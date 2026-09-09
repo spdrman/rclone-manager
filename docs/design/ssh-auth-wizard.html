@@ -186,7 +186,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
         <div class="group">
           <div class="group__head">
             <p class="eyebrow">Keys this deployment already holds</p>
-            <span class="group__note">/etc/backup-manager/config/ssh_keys · 3 keys</span>
+            <span class="group__note">/etc/rclone-manager/config/ssh_keys · 3 keys</span>
           </div>
           <div class="opts">
             <div class="opt opt--on">
@@ -228,7 +228,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
           <div class="banner banner--info" style="margin-bottom:var(--space-2)">
             <span class="banner__glyph">i</span>
             <div class="banner__body">
-              Searched the paths this engine can actually see: /etc/backup-manager, the key file the configuration
+              Searched the paths this engine can actually see: /etc/rclone-manager, the key file the configuration
               names, and this process's own ~/.ssh. On a packaged install the engine is a distroless container, so
               the NAS operator's own home directory is not among them unless it is mounted. An empty group says
               which locations were searched, never just &ldquo;no keys&rdquo;.
@@ -238,7 +238,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
             <div class="opt">
               <span class="radio"></span>
               <div class="opt__body">
-                <div class="opt__title">/etc/backup-manager/id_ed25519
+                <div class="opt__title">/etc/rclone-manager/id_ed25519
                   <span class="chip chip--host">ON THIS MACHINE</span>
                   <span class="chip chip--inuse">INSTALLER-GENERATED</span></div>
                 <div class="opt__fp">SHA256:wjJmbzfYx2FEBhBBqHHnfm7tcyk0SnWVqdWysm/9kho</div>
@@ -576,7 +576,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <div class="term">
         <div><span class="t">15:04:02</span> <span class="i">ssh wizard opened for api-server/var-backups</span></div>
         <div><span class="t">15:04:02</span> <span class="i">key store: 3 keys under ssh_keys/</span></div>
-        <div><span class="t">15:04:02</span> <span class="i">host scan: 3 candidates in /etc/backup-manager, key.file, ~/.ssh</span></div>
+        <div><span class="t">15:04:02</span> <span class="i">host scan: 3 candidates in /etc/rclone-manager, key.file, ~/.ssh</span></div>
         <div><span class="t">15:04:02</span> <span class="w">~/.ssh/id_rsa listed without a fingerprint: no id_rsa.pub beside it, and the private key was not read</span></div>
         <div><span class="t">15:04:31</span> <span class="i">selected ed25519 SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI from the key store</span></div>
         <div><span class="t">15:04:34</span> <span class="i">probing api-server.internal:1209 for its host key</span></div>

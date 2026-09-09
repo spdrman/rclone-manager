@@ -135,7 +135,7 @@ fi
 echo "==> e2e gate: building rbm from this working tree"
 (cd core && GOWORK=off go build \
   -ldflags "-X main.version=$(git rev-parse --short HEAD) -X main.commit=$build_commit" \
-  -o "$work/rbm" ./cmd/backup-manager)
+  -o "$work/rbm" ./cmd/rbm)
 
 echo "==> e2e gate: Suite A smoke slice, against that binary"
 RM_MODE=local \

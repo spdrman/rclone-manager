@@ -84,9 +84,9 @@ func sha256Of(b []byte) string {
 func TestCoreBinaryHashParity_NeedsARealByteComparison(t *testing.T) {
 	p, dir := tempProvider(t, "fictional")
 	binary := []byte("not really a binary, but it has a SHA-256 like everything else")
-	write(t, filepath.Join(dir, "payload", "backup-manager-web"), string(binary))
+	write(t, filepath.Join(dir, "payload", "rbm-web"), string(binary))
 	p.spec.Metadata.BinaryArtifacts = map[string]string{
-		"/rbm-web": filepath.Join("payload", "backup-manager-web"),
+		"/rbm-web": filepath.Join("payload", "rbm-web"),
 	}
 
 	good := ReleaseManifest{
@@ -416,7 +416,7 @@ func TestBridgeFlagsOnlyCountWhereABundleLoadsThem(t *testing.T) {
 	// a working-looking UI, and neither the store artifacts nor the
 	// bridge flag would notice.
 	wrong := SelectUIBundle(&Service{
-		Name:        "backup-manager-ui",
+		Name:        "web-ui",
 		Command:     []string{"/rbm-web", "serve-ui", "--profile=truenas"},
 		Environment: map[string]string{"UI_ROOT": "/ui/bundles"},
 	}, UIBundleSelection{Mechanism: UIBundleNone}, "unraid")
@@ -625,19 +625,19 @@ func TestRoleMountsRefusesAMountWithNoKnownRole(t *testing.T) {
 	// containment alike.
 	p, dir := tempProvider(t, "fictional")
 	write(t, filepath.Join(dir, "compose.yaml"), `services:
-  backup-manager:
+  rclone-manager:
     image: `+canonical.Image.Reference+`
     command: ["/rbm-web", "serve"]
     volumes:
       - /srv/app/state:/data/state
       - /srv/app/backups:/data/backups
-      - /srv/app/etc:/etc/backup-manager
+      - /srv/app/etc:/etc/rclone-manager
 `)
 	p.spec.Metadata.Kind = "compose"
 	p.spec.Metadata.Compose = "compose.yaml"
 
 	if mounts, detail := roleMounts(p); mounts != nil {
-		t.Errorf("a mount at /etc/backup-manager has no canonical role and must be refused, got %v", mounts)
+		t.Errorf("a mount at /etc/rclone-manager has no canonical role and must be refused, got %v", mounts)
 	} else if !strings.Contains(detail, "not a container path the canonical image knows about") {
 		t.Errorf("the refusal should say what it could not place, got: %s", detail)
 	}
@@ -668,7 +668,7 @@ func unresolvedHostPaths(t *testing.T, compose string, env map[string]string) ma
 }
 
 func TestProxmoxProfileRefusesToStartWithAnUnsetHostPath(t *testing.T) {
-	path := Path(filepath.Join("apps", "proxmox", "compose", "backup-manager.yml"))
+	path := Path(filepath.Join("apps", "proxmox", "compose", "rclone-manager.yml"))
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -703,12 +703,12 @@ func TestProxmoxProfileRefusesToStartWithAnUnsetHostPath(t *testing.T) {
 
 	// And the checked-in env file supplies every one of them, so a
 	// correct deployment never sees a refusal.
-	env, err := ReadEnvFile(Path(filepath.Join("apps", "proxmox", "compose", "backup-manager.env")))
+	env, err := ReadEnvFile(Path(filepath.Join("apps", "proxmox", "compose", "rclone-manager.env")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if left := unresolvedHostPaths(t, compose, env); len(left) > 0 {
-		t.Errorf("backup-manager.env leaves %v unresolved", left)
+		t.Errorf("rclone-manager.env leaves %v unresolved", left)
 	}
 }
 
@@ -829,7 +829,7 @@ func TestProxmoxProcedureIsSafeToFollowLiterally(t *testing.T) {
 		},
 		{
 			name: "the chown moves back ahead of the key",
-			text: "sudo chown -R 1000:100 /mnt/backup-manager\n" + text,
+			text: "sudo chown -R 1000:100 /mnt/rclone-manager\n" + text,
 			want: "recursive chown runs before the SSH key exists",
 		},
 	}

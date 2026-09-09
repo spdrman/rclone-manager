@@ -92,7 +92,7 @@ new_repo() {
   printf 'ui\n' >"$dir/ui/marker"
   printf 'FROM scratch\n' >"$dir/container/Dockerfile"
   cat >"$dir/distribution/packaging/canonical.json" <<'JSON'
-{ "image": { "reference": "ghcr.io/spdrman/backup-manager:1.0.0", "published": false } }
+{ "image": { "reference": "ghcr.io/spdrman/rclone-manager:1.0.0", "published": false } }
 JSON
   printf '{ "version": "test", "commit": "0000000000000000000000000000000000000000" }\n' \
     >"$dir/container/release-manifest.json"
@@ -197,7 +197,7 @@ pin_manifest_to_head "$repo"
 r="$(run_guards "$repo" SKIP_PROVENANCE_CHECK=1)"
 rc="$(split_rc "$r")"; out="$(split_out "$r")"
 expect "$rc" "$out" 0 "every guard passed"
-expect "$rc" "$out" 0 "Would publish ghcr.io/spdrman/backup-manager:1.0.0"
+expect "$rc" "$out" 0 "Would publish ghcr.io/spdrman/rclone-manager:1.0.0"
 
 # --- guard 1: the files it reads are not there --------------------------
 current="canonical.json missing"

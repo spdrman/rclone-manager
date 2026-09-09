@@ -8,7 +8,7 @@
 # install is a choice, and apps/synology/README.md sets out the trade.
 #
 # Container Manager -> Project -> Create -> "Create docker-compose.yml",
-# paste this file, and paste backup-manager.env into the environment. See
+# paste this file, and paste rclone-manager.env into the environment. See
 # https://kb.synology.com/en-us/DSM/help/ContainerManager/docker_project
 # for the current wording of that flow.
 #
@@ -21,8 +21,8 @@ services:
   # The engine: local authentication, the versioned /api/v1 API and the
   # backup scheduler, one process sharing one shutdown context. It holds
   # the state database and the credentials, and publishes no port at all.
-  backup-manager:
-    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.3.3}
+  rclone-manager:
+    image: ${IMAGE:-ghcr.io/spdrman/rclone-manager:0.3.3}
     command: ["/rbm-web", "serve", "--profile=synology"]
 
     user: "${PUID:-1026}:${PGID:-100}"
@@ -53,18 +53,18 @@ services:
     # so a ${VAR:-default} here would put the backup root on the DSM
     # system volume and report healthy about it.
     volumes:
-      - ${APPDATA:?set APPDATA in backup-manager.env to the project directory, e.g. /volume1/docker/backup-manager}/state:/data/state
-      - ${BACKUP_ROOT:?set BACKUP_ROOT in backup-manager.env to the shared folder retained artifacts land in}:/data/backups
+      - ${APPDATA:?set APPDATA in rclone-manager.env to the project directory, e.g. /volume1/docker/rclone-manager}/state:/data/state
+      - ${BACKUP_ROOT:?set BACKUP_ROOT in rclone-manager.env to the shared folder retained artifacts land in}:/data/backups
       # A writable directory holding config.yaml (issue #196): the engine
       # creates and atomically replaces that file, and its ssh_keys/ and
       # known_hosts.d/ stores are siblings of it.
-      - ${APPDATA:?set APPDATA in backup-manager.env to the project directory, e.g. /volume1/docker/backup-manager}/config:/etc/backup-manager/config
-      - ${APPDATA:?set APPDATA in backup-manager.env to the project directory, e.g. /volume1/docker/backup-manager}/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
-      - ${APPDATA:?set APPDATA in backup-manager.env to the project directory, e.g. /volume1/docker/backup-manager}/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
+      - ${APPDATA:?set APPDATA in rclone-manager.env to the project directory, e.g. /volume1/docker/rclone-manager}/config:/etc/rclone-manager/config
+      - ${APPDATA:?set APPDATA in rclone-manager.env to the project directory, e.g. /volume1/docker/rclone-manager}/secrets/id_ed25519:/etc/rclone-manager/id_ed25519:ro
+      - ${APPDATA:?set APPDATA in rclone-manager.env to the project directory, e.g. /volume1/docker/rclone-manager}/secrets/known_hosts:/etc/rclone-manager/known_hosts:ro
 
     # The start gate, and a liveness question rather than a health
     # verdict (issue #206). The Web UI below declares
-    # `depends_on: backup-manager: condition: service_healthy`, so
+    # `depends_on: rclone-manager: condition: service_healthy`, so
     # whatever this asks stands between an operator and the only
     # container with a published port. `/rbm status` is
     # FR-24's backup-freshness verdict and exits non-zero on any
@@ -77,7 +77,7 @@ services:
     # is the right default for a plain `docker run` and for the headless
     # `daemon` command, which serves no HTTP and so has no liveness
     # endpoint to ask. Backup freshness is not lost - read it with
-    # `docker exec backup-manager /rbm status`, or let the
+    # `docker exec rclone-manager /rbm status`, or let the
     # alerts block deliver it.
     #
     # Derived from container/compose.yaml, never authored here.
@@ -97,12 +97,12 @@ services:
   # engine. The only container with a published port, and the only URL an
   # operator ever opens. There is no DSM desktop launcher on this path,
   # which is one of the two things the .spk still does that this does not.
-  backup-manager-ui:
-    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.3.3}
+  web-ui:
+    image: ${IMAGE:-ghcr.io/spdrman/rclone-manager:0.3.3}
     command: ["/rbm-web", "serve-ui", "--profile=synology"]
 
     depends_on:
-      backup-manager:
+      rclone-manager:
         condition: service_healthy
 
     user: "${PUID:-1026}:${PGID:-100}"
@@ -119,7 +119,7 @@ services:
       TMPDIR: "/tmp"
       TZ: "${TZ:-UTC}"
       LISTEN_ADDR: ":8080"
-      UPSTREAM_ADDR: "http://backup-manager:8080"
+      UPSTREAM_ADDR: "http://rclone-manager:8080"
       # The per-provider UI bundles the canonical image carries. With the
       # synology profile selected above, the bundle served is
       # /ui/bundles/synology, so an operator who installed through

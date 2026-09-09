@@ -108,7 +108,7 @@
     <p>Three things have to be true, and none of them is checked for you in a way that produces a useful message if it is not.</p>
     <ol>
       <li><strong>The host directories exist and the container can write them.</strong> The runtime image is distroless with no root step, and a bind mount does not chown its source, so create the state, backup and config directories on the NAS and chown them to the container's uid and gid yourself. The config directory is mounted as a writable <em>directory</em>, not a read-only file, which is exactly what lets setup write <code>config.yaml</code> into it.</li>
-      <li><strong>The config directory is empty.</strong> Setup is a one-time door. If anything is already at <code>/etc/backup-manager/config/config.yaml</code>, however it got there, the first-run write refuses rather than overwriting it, and the instance serves the ordinary application instead of the setup flow.</li>
+      <li><strong>The config directory is empty.</strong> Setup is a one-time door. If anything is already at <code>/etc/rclone-manager/config/config.yaml</code>, however it got there, the first-run write refuses rather than overwriting it, and the instance serves the ordinary application instead of the setup flow.</li>
       <li><strong>The remote server has an account to pull from.</strong> A dedicated, shell-less, chrooted SFTP account is what the project's own <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/ssh-setup.md">SSH setup guide</a> recommends, and it has a consequence worth knowing before you get to step 5: against that account shape a remote checksum cannot be computed at all, so verification is transfer verification, not a remote-versus-local hash comparison.</li>
     </ol>
   </section>
@@ -576,12 +576,12 @@
             <span class="key">host</span>: api-server.example.net
             <span class="key">port</span>: 22            <span class="cm"># whatever you typed on step 1</span>
             <span class="key">user</span>: backup-agent
-            <span class="key">key_file</span>: /etc/backup-manager/config/ssh_keys/6f2a1c92-7d40-4b18-9a6e-1e0c5f3b77aa
+            <span class="key">key_file</span>: /etc/rclone-manager/config/ssh_keys/6f2a1c92-7d40-4b18-9a6e-1e0c5f3b77aa
             <span class="key">key</span>:
-                <span class="key">file</span>: /etc/backup-manager/config/ssh_keys/6f2a1c92-7d40-4b18-9a6e-1e0c5f3b77aa
+                <span class="key">file</span>: /etc/rclone-manager/config/ssh_keys/6f2a1c92-7d40-4b18-9a6e-1e0c5f3b77aa
                 <span class="key">env</span>: <span class="str">""</span>
                 <span class="key">command</span>: []
-            <span class="key">known_hosts</span>: /etc/backup-manager/config/known_hosts.d/api_api-server-nightly_known_hosts
+            <span class="key">known_hosts</span>: /etc/rclone-manager/config/known_hosts.d/api_api-server-nightly_known_hosts
           <span class="key">remote_path</span>: /var/backups/
           <span class="key">local_path</span>: /data/backups/api-server/
           <span class="key">include</span>:

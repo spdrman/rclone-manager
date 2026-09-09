@@ -26,7 +26,7 @@ import (
 // # What it cost
 //
 // Measured the way the crypt precedent was measured, on a linux/arm64,
-// CGO_ENABLED=0 build of core/cmd/backup-manager, with this one blank
+// CGO_ENABLED=0 build of core/cmd/rbm, with this one blank
 // import as the only difference between the two builds, and with the
 // flags container/Dockerfile actually ships (-trimpath -buildvcs=false
 // -ldflags "-s -w"):

@@ -50,12 +50,12 @@ const (
 //
 // Two of them, and the second is the one that matters. The rule used to
 // match only ConfigFilePath(), which is the config DIRECTORY plus
-// config.yaml, so today it is /etc/backup-manager/config/config.yaml. The
-// pre-#196 shape mounted /etc/backup-manager/config.yaml, one level up,
+// config.yaml, so today it is /etc/rclone-manager/config/config.yaml. The
+// pre-#196 shape mounted /etc/rclone-manager/config.yaml, one level up,
 // and that value is not derivable from the current containerPaths.config
 // by joining anything to it. So the rule named for the historical shape
 // could not fire on the historical shape: a reintroduced
-// /etc/backup-manager/config.yaml got Role "" from roleForContainerPath,
+// /etc/rclone-manager/config.yaml got Role "" from roleForContainerPath,
 // was skipped by CheckStorageShapes's `if m.Role == ""` line, and reached
 // only the generic role refusal.
 //

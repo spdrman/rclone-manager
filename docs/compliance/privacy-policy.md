@@ -21,7 +21,7 @@ for one.
 
 The one HTTP client the shipped binaries construct talks to `127.0.0.1`: it is
 the container health check asking the local process whether it is healthy
-(`apps/generic/cmd/backup-manager-web`). It never leaves the container.
+(`apps/generic/cmd/rbm-web`). It never leaves the container.
 
 The app does open outbound network connections, and it opens exactly the ones
 the operator configured: SFTP sessions to the hosts named in the operator's own
@@ -39,7 +39,7 @@ through creating them.
 
 - **Backup set configuration**: source paths, destination hosts and paths,
   schedules and retention policy. Stored in the config file
-  (`/etc/backup-manager/config.yaml` inside the container).
+  (`/etc/rclone-manager/config.yaml` inside the container).
 - **SSH private key and known-hosts file**: the credential material for the
   SFTP destinations. Mounted read-only, never copied elsewhere by the app, and
   never written to a log. The host-key policy is strict: an unknown or changed

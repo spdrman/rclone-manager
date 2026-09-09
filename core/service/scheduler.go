@@ -13,7 +13,7 @@ import (
 // when nobody is asking it to, for a process that cannot reach the one
 // internal/app already has.
 //
-// cmd/backup-manager's `daemon` gets that loop from
+// cmd/rbm's `daemon` gets that loop from
 // internal/app.Service.Daemon directly. The generic Web host cannot, §7.2
 // sees to that, and reimplementing it above this boundary would put the
 // cadence, the single-flight decision and the panic policy in a package
@@ -44,7 +44,7 @@ import (
 
 // PollInterval reports the poll_interval this BackupService was
 // configured with (config.Config.PollInterval), the same value
-// cmd/backup-manager's own `daemon` command reads directly off a
+// cmd/rbm's own `daemon` command reads directly off a
 // *config.Config it constructed itself - a shortcut apps/ has no
 // equivalent for, since it cannot import internal/config at all (§7.2).
 // A caller composing this BackupService with an HTTP API (the generic
@@ -57,7 +57,7 @@ func (b *BackupService) PollInterval() time.Duration {
 
 // RunOnSchedule repeats one internal/app.Service.RunCycle pass at the
 // given interval until ctx is done, the same repeated-cycle shape
-// internal/app.Service.Daemon already gives cmd/backup-manager's own
+// internal/app.Service.Daemon already gives cmd/rbm's own
 // `daemon` command — but reachable from apps/ (core/internal is not,
 // docs/EPIC-B-multi-nas.md §7.2), which is what a process composing this
 // BackupService with an HTTP API (the generic Web host's `serve` command,

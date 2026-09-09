@@ -76,13 +76,13 @@ machine can decide into tests rather than sentences (see
 
 `core/` is a working backup engine with a working command line. `rbm` registers twenty
 commands, and the list below is checked against the dispatch table in
-`core/cmd/backup-manager/main.go` on every run of the gate, so it cannot quietly go stale
+`core/cmd/rbm/main.go` on every run of the gate, so it cannot quietly go stale
 the way its predecessor did.
 
-**The command is called `rbm` as of 0.3.3, and `backup-manager` still works.** That is the
+**The command is called `rbm` as of 0.3.3, and `rclone-manager` still works.** That is the
 one thing to know before upgrading, and it is the whole of it: the old name is kept as an
 alias rather than deprecated, so a cron entry, a Compose healthcheck or a provisioning
-script written against `backup-manager` runs unchanged and keeps running. Every example in
+script written against `rclone-manager` runs unchanged and keeps running. Every example in
 this document uses the new name because that is what a new operator should be typing, and
 nothing below is a second surface: one binary, two names for it.
 
@@ -117,7 +117,7 @@ nothing below is a second surface: one binary, two names for it.
 <!-- END CLI-COMMANDS -->
 
 Every command except `version` takes `--config`, defaulting to
-`/etc/backup-manager/config/config.yaml`. That default is a file inside the config
+`/etc/rclone-manager/config/config.yaml`. That default is a file inside the config
 DIRECTORY rather than a file mounted on its own, because #196 made the directory the
 writable mount (see [What is built but not exposed](#what-is-built-but-not-exposed) below);
 pass the directory and it resolves `config.yaml` inside it. `rbm` with no arguments prints
@@ -275,7 +275,7 @@ declares no medium is byte for byte the product it was before, which is a corpus
 
 `apps/common/webhost` serves a versioned `/api/v1`, authenticated, CSRF-protected, with a
 destructive-operation gate in front of anything that can destroy data.
-`apps/generic/cmd/backup-manager-web` is the binary that hosts it: `serve` runs the engine,
+`apps/generic/cmd/rbm-web` is the binary that hosts it: `serve` runs the engine,
 the scheduler and the API in one process, and `serve-ui` serves the built static UI and
 reverse-proxies the API to it. `ui/shared` is the React application both of them exist for.
 
@@ -496,7 +496,7 @@ somebody adds will not be called `fonts.googleapis.com`.
   "no config file yet" is not a distinct first-run case there at all.
 - A packaged container can write its own configuration, since #169 carried #196's
   mount-role change: every adapter now bind-mounts the config DIRECTORY, writable, at
-  `/etc/backup-manager/config` rather than the single `config.yaml` read-only. The three
+  `/etc/rclone-manager/config` rather than the single `config.yaml` read-only. The three
   merged write paths that go through that file (creating a backup set, saving settings,
   first-run setup) reach a writable filesystem in a packaged container. What an operator
   still has to do by hand is make the host directory writable by the container's uid/gid
@@ -831,7 +831,7 @@ about how any of these platforms behaves.
 
 The image is published, which is the other thing this section used to deny, and the
 version this tree declares is not the published one. EPIC F cut v0.1.0 and then v0.2.0 to
-`ghcr.io/spdrman/backup-manager`, and v0.3.0, v0.3.1 and v0.3.2 followed them there, every
+`ghcr.io/spdrman/rclone-manager`, and v0.3.0, v0.3.1 and v0.3.2 followed them there, every
 one of them keyless-signed with the SBOM attested beside it. `0.3.2`'s image index is
 `sha256:e657370c`. `0.3.3` is cut and not pushed, which is what a release looks like
 between the cut and the push: `distribution/packaging/canonical.json` records
@@ -1760,7 +1760,7 @@ storage_mediums:
     storage_class: STANDARD
     upload_verification: readback
     credentials:
-      file: /var/lib/backup-manager/s3/offsite_s3.creds
+      file: /var/lib/rclone-manager/s3/offsite_s3.creds
 
 retention:
   tiers:
@@ -2588,7 +2588,7 @@ run, by `distribution/packaging/readme_claims_test.go`:
 - every markdown link and every backticked repository path in this file resolves, with the
   handful of paths this document names *because* they are absent kept in an explicit list
   with a reason each, so admitting what is missing stays possible;
-- the command table above matches the dispatch table in `core/cmd/backup-manager/main.go`,
+- the command table above matches the dispatch table in `core/cmd/rbm/main.go`,
   and that dispatch table matches the help text the binary prints, so all three move
   together or the build goes red;
 - the `core/internal/` inventory in [Layout](#layout) matches the packages that are actually
@@ -2632,7 +2632,7 @@ in-flight branch. The rest of this section describes the same tree from the insi
 
 `core/` is its own Go module (`core/go.mod`), separate from the repository root, drawn
 that way by #106/B1.1 so the engine has never heard of a provider or a UI (see
-`docs/EPIC-B-multi-nas.md` §7 for why). `core/cmd/backup-manager/` is the entry point,
+`docs/EPIC-B-multi-nas.md` §7 for why). `core/cmd/rbm/` is the entry point,
 `core/service/` is the process-lifetime service layer the web host and the CLI share, and
 `core/internal/` holds every application package, with every rclone import staying inside
 `core/internal/transport/rclone/`:
@@ -2728,7 +2728,7 @@ layers and reduced every platform package to a thin adapter. This paragraph used
 #184, #194, #199 and #169 as unmerged, which stopped being true a long time ago: all four
 are in, and the layout above is what that refactor left rather than what it is becoming.
 
-This project was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It
+This project was originally scoped as `tools/rclone-manager/` inside `iasbuilt/iac`. It
 lives here instead; nothing in the design depended on the location.
 
 ## Documentation index

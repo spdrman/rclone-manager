@@ -13,14 +13,14 @@ import (
 // oldName is built from two halves deliberately: spelled whole, this
 // file would contain the exact literal it exists to find and would
 // report itself on every run.
-const oldName = "backup-manager" + "-web"
+const oldName = "rclone-manager" + "-web"
 
 // The web host used to spell its own name 37 times as a literal, while
 // cliecho.WebBinary sat one import away holding the same value. That is
 // the drift cliname.go exists to prevent, and it was live: every compose
 // file, the Dockerfile, the installer and the docs said rbm-web, and the
 // process an operator actually watches answered
-// "backup-manager-web: runtime profile ...".
+// "rbm-web: runtime profile ...".
 //
 // Deriving the strings fixed it but cannot guard it, because a test that
 // also derives from the constant moves with it and passes either way.

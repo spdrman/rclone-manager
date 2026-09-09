@@ -193,7 +193,7 @@ func CheckPortainerTemplate(source string, t PortainerTemplates, composeVars []s
 				fmt.Sprintf("the stack reads %s and the template never offers it, so an operator is never asked for it", name)})
 		case inEnvFile && got != want:
 			out = append(out, Violation{source, RulePortainerTemplate,
-				fmt.Sprintf("offers %s defaulting to %q, and compose/backup-manager.env declares %q", name, got, want)})
+				fmt.Sprintf("offers %s defaulting to %q, and compose/rclone-manager.env declares %q", name, got, want)})
 		}
 	}
 	for name := range declared {

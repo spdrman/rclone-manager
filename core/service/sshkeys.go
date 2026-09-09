@@ -89,13 +89,13 @@ const sshDiscoveryDirEnv = "BACKUP_MANAGER_SSH_DISCOVERY_DIR"
 // sshDiscoveryMountDir is where the canonical compose file mounts the
 // installer's own generated key: install_docker_host.py writes
 // <prefix>/secrets/id_ed25519 when there is none and compose mounts it
-// read-only at /etc/backup-manager/id_ed25519.
+// read-only at /etc/rclone-manager/id_ed25519.
 //
 // It is scanned as a directory rather than as that one file so a
 // deployment that mounts a second key beside it is described too, and it
 // is reported as searched even on a machine where it does not exist,
 // because "not mounted here" is an answer and silence is not.
-const sshDiscoveryMountDir = "/etc/backup-manager"
+const sshDiscoveryMountDir = "/etc/rclone-manager"
 
 // ErrSSHKeyCandidateNotFound is returned by ImportSSHKeyCandidate when
 // the id does not resolve against a fresh scan of the fixed locations.

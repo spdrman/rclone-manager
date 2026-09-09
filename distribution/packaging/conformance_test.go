@@ -155,7 +155,7 @@ func allPlatforms() []platformFixture {
 			name: "truenas",
 			requiredFiles: []string{
 				"README.md",
-				"compose/backup-manager.yaml",
+				"compose/rclone-manager.yaml",
 				"catalog/app.yaml",
 				"catalog/questions.yaml",
 				"catalog/ix_values.yaml",
@@ -163,7 +163,7 @@ func allPlatforms() []platformFixture {
 			},
 			services: func(t *testing.T) []Service {
 				t.Helper()
-				svcs, err := ReadCompose(filepath.Join(PlatformDir("truenas"), "compose", "backup-manager.yaml"), nil)
+				svcs, err := ReadCompose(filepath.Join(PlatformDir("truenas"), "compose", "rclone-manager.yaml"), nil)
 				if err != nil {
 					t.Fatalf("read TrueNAS custom-app compose: %v", err)
 				}
@@ -177,23 +177,23 @@ func allPlatforms() []platformFixture {
 				// here puts it through every per-platform rule below.
 				return append(svcs, renderedTrueNASCatalog(t)...)
 			},
-			engineService: "backup-manager",
-			uiService:     "backup-manager-ui",
+			engineService: "rclone-manager",
+			uiService:     "web-ui",
 			uiHealthcheck: overrideHealthcheck,
 			hardening:     composeHardening,
 			composeProfiles: []composeProfile{
-				{compose: "compose/backup-manager.yaml"},
+				{compose: "compose/rclone-manager.yaml"},
 			},
 			acceptance:       "truenas-provider-acceptance.md",
 			docSubstitutions: map[string]string{"/mnt/POOL": "/mnt/tank"},
 			runtimeArtifacts: func(t *testing.T) []derivationArtifact {
 				t.Helper()
-				svcs, err := ReadCompose(filepath.Join(PlatformDir("truenas"), "compose", "backup-manager.yaml"), nil)
+				svcs, err := ReadCompose(filepath.Join(PlatformDir("truenas"), "compose", "rclone-manager.yaml"), nil)
 				if err != nil {
 					t.Fatalf("read TrueNAS custom-app compose: %v", err)
 				}
 				return []derivationArtifact{
-					{"compose/backup-manager.yaml", svcs},
+					{"compose/rclone-manager.yaml", svcs},
 					{"catalog/templates/docker-compose.yaml (rendered)", renderedTrueNASCatalog(t)},
 				}
 			},
@@ -202,13 +202,13 @@ func allPlatforms() []platformFixture {
 			name: "unraid",
 			requiredFiles: []string{
 				"README.md",
-				"template/backup-manager.xml",
-				"template/backup-manager-ui.xml",
+				"template/rclone-manager.xml",
+				"template/rclone-manager-ui.xml",
 			},
 			services: func(t *testing.T) []Service {
 				t.Helper()
 				var out []Service
-				for _, f := range []string{"backup-manager.xml", "backup-manager-ui.xml"} {
+				for _, f := range []string{"rclone-manager.xml", "web-ui.xml"} {
 					tpl, err := ReadUnraidTemplate(filepath.Join(PlatformDir("unraid"), "template", f))
 					if err != nil {
 						t.Fatalf("read Unraid template %s: %v", f, err)
@@ -217,8 +217,8 @@ func allPlatforms() []platformFixture {
 				}
 				return out
 			},
-			engineService:    "backup-manager",
-			uiService:        "backup-manager-ui",
+			engineService:    "rclone-manager",
+			uiService:        "web-ui",
 			uiHealthcheck:    disableHealthcheck,
 			hardening:        extraParamsHardening,
 			acceptance:       "unraid-provider-acceptance.md",
@@ -226,7 +226,7 @@ func allPlatforms() []platformFixture {
 			runtimeArtifacts: func(t *testing.T) []derivationArtifact {
 				t.Helper()
 				var out []Service
-				for _, f := range []string{"backup-manager.xml", "backup-manager-ui.xml"} {
+				for _, f := range []string{"rclone-manager.xml", "web-ui.xml"} {
 					tpl, err := ReadUnraidTemplate(filepath.Join(PlatformDir("unraid"), "template", f))
 					if err != nil {
 						t.Fatalf("read Unraid template %s: %v", f, err)
@@ -237,39 +237,39 @@ func allPlatforms() []platformFixture {
 				// container, and the deployable runtime is the pair. A
 				// per-template artifact would report every template as
 				// missing the other role.
-				return []derivationArtifact{{"template/backup-manager{,-ui}.xml", out}}
+				return []derivationArtifact{{"template/rclone-manager{,-ui}.xml", out}}
 			},
 		},
 		{
 			name: "openmediavault",
 			requiredFiles: []string{
 				"README.md",
-				"compose/backup-manager.yml",
-				"compose/backup-manager.env",
+				"compose/rclone-manager.yml",
+				"compose/rclone-manager.env",
 			},
 			services: func(t *testing.T) []Service {
 				t.Helper()
 				dir := filepath.Join(PlatformDir("openmediavault"), "compose")
-				env, err := ReadEnvFile(filepath.Join(dir, "backup-manager.env"))
+				env, err := ReadEnvFile(filepath.Join(dir, "rclone-manager.env"))
 				if err != nil {
 					t.Fatalf("read OMV env file: %v", err)
 				}
-				svcs, err := ReadCompose(filepath.Join(dir, "backup-manager.yml"), env)
+				svcs, err := ReadCompose(filepath.Join(dir, "rclone-manager.yml"), env)
 				if err != nil {
 					t.Fatalf("read OMV compose: %v", err)
 				}
 				return svcs
 			},
-			engineService: "backup-manager",
-			uiService:     "backup-manager-ui",
+			engineService: "rclone-manager",
+			uiService:     "web-ui",
 			uiHealthcheck: overrideHealthcheck,
 			hardening:     composeHardening,
 			composeProfiles: []composeProfile{
-				{compose: "compose/backup-manager.yml", env: "compose/backup-manager.env"},
+				{compose: "compose/rclone-manager.yml", env: "compose/rclone-manager.env"},
 			},
 			acceptance:       "openmediavault-provider-acceptance.md",
 			docSubstitutions: map[string]string{"$DISK": "/srv/dev-disk-by-uuid"},
-			runtimeArtifacts: composeArtifact("openmediavault", "compose/backup-manager.yml", "compose/backup-manager.env"),
+			runtimeArtifacts: composeArtifact("openmediavault", "compose/rclone-manager.yml", "compose/rclone-manager.env"),
 		},
 		{
 			// WP4.5. Proxmox VE has no app store to package into, so
@@ -282,36 +282,36 @@ func allPlatforms() []platformFixture {
 			name: "proxmox",
 			requiredFiles: []string{
 				"README.md",
-				"compose/backup-manager.yml",
-				"compose/backup-manager.env",
+				"compose/rclone-manager.yml",
+				"compose/rclone-manager.env",
 			},
 			services: func(t *testing.T) []Service {
 				t.Helper()
 				dir := filepath.Join(PlatformDir("proxmox"), "compose")
-				env, err := ReadEnvFile(filepath.Join(dir, "backup-manager.env"))
+				env, err := ReadEnvFile(filepath.Join(dir, "rclone-manager.env"))
 				if err != nil {
 					t.Fatalf("read Proxmox env file: %v", err)
 				}
-				svcs, err := ReadCompose(filepath.Join(dir, "backup-manager.yml"), env)
+				svcs, err := ReadCompose(filepath.Join(dir, "rclone-manager.yml"), env)
 				if err != nil {
 					t.Fatalf("read Proxmox compose: %v", err)
 				}
 				return svcs
 			},
-			engineService: "backup-manager",
-			uiService:     "backup-manager-ui",
+			engineService: "rclone-manager",
+			uiService:     "web-ui",
 			uiHealthcheck: overrideHealthcheck,
 			hardening:     composeHardening,
 			composeProfiles: []composeProfile{
-				{compose: "compose/backup-manager.yml", env: "compose/backup-manager.env"},
+				{compose: "compose/rclone-manager.yml", env: "compose/rclone-manager.env"},
 			},
 			acceptance: "proxmox-ve-deployment.md",
 			// Every path the Proxmox procedure names is literal: the
-			// share root is /mnt/backup-manager inside the guest, and
+			// share root is /mnt/rclone-manager inside the guest, and
 			// the profile derives the rest from it, so there is no
 			// machine-specific placeholder to expand.
 			docSubstitutions: map[string]string{},
-			runtimeArtifacts: composeArtifact("proxmox", "compose/backup-manager.yml", "compose/backup-manager.env"),
+			runtimeArtifacts: composeArtifact("proxmox", "compose/rclone-manager.yml", "compose/rclone-manager.env"),
 		},
 		{
 			// Issue #169. Synology's Container Manager project: the path
@@ -328,28 +328,28 @@ func allPlatforms() []platformFixture {
 			name: "synology",
 			requiredFiles: []string{
 				"README.md",
-				"compose/backup-manager.yml",
-				"compose/backup-manager.env",
+				"compose/rclone-manager.yml",
+				"compose/rclone-manager.env",
 			},
 			services: func(t *testing.T) []Service {
 				t.Helper()
 				dir := filepath.Join(PlatformDir("synology"), "compose")
-				env, err := ReadEnvFile(filepath.Join(dir, "backup-manager.env"))
+				env, err := ReadEnvFile(filepath.Join(dir, "rclone-manager.env"))
 				if err != nil {
 					t.Fatalf("read Synology env file: %v", err)
 				}
-				svcs, err := ReadCompose(filepath.Join(dir, "backup-manager.yml"), env)
+				svcs, err := ReadCompose(filepath.Join(dir, "rclone-manager.yml"), env)
 				if err != nil {
 					t.Fatalf("read Synology Container Manager compose: %v", err)
 				}
 				return svcs
 			},
-			engineService: "backup-manager",
-			uiService:     "backup-manager-ui",
+			engineService: "rclone-manager",
+			uiService:     "web-ui",
 			uiHealthcheck: overrideHealthcheck,
 			hardening:     composeHardening,
 			composeProfiles: []composeProfile{
-				{compose: "compose/backup-manager.yml", env: "compose/backup-manager.env"},
+				{compose: "compose/rclone-manager.yml", env: "compose/rclone-manager.env"},
 			},
 			acceptance:       "synology-dsm-package-lifecycle.md",
 			docSubstitutions: map[string]string{},
@@ -357,7 +357,7 @@ func allPlatforms() []platformFixture {
 			// own doc for why the roots are named here rather than the
 			// platform skipped.
 			scanRoots:        []string{"compose", "frontend"},
-			runtimeArtifacts: composeArtifact("synology", "compose/backup-manager.yml", "compose/backup-manager.env"),
+			runtimeArtifacts: composeArtifact("synology", "compose/rclone-manager.yml", "compose/rclone-manager.env"),
 		},
 		{
 			// Issue #170. Portainer deploys the product as a stack, from
@@ -378,20 +378,20 @@ func allPlatforms() []platformFixture {
 				"README.md",
 				"templates.json",
 				"logo.svg",
-				"compose/backup-manager.yml",
-				"compose/backup-manager.env",
+				"compose/rclone-manager.yml",
+				"compose/rclone-manager.env",
 			},
-			services:      composeServices("portainer", "compose/backup-manager.yml", "compose/backup-manager.env"),
-			engineService: "backup-manager",
-			uiService:     "backup-manager-ui",
+			services:      composeServices("portainer", "compose/rclone-manager.yml", "compose/rclone-manager.env"),
+			engineService: "rclone-manager",
+			uiService:     "web-ui",
 			uiHealthcheck: overrideHealthcheck,
 			hardening:     composeHardening,
 			composeProfiles: []composeProfile{
-				{compose: "compose/backup-manager.yml", env: "compose/backup-manager.env"},
+				{compose: "compose/rclone-manager.yml", env: "compose/rclone-manager.env"},
 			},
 			acceptance:       "portainer-stack-deployment.md",
 			docSubstitutions: map[string]string{},
-			runtimeArtifacts: composeArtifact("portainer", "compose/backup-manager.yml", "compose/backup-manager.env"),
+			runtimeArtifacts: composeArtifact("portainer", "compose/rclone-manager.yml", "compose/rclone-manager.env"),
 		},
 		{
 			// Issue #170. CasaOS installs from one compose file carrying
@@ -403,19 +403,19 @@ func allPlatforms() []platformFixture {
 			requiredFiles: []string{
 				"README.md",
 				"icon.svg",
-				"compose/backup-manager.yml",
+				"compose/rclone-manager.yml",
 			},
-			services:      composeServices("casaos", "compose/backup-manager.yml", ""),
-			engineService: "backup-manager",
-			uiService:     "backup-manager-ui",
+			services:      composeServices("casaos", "compose/rclone-manager.yml", ""),
+			engineService: "rclone-manager",
+			uiService:     "web-ui",
 			uiHealthcheck: overrideHealthcheck,
 			hardening:     composeHardening,
 			composeProfiles: []composeProfile{
-				{compose: "compose/backup-manager.yml"},
+				{compose: "compose/rclone-manager.yml"},
 			},
 			acceptance:       "casaos-app-store-install.md",
 			docSubstitutions: map[string]string{},
-			runtimeArtifacts: composeArtifact("casaos", "compose/backup-manager.yml", ""),
+			runtimeArtifacts: composeArtifact("casaos", "compose/rclone-manager.yml", ""),
 		},
 		{
 			// Issue #170. ZimaOS reads the same x-casaos block CasaOS
@@ -427,19 +427,19 @@ func allPlatforms() []platformFixture {
 			requiredFiles: []string{
 				"README.md",
 				"icon.svg",
-				"compose/backup-manager.yml",
+				"compose/rclone-manager.yml",
 			},
-			services:      composeServices("zimaos", "compose/backup-manager.yml", ""),
-			engineService: "backup-manager",
-			uiService:     "backup-manager-ui",
+			services:      composeServices("zimaos", "compose/rclone-manager.yml", ""),
+			engineService: "rclone-manager",
+			uiService:     "web-ui",
 			uiHealthcheck: overrideHealthcheck,
 			hardening:     composeHardening,
 			composeProfiles: []composeProfile{
-				{compose: "compose/backup-manager.yml"},
+				{compose: "compose/rclone-manager.yml"},
 			},
 			acceptance:       "zimaos-app-store-install.md",
 			docSubstitutions: map[string]string{},
-			runtimeArtifacts: composeArtifact("zimaos", "compose/backup-manager.yml", ""),
+			runtimeArtifacts: composeArtifact("zimaos", "compose/rclone-manager.yml", ""),
 		},
 	}
 }
@@ -1177,7 +1177,7 @@ func TestUnraidWebUIJSONAgreesWithTheTemplate(t *testing.T) {
 		t.Fatalf("parse webui.json: %v", err)
 	}
 
-	tpl, err := ReadUnraidTemplate(filepath.Join(PlatformDir("unraid"), "template", "backup-manager-ui.xml"))
+	tpl, err := ReadUnraidTemplate(filepath.Join(PlatformDir("unraid"), "template", "web-ui.xml"))
 	if err != nil {
 		t.Fatalf("read Unraid UI template: %v", err)
 	}

@@ -12,7 +12,7 @@ export const ugosBridge: PlatformBridge = {
 
   deployment: {
     label: "UGOS package",
-    storageMount: "/volume1/backup-manager",
+    storageMount: "/volume1/rclone-manager",
     adapterVersion: "ugos 1.3.0"
   },
 

@@ -25,7 +25,7 @@ import "github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 // package does (§7.2): a process outside core/ cannot import
 // core/internal/transport/rclone at all, Go's own internal rule sees to
 // that, and apps/generic's `serve` embeds rclone exactly the way
-// cmd/backup-manager's `daemon` does, through Open below. Without a seam
+// cmd/rbm's `daemon` does, through Open below. Without a seam
 // it would have had no way to take the signal back, and a routine
 // `docker stop` of the web container exited 143 (issue #212, the same
 // defect issue #190 fixed in the CLI). Forwarding, rather than importing

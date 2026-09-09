@@ -123,7 +123,7 @@ echo "==> Proving ${MANIFEST} describes what this tree builds (version=${manifes
 
 mismatches=0
 for arch in $arches; do
-  tag="backup-manager:parity-${arch}"
+  tag="rclone-manager:parity-${arch}"
   echo "==> Building linux/${arch}" >&2
   docker buildx build \
     --platform "linux/${arch}" \

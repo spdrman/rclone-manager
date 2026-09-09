@@ -77,7 +77,7 @@ func TestSecondsAlwaysParsesBackToTheSameDuration(t *testing.T) {
 	}
 }
 
-// The parse test in core/cmd/backup-manager only ever drives the bodies
+// The parse test in core/cmd/rbm only ever drives the bodies
 // this package's own examples carry, so a duration shape no example uses
 // is a shape nothing checks end to end. This is that corpus rule, held
 // here where the examples are.

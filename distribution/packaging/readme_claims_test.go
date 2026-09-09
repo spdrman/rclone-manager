@@ -17,7 +17,7 @@ import (
 //
 // The README has drifted twice already, and both times in the same
 // shape: a sentence that was true when it was written, about code that
-// then moved. "core/cmd/backup-manager/main.go is 25 lines and
+// then moved. "core/cmd/rbm/main.go is 25 lines and
 // understands exactly one subcommand" survived eleven more subcommands
 // landing, and the layout tree survived six new packages. Neither would
 // have survived a check, so the checks live here.
@@ -324,7 +324,7 @@ func TestREADMELinksResolve(t *testing.T) {
 var declaredAbsentPaths = map[string]string{
 	"apps/ugos/backend":            "named in the gate section as a component that is absent from this tree, which is why its checks are inapplicable rather than skipped",
 	"apps/ugos/frontend/upk-proof": "same: absent, and scripts/ci-local.sh's preflight names it for exactly that reason",
-	"tools/backup-manager/":        "the path this project was originally scoped at inside iasbuilt/iac; the README carries the correction and has to be able to name the old location",
+	"tools/rclone-manager/":        "the path this project was originally scoped at inside iasbuilt/iac; the README carries the correction and has to be able to name the old location",
 }
 
 func TestREADMEBacktickedPathsResolve(t *testing.T) {
@@ -365,7 +365,7 @@ func TestREADMEBacktickedPathsResolve(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestREADMEDocumentsExactlyTheRegisteredCommands(t *testing.T) {
-	src, err := os.ReadFile(Path(filepath.Join("core", "cmd", "backup-manager", "main.go")))
+	src, err := os.ReadFile(Path(filepath.Join("core", "cmd", "rbm", "main.go")))
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
 	}

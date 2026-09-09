@@ -560,7 +560,7 @@ func TestPerSetRetention_EveryNullSpellingInherits(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			doc := "poll_interval: 15m\n" +
-				"state:\n  database: /var/lib/backup-manager/state.db\n" +
+				"state:\n  database: /var/lib/rclone-manager/state.db\n" +
 				"sources:\n  - id: production\n    backup_sets:\n" +
 				"      - id: postgres-primary\n        remote:\n          type: local\n" +
 				"        remote_path: /backups/postgres\n        local_path: /backups/production/postgres\n" +

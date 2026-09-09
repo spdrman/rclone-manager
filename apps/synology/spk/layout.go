@@ -124,7 +124,7 @@ const (
 	// a share "will not be removed after package uninstallation, since it
 	// might delete the user's personal data as well" — which is the
 	// mechanism issue #85's retained-backup-safety criterion rests on.
-	DataShareName = "backup-manager"
+	DataShareName = "rclone-manager"
 )
 
 // CoreBinaries are the two provider-neutral executables the canonical

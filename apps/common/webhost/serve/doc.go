@@ -9,7 +9,7 @@
 // composition in the first place, per §9.2's own words ("The reusable Web
 // host under apps/common/webhost SHALL compose..."). PR #119 built it
 // inside apps/generic instead (apps/generic/server.go's NewEngine/NewUI,
-// and apps/generic/cmd/backup-manager-web's cmdServe orchestration) -
+// and apps/generic/cmd/rbm-web's cmdServe orchestration) -
 // functionally correct, but unusable by any other provider without
 // duplicating it wholesale. This package is that composition, moved here
 // and decoupled from any one provider: NewEngine takes a
@@ -17,7 +17,7 @@
 // rather than a concrete apps/common/auth/local.Service, the same way
 // apps/common/webhost.NewRouter is already parameterized.
 //
-// apps/generic/cmd/backup-manager-web is this package's first caller: it
+// apps/generic/cmd/rbm-web is this package's first caller: it
 // builds a local.Service and a platform.Adapter (both still genuinely
 // generic-provider-specific - every future provider builds its own) and
 // hands them to NewEngine/NewUI/RunEngine here. A future TrueNAS/Synology

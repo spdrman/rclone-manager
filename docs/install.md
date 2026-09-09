@@ -17,10 +17,10 @@ Every flag is still there when you want it, and naming one changes only that one
 
 ```
 python3 scripts/install/install_docker_host.py install \
-    --prefix /volume1/backup-manager \
-    --ssh-key /volume1/backup-manager/secrets/id_ed25519 \
-    --known-hosts /volume1/backup-manager/secrets/known_hosts \
-    --image ghcr.io/spdrman/backup-manager:0.3.3
+    --prefix /volume1/rclone-manager \
+    --ssh-key /volume1/rclone-manager/secrets/id_ed25519 \
+    --known-hosts /volume1/rclone-manager/secrets/known_hosts \
+    --image ghcr.io/spdrman/rclone-manager:0.3.3
 ```
 
 **One file, and no checkout.** Copy
@@ -33,10 +33,10 @@ definition itself (see [It derives from the canonical
 definition](#it-derives-from-the-canonical-definition-it-does-not-restate-it) below for
 what keeps the copy honest).
 
-### Compatibility: `--prefix` no longer defaults to `/volume1/backup-manager`
+### Compatibility: `--prefix` no longer defaults to `/volume1/rclone-manager`
 
 It defaults to `~/rclone-manager`. If you have a script that relied on the old default
-being applied for you, pass `--prefix /volume1/backup-manager` explicitly. The old
+being applied for you, pass `--prefix /volume1/rclone-manager` explicitly. The old
 default was a guess at one NAS vendor's share layout that was wrong by a directory name
 on the actual UGREEN this was proven on, and wrong entirely on anything not
 Synology-shaped, so it never once saved anybody a flag.
@@ -163,8 +163,8 @@ Preflight prints the reference it is about to install before anything is created
 and then proves it:
 
 ```
-  ok   installing ghcr.io/spdrman/backup-manager:0.3.3
-  ok   ghcr.io/spdrman/backup-manager:0.3.3 is sha256:..., the identity the release
+  ok   installing ghcr.io/spdrman/rclone-manager:0.3.3
+  ok   ghcr.io/spdrman/rclone-manager:0.3.3 is sha256:..., the identity the release
        manifest records for 0.3.3
 ```
 
@@ -182,10 +182,10 @@ is pushed, and in that window the manifest records `index_digest: null`, the ins
 carries no digest, and what preflight prints is this instead:
 
 ```
-  ok   installing ghcr.io/spdrman/backup-manager:0.3.3
+  ok   installing ghcr.io/spdrman/rclone-manager:0.3.3
   !!   0.3.3 is cut and not pushed, so container/release-manifest.json records no
        identity for it and there is nothing here to hold
-       ghcr.io/spdrman/backup-manager:0.3.3 to.
+       ghcr.io/spdrman/rclone-manager:0.3.3 to.
 ```
 
 That is 0.3.3 today. It is a warning and never a refusal, and the difference is the

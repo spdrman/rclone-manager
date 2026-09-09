@@ -49,15 +49,15 @@ import (
 // quietly checking nothing.
 func env() map[string]string {
 	return map[string]string{
-		"STATE_DIR":        "/srv/backup-manager/state",
-		"BACKUP_DIR":       "/srv/backup-manager/backups",
-		"CONFIG_DIR":       "/srv/backup-manager/config",
-		"SSH_KEY_FILE":     "/srv/backup-manager/secrets/id_ed25519",
-		"KEY_FILE":         "/srv/backup-manager/secrets/id_ed25519",
-		"KNOWN_HOSTS_FILE": "/srv/backup-manager/secrets/known_hosts",
+		"STATE_DIR":        "/srv/rclone-manager/state",
+		"BACKUP_DIR":       "/srv/rclone-manager/backups",
+		"CONFIG_DIR":       "/srv/rclone-manager/config",
+		"SSH_KEY_FILE":     "/srv/rclone-manager/secrets/id_ed25519",
+		"KEY_FILE":         "/srv/rclone-manager/secrets/id_ed25519",
+		"KNOWN_HOSTS_FILE": "/srv/rclone-manager/secrets/known_hosts",
 		"DISK":             "/srv/dev-disk-by-uuid-11111111-2222-3333-4444-555555555555",
-		"APPDATA":          "/volume1/docker/backup-manager",
-		"BACKUP_ROOT":      "/volume1/backup-manager",
+		"APPDATA":          "/volume1/docker/rclone-manager",
+		"BACKUP_ROOT":      "/volume1/rclone-manager",
 	}
 }
 
@@ -447,7 +447,7 @@ func TestProhibitionScanSeesKeysTheParserHasNoFieldFor(t *testing.T) {
 	const doc = `
 services:
   something-nobody-modelled:
-    image: backup-manager:dev
+    image: rclone-manager:dev
     command: ["/rbm-web", "serve"]
     privileged: true
     x-invented-key:
@@ -567,11 +567,11 @@ func TestMountsRefusesWhatItCannotResolveInsteadOfAnsweringWrongly(t *testing.T)
 	const doc = `
 services:
   engine:
-    image: backup-manager:dev
+    image: rclone-manager:dev
     command: ["/rbm-web", "serve"]
     volumes:
-      - ${KEY_FILE:?set KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
-      - /srv/backup-manager/state:/data/state
+      - ${KEY_FILE:?set KEY_FILE in .env to the SFTP private key}:/etc/rclone-manager/id_ed25519:ro
+      - /srv/rclone-manager/state:/data/state
 `
 	parsed, err := compose.Parse([]byte(doc), "synthetic.yaml", map[string]string{})
 	if err != nil {
@@ -586,7 +586,7 @@ services:
 	if len(mounts) != 1 {
 		t.Fatalf("Mounts = %+v, want only the one entry that actually resolves: an unresolved host path must not be answered as a Mount", mounts)
 	}
-	if mounts[0].HostPath != "/srv/backup-manager/state" {
+	if mounts[0].HostPath != "/srv/rclone-manager/state" {
 		t.Errorf("Mounts[0].HostPath = %q, want the resolved entry", mounts[0].HostPath)
 	}
 
@@ -687,10 +687,10 @@ func TestServiceRolesAreDerivedFromTheCommand(t *testing.T) {
 	renamed, err := compose.Parse([]byte(`
 services:
   totally-different-name:
-    image: backup-manager:dev
+    image: rclone-manager:dev
     command: ["/rbm-web", "serve", "--profile=generic"]
   another-name-entirely:
-    image: backup-manager:dev
+    image: rclone-manager:dev
     command: ["/rbm-web", "serve-ui", "--profile=generic"]
 `), "synthetic.yaml", env())
 	if err != nil {

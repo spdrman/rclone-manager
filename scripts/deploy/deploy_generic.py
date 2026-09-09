@@ -42,7 +42,7 @@ Usage:
     python3 scripts/deploy/deploy_generic.py \\
         --ssh-key /path/to/id_ed25519 --known-hosts /path/to/known_hosts \\
         --host sftp.example.com --user backupuser --remote-path /uploads \\
-        --state-dir /srv/backup-manager/state --backup-dir /srv/backup-manager/backups
+        --state-dir /srv/rclone-manager/state --backup-dir /srv/rclone-manager/backups
 
 Run `--help` for the full flag list, and see test_deploy_generic.py /
 test_deploy_generic_integration.py for what's actually verified.
@@ -65,10 +65,10 @@ COMPOSE_FILE = REPO_ROOT / "container" / "compose.yaml"
 # The configuration mount is the DIRECTORY, not the file inside it
 # (issue #196): the engine creates and atomically replaces config.yaml and
 # keeps ssh_keys/ and known_hosts.d/ beside it.
-CONTAINER_CONFIG_DIR = "/etc/backup-manager/config"
+CONTAINER_CONFIG_DIR = "/etc/rclone-manager/config"
 CONTAINER_CONFIG_PATH = CONTAINER_CONFIG_DIR + "/config.yaml"
-CONTAINER_KEY_PATH = "/etc/backup-manager/id_ed25519"
-CONTAINER_KNOWN_HOSTS_PATH = "/etc/backup-manager/known_hosts"
+CONTAINER_KEY_PATH = "/etc/rclone-manager/id_ed25519"
+CONTAINER_KNOWN_HOSTS_PATH = "/etc/rclone-manager/known_hosts"
 CONTAINER_STATE_DIR = "/data/state"
 CONTAINER_BACKUP_DIR = "/data/backups"
 
@@ -116,7 +116,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "  python3 scripts/deploy/deploy_generic.py \\\n"
             "      --ssh-key /path/to/id_ed25519 --known-hosts /path/to/known_hosts \\\n"
             "      --host sftp.example.com --user backupuser --remote-path /uploads \\\n"
-            "      --state-dir /srv/backup-manager/state --backup-dir /srv/backup-manager/backups\n"
+            "      --state-dir /srv/rclone-manager/state --backup-dir /srv/rclone-manager/backups\n"
         ),
     )
 

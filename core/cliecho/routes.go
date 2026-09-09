@@ -26,7 +26,7 @@ import (
 // A `why` is also a claim about this binary, and claims go stale: five of
 // these said a verb did not exist while the same tree shipped it, and one
 // of the five quoted a usage() line that had been replaced by the flag it
-// was denying. core/cmd/backup-manager's TestNoGapClaimsAVerbThisBinaryShips
+// was denying. core/cmd/rbm's TestNoGapClaimsAVerbThisBinaryShips
 // reads every sentence here against the verb tables now. A sentence that
 // names a shipped verb on purpose, as a counterexample ("`rbm run` is
 // not this"), says so with namesShippedVerbs, and a sentence that
@@ -40,7 +40,7 @@ import (
 // because each of them is written in two places: the builder that refuses
 // with it, and the entry that declares it so Gaps can report it. A
 // sentence that could differ between those two would be a sentence the
-// guard in core/cmd/backup-manager checks a copy of.
+// guard in core/cmd/rbm checks a copy of.
 const (
 	gapRunCycle = "`" + Binary + " run` starts a cycle in your own shell, not in this engine, so it is a different act against a different process"
 
@@ -305,7 +305,7 @@ var routes = map[string]entry{
 				Body: []byte(`{"stale_after_seconds":172800}`)},
 			// The duration shapes, and they are examples rather than a
 			// unit test's table because this is the corpus the dispatcher
-			// is driven with in core/cmd/backup-manager: a shape no
+			// is driven with in core/cmd/rbm: a shape no
 			// example carries is a shape nothing parses end to end. These
 			// three are the ones the old renderer got wrong (a bare
 			// seconds value, a value whose last unit ends in a zero, and
@@ -675,7 +675,7 @@ var routes = map[string]entry{
 			{Params: map[string]string{"id": "offsite_s3"},
 				Body: []byte(`{"region":"eu-west-1","storage_class":"GLACIER_IR"}`)},
 			{Params: map[string]string{"id": "offsite_s3"},
-				Body: []byte(`{"type":"s3","region":"eu-west-1","endpoint":"https://s3.eu-west-1.example.net","bucket":"acme-backups","prefix":"prod","storage_class":"STANDARD","upload_verification":"attested","credentials":{"file":"/etc/backup-manager/aws-credentials"}}`)},
+				Body: []byte(`{"type":"s3","region":"eu-west-1","endpoint":"https://s3.eu-west-1.example.net","bucket":"acme-backups","prefix":"prod","storage_class":"STANDARD","upload_verification":"attested","credentials":{"file":"/etc/rclone-manager/aws-credentials"}}`)},
 		},
 	},
 	key("DELETE", "/storage-mediums/{id}"): {
@@ -794,7 +794,7 @@ var routes = map[string]entry{
 	// They stay gaps until those verbs exist. Printing a command this
 	// binary does not declare would be printing something an operator
 	// pastes and gets exit 2 from, which the dispatcher-driven parity
-	// test in core/cmd/backup-manager catches on purpose.
+	// test in core/cmd/rbm catches on purpose.
 	key("GET", "/ssh-keys"): {
 		why:               "there is no verb that lists the key store, which is why `backup-set patch --ssh-key-id ID` currently takes an id nothing will print for you. `" + Binary + " ssh-key list` would be it",
 		namesShippedVerbs: []string{"backup-set"},
@@ -937,7 +937,7 @@ func backupSetCreateCommand(spec apicontract.BackupSetSpec, runNow, acknowledgeR
 // command line, shared by add, edit and the candidate preflight.
 //
 // One helper for the three because both surfaces already treat them as
-// one: core/cmd/backup-manager declares a single flag set that all seven
+// one: core/cmd/rbm declares a single flag set that all seven
 // verbs read, and this API sends a single body shape to all three of
 // these routes, on the reasoning that what is proven and what is saved
 // must not be able to be different destinations.

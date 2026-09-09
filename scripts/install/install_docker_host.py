@@ -195,7 +195,7 @@ SUPPORTED_ARCH = {
 
 # Fixed in-container paths. These mirror container/compose.yaml's own
 # volume shape and are never host paths.
-CONTAINER_CONFIG_DIR = "/etc/backup-manager/config"
+CONTAINER_CONFIG_DIR = "/etc/rclone-manager/config"
 CONTAINER_STATE_DIR = "/data/state"
 CONTAINER_BACKUP_DIR = "/data/backups"
 
@@ -262,7 +262,7 @@ SOURCE_PORT_ENV = "RCLONE_MANAGER_SOURCE_PORT"
 # installer was written has no digest here and cannot get one, which is
 # the reason the --image default is pinned rather than floating.
 CARRIED_RELEASE = "0.3.3"
-CARRIED_RELEASE_DIGEST = "sha256:bc3cbcd499827251302b037dbb408451a4c476ab4818b9d030ec440ce22767f3"
+CARRIED_RELEASE_DIGEST = None
 
 # Where that release lives. Split into two halves rather than written as
 # one reference on purpose: the --image default is the one literal
@@ -270,7 +270,7 @@ CARRIED_RELEASE_DIGEST = "sha256:bc3cbcd499827251302b037dbb408451a4c476ab4818b9d
 # pins to canonical.json, and a second literal beside it is the copy
 # nobody looks at.
 RELEASE_REGISTRY = "ghcr.io"
-RELEASE_REPOSITORY = "spdrman/backup-manager"
+RELEASE_REPOSITORY = "spdrman/rclone-manager"
 
 # Where a newer installer comes from, printed by the update check. An
 # installer can say a newer release exists; it cannot install one, and
@@ -1332,7 +1332,7 @@ def image_tag(reference: str) -> str:
     """The tag out of an image reference, or "" when it carries none.
 
     Not a naive rsplit on ":": a registry port is a colon too, and
-    "localhost:5000/backup-manager" has no tag at all. The tag can only
+    "localhost:5000/rclone-manager" has no tag at all. The tag can only
     live in the last path segment, so that is the only place looked. A
     digest is not a tag either, so it is taken off before looking.
 
@@ -1340,8 +1340,8 @@ def image_tag(reference: str) -> str:
     There used to be two - this one, and an inline
     `ref.rsplit(":", 1)[-1] if ":" in ref.rsplit("/", 1)[-1] else "latest"`
     inside resolve() - and they disagreed twice over. On
-    `localhost:5000/backup-manager` this said "" and that said "latest";
-    on `backup-manager@sha256:<hex>` this said "" and that said the bare
+    `localhost:5000/rclone-manager` this said "" and that said "latest";
+    on `rclone-manager@sha256:<hex>` this said "" and that said the bare
     hex, so the .env recorded VERSION=<hex> as though a digest were a
     version. Two answers to one question is how one of them goes
     unexamined.
@@ -2270,7 +2270,7 @@ def other_running_containers(project: str):
 # healthchecks and the engine-to-UI topology the security posture depends
 # on, so the same silent drift here would be worse than a stale tag.
 EMBEDDED_COMPOSE_YAML = """\
-# Generic Docker deployment shape for backup-manager (A3.9, extended by
+# Generic Docker deployment shape for rclone-manager (A3.9, extended by
 # issue #82/B4.1). See docs/deployment.md for the reasoning behind every
 # one of these settings and how to build and run it.
 #
@@ -2304,9 +2304,9 @@ EMBEDDED_COMPOSE_YAML = """\
 # that could have produced the broken combination on its own no longer can.
 #
 # What did NOT change is everything that names the project rather than
-# the command: `image: backup-manager:...`, the `rclone-manager` and
+# the command: `image: rclone-manager:...`, the `rclone-manager` and
 # `web-ui` service names, and the container config directory at
-# /etc/backup-manager. Renaming any of those would move an operator's
+# /etc/rclone-manager. Renaming any of those would move an operator's
 # data or break their tooling for no gain.
 #
 # TWO SERVICES, ONE IMAGE (project-owner requirement, folded in before
@@ -2384,7 +2384,7 @@ x-canonical-runtime:
   digest_policy:
     manifest: container/release-manifest.json
     pin: >-
-      Deploy by digest, not by tag: replace image: backup-manager:<tag>
+      Deploy by digest, not by tag: replace image: rclone-manager:<tag>
       with the registry reference plus the @sha256:... digest recorded for
       your architecture in the manifest above, and verify the binary
       SHA-256 recorded alongside it. A tag can be moved; a digest cannot.
@@ -2431,7 +2431,7 @@ services:
         # local build but not what a release should ship.
         VERSION: ${VERSION:-dev}
         COMMIT: ${COMMIT:-none}
-    image: backup-manager:${VERSION:-dev}
+    image: rclone-manager:${VERSION:-dev}
 
     # `/rbm-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md
     # §9.2's "Generic Web App host") is the engine: local authentication,
@@ -2607,14 +2607,14 @@ services:
       # bind mount cannot say "not configured yet" about a file: Docker
       # creates a directory at a source path that does not exist, so the
       # state a fresh install actually starts in was not representable.
-      - ${CONFIG_DIR:?set CONFIG_DIR in .env to the directory holding config.yaml}:/etc/backup-manager/config
+      - ${CONFIG_DIR:?set CONFIG_DIR in .env to the directory holding config.yaml}:/etc/rclone-manager/config
 
       # Credentials stay read-only single files. Nothing in this
       # container writes them, and the shapes are two different claims.
       # Nothing here is baked into the image or into this file — only
       # host paths, resolved at `docker compose up` time.
-      - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
-      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
+      - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/rclone-manager/id_ed25519:ro
+      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/rclone-manager/known_hosts:ro
 
     # `unless-stopped`: restart across crashes and NAS reboots, but stay
     # down if an operator deliberately stops it — the right policy now that
@@ -2695,7 +2695,7 @@ services:
     # produced and tagged (docker compose resolves `image:` against
     # whatever is already built/pulled under that tag). Same digest, same
     # binary, different command - never a second image to keep in sync.
-    image: backup-manager:${VERSION:-dev}
+    image: rclone-manager:${VERSION:-dev}
 
     # Wait for the engine to report healthy before starting: a NAS reboot
     # (or `docker compose up`) starting both containers at once would
@@ -2820,7 +2820,7 @@ services:
 """
 
 # Written by scripts/install/embed_compose.py alongside the blob above.
-EMBEDDED_COMPOSE_SHA256 = "ab5363e02f4d44b250a85735a0ba203243f466b665c64afe1ddaf0bd43d4b2d7"
+EMBEDDED_COMPOSE_SHA256 = "9f69ed2c2097e3189d19c423e494ab4f7d0c3444bf67cbb1bea9208477fb5494"
 
 
 def embedded_compose_bytes() -> bytes:
@@ -4809,7 +4809,7 @@ def _add_shared_groups(sp: argparse.ArgumentParser) -> None:
     layout.add_argument("--prefix", type=Path, default=Path.home() / "rclone-manager",
                         help="Directory the deployment files and the default data directories live under. "
                              "Defaults to rclone-manager under the invoking user's home. It used to default "
-                             "to /volume1/backup-manager, a guessed path for one NAS layout that was wrong "
+                             "to /volume1/rclone-manager, a guessed path for one NAS layout that was wrong "
                              "by a directory name on the actual UGREEN and wrong entirely on anything that "
                              "is not Synology-shaped.")
     layout.add_argument("--state-dir", type=Path, default=None,
@@ -4866,7 +4866,7 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
                               "test, so this installer needs no checkout on the host. Supply it to install "
                               "a locally modified runtime from a checkout; naming a path that does not "
                               "exist is still a refusal.")
-    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.3.3",
+    runtime.add_argument("--image", default="ghcr.io/spdrman/rclone-manager:0.3.3",
                          action=_RecordsThatItWasSupplied,
                          help="Image reference both services run.")
     runtime.add_argument("--release", default=CARRIED_RELEASE,
@@ -5020,10 +5020,10 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "example:\n"
             "  python3 install_docker_host.py install \\\n"
-            "      --prefix /volume1/backup-manager \\\n"
-            "      --ssh-key /volume1/backup-manager/secrets/id_ed25519 \\\n"
-            "      --known-hosts /volume1/backup-manager/secrets/known_hosts \\\n"
-            "      --image ghcr.io/spdrman/backup-manager:0.3.3\n"
+            "      --prefix /volume1/rclone-manager \\\n"
+            "      --ssh-key /volume1/rclone-manager/secrets/id_ed25519 \\\n"
+            "      --known-hosts /volume1/rclone-manager/secrets/known_hosts \\\n"
+            "      --image ghcr.io/spdrman/rclone-manager:0.3.3\n"
         ),
     )
     _add_shared_groups(sp_install)
@@ -5196,7 +5196,7 @@ def resolve_release(args) -> None:
             "can start.",
             "The runtime definition embedded here runs `/rbm-web`, which is the name the "
             f"binaries got in {FIRST_RELEASE_WITH_RBM}. Images published before that carry "
-            "`/backup-manager-web` and nothing at `/rbm-web`, so both containers would die "
+            "`/rbm-web` and nothing at `/rbm-web`, so both containers would die "
             "with \"exec /rbm-web: no such file or directory\" and this installer would sit "
             "waiting for a deployment that was never going to come up. Refusing now is the "
             "same promise --release already makes, that you get the version you named or an "

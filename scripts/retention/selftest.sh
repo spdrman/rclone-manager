@@ -79,12 +79,12 @@ mutant() {
 # The three packages are the three places the claim lives: core/service is
 # the envelope an operator reaches through, core/internal/retention is
 # where the deletion and FR-19's confirmation happen, and
-# cmd/backup-manager is the verb. -run narrows to the checks a mutation is
+# cmd/rbm is the verb. -run narrows to the checks a mutation is
 # expected to move, per call, so the whole file does not cost a full suite
 # per control.
 retention_gate() {
   local pattern=${1:-.}
-  (cd core && GOWORK=off go test -count=1 -timeout 15m -run "$pattern" ./service/ ./internal/retention/ ./cmd/backup-manager/)
+  (cd core && GOWORK=off go test -count=1 -timeout 15m -run "$pattern" ./service/ ./internal/retention/ ./cmd/rbm/)
 }
 
 # expect_gate_fails <label> <dir> <expected substring> [run pattern]
@@ -281,7 +281,7 @@ echo
 echo "==> the CLI verb's confirmation"
 
 d=$(mutant acknowledge-not-required)
-swap "$d/core/cmd/backup-manager/retentionapply.go" \
+swap "$d/core/cmd/rbm/retentionapply.go" \
   '	acknowledge := fs.Bool("acknowledge", false,' \
   '	// PLANTED VIOLATION (scripts/retention/selftest.sh): the
 	// confirmation defaulted to given, so a mistyped command line

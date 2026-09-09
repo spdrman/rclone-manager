@@ -254,7 +254,7 @@ func (c *Client) PreviewRetention(ctx context.Context, source, set string) (apic
 // running engine instead of being refused.
 //
 // They are here under this file's own rule and not in spite of it: each
-// one has a command that drives it (core/cmd/backup-manager/medium.go),
+// one has a command that drives it (core/cmd/rbm/medium.go),
 // so none of them is an untested wrapper claiming this client works
 // against a route nothing calls.
 

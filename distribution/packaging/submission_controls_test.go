@@ -87,20 +87,20 @@ func TestEachHardRuleFiresOnTheShapeItIsAbout(t *testing.T) {
 			rule: CheckNoFloatingTag,
 			path: "fixture/compose.yaml",
 			trips: []string{
-				"    image: ghcr.io/spdrman/backup-manager:latest\n",
-				"    image: ghcr.io/spdrman/backup-manager\n",
-				"    image: ghcr.io/spdrman/backup-manager:${TAG:-latest}\n",
-				"<Repository>ghcr.io/spdrman/backup-manager</Repository>",
-				"  reference: ghcr.io/spdrman/backup-manager:LATEST\n",
+				"    image: ghcr.io/spdrman/rclone-manager:latest\n",
+				"    image: ghcr.io/spdrman/rclone-manager\n",
+				"    image: ghcr.io/spdrman/rclone-manager:${TAG:-latest}\n",
+				"<Repository>ghcr.io/spdrman/rclone-manager</Repository>",
+				"  reference: ghcr.io/spdrman/rclone-manager:LATEST\n",
 			},
 			clean: []string{
-				"    image: ghcr.io/spdrman/backup-manager:1.0.0\n",
-				"    image: backup-manager:${VERSION:-dev}\n",
-				"    image: ghcr.io/spdrman/backup-manager@sha256:" + strings.Repeat("a", 64) + "\n",
-				"    image: registry.invalid:5000/spdrman/backup-manager:1.0.0\n",
-				"<Repository>ghcr.io/spdrman/backup-manager:1.0.0</Repository>",
+				"    image: ghcr.io/spdrman/rclone-manager:1.0.0\n",
+				"    image: rclone-manager:${VERSION:-dev}\n",
+				"    image: ghcr.io/spdrman/rclone-manager@sha256:" + strings.Repeat("a", 64) + "\n",
+				"    image: registry.invalid:5000/spdrman/rclone-manager:1.0.0\n",
+				"<Repository>ghcr.io/spdrman/rclone-manager:1.0.0</Repository>",
 				"# never deploy the latest tag\n",
-				"image:\n  reference: ghcr.io/spdrman/backup-manager:1.0.0\n",
+				"image:\n  reference: ghcr.io/spdrman/rclone-manager:1.0.0\n",
 			},
 		},
 		{
@@ -149,7 +149,7 @@ func TestEachHardRuleFiresOnTheShapeItIsAbout(t *testing.T) {
 				"      USAGE_STATS: none\n",
 				"# There is no telemetry in this release, so there is nothing to disable.\n",
 				"      PUBLIC_BASE_URL: http://localhost:8080\n",
-				"      UPSTREAM_ADDR: http://backup-manager:8080\n",
+				"      UPSTREAM_ADDR: http://rclone-manager:8080\n",
 				"      PUBLIC_BASE_URL: http://tower.local:8080\n",
 				"  home: https://github.com/spdrman/rclone-manager\n",
 				"  icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/docs/submission/icon.svg\n",
@@ -201,7 +201,7 @@ func TestSelfUpdateFetchRuleOnlyReadsExecutedFiles(t *testing.T) {
 	for _, path := range []string{
 		"catalog/app.yaml",
 		"README.md",
-		"template/backup-manager.xml",
+		"template/rclone-manager.xml",
 	} {
 		if v := CheckNoSelfUpdate(path, body); len(v) > 0 {
 			t.Errorf("%s is read, not executed, so a mention must not be a finding: %s", path, oneLine(v))
@@ -228,7 +228,7 @@ func TestMutatingARealPackagedFileTripsTheHardRules(t *testing.T) {
 		body string
 	}{
 		{CheckNoSelfUpdate, "no-self-update", "\npull_policy: always\n"},
-		{CheckNoFloatingTag, "no-floating-tag", "\n    image: ghcr.io/spdrman/backup-manager:latest\n"},
+		{CheckNoFloatingTag, "no-floating-tag", "\n    image: ghcr.io/spdrman/rclone-manager:latest\n"},
 		{CheckNoPrivilegedMode, "no-privileged-mode", "\n    privileged: true\n"},
 		{CheckNoMandatoryTelemetry, "no-mandatory-telemetry", "\n      TELEMETRY_ENDPOINT: https://collector.example.invalid/ingest\n"},
 	}
@@ -294,15 +294,15 @@ func TestImageTagUnderstandsEveryFloatingForm(t *testing.T) {
 		ref  string
 		kind tagKind
 	}{
-		{"ghcr.io/spdrman/backup-manager:1.0.0", tagPinned},
-		{"ghcr.io/spdrman/backup-manager@sha256:" + strings.Repeat("b", 64), tagPinned},
-		{"registry.invalid:5000/spdrman/backup-manager:1.0.0", tagPinned},
-		{"backup-manager:${VERSION:-dev}", tagVariable},
-		{"ghcr.io/spdrman/backup-manager", tagAbsent},
-		{"registry.invalid:5000/spdrman/backup-manager", tagAbsent},
-		{"ghcr.io/spdrman/backup-manager:latest", tagLatest},
-		{"ghcr.io/spdrman/backup-manager:LATEST", tagLatest},
-		{"backup-manager:${VERSION:-latest}", tagFloatingDefault},
+		{"ghcr.io/spdrman/rclone-manager:1.0.0", tagPinned},
+		{"ghcr.io/spdrman/rclone-manager@sha256:" + strings.Repeat("b", 64), tagPinned},
+		{"registry.invalid:5000/spdrman/rclone-manager:1.0.0", tagPinned},
+		{"rclone-manager:${VERSION:-dev}", tagVariable},
+		{"ghcr.io/spdrman/rclone-manager", tagAbsent},
+		{"registry.invalid:5000/spdrman/rclone-manager", tagAbsent},
+		{"ghcr.io/spdrman/rclone-manager:latest", tagLatest},
+		{"ghcr.io/spdrman/rclone-manager:LATEST", tagLatest},
+		{"rclone-manager:${VERSION:-latest}", tagFloatingDefault},
 	}
 	for _, tc := range cases {
 		if _, got := ImageTag(tc.ref); got != tc.kind {
@@ -322,8 +322,8 @@ func TestImageTagUnderstandsEveryFloatingForm(t *testing.T) {
 // about the fixture.
 const canonicalCompose = `
 services:
-  backup-manager:
-    image: ghcr.io/spdrman/backup-manager:0.3.3
+  rclone-manager:
+    image: ghcr.io/spdrman/rclone-manager:0.3.3
     command: ["/rbm-web", "serve"]
     user: "568:568"
     read_only: true
@@ -336,11 +336,11 @@ services:
     volumes:
       - "/host/state:/data/state"
       - "/host/backups:/data/backups"
-      - "/host/config:/etc/backup-manager/config"
-      - "/host/id_ed25519:/etc/backup-manager/id_ed25519:ro"
-      - "/host/known_hosts:/etc/backup-manager/known_hosts:ro"
-  backup-manager-ui:
-    image: ghcr.io/spdrman/backup-manager:0.3.3
+      - "/host/config:/etc/rclone-manager/config"
+      - "/host/id_ed25519:/etc/rclone-manager/id_ed25519:ro"
+      - "/host/known_hosts:/etc/rclone-manager/known_hosts:ro"
+  web-ui:
+    image: ghcr.io/spdrman/rclone-manager:0.3.3
     command: ["/rbm-web", "serve-ui"]
     user: "568:568"
     read_only: true
@@ -350,7 +350,7 @@ services:
     tmpfs: ["/tmp:size=16m"]
     environment:
       LISTEN_ADDR: ":8080"
-      UPSTREAM_ADDR: "http://backup-manager:8080"
+      UPSTREAM_ADDR: "http://rclone-manager:8080"
     healthcheck:
       test: ["CMD", "/rbm-web", "healthcheck"]
     ports:
@@ -391,7 +391,7 @@ func TestEveryDriftElementFailsOnADeliberateMismatch(t *testing.T) {
 		{
 			capability: "drift-image-reference",
 			provider:   "truenas",
-			mutate:     func(s string) string { return strings.ReplaceAll(s, "backup-manager:0.3.3", "backup-manager:9.9.9") },
+			mutate:     func(s string) string { return strings.ReplaceAll(s, "rclone-manager:0.3.3", "rclone-manager:9.9.9") },
 			wants:      "9.9.9",
 		},
 		{
@@ -1083,7 +1083,7 @@ func TestTelemetryRuleReadsAddressLiteralsAsHosts(t *testing.T) {
 	// packages are full of.
 	local := []string{
 		"http://localhost:8080",
-		"http://backup-manager:8080",
+		"http://rclone-manager:8080",
 		"http://tower.local:8080",
 		"http://127.0.0.1:8080",
 		"http://[::1]:8080",
@@ -1111,7 +1111,7 @@ func TestTelemetryRuleReadsAddressLiteralsAsHosts(t *testing.T) {
 		"[2001:db8::1]":                    true,
 		"::ffff:203.0.113.9":               true,
 		"localhost":                        false,
-		"backup-manager":                   false,
+		"rclone-manager":                   false,
 		"tower.local":                      false,
 		"127.0.0.1":                        false,
 		"::1":                              false,

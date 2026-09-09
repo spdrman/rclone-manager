@@ -32,9 +32,9 @@
 # that could have produced the broken combination on its own no longer can.
 #
 # What did NOT change is everything that names the project rather than
-# the command: `image: backup-manager:...`, the `rclone-manager` and
+# the command: `image: rclone-manager:...`, the `rclone-manager` and
 # `web-ui` service names, and the container config directory at
-# /etc/backup-manager. Renaming any of those would move an operator's
+# /etc/rclone-manager. Renaming any of those would move an operator's
 # data or break their tooling for no gain.
 #
 # TWO SERVICES, ONE IMAGE (project-owner requirement, folded in before
@@ -112,7 +112,7 @@ x-canonical-runtime:
   digest_policy:
     manifest: container/release-manifest.json
     pin: >-
-      Deploy by digest, not by tag: replace image: backup-manager:<tag>
+      Deploy by digest, not by tag: replace image: rclone-manager:<tag>
       with the registry reference plus the @sha256:... digest recorded for
       your architecture in the manifest above, and verify the binary
       SHA-256 recorded alongside it. A tag can be moved; a digest cannot.
@@ -159,7 +159,7 @@ services:
         # local build but not what a release should ship.
         VERSION: ${VERSION:-dev}
         COMMIT: ${COMMIT:-none}
-    image: backup-manager:${VERSION:-dev}
+    image: rclone-manager:${VERSION:-dev}
 
     # `/rbm-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md
     # §9.2's "Generic Web App host") is the engine: local authentication,
@@ -335,14 +335,14 @@ services:
       # bind mount cannot say "not configured yet" about a file: Docker
       # creates a directory at a source path that does not exist, so the
       # state a fresh install actually starts in was not representable.
-      - ${CONFIG_DIR:?set CONFIG_DIR in .env to the directory holding config.yaml}:/etc/backup-manager/config
+      - ${CONFIG_DIR:?set CONFIG_DIR in .env to the directory holding config.yaml}:/etc/rclone-manager/config
 
       # Credentials stay read-only single files. Nothing in this
       # container writes them, and the shapes are two different claims.
       # Nothing here is baked into the image or into this file — only
       # host paths, resolved at `docker compose up` time.
-      - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
-      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
+      - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/rclone-manager/id_ed25519:ro
+      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/rclone-manager/known_hosts:ro
 
     # `unless-stopped`: restart across crashes and NAS reboots, but stay
     # down if an operator deliberately stops it — the right policy now that
@@ -423,7 +423,7 @@ services:
     # produced and tagged (docker compose resolves `image:` against
     # whatever is already built/pulled under that tag). Same digest, same
     # binary, different command - never a second image to keep in sync.
-    image: backup-manager:${VERSION:-dev}
+    image: rclone-manager:${VERSION:-dev}
 
     # Wait for the engine to report healthy before starting: a NAS reboot
     # (or `docker compose up`) starting both containers at once would

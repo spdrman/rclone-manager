@@ -1,5 +1,5 @@
 {
-  "name": "@backup-manager/ui-shared",
+  "name": "@rclone-manager/ui-shared",
   "private": true,
   "version": "1.3.0",
   "type": "module",

@@ -106,7 +106,7 @@ func TestLocalLocatorIsTheLiteralPathEveryDeploymentAlreadyHas(t *testing.T) {
 		{"/data/backups", "backup.dump.zst", "/data/backups/backup.dump.zst"},
 		{"/data/backups", "a b.tar", "/data/backups/a b.tar"},
 		{"/data/backups", "2026-09-01T00-00-00Z.sql", "/data/backups/2026-09-01T00-00-00Z.sql"},
-		{"/mnt/tank/backup-manager/backups", "backup.dump", "/mnt/tank/backup-manager/backups/backup.dump"},
+		{"/mnt/tank/rclone-manager/backups", "backup.dump", "/mnt/tank/rclone-manager/backups/backup.dump"},
 		{"/data/backups/", "backup.dump", "/data/backups/backup.dump"},
 		{"relative/dir", "backup.dump", "relative/dir/backup.dump"},
 	}

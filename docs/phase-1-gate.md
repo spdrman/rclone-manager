@@ -22,7 +22,7 @@ stable, exported rclone APIs. The subprocess fallback is not needed.
 
 | # | Requirement | Result | Evidence |
 |---|---|---|---|
-| 1 | A Go application embeds rclone successfully | PASS | `go build ./...` on this module; `cmd/backup-manager` links against the pinned rclone v1.75.0 with no CGO. |
+| 1 | A Go application embeds rclone successfully | PASS | `go build ./...` on this module; `cmd/rbm` links against the pinned rclone v1.75.0 with no CGO. |
 | 2 | Only the local and SFTP backends are registered | PASS, with a documented exception | `local` and `sftp` are the only direct imports. `fs.Registry` also has `crypt`, registered transitively through `fs/operations` (needed for `operations.Copy`). Traced, measured (~2% of binary size) and accepted in `internal/transport/rclone/backends.go`, enforced by `TestRegisteredBackendsExactSet` so it can never widen silently. See "What did not pass outright" below for why this doesn't sink the gate. |
 | 3 | Remote listing works | PASS | `TestPhase1Gate/Listing` and `/Connects`, real `Adapter.List` against `tests/sftpfixture`'s Docker SFTP server. |
 | 4 | Single-file copy works | PASS | `TestPhase1Gate/CopyAndTransferStatistics` copies a 256KiB file over SFTP and compares it byte-for-byte against the source. |

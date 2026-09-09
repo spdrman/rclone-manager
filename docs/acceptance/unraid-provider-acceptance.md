@@ -38,13 +38,13 @@ it. If you skip it, the UI container starts, serves the static bundle, and then
 
 ### 0.1 Make the canonical image resolvable
 
-`ghcr.io/spdrman/backup-manager:0.3.3` is cut but not pushed yet:
+`ghcr.io/spdrman/rclone-manager:0.3.3` is cut but not pushed yet:
 `distribution/packaging/canonical.json` records `image.published: false`, and
 `container/release-manifest.json` carries a `registry_digest` of `null` per
 architecture. So the reference does not resolve from the registry today, and the
 steps below are how you make it resolve, by pushing a build to a registry this host
 can reach or building elsewhere and loading it. The previous release,
-`ghcr.io/spdrman/backup-manager:0.3.0`, stays published and signed if you would
+`ghcr.io/spdrman/rclone-manager:0.3.0`, stays published and signed if you would
 rather run that. Either push to your own registry:
 
 ```bash
@@ -53,16 +53,16 @@ docker buildx build \
   --build-arg VERSION="$(git describe --tags --always)" \
   --build-arg COMMIT="$(git rev-parse HEAD)" \
   -f container/Dockerfile \
-  -t <your-registry>/backup-manager:<version> \
+  -t <your-registry>/rclone-manager:<version> \
   --push .
 ```
 
 or side-load, and edit `Repository` in the Unraid template editor at install time:
 
 ```bash
-docker save backup-manager:<version> | gzip > backup-manager.tar.gz
-scp backup-manager.tar.gz root@<unraid>:/mnt/user/
-ssh root@<unraid> 'gunzip -c /mnt/user/backup-manager.tar.gz | docker load'
+docker save rclone-manager:<version> | gzip > rclone-manager.tar.gz
+scp rclone-manager.tar.gz root@<unraid>:/mnt/user/
+ssh root@<unraid> 'gunzip -c /mnt/user/rclone-manager.tar.gz | docker load'
 ```
 
 - [ ] Canonical image resolvable on the NAS, reference recorded
@@ -70,11 +70,11 @@ ssh root@<unraid> 'gunzip -c /mnt/user/backup-manager.tar.gz | docker load'
 ### 0.2 Create the user-defined network
 
 ```bash
-docker network create backup-manager
-docker network inspect backup-manager --format '{{.Driver}} {{.Name}}'
+docker network create rclone-manager
+docker network inspect rclone-manager --format '{{.Driver}} {{.Name}}'
 ```
 
-- [ ] A user-defined bridge network named `backup-manager` exists
+- [ ] A user-defined bridge network named `rclone-manager` exists
 - [ ] It appears in the **Network Type** dropdown in Unraid's Docker template editor
 
 ### 0.3 Create the appdata and backup shares
@@ -84,9 +84,9 @@ Host-path defaults come from `distribution/packaging/canonical.json`
 and the Unraid frontend bridge already declare:
 
 ```bash
-mkdir -p /mnt/user/appdata/backup-manager/{state,config,secrets}
-mkdir -p /mnt/user/backups/backup-manager
-chmod 700 /mnt/user/appdata/backup-manager/secrets
+mkdir -p /mnt/user/appdata/rclone-manager/{state,config,secrets}
+mkdir -p /mnt/user/backups/rclone-manager
+chmod 700 /mnt/user/appdata/rclone-manager/secrets
 ```
 
 `/mnt/user/backups` must be a real user share Backup Manager can write to, not a
@@ -94,15 +94,15 @@ directory inside appdata. Appdata holds the catalog database; the share holds
 retained backup data. §19.2 makes those two separate security domains, and the
 whole removal criterion below depends on them being separate.
 
-The backup root is `backup-manager` **inside** that share, not the share itself.
+The backup root is `rclone-manager` **inside** that share, not the share itself.
 `backups` is one of the likeliest names for a share you already use for something
 else, and this procedure creates directories, owns them and later checks nothing
 outside them changed. Keeping the app inside a directory of its own means every
 one of those steps only ever touches paths this procedure created.
 
-- [ ] `appdata/backup-manager/{state,config,secrets}` exist
+- [ ] `appdata/rclone-manager/{state,config,secrets}` exist
 - [ ] A `backups` user share exists and is writable
-- [ ] `backups/backup-manager` exists and was created by this step
+- [ ] `backups/rclone-manager` exists and was created by this step
 
 ### 0.4 Own them by the uid/gid the app runs as
 
@@ -112,8 +112,8 @@ nothing inside the container can chown these for you at startup.
 Unraid's conventional account is `99:100` (`nobody:users`):
 
 ```bash
-chown -R 99:100 /mnt/user/appdata/backup-manager
-chown 99:100 /mnt/user/backups/backup-manager
+chown -R 99:100 /mnt/user/appdata/rclone-manager
+chown 99:100 /mnt/user/backups/rclone-manager
 ```
 
 Only paths this procedure created, and the backup root non-recursively. A
@@ -123,7 +123,7 @@ record nobody took, and crawls the `/mnt/user` FUSE layer for as long as that
 takes. On a reinstall the same command would rewrite the retained backup store.
 
 - [ ] `PUID`/`PGID` chosen and recorded
-- [ ] appdata tree and `backups/backup-manager` owned by that uid/gid
+- [ ] appdata tree and `backups/rclone-manager` owned by that uid/gid
 - [ ] Nothing else in the `backups` share had its ownership changed
 
 ### 0.5 Create the SSH key, the pinned known_hosts, and the config
@@ -162,31 +162,31 @@ without a valid config: removing that refusal, and serving a first-run flow inst
 the directory becomes optional.
 
 ```bash
-ssh-keygen -t ed25519 -N '' -f /mnt/user/appdata/backup-manager/secrets/id_ed25519
-ssh-keyscan -t ed25519 <your-sftp-host> > /mnt/user/appdata/backup-manager/secrets/known_hosts
-chmod 600 /mnt/user/appdata/backup-manager/secrets/id_ed25519
-chown 99:100 /mnt/user/appdata/backup-manager/secrets/*
+ssh-keygen -t ed25519 -N '' -f /mnt/user/appdata/rclone-manager/secrets/id_ed25519
+ssh-keyscan -t ed25519 <your-sftp-host> > /mnt/user/appdata/rclone-manager/secrets/known_hosts
+chmod 600 /mnt/user/appdata/rclone-manager/secrets/id_ed25519
+chown 99:100 /mnt/user/appdata/rclone-manager/secrets/*
 ```
 
 Verify the host key fingerprint out of band. Then write
-`/mnt/user/appdata/backup-manager/config/config.yaml` using the annotated example
+`/mnt/user/appdata/rclone-manager/config/config.yaml` using the annotated example
 in `apps/unraid/README.md`.
 
 **Never commit the private key, the config, or any transcript containing them.**
 
 - [ ] Key pair generated, mode 0600, owned by `PUID:PGID`
 - [ ] `known_hosts` pinned, fingerprint verified out of band
-- [ ] `/mnt/user/appdata/backup-manager/config` exists and is **writable** by `PUID:PGID`
+- [ ] `/mnt/user/appdata/rclone-manager/config` exists and is **writable** by `PUID:PGID`
 - [ ] `config.yaml` written inside it and readable by `PUID:PGID`
 
 ---
 
 ## Step 1 — Install the engine template
 
-1. Copy `apps/unraid/template/backup-manager.xml` to
-   `/boot/config/plugins/dockerMan/templates-user/my-backup-manager.xml` on the
+1. Copy `apps/unraid/template/rclone-manager.xml` to
+   `/boot/config/plugins/dockerMan/templates-user/my-rclone-manager.xml` on the
    Unraid flash drive.
-2. **Docker → Add Container**, and pick `backup-manager` from the
+2. **Docker → Add Container**, and pick `rclone-manager` from the
    **user templates** section of the template dropdown.
 3. Check every mapping against step 0's paths and the defaults the template
    supplied. Change nothing you did not have to.
@@ -202,15 +202,15 @@ in `apps/unraid/README.md`.
       on this verdict and it is the backup-freshness badge FR-24 means it to be.
       On a fresh install it will be red until the first backup lands)
 - [ ] It has **no published port** (`docker port <engine>` prints nothing)
-- [ ] It is attached to the `backup-manager` network
+- [ ] It is attached to the `rclone-manager` network
 
 ---
 
 ## Step 2 — Install the Web UI template
 
-1. Copy `apps/unraid/template/backup-manager-ui.xml` to
-   `/boot/config/plugins/dockerMan/templates-user/my-backup-manager-ui.xml`.
-2. **Docker → Add Container**, pick `backup-manager-ui`.
+1. Copy `apps/unraid/template/rclone-manager-ui.xml` to
+   `/boot/config/plugins/dockerMan/templates-user/my-web-ui.xml`.
+2. **Docker → Add Container**, pick `web-ui`.
 3. Apply.
 
 - [ ] The container starts and reaches Docker health **healthy** via its own
@@ -218,7 +218,7 @@ in `apps/unraid/README.md`.
       `/rbm status` (which would fail: this container has no config
       file and no state database)
 - [ ] It publishes exactly one port
-- [ ] It is attached to the `backup-manager` network
+- [ ] It is attached to the `rclone-manager` network
 - [ ] It has **no** volume mappings at all: it never reads the config, the key,
       `known_hosts`, or either data directory
 
@@ -260,7 +260,7 @@ generic Web host provides (§13A).
 - [ ] Enrollment succeeds, logout then login succeeds
 - [ ] The enrollment link is refused the second time
 - [ ] `GET /api/v1/system/capabilities` reports `nativeAuth: false`
-- [ ] `/mnt/user/appdata/backup-manager/state/local-auth.json` holds an Argon2id
+- [ ] `/mnt/user/appdata/rclone-manager/state/local-auth.json` holds an Argon2id
       hash, never a plaintext password
 - [ ] Backup Manager's login is completely independent of Unraid's own root
       password, and neither can log into the other
@@ -272,9 +272,9 @@ generic Web host provides (§13A).
 Run one backup cycle to completion, then:
 
 ```bash
-ls -la /mnt/user/backups/backup-manager
-ls -la /mnt/user/appdata/backup-manager/state
-grep -rIl 'PRIVATE KEY' /mnt/user/backups/backup-manager || echo "clean"
+ls -la /mnt/user/backups/rclone-manager
+ls -la /mnt/user/appdata/rclone-manager/state
+grep -rIl 'PRIVATE KEY' /mnt/user/backups/rclone-manager || echo "clean"
 ```
 
 Then record a baseline for the removal check at the end of this procedure. The
@@ -286,20 +286,20 @@ hash and a full file listing **outside** the backup root, where whatever might
 damage that tree cannot reach the evidence:
 
 ```bash
-mkdir -p /root/backup-manager-acceptance
-head -c 8M /dev/urandom > /mnt/user/backups/backup-manager/canary.bin
-sha256sum /mnt/user/backups/backup-manager/canary.bin | tee /root/backup-manager-acceptance/canary.sha256
-find /mnt/user/backups/backup-manager -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.before
+mkdir -p /root/rclone-manager-acceptance
+head -c 8M /dev/urandom > /mnt/user/backups/rclone-manager/canary.bin
+sha256sum /mnt/user/backups/rclone-manager/canary.bin | tee /root/rclone-manager-acceptance/canary.sha256
+find /mnt/user/backups/rclone-manager -type f -printf '%p %s\n' | sort > /root/rclone-manager-acceptance/backup-root.before
 ```
 
-Keep `/root/backup-manager-acceptance` off the repository: the listing names your own backup
+Keep `/root/rclone-manager-acceptance` off the repository: the listing names your own backup
 sets. Record only that it was taken, and the canary's hash, in the evidence table.
 
-- [ ] At least one completed artifact is under `/mnt/user/backups/backup-manager`
+- [ ] At least one completed artifact is under `/mnt/user/backups/rclone-manager`
 - [ ] `state.db` and `local-auth.json` are under appdata, **not** under the
       backup root
 - [ ] No private key, `known_hosts`, or auth state anywhere under
-      `/mnt/user/backups/backup-manager` (§19.2)
+      `/mnt/user/backups/rclone-manager` (§19.2)
 - [ ] Nothing was written anywhere else in the `backups` share
 - [ ] A sidecar recovery manifest sits next to the artifact and contains no
       secret material (§19.3)
@@ -316,12 +316,12 @@ the case most likely to lose state.
 1. Capture a baseline first, from the Unraid terminal, so the checks below are a
    comparison rather than an impression:
    ```bash
-   sha256sum /mnt/user/appdata/backup-manager/state/state.db | tee /tmp/before-update.sha256
+   sha256sum /mnt/user/appdata/rclone-manager/state/state.db | tee /tmp/before-update.sha256
    find /mnt/user/backups -type f -printf '%p %s\n' | sort > /tmp/before-update.txt
    ```
 2. Push or side-load a newer image tag.
-3. **Docker → backup-manager → Force Update** (or edit the tag and Apply). Do the
-   same for `backup-manager-ui`.
+3. **Docker → rclone-manager → Force Update** (or edit the tag and Apply). Do the
+   same for `web-ui`.
 4. Compare afterwards:
    ```bash
    find /mnt/user/backups -type f -printf '%p %s\n' | sort > /tmp/after-update.txt
@@ -366,8 +366,8 @@ storage step, because after the removal there is nothing left to compare
 against, and any deletion the comparison turns up is a release blocker rather
 than a finding to triage.
 
-1. **Docker → backup-manager → Remove**, and remove the image too.
-2. Repeat for `backup-manager-ui`.
+1. **Docker → rclone-manager → Remove**, and remove the image too.
+2. Repeat for `web-ui`.
 
 - [ ] Both containers are gone
 
@@ -375,15 +375,15 @@ Check the backup root against the baseline recorded in the storage step, before
 looking at anything else:
 
 ```bash
-sha256sum -c /root/backup-manager-acceptance/canary.sha256
-find /mnt/user/backups/backup-manager -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.after
-diff /root/backup-manager-acceptance/backup-root.before /root/backup-manager-acceptance/backup-root.after
+sha256sum -c /root/rclone-manager-acceptance/canary.sha256
+find /mnt/user/backups/rclone-manager -type f -printf '%p %s\n' | sort > /root/rclone-manager-acceptance/backup-root.after
+diff /root/rclone-manager-acceptance/backup-root.before /root/rclone-manager-acceptance/backup-root.after
 ```
 
 - [ ] `sha256sum -c` reports the canary `OK`
 - [ ] The `diff` against the recorded listing is empty, so the backup root is
       untouched, byte for byte, and every artifact is still readable
-- [ ] `/mnt/user/appdata/backup-manager` is untouched (Unraid does not delete
+- [ ] `/mnt/user/appdata/rclone-manager` is untouched (Unraid does not delete
       appdata on container removal, and the package must not either)
 - [ ] Nothing elsewhere in the `backups` share changed
 - [ ] Nothing outside the declared host paths was touched
@@ -402,7 +402,7 @@ part of it can run on a developer laptop, so it lives here.
 - [ ] `<TemplateURL>`, `<Project>`, `<Support>`, `<Icon>` and `<Overview>` all
       resolve to real, reachable URLs
 - [ ] `<Category>` is a category CA actually recognises
-- [ ] `<Requires>` states the `docker network create backup-manager`
+- [ ] `<Requires>` states the `docker network create rclone-manager`
       prerequisite from step 0.2 clearly enough that a first-time installer sees
       it before installing
 - [ ] Installing from CA (not from a hand-copied file) produces the same result

@@ -22,8 +22,8 @@ services:
   # The engine: local authentication, the versioned /api/v1 API and the
   # scheduler, one process sharing one shutdown context. Holds the state
   # database and the credentials, and publishes no port at all.
-  backup-manager:
-    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.3.3}
+  rclone-manager:
+    image: ${IMAGE:-ghcr.io/spdrman/rclone-manager:0.3.3}
     command: ["/rbm-web", "serve", "--profile=generic"]
 
     user: "${PUID:-1000}:${PGID:-1000}"
@@ -70,13 +70,13 @@ services:
     volumes:
       - ${STATE_DIR:?set STATE_DIR to the host directory for the SQLite state directory}:/data/state
       - ${BACKUP_DIR:?set BACKUP_DIR to the host directory retained artifacts land in}:/data/backups
-      - ${CONFIG_DIR:?set CONFIG_DIR to the host directory holding config.yaml}:/etc/backup-manager/config
-      - ${KEY_FILE:?set KEY_FILE to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
-      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
+      - ${CONFIG_DIR:?set CONFIG_DIR to the host directory holding config.yaml}:/etc/rclone-manager/config
+      - ${KEY_FILE:?set KEY_FILE to the SFTP private key}:/etc/rclone-manager/id_ed25519:ro
+      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE to the pinned known_hosts file}:/etc/rclone-manager/known_hosts:ro
 
     # The start gate, and a liveness question rather than a health
     # verdict (issue #206). The Web UI below declares
-    # `depends_on: backup-manager: condition: service_healthy`, so
+    # `depends_on: rclone-manager: condition: service_healthy`, so
     # whatever this asks stands between an operator and the only
     # container with a published port. `/rbm status` is
     # FR-24's backup-freshness verdict and exits non-zero on any
@@ -90,7 +90,7 @@ services:
     # is the right default for a plain `docker run` and for the headless
     # `daemon` command, which serves no HTTP and so has no liveness
     # endpoint to ask. Backup freshness is not lost - read it with
-    # `docker exec backup-manager /rbm status`, or let the
+    # `docker exec rclone-manager /rbm status`, or let the
     # alerts block deliver it.
     #
     # Derived from container/compose.yaml, never authored here.
@@ -114,12 +114,12 @@ services:
   # engine. The only container with a published port, and the only URL an
   # operator ever opens. Portainer's "Published ports" link on the stack
   # view points at this one.
-  backup-manager-ui:
-    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:0.3.3}
+  web-ui:
+    image: ${IMAGE:-ghcr.io/spdrman/rclone-manager:0.3.3}
     command: ["/rbm-web", "serve-ui", "--profile=generic"]
 
     depends_on:
-      backup-manager:
+      rclone-manager:
         condition: service_healthy
 
     user: "${PUID:-1000}:${PGID:-1000}"
@@ -135,7 +135,7 @@ services:
     environment:
       TMPDIR: "/tmp"
       LISTEN_ADDR: ":8080"
-      UPSTREAM_ADDR: "http://backup-manager:8080"
+      UPSTREAM_ADDR: "http://rclone-manager:8080"
 
     # Neither UI_DIR nor UI_ROOT, on purpose: this adapter serves the
     # bundle compiled into the binary. apps/portainer/README.md has the

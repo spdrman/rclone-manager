@@ -446,7 +446,7 @@ func serviceWithArchivedCopy(t *testing.T, store *recordingRestoreStore) (*Backu
 			Bucket:       "backups",
 			Prefix:       "prefix",
 			StorageClass: config.StorageClassDeepArchive,
-			Credentials:  config.MediumCredentials{File: "/var/lib/backup-manager/s3.creds"},
+			Credentials:  config.MediumCredentials{File: "/var/lib/rclone-manager/s3.creds"},
 		},
 		{
 			ID:           "warm-store",
@@ -454,7 +454,7 @@ func serviceWithArchivedCopy(t *testing.T, store *recordingRestoreStore) (*Backu
 			Region:       "us-east-1",
 			Bucket:       "warm-backups",
 			StorageClass: config.StorageClassStandard,
-			Credentials:  config.MediumCredentials{File: "/var/lib/backup-manager/s3.creds"},
+			Credentials:  config.MediumCredentials{File: "/var/lib/rclone-manager/s3.creds"},
 		},
 	}
 

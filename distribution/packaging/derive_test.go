@@ -358,7 +358,7 @@ func TestAThirdContainerIsRefused(t *testing.T) {
 	p := allPlatforms()[0]
 	a := adapterRuntimes(t, p, c)[0].rt
 
-	a.Others = append(a.Others, Service{Name: "backup-manager-sidecar", Command: []string{"/usr/bin/some-agent"}})
+	a.Others = append(a.Others, Service{Name: "rclone-manager-sidecar", Command: []string{"/usr/bin/some-agent"}})
 	d := CheckDerivation(a, c)
 	if !namesField(d, FieldRuntimeProfile) {
 		t.Errorf("a third container produced %s, want a refusal naming %q", FormatDrift(d), FieldRuntimeProfile)

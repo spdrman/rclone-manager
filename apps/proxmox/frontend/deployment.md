@@ -10,11 +10,11 @@ management UI.
 | --- | --- |
 | Platform | Proxmox VE |
 | Deployment | Dedicated container host (VM by default) |
-| Storage mount | `/mnt/backup-manager/backups` (inside the guest) |
+| Storage mount | `/mnt/rclone-manager/backups` (inside the guest) |
 | Authentication | Backup Manager local account |
 
 The storage mount is the backup root, not the share root. The guest sees the
-shared PVE host directory or dataset at `/mnt/backup-manager`, and retained
+shared PVE host directory or dataset at `/mnt/rclone-manager`, and retained
 artifacts land in its `backups` child, so state, config and key material sit
 beside them rather than inside them.
 

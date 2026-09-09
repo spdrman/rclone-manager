@@ -288,7 +288,7 @@ go.mod
 go.sum
 
 cmd/
-  backup-manager/
+  rclone-manager/
 
 internal/
   app/
@@ -323,7 +323,7 @@ container/
   compose.yaml
 ```
 
-This was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`.
+This was originally scoped as `tools/rclone-manager/` inside `iasbuilt/iac`.
 The project now lives in its own repository, so the module root is the
 repository root. Nothing else in this specification depends on the
 location.
@@ -466,7 +466,7 @@ Configuration SHALL support at minimum:
 poll_interval: 15m
 
 state:
-  database: /var/lib/backup-manager/state.db
+  database: /var/lib/rclone-manager/state.db
 
 sources:
   - id: production
@@ -480,7 +480,7 @@ sources:
           port: 22
           user: backup
           key_file: /run/secrets/backup_ssh_key
-          known_hosts: /etc/backup-manager/known_hosts
+          known_hosts: /etc/rclone-manager/known_hosts
 
         remote_path: /backups/postgres
         local_path: /backups/production/postgres
@@ -684,11 +684,11 @@ remote:
   type: sftp
   host: cicd-pipeline.example
   user: backup
-  known_hosts: /etc/backup-manager/known_hosts
+  known_hosts: /etc/rclone-manager/known_hosts
   key:
-    file: /etc/backup-manager/id_ed25519
+    file: /etc/rclone-manager/id_ed25519
     # env: BACKUP_SSH_KEY
-    # command: ["op", "read", "op://infra/backup-manager/private-key"]
+    # command: ["op", "read", "op://infra/rclone-manager/private-key"]
 ```
 
 `key_file` (a bare path, no `key:` block) keeps working unchanged as a

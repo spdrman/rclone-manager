@@ -141,7 +141,7 @@ type AdapterRuntime struct {
 
 // ReduceToRoles sorts an adapter's services into the two canonical roles
 // by the COMMAND each one runs, never by its name. apps/truenas calls
-// them backup-manager/backup-manager-ui and container/compose.yaml calls
+// them rclone-manager/web-ui and container/compose.yaml calls
 // them rclone-manager/web-ui; a check keyed on the name would silently
 // stop checking the moment someone renamed one.
 func ReduceToRoles(platform string, svcs []Service, c Canonical) (AdapterRuntime, []Drift) {

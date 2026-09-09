@@ -333,7 +333,7 @@ func dialEngine() (*apiclient.Client, error) {
 		BaseURL:   base,
 		Username:  os.Getenv(apiUsernameEnv),
 		Password:  os.Getenv(apiPasswordEnv),
-		UserAgent: "backup-manager-cli/" + version,
+		UserAgent: "rclone-manager-cli/" + version,
 	})
 }
 

@@ -54,14 +54,14 @@ type configMountShape struct {
 var configMountShapes = []configMountShape{
 	{
 		// What canonical.json declared before #196:
-		//   <host>/config/config.yaml:/etc/backup-manager/config.yaml:ro
+		//   <host>/config/config.yaml:/etc/rclone-manager/config.yaml:ro
 		name:             "read-only single-file mount (pre-#196 packaging)",
 		readOnly:         true,
 		wantWritesToFail: true,
 	},
 	{
 		// What canonical.json declares now:
-		//   <host>/config:/etc/backup-manager/config
+		//   <host>/config:/etc/rclone-manager/config
 		name:             "writable directory mount (#196)",
 		readOnly:         false,
 		wantWritesToFail: false,

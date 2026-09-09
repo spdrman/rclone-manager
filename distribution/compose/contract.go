@@ -310,7 +310,7 @@ func (d Document) ServiceNames() []string {
 // Roles maps each service name to its role.
 //
 // The role comes from the command, never from the name. apps/truenas
-// calls its two services backup-manager and backup-manager-ui and the
+// calls its two services rclone-manager and web-ui and the
 // canonical file calls them rclone-manager and web-ui; a check keyed on
 // the name would silently stop checking the moment someone renamed one.
 func (d Document) Roles() map[string]Role {
@@ -388,13 +388,13 @@ func (d Document) Mounts(service map[string]any) []Mount {
 // carries a colon inside its message, and splitting the raw string on
 // ":" turned
 //
-//	${KEY_FILE:?set KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
+//	${KEY_FILE:?set KEY_FILE in .env to the SFTP private key}:/etc/rclone-manager/id_ed25519:ro
 //
 // into HostPath "${KEY_FILE", ContainerPath "?set KEY_FILE in .env to
 // the SFTP private key" and ReadOnly false. Every prohibited-path
 // comparison against that HostPath then matched nothing, with no
 // diagnostic, which is a security gate failing open rather than a parse
-// bug. apps/proxmox/compose/backup-manager.yml was already being checked
+// bug. apps/proxmox/compose/rclone-manager.yml was already being checked
 // that way. Compose's long volume syntax degraded the same way, through
 // a map rendered as one string.
 func (d Document) UnparseableMounts(service map[string]any) []string {

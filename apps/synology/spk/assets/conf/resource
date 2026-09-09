@@ -2,7 +2,7 @@
     "data-share": {
         "shares": [
             {
-                "name": "backup-manager",
+                "name": "rclone-manager",
                 "once": false,
                 "permission": {
                     "rw": ["BackupManager"]

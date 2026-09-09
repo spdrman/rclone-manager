@@ -173,7 +173,7 @@ expect_unit_check_fails() {
 # already.
 #
 # The pattern defaults to everything, which is what `go test` does anyway,
-# so a caller that wants the whole package says nothing. core/cmd/backup-manager
+# so a caller that wants the whole package says nothing. core/cmd/rbm
 # is the caller that does not: the rest of its suite has nothing to do with
 # the control being set up, and a negative control that goes red for a
 # neighbour's reason is a negative control nobody can read.
@@ -363,7 +363,7 @@ d=$(mutant cli-renders-a-placement-line-unconditionally)
 # FR-35 allows an additive CLI column only when a non-local placement
 # exists. This is that column rendered on a deployment that has none,
 # which is the single most likely way EPIC E breaks this clause.
-swap "$d/core/cmd/backup-manager/artifacts.go" \
+swap "$d/core/cmd/rbm/artifacts.go" \
   '	if rec.RetentionTier != "" {
 		fmt.Printf("retention_tier:      %s\n", rec.RetentionTier)
 	}' \
@@ -379,7 +379,7 @@ d=$(mutant cli-retention-line-reshaped)
 # function instead, which is closer to the thing being guarded: the line is
 # allowed to say medium= when there IS one, and FR-35's promise is that a
 # deployment naming no medium sees exactly what it saw before.
-swap "$d/core/cmd/backup-manager/retention.go" \
+swap "$d/core/cmd/rbm/retention.go" \
   '	default:
 		return ""
 	}
@@ -394,7 +394,7 @@ d=$(mutant cli-usage-line-reworded)
 # The usage block is compared additively so a new subcommand does not
 # force a regeneration. This is the other direction: a line an operator
 # already reads, quietly reworded.
-swap "$d/core/cmd/backup-manager/main.go" \
+swap "$d/core/cmd/rbm/main.go" \
   '  reconcile                                      run FR-17 reconciliation for every backup set' \
   '  reconcile                                      reconcile every backup set'
 expect_cell_fails "a usage line reworded under an operator who already read it" "$d" \
@@ -410,7 +410,7 @@ echo "==> the commands nothing pinned in the first place"
 # 06b stayed green the whole time because additive-only forgives a line that
 # is merely new.
 #
-# The guard that closes it lives in core/cmd/backup-manager rather than in
+# The guard that closes it lives in core/cmd/rbm rather than in
 # the corpus package, because the list of registered commands is a map only
 # package main can read, and reading the map beats parsing the file that
 # declares it. It holds three real lists against each other, the map, the
@@ -423,29 +423,29 @@ echo "==> the commands nothing pinned in the first place"
 # every cell of that corpus passes. That is the hole. This is the thing that
 # sees it.
 expect_unit_gate_passes "the registered-command pin guard on an unmutated tree" "$root" \
-  ./cmd/backup-manager/ 'TestUsage_EveryRegisteredCommandIsPinned'
+  ./cmd/rbm/ 'TestUsage_EveryRegisteredCommandIsPinned'
 
 d=$(mutant command-registered-and-listed-but-never-pinned)
-swap "$d/core/cmd/backup-manager/main.go" \
+swap "$d/core/cmd/rbm/main.go" \
   '	"version":      cmdVersion,
 }' \
   '	"version":      cmdVersion,
 	"vacuum":       cmdVersion,
 }'
-swap "$d/core/cmd/backup-manager/main.go" \
+swap "$d/core/cmd/rbm/main.go" \
   '  version                                        report version information' \
   '  vacuum                                         compact the state database
   version                                        report version information'
 expect_unit_check_fails "a command registered and listed, with nothing pinning a word of what it prints" "$d" \
   "is a registered command whose usage entry nothing pins" \
-  ./cmd/backup-manager/ 'TestUsage_EveryRegisteredCommandIsPinned'
+  ./cmd/rbm/ 'TestUsage_EveryRegisteredCommandIsPinned'
 
 d=$(mutant command-registered-and-never-listed)
 # The shape `backup-set remove` shipped in (#391), which usage_test.go
 # already catches for the backup-set verbs and, since this batch, for the medium ones.
 # catalog and quarantine still dispatch against string literals, so nothing holds their
 # subcommands against usage.
-swap "$d/core/cmd/backup-manager/main.go" \
+swap "$d/core/cmd/rbm/main.go" \
   '	"version":      cmdVersion,
 }' \
   '	"version":      cmdVersion,
@@ -453,18 +453,18 @@ swap "$d/core/cmd/backup-manager/main.go" \
 }'
 expect_unit_check_fails "a command that is dispatchable and undiscoverable" "$d" \
   "is registered in the commands map and the usage block does not list it" \
-  ./cmd/backup-manager/ 'TestUsage_EveryRegisteredCommandIsPinned'
+  ./cmd/rbm/ 'TestUsage_EveryRegisteredCommandIsPinned'
 
 d=$(mutant usage-lists-a-verb-nothing-dispatches)
 # And the same gap read the other way: the only reference an operator has,
 # offering them a command that answers "unknown command".
-swap "$d/core/cmd/backup-manager/main.go" \
+swap "$d/core/cmd/rbm/main.go" \
   '  version                                        report version information' \
   '  vacuum                                         compact the state database
   version                                        report version information'
 expect_unit_check_fails "a usage entry for a verb nothing dispatches" "$d" \
   "and nothing dispatches it" \
-  ./cmd/backup-manager/ 'TestUsage_EveryRegisteredCommandIsPinned'
+  ./cmd/rbm/ 'TestUsage_EveryRegisteredCommandIsPinned'
 
 echo
 echo "==> what the /api/v1 contract already promises"
@@ -586,7 +586,7 @@ expect_cell_fails "the same backfill, with the corpus regenerated to accept it" 
 # wording carrying a changed validation outcome, which is the laundering
 # EPIC #536 came within one careful reviewer of shipping.
 d=$(mutant scoped-recapture-cannot-launder-another-cell)
-swap "$d/core/cmd/backup-manager/main.go" \
+swap "$d/core/cmd/rbm/main.go" \
   '  reconcile                                      run FR-17 reconciliation for every backup set' \
   '  reconcile                                      run FR-17 reconciliation across the deployment'
 swap "$d/core/internal/config/config.go" \

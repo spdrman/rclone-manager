@@ -283,7 +283,7 @@ func attachToEngine(ctx context.Context, engine *service.RunningEngine) (configW
 		// an operator can pick out of an access log. #543's claim is that a
 		// routed command leaves the same audit trail as the Web UI, and
 		// "Go-http-client/1.1" names no product and no version.
-		UserAgent: fmt.Sprintf("backup-manager/%s (api %s)", version, apicontract.Version),
+		UserAgent: fmt.Sprintf("rclone-manager/%s (api %s)", version, apicontract.Version),
 	})
 	if err != nil {
 		// A routeRefusal like every other way this function refuses a

@@ -15,14 +15,14 @@ poll_interval: 15m
 
 state:
   # The SQLite lifecycle journal. Under var/, which survives upgrades.
-  database: /var/packages/BackupManager/var/state/backup-manager.db
+  database: /var/packages/BackupManager/var/state/rclone-manager.db
 
 sources: []
 
 # Replace the empty list above with something like this. The paths assume
 # the shared folder this package asked DSM to create, which appears as
-# /volume1/backup-manager on a single-volume NAS - check `ls -d
-# /volume*/backup-manager` if yours has more than one volume.
+# /volume1/rclone-manager on a single-volume NAS - check `ls -d
+# /volume*/rclone-manager` if yours has more than one volume.
 #
 # sources:
 #   - id: production
@@ -35,7 +35,7 @@ sources: []
 #           key_file: /var/packages/BackupManager/etc/id_ed25519
 #           known_hosts: /var/packages/BackupManager/etc/known_hosts
 #         remote_path: /backups/postgres
-#         local_path: /volume1/backup-manager/production/postgres
+#         local_path: /volume1/rclone-manager/production/postgres
 #         completion:
 #           strategy: stable
 #           stable_for: 10m

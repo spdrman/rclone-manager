@@ -55,7 +55,7 @@ func New() *Adapter { return &Adapter{} }
 // Transport half of the boundary; medium.go carries the matching one for
 // MediumStore. It is worth having because nothing here forces it:
 // production wiring hands rclone.New() straight to a constructor
-// (core/service's New, core/cmd/backup-manager's setup), so a method whose
+// (core/service's New, core/cmd/rbm's setup), so a method whose
 // signature drifted would fail over there, with an error about the caller
 // rather than one about the adapter.
 var _ transport.Transport = (*Adapter)(nil)

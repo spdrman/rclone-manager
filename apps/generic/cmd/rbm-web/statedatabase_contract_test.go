@@ -30,7 +30,7 @@ import (
 // the contract it holds its handlers to.
 var commandsThatNameTheJournal = []string{
 	filepath.Join("main.go"),
-	filepath.Join("..", "..", "..", "..", "core", "cmd", "backup-manager", "backupset.go"),
+	filepath.Join("..", "..", "..", "..", "core", "cmd", "rbm", "backupset.go"),
 }
 
 // TestBothCommandsTakeTheJournalFromThisOneDefinition goes red if the two

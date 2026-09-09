@@ -1,5 +1,5 @@
 // run_test.go pins the §9.3 orchestration contract this issue moves here
-// from apps/generic/cmd/backup-manager-web's former cmdServe: the HTTP
+// from apps/generic/cmd/rbm-web's former cmdServe: the HTTP
 // server and the background scheduler run as two independent goroutines
 // racing against one shared shutdown context, and neither one's own
 // failure is allowed to go unnoticed.
@@ -231,7 +231,7 @@ func TestRunEngine_ServerErrorCancelsScheduler(t *testing.T) {
 // TestNewHTTPServer_SetsTimeouts is issue #119's review finding that
 // neither http.Server the generic Web host built set any request-level
 // timeout at all (the standard Go "Slowloris" gap) - moved here from
-// apps/generic/cmd/backup-manager-web's former newHTTPServer helper,
+// apps/generic/cmd/rbm-web's former newHTTPServer helper,
 // which every caller (serve and serve-ui) now gets from this shared
 // constructor instead of building its own.
 func TestNewHTTPServer_SetsTimeouts(t *testing.T) {

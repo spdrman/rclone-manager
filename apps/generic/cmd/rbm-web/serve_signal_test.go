@@ -37,7 +37,7 @@ import (
 // of a function call, so it can only be observed from outside one. These
 // three environment variables turn this test binary into the engine when
 // the test below re-executes it, the same trick
-// core/cmd/backup-manager/daemon_signal_test.go uses for `daemon`, and
+// core/cmd/rbm/daemon_signal_test.go uses for `daemon`, and
 // for the same reason: the child runs the same run() main dispatches to,
 // so what it exits with is what the shipped binary exits with.
 const (
@@ -54,7 +54,7 @@ const (
 // serveShutdownNotice is the line `serve` prints once its own shutdown
 // has actually finished. Spelled out here as a literal rather than
 // imported from the command, exactly the way
-// core/cmd/backup-manager/daemon_signal_test.go pins "daemon_stop": what
+// core/cmd/rbm/daemon_signal_test.go pins "daemon_stop": what
 // this test is about is what an operator reading the container's logs
 // sees, so the assertion has to be against the text itself.
 var serveShutdownNotice = cliecho.WebBinary + ": shutdown complete"
@@ -83,7 +83,7 @@ func TestServeChildProcess(t *testing.T) {
 	os.Exit(run(args))
 }
 
-// writeServeTestConfig mirrors core/cmd/backup-manager/main_test.go's own
+// writeServeTestConfig mirrors core/cmd/rbm/main_test.go's own
 // writeTestConfig, with one thing added on purpose: a real file sitting
 // on the (local-backend) remote, so the first scheduled cycle actually
 // transfers something. See the test below for why that matters.

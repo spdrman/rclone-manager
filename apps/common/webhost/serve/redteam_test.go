@@ -20,7 +20,7 @@
 // asked about the wrong hop.
 //
 // So this suite composes NewUI in front of NewEngine, exactly as
-// apps/generic/cmd/backup-manager-web does, and attacks the composition.
+// apps/generic/cmd/rbm-web does, and attacks the composition.
 //
 // # Every attack proves it arrived before it asserts it was stopped
 //

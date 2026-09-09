@@ -43,7 +43,7 @@ var (
 	cliBuildErr  error
 )
 
-// backupManagerCLI builds core/cmd/backup-manager once per test binary
+// backupManagerCLI builds core/cmd/rbm once per test binary
 // and returns the path to it. The build is shared because it is the
 // expensive part and the binary is immutable; each test still gets its
 // own config, journal and directories.
@@ -61,7 +61,7 @@ func backupManagerCLI(t *testing.T) string {
 			return
 		}
 		bin := filepath.Join(dir, "rbm")
-		cmd := exec.Command("go", "build", "-o", bin, "github.com/spdrman/rclone-manager/core/cmd/backup-manager")
+		cmd := exec.Command("go", "build", "-o", bin, "github.com/spdrman/rclone-manager/core/cmd/rbm")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			cliBuildErr = fmtBuildError(err, out)
 			return
@@ -103,7 +103,7 @@ func runCLI(t *testing.T, args ...string) string {
 // writeBoundaryConfig builds a minimal, valid config against real temp
 // directories, wired through the "local" transport so a real cycle needs
 // no network and no Docker — the same fixture shape
-// core/cmd/backup-manager's own main_test.go uses.
+// core/cmd/rbm's own main_test.go uses.
 func writeBoundaryConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

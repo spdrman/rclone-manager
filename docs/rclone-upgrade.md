@@ -71,8 +71,8 @@ that workflow to actually invoke it, and flip this table's row to Enforced.
    go build ./...
    go vet ./...
    go test ./...
-   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/backup-manager
-   GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/backup-manager
+   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/rbm
+   GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/rbm
    ```
 5. **Check what got registered, not just what got imported.** See the next
    section, this has bitten people before.
@@ -105,7 +105,7 @@ is large.
 
 **What gets linked into the binary** is a much smaller set: the Go linker
 only includes code reachable from `main`. Building
-`./cmd/backup-manager` for `linux/arm64` with `CGO_ENABLED=0` produces a
+`./cmd/rbm` for `linux/arm64` with `CGO_ENABLED=0` produces a
 21MB binary, nowhere near what you'd get if every cloud SDK in the module
 graph were actually linked in. Unused packages in the module graph cost
 resolve time and disk in the module cache; they do not cost binary size,

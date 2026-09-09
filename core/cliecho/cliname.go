@@ -16,13 +16,13 @@ package cliecho
 // survivable the moment it does. Renaming the command then means reading
 // fifty string literals and deciding, one at a time, whether each is the
 // CLI or something that merely looks like it. Three shapes in this tree
-// spell "backup-manager" and are NOT this constant, and every one of them
+// spell "rclone-manager" and are NOT this constant, and every one of them
 // would be swept up by a careless search-and-replace:
 //
-//   - filesystem paths (/etc/backup-manager/config, /var/lib/backup-manager)
+//   - filesystem paths (/etc/rclone-manager/config, /var/lib/rclone-manager)
 //     which packaging mounts and an operator's existing deployment already
 //     has on disk;
-//   - the image reference (ghcr.io/spdrman/backup-manager), which is what
+//   - the image reference (ghcr.io/spdrman/rclone-manager), which is what
 //     a compose file and a signed digest already point at rather than
 //     anything an operator types;
 //   - wire identity that a log or an audit trail may already be matched
@@ -72,7 +72,7 @@ package cliecho
 // exec`, their cron entry and their compose file across once.
 //
 // What can be tested from inside this module is the half that lives here,
-// and TestNothingDispatchesOnArgv0 in core/cmd/backup-manager does it: it
+// and TestNothingDispatchesOnArgv0 in core/cmd/rbm does it: it
 // reads every non-test file under core/ and requires os.Args to appear in
 // exactly one shape, os.Args[1:].
 const (
@@ -81,7 +81,7 @@ const (
 	// "usage:" line, and every sentence that says which command to run
 	// next.
 	//
-	// It was `backup-manager` until 0.3.3, and 0.3.3 was a clean cut:
+	// It was `rclone-manager` until 0.3.3, and 0.3.3 was a clean cut:
 	// an image built from it carries this name and no other, so an
 	// operator upgrading moves their scripts across once and is done.
 	// Shipping both spellings was the alternative, and printing two
@@ -92,8 +92,8 @@ const (
 	// Web UI. It is derived rather than spelled so that the two names
 	// cannot drift apart, which is the whole reason this file exists.
 	//
-	// The package directory is core/cmd/backup-manager and the web one is
-	// apps/generic/cmd/backup-manager-web. A Go package path is not
+	// The package directory is core/cmd/rbm and the web one is
+	// apps/generic/cmd/rbm-web. A Go package path is not
 	// operator-visible, so neither follows this constant.
 	WebBinary = Binary + "-web"
 )

@@ -64,7 +64,7 @@ func (a testPlatformAdapter) PlatformInfo(_ context.Context) (capabilities.Platf
 	return capabilities.PlatformInfo{ID: capabilities.PlatformGeneric, Name: "test"}, nil
 }
 
-// writeTestConfig mirrors core/cmd/backup-manager/main_test.go's own
+// writeTestConfig mirrors core/cmd/rbm/main_test.go's own
 // writeTestConfig: a minimal, valid config against real temp directories,
 // needing no network and no Docker.
 func writeTestConfig(t *testing.T) string {

@@ -16,7 +16,7 @@
 # any workflow that runs on its own. Three reasons, in order of how much
 # they matter:
 #
-#   1. It publishes. ghcr.io/spdrman/backup-manager:1.0.0 is a first
+#   1. It publishes. ghcr.io/spdrman/rclone-manager:1.0.0 is a first
 #      publication under a semantic version, and a registry tag is not a
 #      thing you take back cleanly. Whoever does it should mean to.
 #   2. It needs a credential this repository does not and must not hold.
@@ -271,7 +271,7 @@ fi
 # id_rsa and id_ed25519 carry no wildcard, and a git pathspec with no
 # wildcard anchors at the repository root, so those two matched only a
 # key sitting in the top directory. The product mounts its SSH key at
-# /etc/backup-manager/id_ed25519, so a developer generating one for a
+# /etc/rclone-manager/id_ed25519, so a developer generating one for a
 # test puts it in a subdirectory, which is precisely where the guard was
 # not looking. The */ forms cover the rest of the tree.
 key_pathspecs=(

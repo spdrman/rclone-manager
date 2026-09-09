@@ -42,7 +42,7 @@ func TestTheTwoProhibitedHostPathEntryPointsGiveIdenticalVerdicts(t *testing.T) 
 		"/",
 		"//",
 		"",
-		"/mnt/tank/backup-manager/state",
+		"/mnt/tank/rclone-manager/state",
 		"${STATE_DIR:?set STATE_DIR}",
 	}
 
@@ -66,7 +66,7 @@ func TestTheTwoProhibitedHostPathEntryPointsGiveIdenticalVerdicts(t *testing.T) 
 	if !hostPathMatches("//var/run/docker.sock", "/var/run/docker.sock") {
 		t.Error("the Docker socket spelled with a redundant leading slash is not refused, which is the exact evasion this rule was fixed for")
 	}
-	if hostPathMatches("/mnt/tank/backup-manager/state", "/var") {
+	if hostPathMatches("/mnt/tank/rclone-manager/state", "/var") {
 		t.Error("a real storage path is refused, which is how a prohibition gets switched off")
 	}
 }

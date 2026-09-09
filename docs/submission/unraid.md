@@ -7,8 +7,8 @@ packaging metadata under `apps/unraid/template/`.
 
 That store's own published requirements: https://forums.unraid.net/topic/87144-ca-application-policies-and-guidelines/
 
-Two templates, submitted together and installed in order: `backup-manager.xml` first,
-then `backup-manager-ui.xml`. Community Applications review is a human reading the
+Two templates, submitted together and installed in order: `rclone-manager.xml` first,
+then `web-ui.xml`. Community Applications review is a human reading the
 template, so the `<Overview>` text carries the two things a reader has to know before
 installing, the user-defined network they must create by hand and the weaker
 forwarded-header stance that follows from it.

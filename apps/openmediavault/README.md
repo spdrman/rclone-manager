@@ -57,8 +57,8 @@ Everything an operator needs to find it has to be here instead, which is what th
 
 | Path | What it is |
 | --- | --- |
-| `compose/backup-manager.yml` | The deployment. Paste it into the File field of Services, Compose, Files, Add. |
-| `compose/backup-manager.env` | Every host path, the image reference, the uid/gid and the port. Paste it into the Environment field. This is the only file an operator edits. |
+| `compose/rclone-manager.yml` | The deployment. Paste it into the File field of Services, Compose, Files, Add. |
+| `compose/rclone-manager.env` | Every host path, the image reference, the uid/gid and the port. Paste it into the Environment field. This is the only file an operator edits. |
 | `frontend/platform.ts` | The shared platform bridge (§3.5). Provider identity and storage expectations only. |
 
 No Go, no shell, no install hook.
@@ -73,7 +73,7 @@ apt-get install openmediavault-compose
 
 ## The one substitution that matters
 
-`backup-manager.env` sets `DISK=/srv/dev-disk-by-uuid`, and that is a placeholder.
+`rclone-manager.env` sets `DISK=/srv/dev-disk-by-uuid`, and that is a placeholder.
 A real OMV system mounts data filesystems at `/srv/dev-disk-by-uuid-<UUID>/`, with
 the UUID differing per machine, so no checked-in default can be literally correct.
 It matches what `frontend/platform.ts` already declares, so the two stay
@@ -90,12 +90,12 @@ UUID is substituted once rather than five times.
 
 ## Two containers, one image
 
-`backup-manager` runs `/rbm-web serve`: local authentication, the
+`rclone-manager` runs `/rbm-web serve`: local authentication, the
 versioned `/api/v1` API and the backup scheduler in one process sharing one
 shutdown context. It holds the state database and the credentials, and it publishes
 no port.
 
-`backup-manager-ui` runs `/rbm-web serve-ui`: the shared static UI plus
+`web-ui` runs `/rbm-web serve-ui`: the shared static UI plus
 a reverse proxy to the engine. It is the only container with a published port, and
 it mounts nothing at all.
 
@@ -114,18 +114,18 @@ STALE or FAILING set, and on a fresh install, which has backed nothing up yet. S
 the engine asks `/health/live` instead, a liveness probe that needs no
 configuration. Backup freshness is still reported, by the image's own HEALTHCHECK
 for a plain `docker run`, by the alerts block, and by
-`docker exec backup-manager /rbm status`; it just no longer decides
+`docker exec rclone-manager /rbm status`; it just no longer decides
 whether a container starts.
 
 ## Storage
 
 | Role | Host path | In the container | Mode |
 | --- | --- | --- | --- |
-| State | `$DISK/appdata/backup-manager/state` | `/data/state` | rw |
-| Backups | `$DISK/backups/backup-manager` | `/data/backups` | rw |
-| Config | `$DISK/appdata/backup-manager/config` | `/etc/backup-manager/config` | rw |
-| SSH key | `$DISK/appdata/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | ro |
-| Known hosts | `$DISK/appdata/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | ro |
+| State | `$DISK/appdata/rclone-manager/state` | `/data/state` | rw |
+| Backups | `$DISK/backups/rclone-manager` | `/data/backups` | rw |
+| Config | `$DISK/appdata/rclone-manager/config` | `/etc/rclone-manager/config` | rw |
+| SSH key | `$DISK/appdata/rclone-manager/secrets/id_ed25519` | `/etc/rclone-manager/id_ed25519` | ro |
+| Known hosts | `$DISK/appdata/rclone-manager/secrets/known_hosts` | `/etc/rclone-manager/known_hosts` | ro |
 
 `config` is a writable **directory** holding `config.yaml`, not a read-only single
 file (issue #196). Adding a backup set, saving settings and first-run setup all
@@ -136,14 +136,14 @@ disables all three. It may be empty on a fresh install. The SSH key and
 
 
 `DISK` is the only variable in any of these, and it is the only line of
-`backup-manager.env` you have to change. The compose file writes every host path
+`rclone-manager.env` you have to change. The compose file writes every host path
 as `${DISK:?...}/...`, so an unset or misspelled `DISK` stops the deployment
 rather than creating five directories somewhere plausible. There is deliberately
 no per-path variable: five knobs whose values all repeated the same placeholder
 is how the UUID ended up needing five substitutions while the documentation
 promised one.
 
-Appdata holds private state; `$DISK/backups/backup-manager` holds retained
+Appdata holds private state; `$DISK/backups/rclone-manager` holds retained
 artifacts. That split is a rule rather than a preference: §19.2 makes them
 separate security domains, and the backup root must never contain SSH private
 keys or authentication state. `distribution/packaging` checks the containment in
@@ -166,7 +166,7 @@ container can fix ownership for you.
 http://<omv-host>:<WEB_PORT>/
 ```
 
-`WEB_PORT` is set in one place, `backup-manager.env`, and defaults to 8080. If that
+`WEB_PORT` is set in one place, `rclone-manager.env`, and defaults to 8080. If that
 collides with something already on the host (OMV's own Workbench, or another
 container), change it there and re-run **Up**; nothing else needs editing.
 
@@ -204,12 +204,12 @@ profile and must not be changed.
 
 ## The image reference
 
-`ghcr.io/spdrman/backup-manager:0.3.3` is the reference every package here
+`ghcr.io/spdrman/rclone-manager:0.3.3` is the reference every package here
 carries, and it is not pushed yet. `distribution/packaging/canonical.json`
 records `image.published: false`, and `container/release-manifest.json` carries
 a `registry_digest` of `null` per architecture; those two move together, so
 either both describe a real push or neither does. Until the release workflow
 pushes 0.3.3 and the digests are recorded back, reach it the way the acceptance
 procedure's step 0 describes, by pushing to your own registry or side-loading a
-build. The previous release, `ghcr.io/spdrman/backup-manager:0.3.0`, stays
+build. The previous release, `ghcr.io/spdrman/rclone-manager:0.3.0`, stays
 published and signed if you would rather run that. It is the `IMAGE` variable in the env file, and nothing else.

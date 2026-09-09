@@ -421,10 +421,10 @@ func TestNewFirstRun_RefusesADeploymentItCannotProduceAValidConfigFor(t *testing
 		want     string
 	}{
 		{"no config path", FirstRunDefaults{StateDatabase: "/data/state/state.db"}, "config path"},
-		{"no state database", FirstRunDefaults{ConfigPath: "/etc/backup-manager/config.yaml"}, "state database"},
+		{"no state database", FirstRunDefaults{ConfigPath: "/etc/rclone-manager/config.yaml"}, "state database"},
 		{
 			"relative state database",
-			FirstRunDefaults{ConfigPath: "/etc/backup-manager/config.yaml", StateDatabase: "state/state.db"},
+			FirstRunDefaults{ConfigPath: "/etc/rclone-manager/config.yaml", StateDatabase: "state/state.db"},
 			"state database",
 		},
 	}

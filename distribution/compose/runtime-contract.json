@@ -19,7 +19,7 @@
     "",
     "Roles, not service names. A service is the engine or the web UI because of",
     "the command it runs, never because of what it is called: apps/truenas calls",
-    "them backup-manager/backup-manager-ui and the canonical file calls them",
+    "them rclone-manager/web-ui and the canonical file calls them",
     "rclone-manager/web-ui, and a check keyed on the name would silently stop",
     "checking the moment someone renamed one."
   ],
@@ -36,14 +36,14 @@
     "outside the prohibition check."
   ],
   "derived": [
-    "apps/truenas/compose/backup-manager.yaml",
+    "apps/truenas/compose/rclone-manager.yaml",
     "apps/truenas/catalog/templates/docker-compose.yaml",
-    "apps/openmediavault/compose/backup-manager.yml",
-    "apps/proxmox/compose/backup-manager.yml",
-    "apps/synology/compose/backup-manager.yml",
-    "apps/portainer/compose/backup-manager.yml",
-    "apps/casaos/compose/backup-manager.yml",
-    "apps/zimaos/compose/backup-manager.yml"
+    "apps/openmediavault/compose/rclone-manager.yml",
+    "apps/proxmox/compose/rclone-manager.yml",
+    "apps/synology/compose/rclone-manager.yml",
+    "apps/portainer/compose/rclone-manager.yml",
+    "apps/casaos/compose/rclone-manager.yml",
+    "apps/zimaos/compose/rclone-manager.yml"
   ],
 
   "_dockge_comment": [
@@ -189,7 +189,7 @@
       "id": "configuration-mount",
       "scope": "service-mount",
       "roles": ["engine"],
-      "containerPath": "/etc/backup-manager/config",
+      "containerPath": "/etc/rclone-manager/config",
       "writable": true,
       "derived": "derivation-gate",
       "derivedWhy": "distribution/packaging checks every adapter's mounts, in whatever format they were written in: derive.go's storage-mounts rule for the container side and CheckStorageShapes for the write mode, both against canonical.json. It has to be there rather than here for two reasons. It reads each platform's own env file, so ${APPDATA:?...} and ${STATE_DIR:?...} resolve to the real host path instead of an unexpanded string this package would have to split on a colon that is inside a message; and it covers the Unraid XML template, which is not compose at all.",
@@ -199,7 +199,7 @@
       "id": "secret-file-mount",
       "scope": "service-mount",
       "roles": ["engine"],
-      "containerPath": "/etc/backup-manager/id_ed25519",
+      "containerPath": "/etc/rclone-manager/id_ed25519",
       "readOnly": true,
       "derived": "derivation-gate",
       "derivedWhy": "distribution/packaging checks every adapter's mounts, in whatever format they were written in: derive.go's storage-mounts rule for the container side and CheckStorageShapes for the write mode, both against canonical.json. It has to be there rather than here for two reasons. It reads each platform's own env file, so ${APPDATA:?...} and ${STATE_DIR:?...} resolve to the real host path instead of an unexpanded string this package would have to split on a colon that is inside a message; and it covers the Unraid XML template, which is not compose at all.",

@@ -5,7 +5,7 @@
 poll_interval: 15m
 
 state:
-  database: /var/lib/backup-manager/state.db
+  database: /var/lib/rclone-manager/state.db
 
 sources:
   - id: production
@@ -16,7 +16,7 @@ sources:
           host: production.example.internal
           user: backup
           key_file: /run/secrets/backup_ssh_key
-          known_hosts: /etc/backup-manager/known_hosts
+          known_hosts: /etc/rclone-manager/known_hosts
         remote_path: /backups/postgres
         local_path: /backups/production/postgres
         completion:
@@ -50,14 +50,14 @@ storage_mediums:
     storage_class: STANDARD
     upload_verification: readback
     credentials:
-      file: /var/lib/backup-manager/s3/offsite_s3.creds
+      file: /var/lib/rclone-manager/s3/offsite_s3.creds
   - id: offsite_annual
     type: s3
     region: us-east-1
     bucket: nas-backups-annual
     storage_class: STANDARD_IA
     credentials:
-      command: ["/usr/bin/op", "read", "op://infra/backup-manager/s3-annual"]
+      command: ["/usr/bin/op", "read", "op://infra/rclone-manager/s3-annual"]
   # An archive-class medium that NO tier references, which is the shape
   # #442 draws its line around: the declaration is legal and the pairing
   # is not. An operator with objects already on DEEP_ARCHIVE declares the
@@ -69,7 +69,7 @@ storage_mediums:
     bucket: nas-backups-cold
     storage_class: DEEP_ARCHIVE
     credentials:
-      command: ["/usr/bin/op", "read", "op://infra/backup-manager/s3-cold"]
+      command: ["/usr/bin/op", "read", "op://infra/rclone-manager/s3-cold"]
   # A declared medium no tier references is legal: an operator staging a
   # destination before pointing a tier at it (FR-27).
   - id: staging_only

@@ -41,20 +41,20 @@ default.
 1. Create the stack directory and copy the canonical stack into it:
 
    ```
-   mkdir -p /opt/stacks/backup-manager
-   cp container/compose.yaml /opt/stacks/backup-manager/compose.yaml
-   cp container/.env.example /opt/stacks/backup-manager/.env
+   mkdir -p /opt/stacks/rclone-manager
+   cp container/compose.yaml /opt/stacks/rclone-manager/compose.yaml
+   cp container/.env.example /opt/stacks/rclone-manager/.env
    ```
 
-2. Edit `/opt/stacks/backup-manager/.env`. Every host path in it must exist and
+2. Edit `/opt/stacks/rclone-manager/.env`. Every host path in it must exist and
    be owned by `PUID:PGID` before the first start, because the runtime image is
    distroless and cannot create or chown anything for you:
 
    ```
-   mkdir -p /volume1/backup-manager/state /volume1/backups \
-            /volume1/backup-manager/config /volume1/backup-manager/secrets
-   chown 1000:1000 /volume1/backup-manager/state /volume1/backups \
-                   /volume1/backup-manager/config /volume1/backup-manager/secrets
+   mkdir -p /volume1/rclone-manager/state /volume1/backups \
+            /volume1/rclone-manager/config /volume1/rclone-manager/secrets
+   chown 1000:1000 /volume1/rclone-manager/state /volume1/backups \
+                   /volume1/rclone-manager/config /volume1/rclone-manager/secrets
    ```
 
 3. In Dockge, the stack appears on its own. Press **Start**, watch the two
@@ -104,9 +104,9 @@ The mounts are the canonical stack's, with `container/.env.example`'s defaults:
 | --- | --- | --- |
 | `STATE_DIR` | `/data/state` | the catalogue and the local administrator record. Private. |
 | `BACKUP_DIR` | `/data/backups` | retained artifacts, and nothing else. |
-| `CONFIG_DIR` | `/etc/backup-manager/config` | `config.yaml`, writable, plus `ssh_keys/` and `known_hosts.d/`. |
-| `SSH_KEY_FILE` | `/etc/backup-manager/id_ed25519` | the SFTP private key, read-only. |
-| `KNOWN_HOSTS_FILE` | `/etc/backup-manager/known_hosts` | the pinned host key, read-only. |
+| `CONFIG_DIR` | `/etc/rclone-manager/config` | `config.yaml`, writable, plus `ssh_keys/` and `known_hosts.d/`. |
+| `SSH_KEY_FILE` | `/etc/rclone-manager/id_ed25519` | the SFTP private key, read-only. |
+| `KNOWN_HOSTS_FILE` | `/etc/rclone-manager/known_hosts` | the pinned host key, read-only. |
 
 The full operator procedure, including update, removal and the evidence that
 retained backups survived, is

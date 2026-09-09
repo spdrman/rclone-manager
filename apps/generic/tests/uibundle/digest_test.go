@@ -46,7 +46,7 @@ func buildWebHost(t *testing.T, root string) string {
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager-web")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/rbm-web")
 	cmd.Dir = filepath.Join(root, "apps", "generic")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -250,7 +250,7 @@ func TestBridgeSelectionIsNotACompileTimeInput(t *testing.T) {
 
 	build := func(env ...string) string {
 		bin := filepath.Join(t.TempDir(), "rbm-web")
-		cmd := exec.Command("go", "build", "-trimpath", "-o", bin, "./cmd/backup-manager-web")
+		cmd := exec.Command("go", "build", "-trimpath", "-o", bin, "./cmd/rbm-web")
 		cmd.Dir = filepath.Join(root, "apps", "generic")
 		cmd.Env = append(append(os.Environ(), "GOWORK=off"), env...)
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -274,7 +274,7 @@ func TestBridgeSelectionIsNotACompileTimeInput(t *testing.T) {
 	}
 	changed := func() string {
 		bin := filepath.Join(t.TempDir(), "rbm-web")
-		cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-X main.version=deliberately-different", "-o", bin, "./cmd/backup-manager-web")
+		cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-X main.version=deliberately-different", "-o", bin, "./cmd/rbm-web")
 		cmd.Dir = filepath.Join(root, "apps", "generic")
 		cmd.Env = append(os.Environ(), "GOWORK=off")
 		if out, err := cmd.CombinedOutput(); err != nil {

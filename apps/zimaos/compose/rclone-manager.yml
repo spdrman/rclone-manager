@@ -1,10 +1,23 @@
-# CasaOS AppStore entry for Backup Manager (issue #170, B6.6).
+# ZimaOS app-store entry for Backup Manager (issue #170, B6.6).
 #
-# CasaOS installs a third-party application by reading one docker-compose
-# file carrying an `x-casaos` block, so this single file is both the
-# runtime definition and the store submission. See
-# https://github.com/IceWhaleTech/CasaOS-AppStore and
-# https://github.com/IceWhaleTech/CasaOS-AppStore/blob/main/docs/quick-start/overview.md.
+# ZimaOS is built on CasaOS and reads the same `x-casaos` block out of a
+# docker-compose file, so this single file is both the runtime definition
+# and the store submission. apps/zimaos/README.md carries the link to
+# ZimaOS's own developer documentation for that format; this file is the
+# artifact the store ingests, and the submission preflight reads every
+# outbound host in a shipped artifact as an endpoint until it is shown
+# otherwise, so the citation lives beside it rather than inside it.
+#
+# This is a SECOND STORE REGISTRATION OVER ONE RUNTIME, not a second
+# runtime. Its services are byte-for-byte the same shape as
+# apps/casaos/compose/rclone-manager.yml and its host paths are the same
+# paths, because ZimaOS lays /DATA out the way CasaOS does. What differs
+# is the store the file is submitted to and the identity it is submitted
+# under, which is exactly the amount of difference a thin adapter is
+# allowed to have. Saying that plainly is better than inventing a
+# distinction to justify the second directory: the two are separately
+# submitted and separately certified, so they are two rows of the release
+# matrix, and they are one deployment.
 #
 # Two halves, and the split is the whole design. Everything outside
 # `x-casaos` is Compose and container semantics DERIVED from
@@ -15,21 +28,21 @@
 # package and no shared UI module, and a test fails the build if it ever
 # does.
 #
-# No variables anywhere. A CasaOS store install deploys this file as it
+# No variables anywhere. A ZimaOS store install deploys this file as it
 # stands, with no `.env` beside it, so a `${STATE_DIR}` here would be an
 # unresolved reference at install time rather than a knob. Every path
-# below is literal and every one of them is CasaOS's own layout: private
+# below is literal and every one of them is ZimaOS's own layout: private
 # application data under /DATA/AppData, user data under /DATA.
 x-casaos:
   architectures:
     - amd64
     - arm64
-  main: backup-manager-ui
+  main: web-ui
   author: spdrman
   developer: spdrman
   category: Backup
-  store_app_id: backup-manager
-  icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/apps/casaos/icon.svg
+  store_app_id: rclone-manager
+  icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/apps/zimaos/icon.svg
   scheme: http
   hostname: ""
   port_map: "8080"
@@ -49,11 +62,11 @@ x-casaos:
   tips:
     before_install:
       en_us: >-
-        Create /DATA/AppData/backup-manager/state, /DATA/AppData/backup-manager/config,
-        /DATA/AppData/backup-manager/secrets and /DATA/Backups/backup-manager and give
+        Create /DATA/AppData/rclone-manager/state, /DATA/AppData/rclone-manager/config,
+        /DATA/AppData/rclone-manager/secrets and /DATA/Backups/rclone-manager and give
         them to uid 1000 / gid 1000 before installing. The runtime image is distroless,
         so nothing inside the container can create or chown them for you. Put your SFTP
-        private key at /DATA/AppData/backup-manager/secrets/id_ed25519 (mode 0600) and
+        private key at /DATA/AppData/rclone-manager/secrets/id_ed25519 (mode 0600) and
         the pinned host key at .../known_hosts. The engine prints a one-time enrollment
         link on first start; read it in the container log.
 
@@ -61,8 +74,8 @@ services:
   # The engine: local authentication, the versioned /api/v1 API and the
   # scheduler in one process. Holds the state database and the
   # credentials, and publishes no port at all.
-  backup-manager:
-    image: ghcr.io/spdrman/backup-manager:0.3.3
+  rclone-manager:
+    image: ghcr.io/spdrman/rclone-manager:0.3.3
     command: ["/rbm-web", "serve", "--profile=generic"]
 
     user: "1000:1000"
@@ -98,21 +111,21 @@ services:
       TRUSTED_UPSTREAM_CIDRS: ""
 
     volumes:
-      - /DATA/AppData/backup-manager/state:/data/state
-      - /DATA/Backups/backup-manager:/data/backups
+      - /DATA/AppData/rclone-manager/state:/data/state
+      - /DATA/Backups/rclone-manager:/data/backups
       # A writable DIRECTORY holding config.yaml (issue #196), not a
       # read-only single file: the engine replaces that file through a
       # temp file created beside it, and its ssh_keys/ and known_hosts.d/
       # stores are siblings of it. It may legitimately be empty on a
       # fresh install, which a directory can express and a file mount
       # cannot.
-      - /DATA/AppData/backup-manager/config:/etc/backup-manager/config
-      - /DATA/AppData/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
-      - /DATA/AppData/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
+      - /DATA/AppData/rclone-manager/config:/etc/rclone-manager/config
+      - /DATA/AppData/rclone-manager/secrets/id_ed25519:/etc/rclone-manager/id_ed25519:ro
+      - /DATA/AppData/rclone-manager/secrets/known_hosts:/etc/rclone-manager/known_hosts:ro
 
     # The start gate, and a liveness question rather than a health
     # verdict (issue #206). The Web UI below declares
-    # `depends_on: backup-manager: condition: service_healthy`, so
+    # `depends_on: rclone-manager: condition: service_healthy`, so
     # whatever this asks stands between an operator and the only
     # container with a published port. `/rbm status` is
     # FR-24's backup-freshness verdict and exits non-zero on any
@@ -125,7 +138,7 @@ services:
     # is the right default for a plain `docker run` and for the headless
     # `daemon` command, which serves no HTTP and so has no liveness
     # endpoint to ask. Backup freshness is not lost - read it with
-    # `docker exec backup-manager /rbm status`, or let the
+    # `docker exec rclone-manager /rbm status`, or let the
     # alerts block deliver it.
     #
     # Derived from container/compose.yaml, never authored here.
@@ -160,25 +173,25 @@ services:
         - container: /data/backups
           description:
             en_us: The backup root. Retained artifacts land here and nothing else does.
-        - container: /etc/backup-manager/config
+        - container: /etc/rclone-manager/config
           description:
             en_us: Writable configuration directory holding config.yaml.
-        - container: /etc/backup-manager/id_ed25519
+        - container: /etc/rclone-manager/id_ed25519
           description:
             en_us: SFTP private key, mounted read-only.
-        - container: /etc/backup-manager/known_hosts
+        - container: /etc/rclone-manager/known_hosts
           description:
             en_us: Pinned SFTP host key, mounted read-only.
 
   # The web UI: the shared static bundle plus a reverse proxy to the
-  # engine. The only container with a published port, and the app CasaOS
+  # engine. The only container with a published port, and the app ZimaOS
   # opens when the tile is clicked.
-  backup-manager-ui:
-    image: ghcr.io/spdrman/backup-manager:0.3.3
+  web-ui:
+    image: ghcr.io/spdrman/rclone-manager:0.3.3
     command: ["/rbm-web", "serve-ui", "--profile=generic"]
 
     depends_on:
-      backup-manager:
+      rclone-manager:
         condition: service_healthy
 
     user: "1000:1000"
@@ -194,10 +207,10 @@ services:
     environment:
       TMPDIR: "/tmp"
       LISTEN_ADDR: ":8080"
-      UPSTREAM_ADDR: "http://backup-manager:8080"
+      UPSTREAM_ADDR: "http://rclone-manager:8080"
 
     # Neither UI_DIR nor UI_ROOT, on purpose: this adapter serves the
-    # bundle compiled into the binary. apps/casaos/README.md has the
+    # bundle compiled into the binary. apps/zimaos/README.md has the
     # measurement behind that decision.
 
     # No volumes at all: this container never reads config.yaml, the SSH

@@ -604,7 +604,7 @@ const (
 //
 // The tag separator is the last colon OUTSIDE a ${...} expression, and
 // that qualification is the whole check rather than a detail. Written as
-// a plain strings.LastIndex, `backup-manager:${VERSION:-latest}` splits
+// a plain strings.LastIndex, `rclone-manager:${VERSION:-latest}` splits
 // at the `:-` inside the expression and yields a tag of `-latest}`, which
 // is not equal to "latest", so the single worst case this rule exists to
 // catch (a floating default an operator who sets nothing silently gets)

@@ -217,7 +217,7 @@ type CycleReport struct {
 // RunCycle is FR-1's "one processing cycle": the single piece of business
 // logic `run` performs once and `daemon` repeats at poll_interval. Both
 // commands call exactly this method; neither has, or is allowed to have,
-// any cycle logic of its own (see this package's doc and cmd/backup-manager,
+// any cycle logic of its own (see this package's doc and cmd/rbm,
 // which only wires flags, signals and output formatting around this call).
 //
 // The cycle order matters and follows the EPIC directly: for each
@@ -333,7 +333,7 @@ sourcesLoop:
 
 	// Issue #361's verdict, in the event stream, before anything that
 	// reads the cycle's state. `run` turns this into an exit status too
-	// (cmd/backup-manager/setup.go), but `daemon` has no exit status to
+	// (cmd/rbm/setup.go), but `daemon` has no exit status to
 	// turn it into, and a cycle that backed nothing up has to be visible
 	// to whatever is shipping these logs either way.
 	s.reportBarrenSets(ctx, report)

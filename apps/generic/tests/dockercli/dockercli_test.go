@@ -255,7 +255,7 @@ func TestAnImageBuildAbandonedPartWayThroughIsReportedAsAFailure(t *testing.T) {
 // degradedConfig writes a config whose one backup set has never had an
 // artifact discovered for it: internal/health's own decideState (see that
 // package's doc) reports this as DEGRADED, and `rbm status`
-// (cmd/backup-manager/status.go) exits 1 for anything short of HEALTHY.
+// (cmd/rbm/status.go) exits 1 for anything short of HEALTHY.
 // This is real backup-set evidence, not a synthetic health override, so
 // it exercises exactly what a container healthcheck would see in
 // production the day a backup set actually falls behind.
@@ -348,7 +348,7 @@ func runDaemonContainer(t *testing.T, image, dir string) string {
 	args := []string{
 		"run", "-d", "--name", name,
 		dockerlease.LabelFlag, dockerlease.LabelSpec,
-		"-v", filepath.Join(dir, "config") + ":/etc/backup-manager/config",
+		"-v", filepath.Join(dir, "config") + ":/etc/rclone-manager/config",
 		"-v", filepath.Join(dir, "state") + ":/data/state",
 		"-v", filepath.Join(dir, "remote") + ":/data/remote:ro",
 		"-v", filepath.Join(dir, "backups") + ":/data/backups",
@@ -358,7 +358,7 @@ func runDaemonContainer(t *testing.T, image, dir string) string {
 		// ENTRYPOINT can only ever prefix one of them - see that file's
 		// own doc comment), so `command:`/`docker run` args are the whole
 		// argv, exactly as container/compose.yaml's own `command:` does.
-		image, "/rbm", "daemon", "--config", "/etc/backup-manager/config",
+		image, "/rbm", "daemon", "--config", "/etc/rclone-manager/config",
 	}
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -498,11 +498,11 @@ func TestServeCommandExposesTheEngineAPIOnly(t *testing.T) {
 		"run", "-d", "--name", name,
 		dockerlease.LabelFlag, dockerlease.LabelSpec,
 		"-p", "0:8080", // publish --listen's :8080 to an ephemeral host port
-		"-v", filepath.Join(dir, "config") + ":/etc/backup-manager/config",
+		"-v", filepath.Join(dir, "config") + ":/etc/rclone-manager/config",
 		"-v", filepath.Join(dir, "state") + ":/data/state",
 		"-v", filepath.Join(dir, "remote") + ":/data/remote:ro",
 		"-v", filepath.Join(dir, "backups") + ":/data/backups",
-		image, "/rbm-web", "serve", "--config", "/etc/backup-manager/config", "--listen", ":8080",
+		image, "/rbm-web", "serve", "--config", "/etc/rclone-manager/config", "--listen", ":8080",
 	}
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -783,7 +783,7 @@ func upComposeFiles(t *testing.T, image, envFile string, files []string) (*compo
 		files:   files,
 	}
 
-	// Compose resolves `image: backup-manager:${VERSION:-dev}` against
+	// Compose resolves `image: rclone-manager:${VERSION:-dev}` against
 	// VERSION, so VERSION has to be exactly the tag half of the image
 	// buildImage produced for `--no-build` to find it rather than trying
 	// (and failing, with no `build:` context error) to build a fresh one
@@ -877,9 +877,9 @@ func (p *composeProject) publishedPort(t *testing.T, service, containerPort stri
 // directly from the host at all.
 func TestComposeStack_WebUIProxiesToTheEngineEndToEnd(t *testing.T) {
 	// No retag onto a second name here any more. buildImage already
-	// tagged this run's own image as `backup-manager:<per-run tag>`, and
+	// tagged this run's own image as `rclone-manager:<per-run tag>`, and
 	// startComposeStack passes that tag straight to compose as VERSION,
-	// so compose resolves `image: backup-manager:${VERSION:-dev}` to the
+	// so compose resolves `image: rclone-manager:${VERSION:-dev}` to the
 	// exact image this run built. The retag that used to sit here pointed
 	// a globally shared name at it instead, which is the whole of #185:
 	// the next worktree to run this test moved that name onto its own

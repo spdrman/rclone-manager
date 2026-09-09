@@ -436,7 +436,7 @@ func TestClient_NamesItselfOnEveryRequest(t *testing.T) {
 	}
 
 	engine.reset()
-	named, err := New(Config{BaseURL: base, Username: engine.username, Password: engine.password, UserAgent: "backup-manager/1.2.3 (test)"})
+	named, err := New(Config{BaseURL: base, Username: engine.username, Password: engine.password, UserAgent: "rclone-manager/1.2.3 (test)"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestClient_NamesItselfOnEveryRequest(t *testing.T) {
 		t.Fatalf("ListBackupSets: %v", err)
 	}
 	for _, r := range engine.requests() {
-		if r.UserAgent != "backup-manager/1.2.3 (test)" {
+		if r.UserAgent != "rclone-manager/1.2.3 (test)" {
 			t.Errorf("%s identified as %q, want the caller's own UserAgent", r.Operation, r.UserAgent)
 		}
 	}

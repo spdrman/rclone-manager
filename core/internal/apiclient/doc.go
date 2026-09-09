@@ -5,7 +5,7 @@
 // # Why this exists
 //
 // Until this package there was no HTTP client anywhere under
-// core/cmd/backup-manager. Every command opened its own service through
+// core/cmd/rbm. Every command opened its own service through
 // setup.go, which is correct when nothing else is running and quietly
 // wrong when something is: issue #535 records a `backup-set create` run
 // through `docker exec` that succeeded, appeared in `sources`, and was

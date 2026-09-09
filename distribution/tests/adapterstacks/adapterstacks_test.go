@@ -113,7 +113,7 @@ func requireDocker(t *testing.T) {
 // same time takes the name over, and this run then quietly tests that
 // checkout's image instead of its own. The tag carries the pid and the
 // process start time so two runs on one machine cannot collide either.
-var imageReference = "backup-manager:adapterstacks-" +
+var imageReference = "rclone-manager:adapterstacks-" +
 	strconv.Itoa(os.Getpid()) + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 
 var build struct {
@@ -229,9 +229,9 @@ func freshInstallHostPaths(t *testing.T, dir string) map[string]string {
 	return map[string]string{
 		"/data/state":                     filepath.Join(dir, "state"),
 		"/data/backups":                   filepath.Join(dir, "backups"),
-		"/etc/backup-manager/config":      filepath.Join(dir, "config"),
-		"/etc/backup-manager/id_ed25519":  keyFile,
-		"/etc/backup-manager/known_hosts": knownHosts,
+		"/etc/rclone-manager/config":      filepath.Join(dir, "config"),
+		"/etc/rclone-manager/id_ed25519":  keyFile,
+		"/etc/rclone-manager/known_hosts": knownHosts,
 	}
 }
 
@@ -594,7 +594,7 @@ func getWithTransportRetry(t *testing.T, url string, timeout time.Duration) *htt
 
 // serviceRunning names a rewritten definition's service by the COMMAND it
 // runs, never by what it is called: the adapters call them
-// backup-manager/backup-manager-ui and the canonical definition calls them
+// rclone-manager/web-ui and the canonical definition calls them
 // rclone-manager/web-ui, so a lookup keyed on the name would stop finding
 // them the moment one was renamed.
 func serviceRunning(t *testing.T, file, subcommand string) string {

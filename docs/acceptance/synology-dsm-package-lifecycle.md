@@ -272,7 +272,7 @@ this criterion is the one most likely to differ between the two.
 1. Before updating, capture the state that has to survive, into files you
    can hold the upgrade against afterwards rather than into your memory:
    ```sh
-   sha256sum /var/packages/BackupManager/var/state/backup-manager.db \
+   sha256sum /var/packages/BackupManager/var/state/rclone-manager.db \
              /var/packages/BackupManager/etc/config.yaml \
      | tee /tmp/before-upgrade.sha256
    find /var/packages/BackupManager/var/state -type f | sort > /tmp/before-upgrade.txt
@@ -315,10 +315,10 @@ This is the destructive-safety step. Read it fully before starting.
 1. Put real, identifiable data in the backup share, outside the package's
    own footprint:
    ```sh
-   mkdir -p /volume1/backup-manager/acceptance
-   dd if=/dev/urandom of=/volume1/backup-manager/acceptance/canary.bin bs=1M count=8
-   sha256sum /volume1/backup-manager/acceptance/canary.bin | tee /tmp/canary.sha256
-   find /volume1/backup-manager -type f | sort > /tmp/before-uninstall.txt
+   mkdir -p /volume1/rclone-manager/acceptance
+   dd if=/dev/urandom of=/volume1/rclone-manager/acceptance/canary.bin bs=1M count=8
+   sha256sum /volume1/rclone-manager/acceptance/canary.bin | tee /tmp/canary.sha256
+   find /volume1/rclone-manager -type f | sort > /tmp/before-uninstall.txt
    ```
 2. Also record what exists outside the share that must survive:
    ```sh
@@ -330,7 +330,7 @@ This is the destructive-safety step. Read it fully before starting.
 5. Now check the canary FIRST, before anything else:
    ```sh
    sha256sum -c /tmp/canary.sha256
-   find /volume1/backup-manager -type f | sort > /tmp/after-uninstall.txt
+   find /volume1/rclone-manager -type f | sort > /tmp/after-uninstall.txt
    diff /tmp/before-uninstall.txt /tmp/after-uninstall.txt
    ```
    Expect: the canary verifies, and the diff is empty. Synology documents

@@ -219,8 +219,8 @@ The components, copied back out of both images with `docker create` plus
 
 | component | `8ad3100` | `186ba0c7` | delta |
 |---|---|---|---|
-| `backup-manager` | 19,792,032 | 31,391,904 | +11,599,872 |
-| `backup-manager-web` | 21,102,752 | 32,637,088 | +11,534,336 |
+| `rclone-manager` | 19,792,032 | 31,391,904 | +11,599,872 |
+| `rbm-web` | 21,102,752 | 32,637,088 | +11,534,336 |
 | `/ui/bundles`, five adapter bundles | not carried | 3,503,996 | +3,503,996 |
 | `/licenses` | not carried | 57,300 | +57,300 |
 | distroless base layers | 2,113,978 | 2,113,978 | 0 |
@@ -233,8 +233,8 @@ commits predate 0.3.3, so the binaries carry the names they had then;
 **9,502,720 bytes of each binary is rclone's S3 backend**, which #369 imported
 for EPIC E's MediumStore. Measured by building each command for `linux/arm64`
 with the Dockerfile's own flags and then again with that one blank import
-commented out: `backup-manager` goes 31,391,904 -> 21,889,184 and
-`backup-manager-web` goes 31,981,728 -> 22,479,008. Identical deltas, because it
+commented out: `rclone-manager` goes 31,391,904 -> 21,889,184 and
+`rbm-web` goes 31,981,728 -> 22,479,008. Identical deltas, because it
 is the same dependency tree in both: the AWS SDK v2, the IBM COS SDK, Swift,
 go-openapi and the rest of what arrived in `core/go.mod` alongside it. So
 19,005,440 bytes, **71.2% of the whole move, is one shipped feature**.
@@ -256,7 +256,7 @@ is no duplicate to remove there.
 
 One real duplication, recorded rather than blessed: the seven IBM Plex woff2
 faces #632 added are byte-identical in all five bundles and embedded a sixth
-time in `backup-manager-web`. That is 139,744 bytes per copy and **558,976 bytes
+time in `rbm-web`. That is 139,744 bytes per copy and **558,976 bytes
 of pure redundancy** in `/ui/bundles`. It follows from a bundle being a
 self-contained document root, which is what `serve-ui --ui-root <root>/<profile>`
 resolves, so removing it needs a shared asset route and a change to every

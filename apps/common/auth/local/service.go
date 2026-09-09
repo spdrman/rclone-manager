@@ -76,7 +76,7 @@ type Config struct {
 	// no published port and joins no network but `internal`, which only
 	// `web-ui` (`serve-ui`, apps/common/webhost/serve.NewUI's reverse proxy)
 	// also joins - nothing else on the host, and nothing on the LAN, can
-	// ever be this Service's direct peer. apps/generic/cmd/backup-manager-web's
+	// ever be this Service's direct peer. apps/generic/cmd/rbm-web's
 	// `--trust-forwarded-headers` flag is what actually turns this on for
 	// that deployment; container/compose.yaml sets it for the
 	// `rclone-manager` (engine) service only, never for `web-ui` itself
@@ -205,7 +205,7 @@ func (s *Service) Authenticator() capabilities.Authenticator {
 // TrustForwardedHeaders reports whether this Service was configured to
 // trust X-Forwarded-For/X-Forwarded-Proto from its immediate caller (see
 // Config.TrustForwardedHeaders's own doc for exactly when that is safe).
-// apps/generic/cmd/backup-manager-web calls this to fill
+// apps/generic/cmd/rbm-web calls this to fill
 // apps/common/webhost/serve.EngineConfig.TrustForwardedHeaders, which
 // decides the same thing for the CSRF cookie NewEngine issues
 // (EnsureCSRFCookie) that this Service's own session cookie already

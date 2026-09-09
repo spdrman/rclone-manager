@@ -39,11 +39,11 @@ No state or backup data moves.
 
 | Path | What it is |
 | --- | --- |
-| `compose/backup-manager.yaml` | The custom-app deployment. Paste it into Apps, Discover Apps, Custom App, Install via YAML. Usable today. |
+| `compose/rclone-manager.yaml` | The custom-app deployment. Paste it into Apps, Discover Apps, Custom App, Install via YAML. Usable today. |
 | `catalog/app.yaml` | Catalog entry metadata: title, version, categories, icon, sources, run-as context. |
 | `catalog/questions.yaml` | The install wizard: image reference, five storage paths, the published port, and the uid/gid. |
 | `catalog/ix_values.yaml` | A default for every question. |
-| `catalog/templates/docker-compose.yaml` | What the catalog renders. The same two containers as `compose/backup-manager.yaml`, with the answers substituted. `distribution/packaging` renders it against `ix_values.yaml` on every commit and puts the result through every rule the paste-in compose file gets: the canonical image, the five storage roles and their host paths, read-only mounts, the single published port, the commands, and the full hardening set. The template stays loop-free and conditional-free so that stays possible. |
+| `catalog/templates/docker-compose.yaml` | What the catalog renders. The same two containers as `compose/rclone-manager.yaml`, with the answers substituted. `distribution/packaging` renders it against `ix_values.yaml` on every commit and puts the result through every rule the paste-in compose file gets: the canonical image, the five storage roles and their host paths, read-only mounts, the single published port, the commands, and the full hardening set. The template stays loop-free and conditional-free so that stays possible. |
 | `frontend/platform.ts` | The shared platform bridge (§3.5). Provider identity and storage expectations only, no lifecycle behaviour. |
 
 There is deliberately no fourth thing. No Go, no shell, no install hook, no
@@ -51,12 +51,12 @@ TrueNAS-specific service. `distribution/packaging` fails the build if any appear
 
 ## Two containers, one image
 
-`backup-manager` runs `/rbm-web serve`: local authentication, the
+`rclone-manager` runs `/rbm-web serve`: local authentication, the
 versioned `/api/v1` API and the backup scheduler in one process sharing one
 shutdown context. It holds the state database and the credentials, and it
 publishes no port.
 
-`backup-manager-ui` runs `/rbm-web serve-ui`: the shared static UI plus
+`web-ui` runs `/rbm-web serve-ui`: the shared static UI plus
 a reverse proxy to the engine. It is the only container with a published port, and
 it mounts nothing at all.
 
@@ -75,18 +75,18 @@ STALE or FAILING set, and on a fresh install, which has backed nothing up yet. S
 the engine asks `/health/live` instead, a liveness probe that needs no
 configuration. Backup freshness is still reported, by the image's own HEALTHCHECK
 for a plain `docker run`, by the alerts block, and by
-`docker exec backup-manager /rbm status`; it just no longer decides
+`docker exec rclone-manager /rbm status`; it just no longer decides
 whether a container starts.
 
 ## Storage
 
 | Role | Host default | In the container | Mode |
 | --- | --- | --- | --- |
-| State | `/mnt/tank/backup-manager/state` | `/data/state` | rw |
-| Backups | `/mnt/tank/backup-manager/backups` | `/data/backups` | rw |
-| Config | `/mnt/tank/backup-manager/config` | `/etc/backup-manager/config` | rw |
-| SSH key | `/mnt/tank/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | ro |
-| Known hosts | `/mnt/tank/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | ro |
+| State | `/mnt/tank/rclone-manager/state` | `/data/state` | rw |
+| Backups | `/mnt/tank/rclone-manager/backups` | `/data/backups` | rw |
+| Config | `/mnt/tank/rclone-manager/config` | `/etc/rclone-manager/config` | rw |
+| SSH key | `/mnt/tank/rclone-manager/secrets/id_ed25519` | `/etc/rclone-manager/id_ed25519` | ro |
+| Known hosts | `/mnt/tank/rclone-manager/secrets/known_hosts` | `/etc/rclone-manager/known_hosts` | ro |
 
 `config` is a writable **directory** holding `config.yaml`, not a read-only single
 file (issue #196). Adding a backup set, saving settings and first-run setup all
@@ -148,8 +148,8 @@ sources:
           host: "sftp.example.internal"
           user: "backup"
           key:
-            file: "/etc/backup-manager/id_ed25519"
-          known_hosts: "/etc/backup-manager/known_hosts"
+            file: "/etc/rclone-manager/id_ed25519"
+          known_hosts: "/etc/rclone-manager/known_hosts"
         remote_path: "/srv/backups"
         local_path: /data/backups
         include:
@@ -167,21 +167,21 @@ shape; this is the same thing with TrueNAS's paths.
 
 ## The image reference
 
-`ghcr.io/spdrman/backup-manager:0.3.3` is the reference every package here
+`ghcr.io/spdrman/rclone-manager:0.3.3` is the reference every package here
 carries, and it is not pushed yet. `distribution/packaging/canonical.json`
 records `image.published: false`, and `container/release-manifest.json` carries
 a `registry_digest` of `null` per architecture; those two move together, so
 either both describe a real push or neither does. Until the release workflow
 pushes 0.3.3 and the digests are recorded back, reach it the way the acceptance
 procedure's step 0 describes, by pushing to your own registry or side-loading a
-build. The previous release, `ghcr.io/spdrman/backup-manager:0.3.0`, stays
+build. The previous release, `ghcr.io/spdrman/rclone-manager:0.3.0`, stays
 published and signed if you would rather run that. The reference is one question in the wizard and one line in the
 compose file, so substituting it is a one-place change.
 
 ## Contributing this to the TrueNAS catalog
 
 Copy `catalog/` into the TrueNAS apps repository as
-`ix-dev/community/backup-manager/` and run that repository's own validation and
+`ix-dev/community/rclone-manager/` and run that repository's own validation and
 render tooling. That validator cannot run here, so it is step 8 of the acceptance
 procedure rather than a CI check. What CI does check on every commit: every
 question is consumed by the template and given a default, the rendered image is

@@ -27,7 +27,7 @@ import (
 // LauncherIconSizes are the pixel sizes shipped under the DSM UI
 // directory's images/ folder.
 //
-// The launcher config references them as "images/backup_manager_{0}.png",
+// The launcher config references them as "images/rclone_manager_{0}.png",
 // the templated form Synology's own desktop-application example uses, and
 // DSM substitutes a size for {0}. The documentation does not say which
 // sizes it asks for, so the package ships the common DSM icon sizes
@@ -126,7 +126,7 @@ func renderLauncherIcons() ([]assetFile, error) {
 			return nil, err
 		}
 		out = append(out, assetFile{
-			Name: fmt.Sprintf("backup_manager_%d.png", size),
+			Name: fmt.Sprintf("rclone_manager_%d.png", size),
 			Body: body,
 		})
 	}

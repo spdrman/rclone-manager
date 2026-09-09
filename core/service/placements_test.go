@@ -281,7 +281,7 @@ func TestToStorageMediumSummaries_DescribeThePlaceAndNeverTheKey(t *testing.T) {
 		{ID: "offsite_s3", Type: config.StorageMediumTypeS3, Bucket: "nas-backups", Region: "us-east-1",
 			Credentials: config.MediumCredentials{Env: "BACKUP_S3_OFFSITE"}},
 		{ID: "offsite_cold", Type: config.StorageMediumTypeS3, Bucket: "nas-archive", StorageClass: config.StorageClassDeepArchive,
-			Credentials: config.MediumCredentials{File: "/var/lib/backup-manager/s3/cold.creds"}},
+			Credentials: config.MediumCredentials{File: "/var/lib/rclone-manager/s3/cold.creds"}},
 	}}
 
 	// The local hard drive leads the list and is not declared anywhere

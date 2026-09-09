@@ -49,20 +49,20 @@ shape every metadata format reduces to.
    nothing inside the container can create or chown them for you.
 
    ```
-   mkdir -p /opt/backup-manager/state /opt/backup-manager/backups \
-            /opt/backup-manager/config /opt/backup-manager/secrets
-   chown 1000:1000 /opt/backup-manager/state /opt/backup-manager/backups \
-                   /opt/backup-manager/config /opt/backup-manager/secrets
+   mkdir -p /opt/rclone-manager/state /opt/rclone-manager/backups \
+            /opt/rclone-manager/config /opt/rclone-manager/secrets
+   chown 1000:1000 /opt/rclone-manager/state /opt/rclone-manager/backups \
+                   /opt/rclone-manager/config /opt/rclone-manager/secrets
    ```
 
-2. Put the SFTP private key at `/opt/backup-manager/secrets/id_ed25519` (mode
-   0600) and the pinned host key at `/opt/backup-manager/secrets/known_hosts`.
+2. Put the SFTP private key at `/opt/rclone-manager/secrets/id_ed25519` (mode
+   0600) and the pinned host key at `/opt/rclone-manager/secrets/known_hosts`.
    Neither is ever baked into the image or into any file in this repository.
 
 3. Register the template. In Portainer, **Settings, App Templates**, and point
    the URL at this repository's `apps/portainer/templates.json`. On a host that
    cannot reach the repository, use **Custom Templates, Add, Repository** or
-   paste `compose/backup-manager.yml` in directly.
+   paste `compose/rclone-manager.yml` in directly.
 
 4. Deploy it from **App Templates**, fill the form, and open the published port.
    The engine prints a one-time enrollment link on first start; read it from the
@@ -78,11 +78,11 @@ it is ticked.
 
 | Host path | Container path | Holds |
 | --- | --- | --- |
-| `/opt/backup-manager/state` | `/data/state` | the catalogue and the local administrator record. Private. |
-| `/opt/backup-manager/backups` | `/data/backups` | retained artifacts, and nothing else. |
-| `/opt/backup-manager/config` | `/etc/backup-manager/config` | `config.yaml`, writable, plus the engine's `ssh_keys/` and `known_hosts.d/` stores. |
-| `/opt/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | the SFTP private key, read-only. |
-| `/opt/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | the pinned host key, read-only. |
+| `/opt/rclone-manager/state` | `/data/state` | the catalogue and the local administrator record. Private. |
+| `/opt/rclone-manager/backups` | `/data/backups` | retained artifacts, and nothing else. |
+| `/opt/rclone-manager/config` | `/etc/rclone-manager/config` | `config.yaml`, writable, plus the engine's `ssh_keys/` and `known_hosts.d/` stores. |
+| `/opt/rclone-manager/secrets/id_ed25519` | `/etc/rclone-manager/id_ed25519` | the SFTP private key, read-only. |
+| `/opt/rclone-manager/secrets/known_hosts` | `/etc/rclone-manager/known_hosts` | the pinned host key, read-only. |
 
 Private state and the backup root are separate security domains and neither one
 is inside the other. `distribution/packaging` fails the build if that stops
@@ -110,11 +110,11 @@ generic bridge says exactly that rather than claiming otherwise.
 
 ## Where the runtime definition comes from
 
-`compose/backup-manager.yml` is derived from `container/compose.yaml` at runtime
+`compose/rclone-manager.yml` is derived from `container/compose.yaml` at runtime
 contract 1.2.0. Seven fields have one authority each and a mismatch names the
 field (`distribution/packaging/derive.go`), and on top of that the whole stack is
 held to the canonical one semantically, service by service, by
 `TestEveryNewAdapterIsSemanticallyEquivalentToTheCanonicalStack`. The App
-Template's environment list is checked against `compose/backup-manager.env` in
+Template's environment list is checked against `compose/rclone-manager.env` in
 both directions, so the form an operator fills in and the file it feeds can
 never name different variables.

@@ -733,9 +733,9 @@ run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
            "This block reuses the anchor the create above established rather than probing again," \
            "so it needs to know which line that is."
 
-  local base=(--config /etc/backup-manager/config
+  local base=(--config /etc/rclone-manager/config
     --host "$source_ip"
-    --ssh-key-file /etc/backup-manager/id_ed25519
+    --ssh-key-file /etc/rclone-manager/id_ed25519
     --known-hosts-line "$trusted"
     --remote-path /upload
     --completion-strategy rename
@@ -757,7 +757,7 @@ run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
 
   step "  #624: a check that passes clears the mark"
   local out=""
-  out="$(bm_stopped "$mgr" "$prefix" backup-set test-connection e2e/offline --config /etc/backup-manager/config 2>&1)" \
+  out="$(bm_stopped "$mgr" "$prefix" backup-set test-connection e2e/offline --config /etc/rclone-manager/config 2>&1)" \
     || die "\`backup-set test-connection\` against the source this script has been backing up all along failed." \
            "the command said: $out"
   for want in credentials resolve connect host_key authenticate list; do
@@ -797,7 +797,7 @@ run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
     --user "nobody-$run_id" --local-path /data/backups/nobody --no-verify \
     || die "\`backup-set create --no-verify\` failed for the unreachable set."
   refused=0
-  out="$(bm_stopped "$mgr" "$prefix" backup-set test-connection e2e/nobody --config /etc/backup-manager/config 2>&1)" || refused=$?
+  out="$(bm_stopped "$mgr" "$prefix" backup-set test-connection e2e/nobody --config /etc/rclone-manager/config 2>&1)" || refused=$?
   [ "$refused" = "1" ] \
     || die "\`backup-set test-connection\` against a source that cannot authenticate exited $refused, want 1." \
            "the command said: $out"
@@ -818,7 +818,7 @@ run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
   local id
   for id in e2e/nobody e2e/offline; do
     mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
-      /rbm backup-set remove "$id" --config /etc/backup-manager/config >/dev/null \
+      /rbm backup-set remove "$id" --config /etc/rclone-manager/config >/dev/null \
       || die "could not remove $id, so the rest of this case would be asserting about three backup sets."
   done
 }
@@ -1099,10 +1099,10 @@ run_case() {
   # create-admin` needs in run_lifecycle below, for the same kind of
   # reason, and it is the honest worked example for a packaged install.
   local create_argv=(backup-set create e2e/source
-    --config /etc/backup-manager/config
+    --config /etc/rclone-manager/config
     --host "$source_ip"
     --user "$sftp_user"
-    --ssh-key-file /etc/backup-manager/id_ed25519
+    --ssh-key-file /etc/rclone-manager/id_ed25519
     --trust-host-key
     --remote-path /upload
     --local-path /data/backups/source
@@ -1122,7 +1122,7 @@ run_case() {
   # And nothing was written. `sources` needs a configuration to read, so on
   # an installation that still has none it refuses, and a zero here would
   # mean the refused create left one behind after all.
-  if bm "$mgr" "$prefix" sources --config /etc/backup-manager/config >/dev/null 2>&1; then
+  if bm "$mgr" "$prefix" sources --config /etc/rclone-manager/config >/dev/null 2>&1; then
     die "the refused create left a configuration behind, so \"nothing was written\" is not true on a real install."
   fi
   note "refused with exit 3, and this installation still has no configuration"
@@ -1148,7 +1148,7 @@ run_case() {
 
   # ------------------------------------------------------ run it
   step "  running the backup set"
-  bm "$mgr" "$prefix" run --config /etc/backup-manager/config \
+  bm "$mgr" "$prefix" run --config /etc/rclone-manager/config \
     || die "the backup cycle exited non-zero." \
            "$( [ "$case_name" = connection-cap ] && echo "This is the case that pins #264: the source refuses a third simultaneous connection, and a manager that leaks a connection pool per operation cannot get past it." || true )"
 
@@ -1192,7 +1192,7 @@ run_case() {
   # The product's own verdict, on top of the bytes: a set whose artifacts
   # all landed and verified is HEALTHY, and `status` exits non-zero on
   # anything else (FR-24).
-  bm "$mgr" "$prefix" status --config /etc/backup-manager/config \
+  bm "$mgr" "$prefix" status --config /etc/rclone-manager/config \
     || die "the engine's own status says this backup set is not healthy, even though the bytes match."
 
   if [ "$case_name" = "lifecycle" ]; then
@@ -1284,7 +1284,7 @@ run_activity_diagnostic() {
   step "  the lifecycle feed, read from the engine over its own API (#598)"
   local feed_out feed_err
   feed_err="$case_dir/activity.err"
-  feed_out="$(bm_routed "$mgr" "$prefix" activity --config /etc/backup-manager/config 2>"$feed_err")" \
+  feed_out="$(bm_routed "$mgr" "$prefix" activity --config /etc/rclone-manager/config 2>"$feed_err")" \
     || die "\`rbm activity\` failed against a deployment that has just completed a backup." \
            "stderr: $(cat "$feed_err")"
 
@@ -1318,7 +1318,7 @@ run_activity_diagnostic() {
   # --json is what a support conversation or a cron job parses, so it is
   # asserted on the contract's field names rather than on the table.
   local json_out
-  json_out="$(bm_routed "$mgr" "$prefix" activity --config /etc/backup-manager/config --limit 1 --json 2>/dev/null)" \
+  json_out="$(bm_routed "$mgr" "$prefix" activity --config /etc/rclone-manager/config --limit 1 --json 2>/dev/null)" \
     || die "\`rbm activity --json\` failed against the running engine."
   case "$json_out" in
     *'"events"'*'"artifact_id"'*'"occurred_at"'*) : ;;
@@ -1343,7 +1343,7 @@ run_activity_diagnostic() {
     -e BACKUP_MANAGER_API_USERNAME="$admin_user" \
     -e BACKUP_MANAGER_API_PASSWORD="$admin_pass" \
     rclone-manager \
-    /rbm activity --config /etc/backup-manager/config >/dev/null 2>"$down_err" \
+    /rbm activity --config /etc/rclone-manager/config >/dev/null 2>"$down_err" \
     || true
   if grep -q 'mode: engine-attached' "$down_err"; then
     die "the read announced engine-attached with the engine container stopped." \
@@ -1376,7 +1376,7 @@ run_activity_diagnostic() {
     || die "could not make the configuration directory read-only on the manager machine."
 
   local refusal="" refused=0
-  refusal="$(bm_routed "$mgr" "$prefix" settings patch --timezone Europe/Berlin --config /etc/backup-manager/config 2>&1)" || refused=$?
+  refusal="$(bm_routed "$mgr" "$prefix" settings patch --timezone Europe/Berlin --config /etc/rclone-manager/config 2>&1)" || refused=$?
   docker exec "$mgr" chmod 0755 "$prefix/config" \
     || die "could not restore the configuration directory's permissions on the manager machine."
 
@@ -1616,7 +1616,7 @@ run_retention_apply() {
   mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
   mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
     /rbm backup-set retention e2e/source \
-    --config /etc/backup-manager/config \
+    --config /etc/rclone-manager/config \
     --daily-days 1 --weekly-months 1 --monthly-months 1 >/dev/null \
     || die "giving the backup set its own retention policy failed."
 
@@ -1627,7 +1627,7 @@ run_retention_apply() {
   step "  applying the plan"
   apply_out="$(mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
     /rbm retention apply e2e/source \
-    --config /etc/backup-manager/config --acknowledge 2>/dev/null)" \
+    --config /etc/rclone-manager/config --acknowledge 2>/dev/null)" \
     || die "the retention apply exited non-zero." "It said: $apply_out"
   printf '%s\n' "$apply_out" | sed 's/^/    | /'
 
@@ -1718,7 +1718,7 @@ run_retention_apply() {
     bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /rbm version"
 
   local health
-  health="$(bm "$mgr" "$prefix" status --config /etc/backup-manager/config 2>/dev/null || true)"
+  health="$(bm "$mgr" "$prefix" status --config /etc/rclone-manager/config 2>/dev/null || true)"
   printf '%s\n' "$health" | sed 's/^/    | /'
   printf '%s\n' "$health" | grep -q "^e2e/source:" \
     || die "the engine's status says nothing about e2e/source after the retention apply." \
@@ -1800,14 +1800,14 @@ count_sets() {  # backup sets the engine reports, through its own read surface
   # `sources` prints one indented line per backup set, each carrying
   # remote_path=. Counting that rather than the indentation, because the
   # indentation is a format and the field is a fact.
-  bm "$1" "$2" sources --config /etc/backup-manager/config | grep -c 'remote_path=' || true
+  bm "$1" "$2" sources --config /etc/rclone-manager/config | grep -c 'remote_path=' || true
 }
 
 count_artifacts() {  # catalogued artifacts, through the engine's own read surface
   # `artifacts` ends with its own "N artifact(s)" line, which is the
   # engine counting its catalog rather than this script counting lines it
   # happens to recognise.
-  bm "$1" "$2" artifacts --config /etc/backup-manager/config \
+  bm "$1" "$2" artifacts --config /etc/rclone-manager/config \
     | sed -n 's/^\([0-9][0-9]*\) artifact(s)$/\1/p' | tail -1
 }
 

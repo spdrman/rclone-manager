@@ -224,8 +224,8 @@ type GoBuildTarget struct {
 // binary appearing in the Dockerfile and not here is a difference someone
 // has to make on purpose.
 var ShippedGoBinaries = []GoBuildTarget{
-	{Binary: "rbm", ModuleDir: "core", Package: "./cmd/backup-manager"},
-	{Binary: "rbm-web", ModuleDir: "apps/generic", Package: "./cmd/backup-manager-web"},
+	{Binary: "rbm", ModuleDir: "core", Package: "./cmd/rbm"},
+	{Binary: "rbm-web", ModuleDir: "apps/generic", Package: "./cmd/rbm-web"},
 }
 
 // GoModuleRef is one module in a binary's linked graph.
@@ -745,7 +745,7 @@ func ArtifactParityComplaints(targets map[string]DistributionTarget, recorded []
 // repository with no tags is an abbreviated commit) and the tag every
 // provider package advertises is a semantic version that resolves
 // nowhere. The moment a push happens, the two must be the same string,
-// or `docker run ghcr.io/spdrman/backup-manager:1.0.0 /rbm
+// or `docker run ghcr.io/spdrman/rclone-manager:1.0.0 /rbm
 // version` answers with a commit SHA that the listing never mentions.
 func VersionParityComplaints(published bool, canonicalTag, manifestVersion, bundleVersion string, versionIsABuildStamp bool) []string {
 	var out []string

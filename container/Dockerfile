@@ -32,7 +32,7 @@
 # engine), `healthcheck` and `auth`. Two binaries, not one with two
 # names, because apps/generic needs to import apps/common/webhost and
 # apps/common/auth/local, and core/'s own module cannot depend on apps/
-# in either direction (§7.1). See apps/generic/cmd/backup-manager-web's
+# in either direction (§7.1). See apps/generic/cmd/rbm-web's
 # own main.go doc for the module boundary reasoning. That directory keeps
 # the old spelling because a Go package path is not operator-visible;
 # every string the binary prints about itself already comes from
@@ -53,8 +53,8 @@
 # below 0.3.3 rather than write a deployment an older image cannot start.
 #
 # What did NOT change is everything that is not the CLI: the image
-# reference (ghcr.io/spdrman/backup-manager), the config directory at
-# /etc/backup-manager, and the Go package paths under cmd/. Moving any of
+# reference (ghcr.io/spdrman/rclone-manager), the config directory at
+# /etc/rclone-manager, and the Go package paths under cmd/. Moving any of
 # those would move an operator's data or break their tooling for nothing.
 #
 # The compose service names are not on that list, and it is worth saying
@@ -134,7 +134,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # apicontract is on this list because the CLI now speaks to a running
 # engine (#543): core/internal/apiclient resolves every path, status and
 # error code out of core/apicontract, so leaving it out builds a tree in
-# which `go build ./cmd/backup-manager` fails with "cannot find module
+# which `go build ./cmd/rbm` fails with "cannot find module
 # providing package .../core/apicontract" and nothing in the Go suite says
 # so, because a `go test` from a checkout has the whole module. It is
 # listed in the build-web stage too, for the same reason one step ahead:
@@ -183,7 +183,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -buildvcs=false \
         -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
         -o /out/rbm \
-        ./cmd/backup-manager
+        ./cmd/rbm
 
 # ---- frontend builder -------------------------------------------------
 # ui/shared's static bundle (docs/EPIC-B-multi-nas.md §9.2/§11): built
@@ -315,7 +315,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -buildvcs=false \
         -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
         -o /out/rbm-web \
-        ./cmd/backup-manager-web
+        ./cmd/rbm-web
 
 # ---- runtime ------------------------------------------------------------
 # distroless static, nonroot variant: no shell, no package manager, no libc
@@ -402,7 +402,7 @@ EXPOSE 8080
 
 # `rbm status` (issue #26, FR-24) exits 0 only when every
 # configured backup set reports HEALTHY, and non-zero on DEGRADED, STALE or
-# FAILING (see core/cmd/backup-manager/status.go's own doc for the exact
+# FAILING (see core/cmd/rbm/status.go's own doc for the exact
 # contract). This is the real backup-freshness signal FR-24's health states
 # are meant to be read through - not process liveness, which is what the
 # previous `version`-based HEALTHCHECK could only ever answer. Verified

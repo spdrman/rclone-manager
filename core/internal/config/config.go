@@ -519,7 +519,7 @@ type BackupSet struct {
 	// a *Config has to remember: any mutation of the top-level Retention
 	// has to be followed by Validate (or ResolveBackupSetRetention), or
 	// every set goes on deciding under the policy that was in force when
-	// it was last resolved. cmd/backup-manager's retention override flags
+	// it was last resolved. cmd/rbm's retention override flags
 	// are the live instance of this, and were a silent no-op until they
 	// re-resolved.
 	Retention Retention `yaml:"-"`
@@ -1726,7 +1726,7 @@ type MediumCredentials struct {
 	// holds is a secret it cannot log.
 	//
 	// The file belongs under this manager's private state directory
-	// (/var/lib/backup-manager), never under the backup root: the backup
+	// (/var/lib/rclone-manager), never under the backup root: the backup
 	// root is what a NAS deployment exports over SMB or AFP, and #298 was
 	// filed over precisely that exposure for the SSH key. This package
 	// does not enforce that placement, the same way it does not enforce it
@@ -1762,7 +1762,7 @@ const DefaultFileName = "config.yaml"
 // DefaultFileName inside it; anything else is returned unchanged.
 //
 // It exists because #196 made the packaged mount a directory, so
-// `--config /etc/backup-manager/config` is now the natural thing for an
+// `--config /etc/rclone-manager/config` is now the natural thing for an
 // operator to type. Without this, that spelling fails with "is a
 // directory" from deep inside the YAML reader, which says nothing about
 // what to do instead.

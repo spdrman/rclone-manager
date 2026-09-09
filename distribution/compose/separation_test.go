@@ -54,9 +54,9 @@ var privatePaths = []struct {
 	// declares, and it is also the stricter thing to check: nesting it
 	// inside the backup destination would publish the two key stores as
 	// well as the configuration.
-	{"/etc/backup-manager/config", "the manager's configuration directory"},
-	{"/etc/backup-manager/id_ed25519", "the SFTP private key"},
-	{"/etc/backup-manager/known_hosts", "the pinned host keys"},
+	{"/etc/rclone-manager/config", "the manager's configuration directory"},
+	{"/etc/rclone-manager/id_ed25519", "the SFTP private key"},
+	{"/etc/rclone-manager/known_hosts", "the pinned host keys"},
 }
 
 const backupDataPath = "/data/backups"
@@ -74,7 +74,7 @@ const backupDataPath = "/data/backups"
 func separationEnv() map[string]string {
 	out := map[string]string{
 		"DISK":     "/srv/dev-disk-by-uuid-0000",
-		"KEY_FILE": "/srv/backup-manager/secrets/id_ed25519",
+		"KEY_FILE": "/srv/rclone-manager/secrets/id_ed25519",
 	}
 	for k, v := range env() {
 		out[k] = v
@@ -194,7 +194,7 @@ func platformOfArtifact(rel string) string {
 // nonComposePlatformCoverage names a claimed platform this suite checks
 // through something other than a Compose document, and where.
 var nonComposePlatformCoverage = map[string]string{
-	"unraid": "apps/unraid/template/backup-manager.xml, read by TestTheUnraidTemplateKeepsPrivateStateOutOfTheBackupShare",
+	"unraid": "apps/unraid/template/rclone-manager.xml, read by TestTheUnraidTemplateKeepsPrivateStateOutOfTheBackupShare",
 }
 
 // platformsWithNoHostPathsToCheck names a claimed platform this suite
@@ -499,12 +499,12 @@ func TestTheSeparationRuleWouldNoticeANestedLayout(t *testing.T) {
 	const nested = `
 services:
   engine:
-    image: backup-manager:dev
+    image: rclone-manager:dev
     command: ["/rbm-web", "serve", "--profile=generic"]
     volumes:
       - /srv/backups:/data/backups
       - /srv/backups/private:/data/state
-      - /srv/backups/keys/id_ed25519:/etc/backup-manager/id_ed25519:ro
+      - /srv/backups/keys/id_ed25519:/etc/rclone-manager/id_ed25519:ro
 `
 	doc, err := compose.Parse([]byte(nested), "synthetic-nested.yaml", separationEnv())
 	if err != nil {
@@ -515,7 +515,7 @@ services:
 		t.Fatal("the synthetic document declares no backup mount, so this control proves nothing")
 	}
 
-	for _, containerPath := range []string{"/data/state", "/etc/backup-manager/id_ed25519"} {
+	for _, containerPath := range []string{"/data/state", "/etc/rclone-manager/id_ed25519"} {
 		mount, declared := doc.MountFor(compose.RoleEngine, containerPath)
 		if !declared {
 			t.Fatalf("the synthetic document declares no mount at %s", containerPath)
@@ -567,18 +567,18 @@ func (tpl unraidTemplate) mounts() map[string]compose.Mount {
 // TestTheUnraidTemplateKeepsPrivateStateOutOfTheBackupShare closes the
 // biggest half of M8's platform gap.
 //
-// apps/unraid/template/backup-manager.xml declares exactly the mounts
-// this rule is about (`/mnt/user/appdata/backup-manager/state`,
+// apps/unraid/template/rclone-manager.xml declares exactly the mounts
+// this rule is about (`/mnt/user/appdata/rclone-manager/state`,
 // `.../secrets/id_ed25519`, `.../secrets/known_hosts` and
-// `/mnt/user/backups/backup-manager`) as operator-editable Config
+// `/mnt/user/backups/rclone-manager`) as operator-editable Config
 // defaults, and nothing checked that an operator who repoints Backup root
-// at `/mnt/user/appdata/backup-manager` has just nested the SFTP private
+// at `/mnt/user/appdata/rclone-manager` has just nested the SFTP private
 // key and the local-auth record inside the backup share. It was outside
 // the suite entirely because the suite only ever read Compose documents.
 func TestTheUnraidTemplateKeepsPrivateStateOutOfTheBackupShare(t *testing.T) {
 	t.Parallel()
 
-	const rel = "apps/unraid/template/backup-manager.xml"
+	const rel = "apps/unraid/template/rclone-manager.xml"
 	raw, err := os.ReadFile(compose.Path(rel))
 	if err != nil {
 		t.Fatalf("read %s: %v", rel, err)
@@ -607,8 +607,8 @@ func TestTheUnraidTemplateReaderSeesTheDeclaredPaths(t *testing.T) {
 
 	const nested = `<?xml version="1.0"?>
 <Container version="2">
-  <Config Name="Application state" Target="/data/state" Default="/mnt/user/backups/backup-manager/state" Type="Path">/mnt/user/backups/backup-manager/state</Config>
-  <Config Name="Backup root" Target="/data/backups" Default="/mnt/user/backups/backup-manager" Type="Path">/mnt/user/backups/backup-manager</Config>
+  <Config Name="Application state" Target="/data/state" Default="/mnt/user/backups/rclone-manager/state" Type="Path">/mnt/user/backups/rclone-manager/state</Config>
+  <Config Name="Backup root" Target="/data/backups" Default="/mnt/user/backups/rclone-manager" Type="Path">/mnt/user/backups/rclone-manager</Config>
   <Config Name="Listen address" Target="LISTEN_ADDR" Default=":8080" Type="Variable">:8080</Config>
 </Container>`
 
@@ -661,7 +661,7 @@ func TestAnUnresolvedHostPathIsRefusedRatherThanCompared(t *testing.T) {
 	}
 	// The negative half: a real path must not be flagged, or the rule
 	// would fail every artifact and prove nothing about any of them.
-	for _, resolved := range []string{"/mnt/tank/backup-manager/state", "/srv/backup-manager/secrets/id_ed25519"} {
+	for _, resolved := range []string{"/mnt/tank/rclone-manager/state", "/srv/rclone-manager/secrets/id_ed25519"} {
 		if got := unresolvedIn(resolved); len(got) != 0 {
 			t.Errorf("unresolvedIn(%q) = %v, want none", resolved, got)
 		}
@@ -673,7 +673,7 @@ func TestAnUnresolvedHostPathIsRefusedRatherThanCompared(t *testing.T) {
 	const templated = `
 services:
   engine:
-    image: backup-manager:dev
+    image: rclone-manager:dev
     command: ["/rbm-web", "serve", "--profile=generic"]
     volumes:
       - "{{ .Values.storage.backups.hostPath }}:/data/backups"

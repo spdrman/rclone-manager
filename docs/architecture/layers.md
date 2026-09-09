@@ -221,7 +221,7 @@ The enforcement cost is still one edit in `scripts/architecture/layers.conf`.
 ## A note on the source specification's paths
 
 The refactor specification behind #81's standing constraint roots its structure
-diagram at `tools/backup-manager/`, a path that does not exist in this
+diagram at `tools/rclone-manager/`, a path that does not exist in this
 repository. The binding requirement is the **dependency direction**, not the
 literal paths: #81 says so, and #165 restates it. The layer a file is in is what
 `scripts/architecture/layers.conf` says it is, not what its directory happens to

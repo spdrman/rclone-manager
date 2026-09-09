@@ -826,7 +826,7 @@ func ImportsProviderRe(provider string) *regexp.Regexp {
 	// lines until it meets a provider path in a later comment, and the
 	// check then reports core as importing a provider because somebody
 	// wrote "this repository's" a few lines above the word. That is not
-	// hypothetical: it is how core/cmd/backup-manager/usagepins_test.go
+	// hypothetical: it is how core/cmd/rbm/usagepins_test.go
 	// first tripped this. An import path and a string literal both live
 	// on one line, so refusing to cross one costs nothing real.
 	return regexp.MustCompile(`["'][^"'\n]*apps/` + regexp.QuoteMeta(provider) + `/`)

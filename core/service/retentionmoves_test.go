@@ -384,7 +384,7 @@ func previewOfALegacyRow(t *testing.T, chain config.Retention) RetentionPlan {
 // backup it already had listed under a heading that reads like a fault.
 //
 // `rbm retention` already refuses to print exactly this
-// (printPlacementPlan's own doc, core/cmd/backup-manager/retention.go).
+// (printPlacementPlan's own doc, core/cmd/rbm/retention.go).
 // The plan the API is built on did not, so the two operator surfaces
 // disagreed about the same deployment.
 func TestPreviewRetention_AMediumFreeDeploymentSaysNothingAboutPlacement(t *testing.T) {

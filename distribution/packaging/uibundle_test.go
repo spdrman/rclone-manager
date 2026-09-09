@@ -154,7 +154,7 @@ func TestTheGenericBundleIsTheOneCompiledIntoTheBinary(t *testing.T) {
 // one of the rows.
 func TestUIBundleSelectionIsDecidedByTheArtifact(t *testing.T) {
 	svc := func(env map[string]string, cmd ...string) *Service {
-		return &Service{Name: "backup-manager-ui", Command: cmd, Environment: env}
+		return &Service{Name: "web-ui", Command: cmd, Environment: env}
 	}
 
 	for _, tc := range []struct {

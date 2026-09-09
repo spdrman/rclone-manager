@@ -50,7 +50,7 @@ backup job and nothing else, so it can be rotated or revoked without touching
 anything unrelated:
 
 ```bash
-ssh-keygen -t ed25519 -f /etc/backup-manager/ssh/backup_key -C "rclone-manager" -N ""
+ssh-keygen -t ed25519 -f /etc/rclone-manager/ssh/backup_key -C "rclone-manager" -N ""
 ```
 
 The empty `-N ""` means no passphrase. That's deliberate, not an oversight:
@@ -60,8 +60,8 @@ filesystem permissions and by mounting the key read-only into wherever
 rbm actually runs:
 
 ```bash
-chmod 600 /etc/backup-manager/ssh/backup_key
-chown root:root /etc/backup-manager/ssh/backup_key
+chmod 600 /etc/rclone-manager/ssh/backup_key
+chown root:root /etc/rclone-manager/ssh/backup_key
 ```
 
 Never commit this key, or any real key, to Git. If you generate it inside a
@@ -76,9 +76,9 @@ other server privileges. Here's what that looks like as actual commands, on
 the remote server, as root:
 
 ```bash
-useradd --system --create-home --home-dir /srv/backup-manager \
+useradd --system --create-home --home-dir /srv/rclone-manager \
         --shell /usr/sbin/nologin backupsvc
-mkdir -p /srv/backup-manager/incoming
+mkdir -p /srv/rclone-manager/incoming
 ```
 
 `/usr/sbin/nologin` blocks every login path that goes through the account's
@@ -92,11 +92,11 @@ next step is what actually does the confining.
 Add your dedicated public key to this account:
 
 ```bash
-mkdir -p /srv/backup-manager/incoming/.ssh
-chmod 700 /srv/backup-manager/incoming/.ssh
-cp /etc/backup-manager/ssh/backup_key.pub /srv/backup-manager/incoming/.ssh/authorized_keys
-chmod 600 /srv/backup-manager/incoming/.ssh/authorized_keys
-chown -R backupsvc:backupsvc /srv/backup-manager/incoming/.ssh
+mkdir -p /srv/rclone-manager/incoming/.ssh
+chmod 700 /srv/rclone-manager/incoming/.ssh
+cp /etc/rclone-manager/ssh/backup_key.pub /srv/rclone-manager/incoming/.ssh/authorized_keys
+chmod 600 /srv/rclone-manager/incoming/.ssh/authorized_keys
+chown -R backupsvc:backupsvc /srv/rclone-manager/incoming/.ssh
 ```
 
 OpenSSH is strict about ownership here and will silently refuse to read
@@ -111,7 +111,7 @@ single config line. Add to `/etc/ssh/sshd_config`:
 
 ```
 Match User backupsvc
-    ChrootDirectory /srv/backup-manager/incoming
+    ChrootDirectory /srv/rclone-manager/incoming
     ForceCommand internal-sftp
     AllowTcpForwarding no
     AllowAgentForwarding no
@@ -123,17 +123,17 @@ Match User backupsvc
 the writable part, to be owned by root and not writable by group or other:
 
 ```bash
-chown root:root /srv/backup-manager /srv/backup-manager/incoming
-chmod 755 /srv/backup-manager /srv/backup-manager/incoming
+chown root:root /srv/rclone-manager /srv/rclone-manager/incoming
+chmod 755 /srv/rclone-manager /srv/rclone-manager/incoming
 ```
 
 Put the actual backup artifacts in a subdirectory the account owns, not in
 the chroot root itself:
 
 ```bash
-mkdir -p /srv/backup-manager/incoming/backups
-chown backupsvc:backupsvc /srv/backup-manager/incoming/backups
-chmod 750 /srv/backup-manager/incoming/backups
+mkdir -p /srv/rclone-manager/incoming/backups
+chown backupsvc:backupsvc /srv/rclone-manager/incoming/backups
+chmod 750 /srv/rclone-manager/incoming/backups
 ```
 
 Now the "list/read/delete eligible artifacts, but never modify or replace a
@@ -151,8 +151,8 @@ needs:
 
 ```bash
 # run as the producer account, after a backup artifact is finalized
-chown produceruser:backupsvc /srv/backup-manager/incoming/backups/some-artifact.dump.zst
-chmod 440 /srv/backup-manager/incoming/backups/some-artifact.dump.zst
+chown produceruser:backupsvc /srv/rclone-manager/incoming/backups/some-artifact.dump.zst
+chmod 440 /srv/rclone-manager/incoming/backups/some-artifact.dump.zst
 ```
 
 With that combination, `backupsvc` can `list`, `get`, and `rm` the artifact
@@ -193,13 +193,13 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 Then, from wherever rbm will actually connect from:
 
 ```bash
-ssh-keyscan -t ed25519 -p 22 production.example.internal > /etc/backup-manager/known_hosts
-ssh-keygen -lf /etc/backup-manager/known_hosts
+ssh-keyscan -t ed25519 -p 22 production.example.internal > /etc/rclone-manager/known_hosts
+ssh-keygen -lf /etc/rclone-manager/known_hosts
 ```
 
 Compare the two fingerprints by eye. If they don't match, stop, you're either
 talking to the wrong host or something is intercepting the connection. Only
-once they match does `/etc/backup-manager/known_hosts` mean anything.
+once they match does `/etc/rclone-manager/known_hosts` mean anything.
 
 From here on, rbm itself is what keeps this honest: if that host's
 key ever changes, whether from a legitimate server rebuild or from something
@@ -222,11 +222,11 @@ remote:
   host: production.example.internal
   port: 22
   user: backupsvc
-  known_hosts: /etc/backup-manager/known_hosts
+  known_hosts: /etc/rclone-manager/known_hosts
   key:
-    file: /etc/backup-manager/ssh/backup_key
+    file: /etc/rclone-manager/ssh/backup_key
     # env: BACKUP_SSH_KEY
-    # command: ["op", "read", "op://infra/backup-manager/private-key"]
+    # command: ["op", "read", "op://infra/rclone-manager/private-key"]
 ```
 
 Exactly one of `key.file`, `key.env` or `key.command` goes in that block (the
@@ -295,9 +295,9 @@ model.
 
 ```yaml
 key_encryption:
-  file: /etc/backup-manager/secrets/key.dek
+  file: /etc/rclone-manager/secrets/key.dek
   # env: BACKUP_MANAGER_KEY_DEK
-  # command: ["op", "read", "op://infra/backup-manager/key-encryption-key"]
+  # command: ["op", "read", "op://infra/rclone-manager/key-encryption-key"]
 ```
 
 Exactly one of `file`, `env` or `command` goes in that block, the identical
@@ -377,8 +377,8 @@ sources:
           host: production.example.internal
           port: 22
           user: backupsvc
-          key_file: /etc/backup-manager/ssh/backup_key
-          known_hosts: /etc/backup-manager/known_hosts
+          key_file: /etc/rclone-manager/ssh/backup_key
+          known_hosts: /etc/rclone-manager/known_hosts
         remote_path: /backups
 ```
 
@@ -442,8 +442,8 @@ Before trusting this setup with production data, do a manual sanity check
 with the same files rbm will use:
 
 ```bash
-sftp -i /etc/backup-manager/ssh/backup_key \
-     -o UserKnownHostsFile=/etc/backup-manager/known_hosts \
+sftp -i /etc/rclone-manager/ssh/backup_key \
+     -o UserKnownHostsFile=/etc/rclone-manager/known_hosts \
      -o StrictHostKeyChecking=yes \
      backupsvc@production.example.internal
 ```

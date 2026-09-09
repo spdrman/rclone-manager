@@ -21,7 +21,7 @@ tested logic in `internal/lifecycle`, `internal/discovery`, `internal/retention`
 `internal/revalidate`, and `internal/quarantine`, and none of it is wired to anything that
 runs continuously:
 
-- `cmd/backup-manager/main.go` is 25 lines and understands exactly one subcommand,
+- `cmd/rbm/main.go` is 25 lines and understands exactly one subcommand,
   `version`. There is no `run`, `daemon`, `status`, `retention`, or `reconcile` subcommand.
   Issues #25 (execution modes) and #26 (the CLI surface) are both still open.
 - `internal/obs`'s structured logger has zero callers anywhere in this repository, including

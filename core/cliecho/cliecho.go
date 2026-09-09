@@ -28,7 +28,7 @@
 // side of the wire:
 //
 //   - The correspondence already exists here.
-//     core/cmd/backup-manager/engineroute.go maps CLI arguments onto
+//     core/cmd/rbm/engineroute.go maps CLI arguments onto
 //     exactly the requests the UI sends. This is that same relation read
 //     in the other direction.
 //   - The flag spellings are pinned here. core/tests/compat holds usage()
@@ -53,7 +53,7 @@
 //     walks the registered route table and requires every route to have
 //     either a builder or an explicit no-equivalent entry carrying a
 //     reason. A route added with neither fails. That is the parity guard.
-//   - core/cmd/backup-manager's TestEveryEchoedCommandParses feeds every
+//   - core/cmd/rbm's TestEveryEchoedCommandParses feeds every
 //     command this package can emit through the real dispatcher, and
 //     requires it not to be a usage error. A renamed flag, a removed one
 //     or an argument in the wrong position fails there rather than being
@@ -61,7 +61,7 @@
 //     only ever as good as Examples() is wide: a shape no example carries
 //     is a shape nothing parses, which is how a duration renderer that
 //     ate a digit from half its input space stayed green.
-//   - core/cmd/backup-manager's TestNoGapClaimsAVerbThisBinaryShips reads
+//   - core/cmd/rbm's TestNoGapClaimsAVerbThisBinaryShips reads
 //     every gap sentence and fails if it names a verb the binary
 //     dispatches without saying it means to. A gap is a promise that
 //     there is no verb, and five of them outlived the verbs they
@@ -250,7 +250,7 @@ func Echo(a Action) Line {
 // the verbs it names deliberately.
 //
 // It is exported for one reader: TestNoGapClaimsAVerbThisBinaryShips in
-// core/cmd/backup-manager, which is the only package that can see both
+// core/cmd/rbm, which is the only package that can see both
 // these sentences and the verb tables the binary dispatches on. Five of
 // these entries claimed a verb that this same tree ships (`activity`,
 // `activity --follow`, `retention apply`, `backup-set edit-hold` and a
@@ -360,7 +360,7 @@ type entry struct {
 	//
 	// They are declared here as well as being returned by the builder so
 	// that Gaps can report them. A sentence only a builder knows is a
-	// sentence the guard in core/cmd/backup-manager cannot check, and
+	// sentence the guard in core/cmd/rbm cannot check, and
 	// that guard is the reason five gap entries claiming verbs this tree
 	// ships were only found by somebody reading them.
 	refusals []string

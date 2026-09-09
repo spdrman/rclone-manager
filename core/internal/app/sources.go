@@ -15,7 +15,7 @@ import (
 // means a `sources` that breaks is a configuration or construction problem
 // and never a dependency problem.
 //
-// The projection is the reason the file exists at all. cmd/backup-manager
+// The projection is the reason the file exists at all. cmd/rbm
 // could read config.Source directly and print it in ten fewer lines; it
 // would then be the second place that decides which fields of a backup set
 // an operator is shown, and the CLI and a future HTTP handler would drift
@@ -25,7 +25,7 @@ import (
 // SourceSummary is `rbm sources`' one line of business logic: a
 // read-only, presentation-ready view of one configured source and its
 // backup sets. It carries nothing config.Source/config.BackupSet don't
-// already have; it exists so cmd/backup-manager never reaches into
+// already have; it exists so cmd/rbm never reaches into
 // internal/config's types directly, keeping the CLI thin and this
 // package's shape the one both a future HTTP handler and the CLI render
 // from.

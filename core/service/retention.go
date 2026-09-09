@@ -837,7 +837,7 @@ func declaresAStorageMedium(cfg *config.Config) bool {
 // reads like a fault.
 //
 // `rbm retention` already refuses to print exactly this, for
-// exactly this reason (printPlacementPlan, core/cmd/backup-manager/
+// exactly this reason (printPlacementPlan, core/cmd/rbm/
 // retention.go). This is the same rule on the second surface, so the two
 // tell the same story about the same deployment rather than two.
 //

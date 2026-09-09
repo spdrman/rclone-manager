@@ -291,7 +291,7 @@ func TestMediumRendersUnderEveryVerb(t *testing.T) {
 		ID: "cold", Type: transport.MediumTypeS3, Region: "us-east-1",
 		Endpoint: "https://minio.example:9000", Bucket: "nas-backups",
 		Prefix: "rclone-manager", StorageClass: "STANDARD",
-		Credentials: transport.MediumCredentials{File: "/var/lib/backup-manager/s3.creds"},
+		Credentials: transport.MediumCredentials{File: "/var/lib/rclone-manager/s3.creds"},
 	}
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
 		if out := fmt.Sprintf(verb, m); out == "" {

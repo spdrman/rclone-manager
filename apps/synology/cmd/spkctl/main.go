@@ -10,7 +10,7 @@
 // Where the release binaries come from: they are the two executables
 // inside the canonical OCI image 4.1 builds. Extract them with
 //
-//	cid=$(docker create --platform linux/amd64 backup-manager:<version> /rbm version)
+//	cid=$(docker create --platform linux/amd64 rclone-manager:<version> /rbm version)
 //	docker cp "${cid}:/rbm"     ./release/amd64/rbm
 //	docker cp "${cid}:/rbm-web" ./release/amd64/rbm-web
 //	docker rm "${cid}"
@@ -35,7 +35,7 @@ import (
 )
 
 // main defers to run so the whole CLI is reachable from a test without a
-// process, the same split cmd/backup-manager-web uses.
+// process, the same split cmd/rbm-web uses.
 func main() { os.Exit(run(os.Args[1:])) }
 
 // run dispatches and returns the exit code. Two means the invocation was

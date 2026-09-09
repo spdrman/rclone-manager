@@ -100,8 +100,8 @@ describe("the echoed rbm command", () => {
   });
 
   it("names the reference sources without inventing a value for them", () => {
-    expect(addCommand({ id: "a", type: "s3", bucket: "b", credentials: { file: "/etc/backup-manager/s3.creds" } }))
-      .toContain("--credentials-file /etc/backup-manager/s3.creds");
+    expect(addCommand({ id: "a", type: "s3", bucket: "b", credentials: { file: "/etc/rclone-manager/s3.creds" } }))
+      .toContain("--credentials-file /etc/rclone-manager/s3.creds");
     expect(addCommand({ id: "a", type: "s3", bucket: "b", credentials: { env: "BACKUP_S3_OFFSITE" } }))
       .toContain("--credentials-env BACKUP_S3_OFFSITE");
   });

@@ -1679,14 +1679,14 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     listSSHKeyCandidates: (): Promise<SSHKeyDiscovery> =>
       delay({
         locations: [
-          { path: "/etc/backup-manager", kind: "mount", found: 1 },
-          { path: "/home/backup-manager/.ssh", kind: "home", found: 0, problem: "this location is not present in this deployment" }
+          { path: "/etc/rclone-manager", kind: "mount", found: 1 },
+          { path: "/home/rclone-manager/.ssh", kind: "home", found: 0, problem: "this location is not present in this deployment" }
         ],
         candidates: [
           {
             id: "cand_mock_installer",
-            path: "/etc/backup-manager/id_ed25519",
-            location: "/etc/backup-manager",
+            path: "/etc/rclone-manager/id_ed25519",
+            location: "/etc/rclone-manager",
             algorithm: "ssh-ed25519",
             fingerprint: mockCandidateFingerprint,
             publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImockinstallerkey rclone-manager",

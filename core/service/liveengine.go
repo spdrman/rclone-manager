@@ -527,7 +527,7 @@ func (s *FirstRunServing) Release() error {
 var ErrNotAnnounced = errors.New("service: this deployment could not be announced, so it cannot be set up yet")
 
 // notAnnounced marks an error as that refusal without altering a word of
-// it, the same trick core/cmd/backup-manager's engineHeld plays.
+// it, the same trick core/cmd/rbm's engineHeld plays.
 //
 // The words matter here more than usual: what validateStateDir says
 // ("/data/state is not writable", "exists and is not a directory") is the

@@ -53,7 +53,7 @@ import (
 // `rbm fetch` are what exercise real connectivity.
 //
 // The returned *config.Config is the same up-to-date result LoadAndValidate
-// produced, so a caller (cmd/backup-manager's `check` command) can print a
+// produced, so a caller (cmd/rbm's `check` command) can print a
 // summary of what was validated without loading the file a second time.
 func Check(ctx context.Context, configPath string) (*config.Config, error) {
 	cfg, err := config.LoadAndValidate(configPath)

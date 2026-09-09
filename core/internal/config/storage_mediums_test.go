@@ -40,7 +40,7 @@ func mediumsConfig() Config {
 		Region:      "us-east-1",
 		Bucket:      "nas-backups",
 		Prefix:      "rclone-manager",
-		Credentials: MediumCredentials{File: "/var/lib/backup-manager/s3/offsite_s3.creds"},
+		Credentials: MediumCredentials{File: "/var/lib/rclone-manager/s3/offsite_s3.creds"},
 	}}
 	return c
 }
@@ -408,7 +408,7 @@ func TestValidate_PerSetRetentionMediumReferences(t *testing.T) {
 func TestValidate_MediumCredentialSources(t *testing.T) {
 	t.Run("each source alone is accepted", func(t *testing.T) {
 		for name, creds := range map[string]MediumCredentials{
-			"file":    {File: "/var/lib/backup-manager/s3/offsite.creds"},
+			"file":    {File: "/var/lib/rclone-manager/s3/offsite.creds"},
 			"env":     {Env: "BACKUP_S3_OFFSITE"},
 			"command": {Command: []string{"/usr/bin/op", "read", "op://infra/s3"}},
 		} {
@@ -549,7 +549,7 @@ func TestLoad_StorageMediumsRoundTripFromYAML(t *testing.T) {
 			Prefix:             "rclone-manager",
 			StorageClass:       StorageClassStandard,
 			UploadVerification: UploadVerificationReadback,
-			Credentials:        MediumCredentials{File: "/var/lib/backup-manager/s3/offsite_s3.creds"},
+			Credentials:        MediumCredentials{File: "/var/lib/rclone-manager/s3/offsite_s3.creds"},
 		},
 		{
 			ID:           "offsite_annual",
@@ -557,7 +557,7 @@ func TestLoad_StorageMediumsRoundTripFromYAML(t *testing.T) {
 			Region:       "us-east-1",
 			Bucket:       "nas-backups-annual",
 			StorageClass: StorageClassStandardIA,
-			Credentials:  MediumCredentials{Command: []string{"/usr/bin/op", "read", "op://infra/backup-manager/s3-annual"}},
+			Credentials:  MediumCredentials{Command: []string{"/usr/bin/op", "read", "op://infra/rclone-manager/s3-annual"}},
 		},
 		{
 			ID:           "offsite_cold",
@@ -565,7 +565,7 @@ func TestLoad_StorageMediumsRoundTripFromYAML(t *testing.T) {
 			Region:       "us-east-1",
 			Bucket:       "nas-backups-cold",
 			StorageClass: StorageClassDeepArchive,
-			Credentials:  MediumCredentials{Command: []string{"/usr/bin/op", "read", "op://infra/backup-manager/s3-cold"}},
+			Credentials:  MediumCredentials{Command: []string{"/usr/bin/op", "read", "op://infra/rclone-manager/s3-cold"}},
 		},
 		{
 			ID:          "staging_only",
@@ -925,7 +925,7 @@ func TestValidate_DefaultStorageMedium(t *testing.T) {
 			Region:       "us-east-1",
 			Bucket:       "nas-archive",
 			StorageClass: StorageClassDeepArchive,
-			Credentials:  MediumCredentials{File: "/var/lib/backup-manager/s3/cold.creds"},
+			Credentials:  MediumCredentials{File: "/var/lib/rclone-manager/s3/cold.creds"},
 		})
 		// The control: declaring it is legal, and stays legal. It is
 		// pointing something at it that is refused.

@@ -61,7 +61,7 @@
 // The other half of the same problem is a surface that was never captured
 // in the first place, which no comparison can notice. For the usage block
 // that is closed by TestUsage_EveryRegisteredCommandIsPinned over in
-// core/cmd/backup-manager: every verb the binary dispatches has to have its
+// core/cmd/rbm: every verb the binary dispatches has to have its
 // entry line pinned here (#549).
 //
 // # Determinism, and the one place it is bought rather than assumed

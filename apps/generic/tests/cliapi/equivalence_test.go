@@ -64,7 +64,7 @@ func buildCLI(t *testing.T, root string) string {
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/rbm")
 	cmd.Dir = filepath.Join(root, "core")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {

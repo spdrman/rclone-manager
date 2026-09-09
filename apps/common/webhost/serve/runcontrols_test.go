@@ -9,7 +9,7 @@
 // composition main.go actually builds.
 //
 // The first test is the deployment's own answer, with no Gate supplied at
-// all, exactly as apps/generic/cmd/backup-manager-web/main.go builds it.
+// all, exactly as apps/generic/cmd/rbm-web/main.go builds it.
 // It is allowed to assert a refusal: a refusal is a legitimate outcome to
 // record, and recording it is the check that would have caught this two
 // releases ago. What it is not allowed to do is assert a bare 403, which

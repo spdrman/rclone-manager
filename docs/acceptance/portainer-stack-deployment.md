@@ -29,18 +29,18 @@ Portainer CE packaging, so nothing here is a migration from an earlier one.
 
 ### 0.2 Make the canonical image resolvable
 
-`ghcr.io/spdrman/backup-manager:0.3.3` is cut but not pushed yet:
+`ghcr.io/spdrman/rclone-manager:0.3.3` is cut but not pushed yet:
 `distribution/packaging/canonical.json` records `image.published: false`, and
 `container/release-manifest.json` carries a `registry_digest` of `null` per
 architecture. So the reference does not resolve from the registry today, and the
 steps below are how you make it resolve, by pushing a build to a registry this host
 can reach or building elsewhere and loading it. The previous release,
-`ghcr.io/spdrman/backup-manager:0.3.0`, stays published and signed if you would
+`ghcr.io/spdrman/rclone-manager:0.3.0`, stays published and signed if you would
 rather run that:
 
 ```bash
-docker buildx build --platform=linux/amd64,linux/arm64 -f container/Dockerfile -t backup-manager:acceptance .
-docker save backup-manager:acceptance | ssh admin@<host> 'docker load'
+docker buildx build --platform=linux/amd64,linux/arm64 -f container/Dockerfile -t rclone-manager:acceptance .
+docker save rclone-manager:acceptance | ssh admin@<host> 'docker load'
 ```
 
 - [ ] The image is resolvable on the host, and the exact reference used is recorded
@@ -48,8 +48,8 @@ docker save backup-manager:acceptance | ssh admin@<host> 'docker load'
 ### 0.3 Create the host paths
 
 ```bash
-mkdir -p /opt/backup-manager/state /opt/backup-manager/backups \
-         /opt/backup-manager/config /opt/backup-manager/secrets
+mkdir -p /opt/rclone-manager/state /opt/rclone-manager/backups \
+         /opt/rclone-manager/config /opt/rclone-manager/secrets
 ```
 
 The runtime image is distroless: no shell, no root step, nothing inside the
@@ -61,11 +61,11 @@ following `docs/ssh-setup.md`. Never commit either, and never paste a private ke
 into the evidence table.
 
 ```bash
-ssh-keygen -t ed25519 -N "" -f /opt/backup-manager/secrets/id_ed25519
-ssh-keyscan -t ed25519 <sftp-host> > /opt/backup-manager/secrets/known_hosts
+ssh-keygen -t ed25519 -N "" -f /opt/rclone-manager/secrets/id_ed25519
+ssh-keyscan -t ed25519 <sftp-host> > /opt/rclone-manager/secrets/known_hosts
 ```
 
-**Recurse only over what this step created.** `/opt/backup-manager/backups` is the retained
+**Recurse only over what this step created.** `/opt/rclone-manager/backups` is the retained
 backup store: on a reinstall it already holds data this procedure did not write,
 and a recursive ownership change across it rewrites all of it with nothing to
 restore it from. So the private trees are chowned recursively and the backup root
@@ -74,15 +74,15 @@ fails the build if any procedure in this directory recurses over a backup root o
 a parent of one.
 
 ```bash
-chown -R 1000:1000 /opt/backup-manager/state /opt/backup-manager/config /opt/backup-manager/secrets
-chown 1000:1000 /opt/backup-manager/backups
-chmod 600 /opt/backup-manager/secrets/id_ed25519
+chown -R 1000:1000 /opt/rclone-manager/state /opt/rclone-manager/config /opt/rclone-manager/secrets
+chown 1000:1000 /opt/rclone-manager/backups
+chmod 600 /opt/rclone-manager/secrets/id_ed25519
 ```
 
 - [ ] All four paths exist and are owned by the app's uid and gid
 - [ ] The recursive ownership change touched only state, config and secrets
 - [ ] It ran **after** the key and `known_hosts` were created
-- [ ] `/opt/backup-manager/config` is writable by the app's uid and gid
+- [ ] `/opt/rclone-manager/config` is writable by the app's uid and gid
 - [ ] Key material lives only on this host, redacted everywhere else
 
 ---
@@ -92,7 +92,7 @@ chmod 600 /opt/backup-manager/secrets/id_ed25519
 The engine's start gate is a liveness question, not a backup-freshness verdict
 (issue #206). It declares
 `["CMD", "/rbm-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]`,
-derived from `container/compose.yaml`, and `backup-manager-ui` waits on that with
+derived from `container/compose.yaml`, and `web-ui` waits on that with
 `condition: service_healthy`. `/rbm status` is still FR-24's freshness
 verdict and still the image's own baked-in `HEALTHCHECK`, and it exits non-zero on a
 fresh install by design, which is exactly why nothing waits on it any more. So a
@@ -109,16 +109,16 @@ a hard startup failure rather than a first-run wizard, so an invalid one is wors
 none at all. Either finish setup in the browser and skip the file, or write it here.
 
 **If you take the file route, take it before Deploy.** Every field Portainer shows is
-one environment variable of `apps/portainer/compose/backup-manager.env`, and the stack
+one environment variable of `apps/portainer/compose/rclone-manager.env`, and the stack
 deploys as soon as you press Deploy, so a hand-written `config.yaml` has to be on the
 host before that press or it is not the file the engine reads on its first start. Write
 it over SSH on the host running the Docker engine, not inside the Portainer container.
 Skip this block entirely to use the first-run flow instead.
 
 ```bash
-$EDITOR /opt/backup-manager/config/config.yaml
-chown 1000:1000 /opt/backup-manager/config/config.yaml
-chmod 600 /opt/backup-manager/config/config.yaml
+$EDITOR /opt/rclone-manager/config/config.yaml
+chown 1000:1000 /opt/rclone-manager/config/config.yaml
+chmod 600 /opt/rclone-manager/config/config.yaml
 ```
 
 The container-side paths in it are fixed by this package and must not be changed:
@@ -129,7 +129,7 @@ annotated example is this same file with another platform's host paths, and
 **Never commit the config or paste one into the evidence table:** it names the SFTP
 host and user.
 
-- [ ] Either `config.yaml` is written into `/opt/backup-manager/config` **before** the install
+- [ ] Either `config.yaml` is written into `/opt/rclone-manager/config` **before** the install
       and is valid, or that directory is left empty and the first-run flow writes it.
       A file that exists and does not validate is the one state that refuses the start,
       so record which of the two routes this run took
@@ -144,20 +144,20 @@ host and user.
 1. In Portainer, **Settings, App Templates**, set the templates URL to this
    repository's `apps/portainer/templates.json`, and save. On a host that cannot
    reach the repository, use **Custom Templates, Add** and paste
-   `apps/portainer/compose/backup-manager.yml` instead.
+   `apps/portainer/compose/rclone-manager.yml` instead.
 2. **App Templates**, pick Backup Manager, and fill the form. Every field is one
-   variable of `apps/portainer/compose/backup-manager.env` and the defaults are
+   variable of `apps/portainer/compose/rclone-manager.env` and the defaults are
    the same defaults.
 3. Deploy the stack.
 
 - [ ] The template appeared in Portainer's App Templates list
 - [ ] Every environment field Portainer showed matches a variable the stack reads
 - [ ] The stack deployed and both containers reach `running`
-- [ ] `backup-manager` reports healthy (it declares the liveness probe
+- [ ] `rclone-manager` reports healthy (it declares the liveness probe
       `/rbm-web healthcheck --url http://127.0.0.1:8080/health/live`,
       not the image's own `/rbm status`: the web UI waits on this, and
       the backup-freshness verdict is non-zero on a fresh install)
-- [ ] `backup-manager-ui` reports healthy, having overridden the image's own healthcheck
+- [ ] `web-ui` reports healthy, having overridden the image's own healthcheck
 - [ ] No Portainer agent was installed, and no Portainer extension or plugin was added
 
 ## Step 2 — Web UI
@@ -180,10 +180,10 @@ host and user.
 
 ## Step 4 — Storage mapping and backup-root containment
 
-- [ ] Private state lands under `/opt/backup-manager/state`
-- [ ] Retained artifacts land under `/opt/backup-manager/backups`
+- [ ] Private state lands under `/opt/rclone-manager/state`
+- [ ] Retained artifacts land under `/opt/rclone-manager/backups`
 - [ ] No SSH private key, `known_hosts`, config file or authentication record
-      exists anywhere under `/opt/backup-manager/backups`
+      exists anywhere under `/opt/rclone-manager/backups`
 - [ ] The key and `known_hosts` are mounted read-only, and a write attempt from
       inside the container fails
 - [ ] The configuration directory is mounted **writable**: creating a backup set
@@ -197,7 +197,7 @@ Portainer itself has the Docker socket. This product must not, and this is where
 that is decided against the running containers rather than against the file.
 
 ```bash
-docker inspect backup-manager backup-manager-ui \
+docker inspect rclone-manager web-ui \
   --format '{{.Name}} priv={{.HostConfig.Privileged}} net={{.HostConfig.NetworkMode}} pid={{.HostConfig.PidMode}} caps={{.HostConfig.CapAdd}} binds={{.HostConfig.Binds}}'
 ```
 
@@ -218,15 +218,15 @@ Capture a baseline before the pull and compare after it, so "everything
 survived" is a diff rather than an impression:
 
 ```bash
-sha256sum /opt/backup-manager/state/state.db | tee /root/portainer-before-update.sha256
-find /opt/backup-manager/backups -type f -printf '%p %s\n' | sort > /root/portainer-before-update.txt
+sha256sum /opt/rclone-manager/state/state.db | tee /root/portainer-before-update.sha256
+find /opt/rclone-manager/backups -type f -printf '%p %s\n' | sort > /root/portainer-before-update.txt
 ```
 
 Then, in Portainer, open the stack and use **Update the stack** with
 "Re-pull image" enabled, or run the equivalent on the host.
 
 ```bash
-find /opt/backup-manager/backups -type f -printf '%p %s\n' | sort > /root/portainer-after-update.txt
+find /opt/rclone-manager/backups -type f -printf '%p %s\n' | sort > /root/portainer-after-update.txt
 diff /root/portainer-before-update.txt /root/portainer-after-update.txt
 ```
 
@@ -243,9 +243,9 @@ looking. **Capture the baseline first and write it outside the tree you are
 about to test**, so whatever damages the tree cannot damage the evidence:
 
 ```bash
-dd if=/dev/urandom of=/opt/backup-manager/backups/acceptance-canary.bin bs=1M count=8
-sha256sum /opt/backup-manager/backups/acceptance-canary.bin | tee /root/portainer-canary.sha256
-find /opt/backup-manager/backups -type f -printf '%p %s\n' | sort > /root/portainer-before-remove.txt
+dd if=/dev/urandom of=/opt/rclone-manager/backups/acceptance-canary.bin bs=1M count=8
+sha256sum /opt/rclone-manager/backups/acceptance-canary.bin | tee /root/portainer-canary.sha256
+find /opt/rclone-manager/backups -type f -printf '%p %s\n' | sort > /root/portainer-before-remove.txt
 ```
 
 Now remove the stack in Portainer: open it and press **Delete this stack**.
@@ -257,7 +257,7 @@ Then verify against the baseline, before inspecting anything else:
 
 ```bash
 sha256sum -c /root/portainer-canary.sha256
-find /opt/backup-manager/backups -type f -printf '%p %s\n' | sort > /root/portainer-after-remove.txt
+find /opt/rclone-manager/backups -type f -printf '%p %s\n' | sort > /root/portainer-after-remove.txt
 diff /root/portainer-before-remove.txt /root/portainer-after-remove.txt
 ```
 
@@ -265,7 +265,7 @@ diff /root/portainer-before-remove.txt /root/portainer-after-remove.txt
       artifact is untouched, byte for byte
 - [ ] Deleting the stack with volume removal enabled deleted no
       retained artifact either: the same `sha256sum -c` and `diff` are still clean
-- [ ] `/opt/backup-manager/state` still holds the catalogue, so a reinstall
+- [ ] `/opt/rclone-manager/state` still holds the catalogue, so a reinstall
       pointed at the same paths comes back with the same backup sets
 - [ ] Removing this adapter removes no core behaviour: the same image runs
       unchanged under `container/compose.yaml` on a plain Docker host
@@ -288,7 +288,7 @@ ls /etc/systemd/system > /root/portainer-baseline-units.txt 2>/dev/null || true
 
 ## Step 9 — Destructive-safety re-check
 
-- [ ] A backup set configured with a root outside `/opt/backup-manager/backups` is refused
+- [ ] A backup set configured with a root outside `/opt/rclone-manager/backups` is refused
 - [ ] A symlink inside the backup root that points outside it is not followed into a delete
 - [ ] A retention apply deletes only artifacts under the backup root
 - [ ] Nothing under the private state, config or secrets paths is ever a delete target

@@ -5,7 +5,7 @@
 **Type:** EPIC / Detailed implementation specification  
 **Repository:** `iasbuilt/iac`  
 **Parent / predecessor EPIC:** `Embedded-rclone NAS Backup Lifecycle Manager — UI-Ready Architecture`  
-**Primary implementation root:** `tools/backup-manager/`  
+**Primary implementation root:** `tools/rclone-manager/`  
 **Target platform:** UGREEN NAS / UGOS Pro  
 **Primary UI distribution:** UGOS Pro Docker Application packaged as `.UPK`  
 **Secondary distribution:** headless Docker image/package for terminal operation  
@@ -131,7 +131,7 @@ Required corrections:
 
 Critical findings:
 
-1. Separate `backup-manager-ugos` and `backup-manager-cli` images create needless artifact drift when the design already embeds the UI in the same Go binary.
+1. Separate `rclone-manager-ugos` and `rclone-manager-cli` images create needless artifact drift when the design already embeds the UI in the same Go binary.
 2. Four image builds (UGOS/CLI × amd64/arm64) double the release surface without adding lifecycle isolation.
 3. "Same core version" is weaker than using the exact same executable/image digest.
 4. Upgrade rollback could fail if an older binary sees a newer schema.
@@ -1065,14 +1065,14 @@ Target structure:
 
 ```text
 tools/
-  backup-manager/
+  rclone-manager/
     README.md
     go.work
 
     core/
       go.mod
       cmd/
-        backup-manager/
+        rclone-manager/
       app/
         service.go
         operations.go
@@ -1795,7 +1795,7 @@ Private state includes:
 Preferred container path:
 
 ```text
-/var/lib/backup-manager/
+/var/lib/rclone-manager/
 ```
 
 The UPK SHALL mount this path from a **UGOS-owned private writable application location** proven in Phase 0.
@@ -1924,7 +1924,7 @@ is_docker_app: true
 only_admin: true
 
 port: 29090
-proxy_path: backup-manager-api
+proxy_path: rclone-manager-api
 open_type: inner
 
 tag_types:
@@ -1949,16 +1949,16 @@ parameters:
         description: Application logging verbosity.
 
 privacy_policy_link:
-  - https://<publisher>/backup-manager/privacy
+  - https://<publisher>/rclone-manager/privacy
 
 # Current UGREEN project.yaml rules require these when
 # open-source code/components are used.
 license_agreement_link:
-  - https://<publisher>/backup-manager/licenses
+  - https://<publisher>/rclone-manager/licenses
 source_code_link:
-  - https://<publisher>/backup-manager/source
+  - https://<publisher>/rclone-manager/source
 technical_support_link:
-  - https://<publisher>/backup-manager/support
+  - https://<publisher>/rclone-manager/support
 
 i18n:
   en-US:
@@ -1984,7 +1984,7 @@ Illustrative:
 
 ```yaml
 services:
-  backup-manager:
+  rclone-manager:
     image: <exact-versioned-canonical-image-tag>
     restart: always
 
@@ -1992,11 +1992,11 @@ services:
       TZ: ${TZ}
       BACKUP_MANAGER_LOG_LEVEL: ${LOG_LEVEL}
       BACKUP_MANAGER_AUTH_MODE: ugos
-      BACKUP_MANAGER_DATA_DIR: /var/lib/backup-manager
+      BACKUP_MANAGER_DATA_DIR: /var/lib/rclone-manager
       BACKUP_MANAGER_BACKUP_ROOT: /data/backups
 
     volumes:
-      - <verified-private-state-source>:/var/lib/backup-manager
+      - <verified-private-state-source>:/var/lib/rclone-manager
       - ${BACKUP_ROOT}:/data/backups
 
     ports:
@@ -2541,7 +2541,7 @@ including:
 
 ```json
 {
-  "backup_manager": "...",
+  "rclone_manager": "...",
   "api_version": "v1",
   "ui_build": "...",
   "rclone": "...",
@@ -2570,7 +2570,7 @@ The headless package supports operators who want:
 Publish:
 
 ```text
-<registry>/iasbuilt/backup-manager:<version>
+<registry>/iasbuilt/rclone-manager:<version>
 ```
 
 The image is the same architecture-specific image digest bundled into the matching UPK release.
@@ -2583,10 +2583,10 @@ A convenience `latest` tag MAY exist in the registry, but it SHALL NOT be used b
 
 ```bash
 docker run --rm \
-  -v /path/to/config:/etc/backup-manager:ro \
-  -v /path/to/state:/var/lib/backup-manager \
+  -v /path/to/config:/etc/rclone-manager:ro \
+  -v /path/to/state:/var/lib/rclone-manager \
   -v /path/to/backups:/data/backups \
-  <registry>/iasbuilt/backup-manager:0.1.0 \
+  <registry>/iasbuilt/rclone-manager:0.1.0 \
   rbm check
 ```
 
@@ -2594,12 +2594,12 @@ Daemon:
 
 ```bash
 docker run -d \
-  --name backup-manager \
+  --name rclone-manager \
   --restart unless-stopped \
-  -v /path/to/config:/etc/backup-manager:ro \
-  -v /path/to/state:/var/lib/backup-manager \
+  -v /path/to/config:/etc/rclone-manager:ro \
+  -v /path/to/state:/var/lib/rclone-manager \
   -v /path/to/backups:/data/backups \
-  <registry>/iasbuilt/backup-manager:0.1.0 \
+  <registry>/iasbuilt/rclone-manager:0.1.0 \
   rbm daemon
 ```
 
@@ -2613,8 +2613,8 @@ Provide a supported example:
 
 ```yaml
 services:
-  backup-manager:
-    image: <registry>/iasbuilt/backup-manager:0.1.0
+  rclone-manager:
+    image: <registry>/iasbuilt/rclone-manager:0.1.0
     restart: unless-stopped
 
     command:
@@ -2622,8 +2622,8 @@ services:
       - daemon
 
     volumes:
-      - ./config:/etc/backup-manager:ro
-      - ./state:/var/lib/backup-manager
+      - ./config:/etc/rclone-manager:ro
+      - ./state:/var/lib/rclone-manager
       - /mnt/backups:/data/backups
 
     read_only: true
@@ -2674,8 +2674,8 @@ linux/arm64
 Build matrix SHALL produce one canonical image per architecture:
 
 ```text
-backup-manager:<version>  linux/amd64
-backup-manager:<version>  linux/arm64
+rclone-manager:<version>  linux/amd64
+rclone-manager:<version>  linux/arm64
 ```
 
 For registry publication this MAY be represented by a multi-architecture manifest.
@@ -2700,10 +2700,10 @@ packaging/ugos/
 │   └── docker-compose.yaml
 ├── rootfs_amd64/
 │   └── images/
-│       └── backup-manager-<version>-amd64.tar
+│       └── rclone-manager-<version>-amd64.tar
 └── rootfs_arm64/
     └── images/
-        └── backup-manager-<version>-arm64.tar
+        └── rclone-manager-<version>-arm64.tar
 ```
 
 Do not put additional arbitrary files into Docker App `rootfs_common`.
@@ -3703,7 +3703,7 @@ Implement/prove:
 
 Implement/prove:
 
-- private writable state source for `/var/lib/backup-manager`;
+- private writable state source for `/var/lib/rclone-manager`;
 - user-authorized backup root mounted at `/data/backups`;
 - update persistence;
 - disable/enable persistence;
@@ -4507,19 +4507,19 @@ TDD itself is part of the safety system. Any change to authentication, deletion,
 Create/update:
 
 ```text
-tools/backup-manager/README.md
-tools/backup-manager/docs/architecture.md
-tools/backup-manager/docs/provider-apps.md
-tools/backup-manager/docs/testing-tdd.md
-tools/backup-manager/docs/security.md
-tools/backup-manager/docs/providers/ugos.md
-tools/backup-manager/docs/providers/synology.md
-tools/backup-manager/docs/providers/truenas.md
-tools/backup-manager/docs/providers/unraid.md
-tools/backup-manager/docs/providers/openmediavault.md
-tools/backup-manager/docs/providers/proxmox.md
-tools/backup-manager/docs/providers/docker.md
-tools/backup-manager/docs/release.md
+tools/rclone-manager/README.md
+tools/rclone-manager/docs/architecture.md
+tools/rclone-manager/docs/provider-apps.md
+tools/rclone-manager/docs/testing-tdd.md
+tools/rclone-manager/docs/security.md
+tools/rclone-manager/docs/providers/ugos.md
+tools/rclone-manager/docs/providers/synology.md
+tools/rclone-manager/docs/providers/truenas.md
+tools/rclone-manager/docs/providers/unraid.md
+tools/rclone-manager/docs/providers/openmediavault.md
+tools/rclone-manager/docs/providers/proxmox.md
+tools/rclone-manager/docs/providers/docker.md
+tools/rclone-manager/docs/release.md
 ```
 
 `architecture.md` SHALL document the dependency rule:
@@ -5017,7 +5017,7 @@ The adversarial panel required these substantive changes from the prior draft:
 
 ```text
                          REPOSITORY
-                tools/backup-manager/
+                tools/rclone-manager/
                         │
         ┌───────────────┼────────────────┐
         │               │                │

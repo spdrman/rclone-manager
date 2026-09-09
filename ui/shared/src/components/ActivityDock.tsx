@@ -104,9 +104,9 @@ import { clock } from "@shared/utilities/format";
 const DOCK_BUFFER = 1000;
 
 const STORAGE = {
-  open: "backup-manager.dock.open",
-  height: "backup-manager.dock.height",
-  filter: "backup-manager.dock.filter"
+  open: "rclone-manager.dock.open",
+  height: "rclone-manager.dock.height",
+  filter: "rclone-manager.dock.filter"
 } as const;
 
 const MIN_HEIGHT = 120;
@@ -582,7 +582,7 @@ export function ActivityDock() {
     const anchor = document.createElement("a");
     anchor.href = url;
     // The deployment and the time, not a set id: this file is every set.
-    anchor.download = "backup-manager-terminal-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt";
+    anchor.download = "rclone-manager-terminal-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt";
     anchor.click();
     URL.revokeObjectURL(url);
   }, [shown, viewer, preamble]);

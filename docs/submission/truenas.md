@@ -8,7 +8,7 @@ packaging metadata under `apps/truenas/catalog/`.
 That store's own published requirements: https://www.truenas.com/docs/truenasapps/
 
 Copy `apps/truenas/catalog/` into the iX catalog repository as
-`ix-dev/community/backup-manager/` and run that repository's own validation and render
+`ix-dev/community/rclone-manager/` and run that repository's own validation and render
 tooling. Nothing on a developer machine can run that validator, which is why it is step 8
 of `docs/acceptance/truenas-provider-acceptance.md` rather than a check here.
 

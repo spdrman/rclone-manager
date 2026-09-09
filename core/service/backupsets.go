@@ -20,7 +20,7 @@
 // SubmitRunCycle) immediately, without an operator restarting the
 // process, and visible to `rbm sources`/any other CLI
 // invocation the next time one runs, since that command already reads
-// the same file fresh on every invocation (core/cmd/backup-manager/
+// the same file fresh on every invocation (core/cmd/rbm/
 // sources.go).
 //
 // This was previously out of core/service's scope by design (see
@@ -583,7 +583,7 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 
 	// Re-read from disk, not b.state.Load().inner.Config: this is the same "always
 	// read fresh" discipline `rbm sources` already uses
-	// (core/cmd/backup-manager/sources.go), and it is what makes this
+	// (core/cmd/rbm/sources.go), and it is what makes this
 	// method safe even if configPath was edited by hand (or by a second
 	// process) since this BackupService last loaded it — the write below
 	// is always based on the file's actual current content, never a

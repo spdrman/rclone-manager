@@ -40,7 +40,7 @@ import (
 // Service.MediumStore is filled in from the transport adapter (app.go), so
 // "this command needs no remote, it only reads a local file" is true right
 // up until it is asked about an artifact that has been moved. The comment
-// that keeps it wired lives on cmdValidate in cmd/backup-manager, next to
+// that keeps it wired lives on cmdValidate in cmd/rbm, next to
 // the argument that would be edited to break it again.
 //
 // The other thing worth knowing before changing anything here is that a

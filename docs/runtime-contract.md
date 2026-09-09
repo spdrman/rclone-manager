@@ -36,8 +36,8 @@ prove the check can actually see it go.
 | `timezone` | engine | `TZ`, because retention is evaluated against calendar boundaries |
 | `private-state-mount` | engine | `/data/state` |
 | `backup-data-mount` | engine | `/data/backups` |
-| `configuration-mount` | engine | `/etc/backup-manager/config`, a writable directory holding `config.yaml` (issue #196) |
-| `secret-file-mount` | engine | `/etc/backup-manager/id_ed25519`, read-only |
+| `configuration-mount` | engine | `/etc/rclone-manager/config`, a writable directory holding `config.yaml` (issue #196) |
+| `secret-file-mount` | engine | `/etc/rclone-manager/id_ed25519`, read-only |
 | `resource-expectations` | document | `x-canonical-runtime.resources` |
 | `supported-architectures` | document | `x-canonical-runtime.architectures` |
 | `digest-policy` | document | `x-canonical-runtime.digest_policy` |
@@ -96,7 +96,7 @@ without becoming a second build.
 rbm-web serve    --profile=generic
 rbm-web serve    --profile=ugos --trusted-upstream=172.19.0.2/32
 rbm-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 \
-                            --ui-root=/usr/share/backup-manager/ui
+                            --ui-root=/usr/share/rclone-manager/ui
 ```
 
 Seven profiles exist: `generic`, `ugos`, and the five issue #169 added when it
@@ -408,7 +408,7 @@ One mount is redeclared, and the host side of it does not move either:
 | | Phase 4 | Converted adapter |
 |---|---|---|
 | host path | `<appdata>/config/config.yaml` | `<appdata>/config` |
-| container path | `/etc/backup-manager/config.yaml` | `/etc/backup-manager/config` |
+| container path | `/etc/rclone-manager/config.yaml` | `/etc/rclone-manager/config` |
 | mode | `ro` | writable |
 
 The file an operator already has stays exactly where it is; what the adapter
@@ -423,7 +423,7 @@ saying per platform rather than once:
 | platform | what carries the old answer | what stops it |
 |---|---|---|
 | generic, OpenMediaVault, Proxmox | an env file the operator edits | `CONFIG_FILE` became `CONFIG_DIR`, a fail-closed `${VAR:?}` reference, so an unconverted file stops the deployment with a message |
-| Synology (Container Manager) | `backup-manager.env` | the same, `${APPDATA:?...}/config` |
+| Synology (Container Manager) | `rclone-manager.env` | the same, `${APPDATA:?...}/config` |
 | TrueNAS (catalog) | the platform, not a file | the question was renamed `config` to `configDir`, so an upgrade has no stored answer to carry forward and the wizard asks again |
 | Unraid | the operator's own template copy | nothing automatic: a changed `<Config>` Target does not retire a mapping already in the user template, so the old read-only file mapping has to be deleted by hand |
 | Synology (`.spk`) | the package's own layout | the package installs the directory itself |
@@ -432,9 +432,9 @@ The `${VAR:?}` claim only ever covered the first three rows. There is no
 `${VAR:?}` anywhere in a TrueNAS catalog answer or an Unraid template, and
 saying otherwise made a fail-closed guarantee out of a property those two
 platforms do not have. On TrueNAS the failure it hid was concrete: an upgrade
-that kept a Phase 4 answer of `<pool>/backup-manager/config/config.yaml` bind
-mounts that FILE at `/etc/backup-manager/config`, `--config` resolves to
-`/etc/backup-manager/config/config.yaml` inside it, and the engine crash-loops
+that kept a Phase 4 answer of `<pool>/rclone-manager/config/config.yaml` bind
+mounts that FILE at `/etc/rclone-manager/config`, `--config` resolves to
+`/etc/rclone-manager/config/config.yaml` inside it, and the engine crash-loops
 on ENOTDIR with a message naming neither the mount nor the migration.
 
 Two things close that. The TrueNAS question carries a new identifier, so there

@@ -20,7 +20,7 @@
 // lifecycle, discovery, reconciliation, retention, capacity and health
 // exactly as the EPIC's cycle order requires (reconcile, then discover,
 // then per-artifact transfer/verify/commit/delete, then a retention
-// preview), and it does so in one place so that cmd/backup-manager's `run`
+// preview), and it does so in one place so that cmd/rbm's `run`
 // and `daemon` subcommands, and every other CLI command that needs a
 // use case (`status`, `fetch`, `retention`, `reconcile`, `validate`, ...),
 // call the exact same Service methods. A future HTTP API is meant to be
@@ -295,7 +295,7 @@ type Service struct {
 // Logger may be left nil by the caller afterward for read-only use cases
 // that do not need them; New itself never rejects a nil value here, since
 // which fields a given CLI command actually needs is that command's own
-// business (see cmd/backup-manager).
+// business (see cmd/rbm).
 //
 // # Issue #295's redaction wiring
 //

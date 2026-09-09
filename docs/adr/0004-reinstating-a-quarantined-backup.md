@@ -270,7 +270,7 @@ rather than one, which is a stronger statement about a larger surface.
   excluded, which matters because the `QUARANTINED_LOST` to `COMPLETE` edge is
   reachable only from `COMPLETE` and so always describes a remote that is
   already gone. It reaches `rbm status`, the Prometheus gauge
-  `backup_manager_backup_set_reinstated_remote_retained`, and
+  `rclone_manager_backup_set_reinstated_remote_retained`, and
   `GET /api/v1/system/health`. No bytes figure goes with it: the only
   measurement this manager ever took of those remote objects was at discovery,
   FR-8 treats that as untrusted, and re-reading them on every health pass would

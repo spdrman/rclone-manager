@@ -57,7 +57,7 @@ type retentionVerdictResponse struct {
 	// a straight translation. It is what keeps a deployment that declares
 	// no storage medium serving exactly the bytes it served before this
 	// field existed, and `rbm retention` already states the
-	// same asymmetry the same way (mediumSuffix, core/cmd/backup-manager/
+	// same asymmetry the same way (mediumSuffix, core/cmd/rbm/
 	// retention.go), so the two operator surfaces read alike.
 	//
 	// The service-side value is not tested against the literal "local"

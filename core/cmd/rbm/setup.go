@@ -35,10 +35,10 @@ import (
 
 // defaultConfigPath matches container/compose.yaml's mount point and
 // docs/deployment.md's documented layout. The packaged mount is the
-// DIRECTORY /etc/backup-manager/config (issue #196) and config.yaml lives
+// DIRECTORY /etc/rclone-manager/config (issue #196) and config.yaml lives
 // inside it; --config also accepts that directory, which
 // config.ResolvePath turns into this same file.
-const defaultConfigPath = "/etc/backup-manager/config/config.yaml"
+const defaultConfigPath = "/etc/rclone-manager/config/config.yaml"
 
 // newFlagSet builds a flag.FlagSet every subcommand but `version` shares:
 // a name (for its own usage/error output) and the one flag they all take,

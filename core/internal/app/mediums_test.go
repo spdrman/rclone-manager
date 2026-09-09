@@ -25,7 +25,7 @@ func mediumsFixture() []config.StorageMedium {
 			Bucket:       "nas-backups",
 			Prefix:       "rclone-manager",
 			StorageClass: config.StorageClassStandardIA,
-			Credentials:  config.MediumCredentials{File: "/var/lib/backup-manager/s3/offsite.creds"},
+			Credentials:  config.MediumCredentials{File: "/var/lib/rclone-manager/s3/offsite.creds"},
 		},
 		{
 			ID:                 "trusted_s3",
@@ -60,7 +60,7 @@ func TestMediumResolver_CarriesEveryConfiguredFieldThroughUnchanged(t *testing.T
 		Bucket:       "nas-backups",
 		Prefix:       "rclone-manager",
 		StorageClass: config.StorageClassStandardIA,
-		Credentials:  transport.MediumCredentials{File: "/var/lib/backup-manager/s3/offsite.creds"},
+		Credentials:  transport.MediumCredentials{File: "/var/lib/rclone-manager/s3/offsite.creds"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Resolve(offsite_s3) =\n\t%+v\nwant\n\t%+v", got, want)

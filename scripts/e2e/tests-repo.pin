@@ -223,7 +223,7 @@
 #
 # It also brings two cases the old suite could not express. `invoke_as` runs the
 # argv under test through a second filename for the same binary, so g6 reaches
-# `version` under `backup-manager` and g7 reaches an unknown command under it,
+# `version` under `rclone-manager` and g7 reaches an unknown command under it,
 # and both require the output to say `rbm`. What that proves is that the binary
 # does not care which name reached it. What it does NOT prove, and their case
 # doc says so, is that the shipped image carries both names: the `go` builder

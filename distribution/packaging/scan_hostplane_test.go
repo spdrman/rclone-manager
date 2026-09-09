@@ -47,18 +47,18 @@ func TestScanForHostPlaneModificationCatchesEveryMarker(t *testing.T) {
 		file string
 		body string
 	}{
-		{"pve cluster filesystem", "deploy.yml", "x-hook: cp backup-manager.conf /etc/pve/local/\n"},
+		{"pve cluster filesystem", "deploy.yml", "x-hook: cp rclone-manager.conf /etc/pve/local/\n"},
 		{"pve web assets", "deploy.yml", "x-hook: cp panel.js /usr/share/pve-manager/js/\n"},
 		{"pve ui bundle patch", "install.yaml", "post: sed -i s/x/y/ pvemanagerlib.js\n"},
 		{"pve daemon restart", "install.yaml", "post: systemctl reload pveproxy\n"},
-		{"omv config database", "compose/backup-manager.env", "HOOK=/etc/openmediavault/config.xml\n"},
-		{"omv tooling", "compose/backup-manager.env", "HOOK=omv-salt deploy run backupmanager\n"},
-		{"unraid plugin", "template/backup-manager.xml", "<Plugin>backup-manager.plg</Plugin>\n"},
+		{"omv config database", "compose/rclone-manager.env", "HOOK=/etc/openmediavault/config.xml\n"},
+		{"omv tooling", "compose/rclone-manager.env", "HOOK=omv-salt deploy run backupmanager\n"},
+		{"unraid plugin", "template/rclone-manager.xml", "<Plugin>rclone-manager.plg</Plugin>\n"},
 		{"truenas middleware", "catalog/app.yaml", "hook: midclt call system.general.update\n"},
 		{"dsm web root", "conf/resource", "{\"path\": \"/usr/syno/synoman/webman/3rdparty\"}\n"},
 		{"dsm private api", "scripts/postinst.yaml", "cmd: synowebapi --exec api=SYNO.Core.Service\n"},
-		{"host systemd unit", "deploy.yml", "x-unit: /etc/systemd/system/backup-manager.service\n"},
-		{"host service state", "deploy.yml", "x-post: systemctl enable backup-manager\n"},
+		{"host systemd unit", "deploy.yml", "x-unit: /etc/systemd/system/rclone-manager.service\n"},
+		{"host service state", "deploy.yml", "x-post: systemctl enable rclone-manager\n"},
 		{"host cron entry", "deploy.yml", "x-post: crontab -l\n"},
 		{"source patch", "deploy.yml", "x-post: patch -p1 < ui.diff\n"},
 	}

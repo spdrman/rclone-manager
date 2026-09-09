@@ -377,7 +377,7 @@ func run() error {
 			// TRANSFERRING) and Commit (which records its own VERIFIED ->
 			// COMMITTING), Verify does not make the TRANSFERRED ->
 			// VERIFYING move itself; nothing in this repository currently
-			// orchestrates the full pipeline end to end (cmd/backup-manager
+			// orchestrates the full pipeline end to end (cmd/rbm
 			// is a version-only stub), so this harness is that
 			// orchestrator, and this is the one entry transition it has to
 			// make explicitly rather than delegate. Going through the real

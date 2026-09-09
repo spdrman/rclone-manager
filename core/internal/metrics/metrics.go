@@ -21,7 +21,7 @@
 // Render takes a health.Report as a plain value and returns a string.
 // Nothing in this package calls internal/health itself, holds a journal,
 // or knows how a Report gets built. Nothing outside this package calls
-// Render yet either: cmd/backup-manager has no subcommand to serve it from
+// Render yet either: cmd/rbm has no subcommand to serve it from
 // (issues #25, #26), the same position internal/health, internal/obs and
 // internal/capacity are already in. Wiring this in later, a
 // "rbm status --prometheus" flag, an HTTP handler, or both, is
@@ -32,7 +32,7 @@
 // Output follows the Prometheus text exposition format, version 0.0.4
 // (see ContentType): a "# HELP" and "# TYPE" line per metric name,
 // followed by that metric's samples grouped together, one line each. Every
-// metric name is prefixed backup_manager_ so it cannot collide with
+// metric name is prefixed rclone_manager_ so it cannot collide with
 // another exporter's metric on the same scrape target. A health.Report
 // field the caller never populated (any of BackupSetInputs' three
 // pointers) or one internal/health never had evidence for
@@ -66,7 +66,7 @@ const ContentType = "text/plain; version=0.0.4; charset=utf-8"
 // names, so moving the prefix breaks all of them for a cosmetic gain.
 // core/cliecho/cliname.go has the rest of what the rename deliberately
 // left where it was.
-const namePrefix = "backup_manager_"
+const namePrefix = "rclone_manager_"
 
 // newestGoodBackupAgeHelp names, in the HELP line a scraping operator
 // reads, exactly the states internal/health counts as known-good.

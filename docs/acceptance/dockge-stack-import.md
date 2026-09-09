@@ -27,18 +27,18 @@ Dockge packaging, so nothing here is a migration from an earlier one.
 
 ### 0.2 Make the canonical image resolvable
 
-`ghcr.io/spdrman/backup-manager:0.3.3` is cut but not pushed yet:
+`ghcr.io/spdrman/rclone-manager:0.3.3` is cut but not pushed yet:
 `distribution/packaging/canonical.json` records `image.published: false`, and
 `container/release-manifest.json` carries a `registry_digest` of `null` per
 architecture. So the reference does not resolve from the registry today, and the
 steps below are how you make it resolve, by pushing a build to a registry this host
 can reach or building elsewhere and loading it. The previous release,
-`ghcr.io/spdrman/backup-manager:0.3.0`, stays published and signed if you would
+`ghcr.io/spdrman/rclone-manager:0.3.0`, stays published and signed if you would
 rather run that:
 
 ```bash
-docker buildx build --platform=linux/amd64,linux/arm64 -f container/Dockerfile -t backup-manager:acceptance .
-docker save backup-manager:acceptance | ssh admin@<host> 'docker load'
+docker buildx build --platform=linux/amd64,linux/arm64 -f container/Dockerfile -t rclone-manager:acceptance .
+docker save rclone-manager:acceptance | ssh admin@<host> 'docker load'
 ```
 
 - [ ] The image is resolvable on the host, and the exact reference used is recorded
@@ -46,8 +46,8 @@ docker save backup-manager:acceptance | ssh admin@<host> 'docker load'
 ### 0.3 Create the host paths
 
 ```bash
-mkdir -p /volume1/backup-manager/state /volume1/backups \
-         /volume1/backup-manager/config /volume1/backup-manager/secrets
+mkdir -p /volume1/rclone-manager/state /volume1/backups \
+         /volume1/rclone-manager/config /volume1/rclone-manager/secrets
 ```
 
 The runtime image is distroless: no shell, no root step, nothing inside the
@@ -59,8 +59,8 @@ following `docs/ssh-setup.md`. Never commit either, and never paste a private ke
 into the evidence table.
 
 ```bash
-ssh-keygen -t ed25519 -N "" -f /volume1/backup-manager/secrets/id_ed25519
-ssh-keyscan -t ed25519 <sftp-host> > /volume1/backup-manager/secrets/known_hosts
+ssh-keygen -t ed25519 -N "" -f /volume1/rclone-manager/secrets/id_ed25519
+ssh-keyscan -t ed25519 <sftp-host> > /volume1/rclone-manager/secrets/known_hosts
 ```
 
 **Recurse only over what this step created.** `/volume1/backups` is the retained
@@ -72,15 +72,15 @@ fails the build if any procedure in this directory recurses over a backup root o
 a parent of one.
 
 ```bash
-chown -R 1000:1000 /volume1/backup-manager/state /volume1/backup-manager/config /volume1/backup-manager/secrets
+chown -R 1000:1000 /volume1/rclone-manager/state /volume1/rclone-manager/config /volume1/rclone-manager/secrets
 chown 1000:1000 /volume1/backups
-chmod 600 /volume1/backup-manager/secrets/id_ed25519
+chmod 600 /volume1/rclone-manager/secrets/id_ed25519
 ```
 
 - [ ] All four paths exist and are owned by the app's uid and gid
 - [ ] The recursive ownership change touched only state, config and secrets
 - [ ] It ran **after** the key and `known_hosts` were created
-- [ ] `/volume1/backup-manager/config` is writable by the app's uid and gid
+- [ ] `/volume1/rclone-manager/config` is writable by the app's uid and gid
 - [ ] Key material lives only on this host, redacted everywhere else
 
 ---
@@ -114,9 +114,9 @@ there, and do it before **Start**. Skip this block entirely to use the first-run
 instead.
 
 ```bash
-$EDITOR /volume1/backup-manager/config/config.yaml
-chown 1000:1000 /volume1/backup-manager/config/config.yaml
-chmod 600 /volume1/backup-manager/config/config.yaml
+$EDITOR /volume1/rclone-manager/config/config.yaml
+chown 1000:1000 /volume1/rclone-manager/config/config.yaml
+chmod 600 /volume1/rclone-manager/config/config.yaml
 ```
 
 The container-side paths in it are fixed by this package and must not be changed:
@@ -127,7 +127,7 @@ annotated example is this same file with another platform's host paths, and
 **Never commit the config or paste one into the evidence table:** it names the SFTP
 host and user.
 
-- [ ] Either `config.yaml` is written into `/volume1/backup-manager/config` **before** the install
+- [ ] Either `config.yaml` is written into `/volume1/rclone-manager/config` **before** the install
       and is valid, or that directory is left empty and the first-run flow writes it.
       A file that exists and does not validate is the one state that refuses the start,
       so record which of the two routes this run took
@@ -143,12 +143,12 @@ host and user.
    stack in unmodified:
 
    ```bash
-   mkdir -p /opt/stacks/backup-manager
-   cp container/compose.yaml /opt/stacks/backup-manager/compose.yaml
-   cp container/.env.example /opt/stacks/backup-manager/.env
+   mkdir -p /opt/stacks/rclone-manager
+   cp container/compose.yaml /opt/stacks/rclone-manager/compose.yaml
+   cp container/.env.example /opt/stacks/rclone-manager/.env
    ```
 
-2. Edit only `/opt/stacks/backup-manager/.env`. Record every edit: the number of
+2. Edit only `/opt/stacks/rclone-manager/.env`. Record every edit: the number of
    edits needed to `compose.yaml` itself is an acceptance result, and it must be
    the removal of the `build:` block and nothing else.
 3. In Dockge the stack appears on its own. Press **Start**.
@@ -185,7 +185,7 @@ host and user.
 
 ## Step 4 — Storage mapping and backup-root containment
 
-- [ ] Private state lands under `/volume1/backup-manager/state`
+- [ ] Private state lands under `/volume1/rclone-manager/state`
 - [ ] Retained artifacts land under `/volume1/backups`
 - [ ] No SSH private key, `known_hosts`, config file or authentication record
       exists anywhere under `/volume1/backups`
@@ -207,7 +207,7 @@ whether compatibility held.
       uses host networking or the host PID namespace, and neither adds a capability:
 
       ```bash
-      docker inspect backup-manager-rclone-manager-1 backup-manager-web-ui-1 \
+      docker inspect rclone-manager-rclone-manager-1 rbm-web-ui-1 \
         --format '{{.Name}} priv={{.HostConfig.Privileged}} net={{.HostConfig.NetworkMode}} binds={{.HostConfig.Binds}}'
       ```
 - [ ] Stopping Dockge leaves the stack running and the web UI reachable
@@ -222,7 +222,7 @@ Capture a baseline before the pull and compare after it, so "everything
 survived" is a diff rather than an impression:
 
 ```bash
-sha256sum /volume1/backup-manager/state/state.db | tee /root/dockge-before-update.sha256
+sha256sum /volume1/rclone-manager/state/state.db | tee /root/dockge-before-update.sha256
 find /volume1/backups -type f -printf '%p %s\n' | sort > /root/dockge-before-update.txt
 ```
 
@@ -267,7 +267,7 @@ diff /root/dockge-before-remove.txt /root/dockge-after-remove.txt
       artifact is untouched, byte for byte
 - [ ] Deleting the stack directory from `/opt/stacks` deleted no
       retained artifact either: the same `sha256sum -c` and `diff` are still clean
-- [ ] `/volume1/backup-manager/state` still holds the catalogue, so a reinstall
+- [ ] `/volume1/rclone-manager/state` still holds the catalogue, so a reinstall
       pointed at the same paths comes back with the same backup sets
 - [ ] Removing this adapter removes no core behaviour: the same image runs
       unchanged under `container/compose.yaml` on a plain Docker host

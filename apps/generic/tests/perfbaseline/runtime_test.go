@@ -573,7 +573,7 @@ func repoRoot(t *testing.T) string {
 func buildEngine(t *testing.T, repoRoot string) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "rbm-web")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager-web")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/rbm-web")
 	cmd.Dir = filepath.Join(repoRoot, "apps", "generic")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {

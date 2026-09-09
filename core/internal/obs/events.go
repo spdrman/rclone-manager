@@ -217,7 +217,7 @@ const (
 )
 
 // Startup logs EventStartup: binaryVersion and commit are normally the
-// values cmd/backup-manager's main.go already sets via -ldflags (default
+// values cmd/rbm's main.go already sets via -ldflags (default
 // "dev" / "none" in a non-release build), and goVersion is typically
 // runtime.Version(). None of these are secret; they exist to make "which
 // build is this" answerable from a log line alone, without shelling into

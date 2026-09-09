@@ -1,18 +1,18 @@
 # UGREEN container deployment
 
-This documents the container packaging for `core/cmd/backup-manager` (A3.9): what's in
+This documents the container packaging for `core/cmd/rbm` (A3.9): what's in
 `container/`, why it's shaped the way it is, and how I verified each requirement rather
 than just asserting it. It's meant to be read next to `container/Dockerfile` and
 `container/compose.yaml`, which carry the same reasoning inline as comments.
 
-## The command is `rbm`, and `backup-manager` stops working
+## The command is `rbm`, and `rclone-manager` stops working
 
 0.3.3 renamed the command an operator types. The engine CLI is `rbm` and the web host is
 `rbm-web`, and inside the image those are the two real binaries at `/rbm` and `/rbm-web`.
 Everything in this file, in `container/compose.yaml` and in every adapter now names them.
 
 Read the next sentence before you bump the tag, because things you already run do break.
-0.3.3 is a clean cut: `/backup-manager` and `/backup-manager-web` are not in an image
+0.3.3 is a clean cut: `/rclone-manager` and `/rbm-web` are not in an image
 built from 0.3.3 onwards, as files or as links or as anything else, so a compose file,
 `docker run` line, `docker exec`, cron entry or wrapper script naming either one stops
 working the moment the tag moves. Move each of them onto `rbm` or `rbm-web` in the same
@@ -35,8 +35,8 @@ image has those two names and nothing else to choose from. Both
 name them directly.
 
 What did NOT change is everything that names the project rather than the command: the
-image reference `ghcr.io/spdrman/backup-manager`, the `rclone-manager` and `web-ui`
-compose service names, the container config directory `/etc/backup-manager`, and the
+image reference `ghcr.io/spdrman/rclone-manager`, the `rclone-manager` and `web-ui`
+compose service names, the container config directory `/etc/rclone-manager`, and the
 binary names `container/release-manifest.json` records a SHA-256 under. Renaming any of
 those would move somebody's data or invalidate a release record for no gain.
 
@@ -56,7 +56,7 @@ requirement was verified rather than asserted. The two are meant to be read toge
 
 ## Status
 
-`core/cmd/backup-manager` implements every execution mode this deployment shape was
+`core/cmd/rbm` implements every execution mode this deployment shape was
 originally packaged ahead of: `run`, `daemon`, `check`, `status`, `sources`, `artifacts`,
 `fetch`, `retention`, `reconcile`, `validate` and `version`. `container/compose.yaml`
 defaults to the real long-running process (`/rbm-web serve`, see "The generic
@@ -71,7 +71,7 @@ The image contains no `rclone` binary anywhere, and I checked that directly agai
 built image rather than trusting the design:
 
 ```
-$ docker create --platform linux/arm64 backup-manager:0.0.0-a3.9 version
+$ docker create --platform linux/arm64 rclone-manager:0.0.0-a3.9 version
 $ docker export <container-id> | tar -tv | grep -i rclone
 $ echo $?
 1
@@ -79,16 +79,16 @@ $ echo $?
 
 Exit 1 means zero matches, checked case-insensitively against the full file listing of
 the exported image filesystem (1447 entries: the distroless base's certs/tzdata/passwd
-plus exactly one executable, `/backup-manager`, which 0.3.3 renamed to `/rbm`). There's
+plus exactly one executable, `/rclone-manager`, which 0.3.3 renamed to `/rbm`). There's
 no file named `rclone`, no `rclone` directory, nothing.
 
 The flip side, that rclone's packages are genuinely compiled into that one binary rather
 than the manager silently doing nothing useful, is also checked directly:
 
 ```
-$ strings backup-manager | grep -c 'rclone/rclone'
+$ strings rclone-manager | grep -c 'rclone/rclone'
 2770
-$ strings backup-manager | grep 'rclone/rclone' | sort -u | head
+$ strings rclone-manager | grep 'rclone/rclone' | sort -u | head
  github.com/rclone/rclone/fs/hash
  github.com/rclone/rclone/fs/list
  github.com/rclone/rclone/fs/walk
@@ -115,7 +115,7 @@ the only option that ever made sense here.
 - **`GOTOOLCHAIN=local`** so `go build` never reaches out to fetch a different toolchain
   mid-build if some future `core/go.mod` bump disagreed with the pinned builder image.
 - **`-trimpath`** strips the builder's absolute source paths from the binary. Checked
-  directly: `strings backup-manager | grep -E '/Users/rom|/src/'` returns nothing.
+  directly: `strings rclone-manager | grep -E '/Users/rom|/src/'` returns nothing.
 - **`-buildvcs=false`** so the build doesn't stamp VCS state read off a `.git` directory
   that may or may not even be in the build context (`.dockerignore` excludes `.git`
   deliberately, for this exact reason).
@@ -165,7 +165,7 @@ docker buildx build \
   --build-arg VERSION=$(git describe --tags --always) \
   --build-arg COMMIT=$(git rev-parse HEAD) \
   -f container/Dockerfile \
-  -t <registry>/backup-manager:<version> \
+  -t <registry>/rclone-manager:<version> \
   --push \
   .
 ```
@@ -228,7 +228,7 @@ This image has no shell and no root-then-drop-privileges init step (that would n
 `privileged`-adjacent capabilities this container deliberately doesn't have), so it
 cannot `chown` the mounted directories for you at startup. **Whatever `PUID`/`PGID` you
 set has to already own `STATE_DIR` and `BACKUP_DIR` on the host before the first start**,
-e.g. `chown -R 1000:1000 /volume1/backup-manager/state /volume1/backups` on the NAS
+e.g. `chown -R 1000:1000 /volume1/rclone-manager/state /volume1/backups` on the NAS
 itself, matching whichever PUID/PGID you put in `.env`.
 
 One honest limitation: I built and ran all of this on macOS with Docker Desktop, whose
@@ -251,11 +251,11 @@ is owned by uid 65532 specifically, not by whatever `PUID` you set.
 
 - `/data/state` (writable): the SQLite journal directory, see above.
 - `/data/backups` (writable): the NAS backup volume/share completed artifacts land on.
-- `/etc/backup-manager/config` (writable): the DIRECTORY holding the manager's YAML
+- `/etc/rclone-manager/config` (writable): the DIRECTORY holding the manager's YAML
   config (FR-5), and the two stores the engine creates beside it, `ssh_keys/` and
   `known_hosts.d/`.
-- `/etc/backup-manager/id_ed25519` (`:ro`): the SFTP client private key.
-- `/etc/backup-manager/known_hosts` (`:ro`): the pinned host keys (FR-6).
+- `/etc/rclone-manager/id_ed25519` (`:ro`): the SFTP client private key.
+- `/etc/rclone-manager/known_hosts` (`:ro`): the pinned host keys (FR-6).
 
 The configuration mount is a writable directory rather than a read-only single file,
 and that is issue #196 rather than a preference. Adding a backup set, saving settings
@@ -344,9 +344,9 @@ the result mean something.
 docker buildx build --platform linux/arm64 \
   --build-arg VERSION=$(git describe --tags --always) \
   --build-arg COMMIT=$(git rev-parse HEAD) \
-  -f container/Dockerfile -t backup-manager:dev --load .
+  -f container/Dockerfile -t rclone-manager:dev --load .
 
-docker run --rm --platform linux/arm64 backup-manager:dev /rbm version
+docker run --rm --platform linux/arm64 rclone-manager:dev /rbm version
 
 # The full deployment shape, via compose (starts the generic Web host —
 # see below — listening on LISTEN_PORT, default 8080):
@@ -643,7 +643,7 @@ copy of it in prose is a copy that goes stale without anything noticing.
 
 **What this records about the registry**: nothing yet, for the version currently cut.
 `distribution/packaging/canonical.json` records `image.published: false` for
-`ghcr.io/spdrman/backup-manager:0.3.3`, and the manifest carries a `registry_digest` of
+`ghcr.io/spdrman/rclone-manager:0.3.3`, and the manifest carries a `registry_digest` of
 `null` per architecture and a null `index_digest` to say the same thing from the other
 side. `TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` holds the two
 together in both directions: a published flag with no digest and a digest with no

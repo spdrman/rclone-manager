@@ -45,8 +45,8 @@ does both, by design, so this package ships two templates.
 
 | Path | What it is |
 | --- | --- |
-| `template/backup-manager.xml` | The engine. Install first. |
-| `template/backup-manager-ui.xml` | The web interface. Install second. |
+| `template/rclone-manager.xml` | The engine. Install first. |
+| `template/rclone-manager-ui.xml` | The web interface. Install second. |
 | `frontend/platform.ts` | The shared platform bridge (§3.5). Provider identity and storage expectations only. |
 | `frontend/webui.json` | WebUI and storage facts, pinned to the templates by `distribution/packaging` so the two cannot drift. |
 
@@ -56,7 +56,7 @@ the build if any appears.
 ## The one prerequisite
 
 ```bash
-docker network create backup-manager
+docker network create rclone-manager
 ```
 
 Both templates target that user-defined network. The Web UI container reaches the
@@ -75,11 +75,11 @@ Docker, Add Container.
 
 | Role | Host default | In the container | Mode |
 | --- | --- | --- | --- |
-| State | `/mnt/user/appdata/backup-manager/state` | `/data/state` | rw |
-| Backups | `/mnt/user/backups/backup-manager` | `/data/backups` | rw |
-| Config | `/mnt/user/appdata/backup-manager/config` | `/etc/backup-manager/config` | rw |
-| SSH key | `/mnt/user/appdata/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | ro |
-| Known hosts | `/mnt/user/appdata/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | ro |
+| State | `/mnt/user/appdata/rclone-manager/state` | `/data/state` | rw |
+| Backups | `/mnt/user/backups/rclone-manager` | `/data/backups` | rw |
+| Config | `/mnt/user/appdata/rclone-manager/config` | `/etc/rclone-manager/config` | rw |
+| SSH key | `/mnt/user/appdata/rclone-manager/secrets/id_ed25519` | `/etc/rclone-manager/id_ed25519` | ro |
+| Known hosts | `/mnt/user/appdata/rclone-manager/secrets/known_hosts` | `/etc/rclone-manager/known_hosts` | ro |
 
 `config` is a writable **directory** holding `config.yaml`, not a read-only single
 file (issue #196). Adding a backup set, saving settings and first-run setup all
@@ -173,7 +173,7 @@ The flag decides whether the engine believes `X-Forwarded-For` and
 `X-Forwarded-Proto`. `apps/common/auth/local` allows it only where the Web UI
 container is the engine's sole possible direct TCP peer "by network topology, not
 merely by convention". A compose project network is created, named and destroyed
-with the deployment, and nothing else joins it. The `backup-manager` network
+with the deployment, and nothing else joins it. The `rclone-manager` network
 these two templates share is not that: you create it by hand, it outlives both
 containers, it has a very reusable name, and every container on a user-defined
 bridge reaches every port of every other container on it regardless of what is
@@ -214,14 +214,14 @@ package and must not be changed.
 
 ## The image reference
 
-`ghcr.io/spdrman/backup-manager:0.3.3` is the reference every package here
+`ghcr.io/spdrman/rclone-manager:0.3.3` is the reference every package here
 carries, and it is not pushed yet. `distribution/packaging/canonical.json`
 records `image.published: false`, and `container/release-manifest.json` carries
 a `registry_digest` of `null` per architecture; those two move together, so
 either both describe a real push or neither does. Until the release workflow
 pushes 0.3.3 and the digests are recorded back, reach it the way the acceptance
 procedure's step 0 describes, by pushing to your own registry or side-loading a
-build. The previous release, `ghcr.io/spdrman/backup-manager:0.3.0`, stays
+build. The previous release, `ghcr.io/spdrman/rclone-manager:0.3.0`, stays
 published and signed if you would rather run that. It is one `<Repository>` element per template, editable in Unraid's
 own template editor.
 

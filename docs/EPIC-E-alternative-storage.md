@@ -7,7 +7,7 @@
 **Parent / predecessor EPICs:** EPIC A (#1, backup engine), EPIC B (#81, provider-neutral core and multi-NAS apps)
 **Primary implementation root:** `core/`
 **Tracker issue:** #232 (sub-issues #233 through #242)
-**FR numbering:** this specification continues the product's FR series at **FR-27**. FR-1 through FR-24 are defined in `docs/EPIC.md`; FR-26 is claimed by the `version` command in `core/cmd/backup-manager` and `core/internal/app`. Nothing here renumbers an existing FR.
+**FR numbering:** this specification continues the product's FR series at **FR-27**. FR-1 through FR-24 are defined in `docs/EPIC.md`; FR-26 is claimed by the `version` command in `core/cmd/rbm` and `core/internal/app`. Nothing here renumbers an existing FR.
 
 ---
 
@@ -178,9 +178,9 @@ storage_mediums:
     storage_class: STANDARD
     upload_verification: readback # readback (default) or attested; see FR-31
     credentials:
-      file: /var/lib/backup-manager/s3/offsite_s3.creds
+      file: /var/lib/rclone-manager/s3/offsite_s3.creds
       # env: BACKUP_S3_OFFSITE
-      # command: ["op", "read", "op://infra/backup-manager/s3-offsite"]
+      # command: ["op", "read", "op://infra/rclone-manager/s3-offsite"]
 ```
 
 A retention tier names the medium its artifacts live on:
@@ -333,7 +333,7 @@ S3 credentials follow the SSH key custody model in `core/internal/config.Key` an
 - Three sources, exactly one set per medium: `credentials.file` (preferred: an AWS shared-credentials format file that rclone reads itself, so the secret never enters this process's memory), `credentials.env`, `credentials.command` (argv array, never a shell string, bounded timeout, minimal environment).
 - There is **no schema field for a literal key**. `access_key_id:` or `secret_access_key:` inline in the config is an unknown field, refused by `Load`'s `KnownFields(true)` before validation even runs, and a test pins that refusal.
 - Whatever `env` or `command` produce is validated by shape before use, wrapped in `obs.Secret`, and never echoed: a resolver failure is reported by the shape of the problem, never by the content that failed.
-- Credential files live under private state (`/var/lib/backup-manager`, EPIC B section 19.1), never under the backup root, and the API import flow mirrors SSH key import: the secret goes into private state, and the config holds a path.
+- Credential files live under private state (`/var/lib/rclone-manager`, EPIC B section 19.1), never under the backup root, and the API import flow mirrors SSH key import: the secret goes into private state, and the config holds a path.
 - The following SHALL never contain a credential, in whole or in part: `config.yaml` values, any log line at any level, any error message, any API response (the mediums surface returns id, type, bucket, region, class, never key material), the redacted config export, recovery manifests and sidecar objects, and bucket object metadata.
 - The enforcement is a canary: an integration test resolves a known canary secret through each source and asserts its absence from every observable output above. The planted violation for this guard is a build that logs the resolved medium config verbatim; the canary gate fails it, and that failing run is recorded in the landing PR.
 

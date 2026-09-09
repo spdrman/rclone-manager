@@ -84,7 +84,7 @@ storage_mediums:
     storage_class: STANDARD
     upload_verification: readback # readback (default) or attested; see below
     credentials:
-      file: /var/lib/backup-manager/s3/offsite_s3.creds
+      file: /var/lib/rclone-manager/s3/offsite_s3.creds
 
 retention:
   timezone: UTC
@@ -203,7 +203,7 @@ the fact that a file was written, and never the material: there is no read side
 for it at all, so the only way to get a stored credential back is to be root on
 the host, which is what the file's 0600 already assumes.
 
-Credential files belong under private state (`/var/lib/backup-manager`), never
+Credential files belong under private state (`/var/lib/rclone-manager`), never
 under the backup root. Nothing that leaves this process carries key material:
 not a log line at any level, not an error message, not an API response, not the
 redacted config export, not a recovery manifest, and not object metadata in your

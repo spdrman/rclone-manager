@@ -8,7 +8,7 @@ store compose file under `apps/zimaos/`.
 That store's own published requirements: https://www.zimaspace.com/docs/developer/app-store-compose-x-casaos
 
 ZimaOS installs a third-party application by reading one docker-compose file carrying an
-`x-casaos` block, so `apps/zimaos/compose/backup-manager.yml` is both the runtime
+`x-casaos` block, so `apps/zimaos/compose/rclone-manager.yml` is both the runtime
 definition and the whole submission. Everything outside `x-casaos` is derived from
 `container/compose.yaml` and held to it field by field; everything inside it is store
 presentation and reaches no Go package and no shared UI module.

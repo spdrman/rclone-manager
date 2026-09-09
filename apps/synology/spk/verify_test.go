@@ -434,7 +434,7 @@ func TestVerify_ScansShellAnywhereInThePackage(t *testing.T) {
 	}
 	substituted := strings.Replace(shipped,
 		`RUN_DIR="${PKG_VAR}/run"`,
-		`RUN_DIR="/volume1/backup-manager"`, 1)
+		`RUN_DIR="/volume1/rclone-manager"`, 1)
 	if substituted == shipped {
 		t.Fatal("could not substitute RUN_DIR in common.sh, so the case below proves nothing")
 	}
@@ -450,7 +450,7 @@ func TestVerify_ScansShellAnywhereInThePackage(t *testing.T) {
 			inner: true,
 			mutate: func(entries []tarEntry) []tarEntry {
 				return addEntry(entries, PayloadShareDir+"/cleanup.sh",
-					[]byte("#!/bin/sh\nrm -rf /volume1/backup-manager\n"))
+					[]byte("#!/bin/sh\nrm -rf /volume1/rclone-manager\n"))
 			},
 			detail: "cleanup.sh",
 		},
@@ -459,7 +459,7 @@ func TestVerify_ScansShellAnywhereInThePackage(t *testing.T) {
 			inner: true,
 			mutate: func(entries []tarEntry) []tarEntry {
 				return addEntry(entries, DSMUIDir+"/refresh",
-					[]byte("#!/bin/sh\nfind /volume1/backup-manager -type f | xargs rm -f\n"))
+					[]byte("#!/bin/sh\nfind /volume1/rclone-manager -type f | xargs rm -f\n"))
 			},
 			detail: "refresh",
 		},

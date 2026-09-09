@@ -49,7 +49,7 @@ manifest in the first place:
 
 ```sh
 mkdir -p release/amd64
-cid=$(docker create --platform linux/amd64 backup-manager:<version> /rbm version)
+cid=$(docker create --platform linux/amd64 rclone-manager:<version> /rbm version)
 docker cp "${cid}:/rbm"     release/amd64/rbm
 docker cp "${cid}:/rbm-web" release/amd64/rbm-web
 docker rm "${cid}"
@@ -111,10 +111,10 @@ there. The Container Manager path is also the one EPIC B's support table
 names for Synology; the `.spk` predates it and is not being retired, which
 is a product decision and not this issue's to make.
 
-`compose/backup-manager.yml` and `compose/backup-manager.env` are the
+`compose/rclone-manager.yml` and `compose/rclone-manager.env` are the
 project. Container Manager → Project → Create → "Create docker-compose.yml"
 takes the first, and the environment field takes the second. Read
-`compose/backup-manager.env` before pasting: two paths in it are yours to
+`compose/rclone-manager.env` before pasting: two paths in it are yours to
 set, and the compose file refuses to start rather than inventing either.
 The two installs can run side by side while you compare them, because the
 `.spk` publishes 8477 and the project defaults to 8080.
@@ -167,7 +167,7 @@ here is not attributable to one verified peer.
 | `/var/packages/BackupManager/target` | the two binaries, the DSM UI files, the config seed | replaced | removed |
 | `/var/packages/BackupManager/etc` | `config.yaml`, and the SSH key/known_hosts you put there | kept | kept |
 | `/var/packages/BackupManager/var` | SQLite journal, `local-auth.json`, logs, pid files | kept | kept |
-| `/volume?/backup-manager` | backup data (a DSM shared folder) | kept | kept |
+| `/volume?/rclone-manager` | backup data (a DSM shared folder) | kept | kept |
 
 Both daemons' logs live under `var/log`, on the DSM system volume, and
 `var/` survives every upgrade and reboot. `common.sh` caps each at

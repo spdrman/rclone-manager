@@ -292,7 +292,7 @@ type GFSVerdict struct {
 
 // SiblingCollisionLines renders v.SiblingCollisions into one human
 // sentence per distinct sibling, for `retention --dry-run`
-// (cmd/backup-manager/retention.go) and FR-20's own PruneVerdict.Reason
+// (cmd/rbm/retention.go) and FR-20's own PruneVerdict.Reason
 // (prune.go) to print verbatim. Returns nil when SiblingCollisions is
 // empty, so a caller can range over the result without a length check.
 //

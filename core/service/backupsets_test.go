@@ -160,7 +160,7 @@ func TestCreateBackupSet_PersistsAndIsImmediatelyVisible(t *testing.T) {
 	// The config file on disk, not just this process's in-memory copy,
 	// must carry the new set — a second process (the CLI's `sources`
 	// command, or this same process restarting) reads it fresh from
-	// disk with no other coordination (core/cmd/backup-manager/
+	// disk with no other coordination (core/cmd/rbm/
 	// sources.go), so if only the in-memory copy changed, that promise
 	// would be false.
 	raw, err := os.ReadFile(configPath)

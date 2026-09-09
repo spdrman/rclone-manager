@@ -74,7 +74,7 @@ records no identity:
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity 'https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release' \
-  ghcr.io/spdrman/backup-manager:0.3.0
+  ghcr.io/spdrman/rclone-manager:0.3.0
 ```
 
 That command passes against the published image, and it is the whole point of this
@@ -132,8 +132,8 @@ already hold rather than pulling an image to read it.
 release time through the environment and never written down:
 
 ```
-COSIGN_PRIVATE_KEY="$(pass show backup-manager/cosign)" \
-  cosign sign --key env://COSIGN_PRIVATE_KEY ghcr.io/spdrman/backup-manager@<digest>
+COSIGN_PRIVATE_KEY="$(pass show rclone-manager/cosign)" \
+  cosign sign --key env://COSIGN_PRIVATE_KEY ghcr.io/spdrman/rclone-manager@<digest>
 ```
 
 `scripts/release/publish-image.sh` enforces that. Guard 5 asks git for every path
@@ -158,7 +158,7 @@ guard was first written:
 * `id_rsa` and `id_ed25519` are matched as `*/id_rsa` and `*/id_ed25519` too. A
   git pathspec with no wildcard anchors at the repository root, so the bare forms
   only ever saw a key in the top directory, and this product mounts its SSH key
-  at `/etc/backup-manager/id_ed25519`.
+  at `/etc/rclone-manager/id_ed25519`.
 
 `scripts/tests/publish-image-guards.test.sh` builds every fixture with this
 repository's real `.gitignore` in it, because the guard's answer depends on the
@@ -167,7 +167,7 @@ not hold where the script runs.
 
 ## Publishing
 
-`ghcr.io/spdrman/backup-manager:0.3.3` is cut and not pushed.
+`ghcr.io/spdrman/rclone-manager:0.3.3` is cut and not pushed.
 `distribution/packaging/canonical.json` records `image.published: false`, and the release
 manifest records the same fact from the other side as a `registry_digest` of `null` per
 architecture and a null `index_digest`. The two are held together by

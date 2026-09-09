@@ -137,7 +137,7 @@
 
   <section>
     <h2 id="cli">The command line</h2>
-    <p>Everything the web interface does, and several things it does not, are reachable from <code>backup-manager</code>. Every command except <code>version</code> takes <code>--config</code>, defaulting to <code>/etc/backup-manager/config.yaml</code>.</p>
+    <p>Everything the web interface does, and several things it does not, are reachable from <code>rclone-manager</code>. Every command except <code>version</code> takes <code>--config</code>, defaulting to <code>/etc/rclone-manager/config.yaml</code>.</p>
     <div class="scroll-x">
       <table>
         <thead>
@@ -178,7 +178,7 @@
     <p>This section exists because the README has one, and a documentation site that quietly drops the uncomfortable half is worse than no site.</p>
     <ul>
       <li><strong>No acceptance procedure has been run on real hardware.</strong> The procedures for TrueNAS, Unraid, OpenMediaVault, Synology and Proxmox VE are written, reviewed and specific, and nobody working on the repository has one of those machines to execute them on. Every one of those platforms is build-supported and uncertified.</li>
-      <li><strong>The container image has never been published.</strong> <code>ghcr.io/spdrman/backup-manager</code> is the settled target and the packaging metadata records it as unpublished, so that reference resolves to nothing today.</li>
+      <li><strong>The container image has never been published.</strong> <code>ghcr.io/spdrman/rclone-manager</code> is the settled target and the packaging metadata records it as unpublished, so that reference resolves to nothing today.</li>
       <li><strong>There is no restore command and no restore endpoint.</strong> Restore execution is out of scope by design. Recovering a backup is a documented manual procedure, and that procedure is the whole of it.</li>
       <li><strong>There is no metrics endpoint.</strong> A Prometheus renderer exists in the tree and nothing imports it. No listener serves <code>/metrics</code>.</li>
       <li><strong>The screenshots on this site come from a mock.</strong> Every picture in <a href="first-run.html">the first-run tutorial</a> was taken against the development server's in-memory fixture API, not against a running engine. The layout, the copy and the flow are the real ones. The data is not, and that page says so beside each picture.</li>

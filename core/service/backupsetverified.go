@@ -50,7 +50,7 @@
 // #624's "which world does this run in" question rather than leaving it
 // to be discovered. The engine that serves a deployment owns its
 // configuration file; a CLI beside a serving engine routes the check to
-// that engine (core/cmd/backup-manager's backupSetRoute), so the process
+// that engine (core/cmd/rbm's backupSetRoute), so the process
 // that clears the mark is always the process whose configuration the mark
 // is in. There is no version of this where one process proves a
 // connection and another edits the file.

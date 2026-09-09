@@ -51,7 +51,7 @@ import { ConfigurationSavedPage } from "@shared/pages/ConfigurationSavedPage";
 import { LoginPage } from "@shared/auth/LoginPage";
 import { EnrollmentPage } from "@shared/auth/EnrollmentPage";
 
-const THEME_KEY = "backup-manager.theme";
+const THEME_KEY = "rclone-manager.theme";
 
 export function App() {
   const api = useApi();

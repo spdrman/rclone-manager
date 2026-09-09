@@ -69,7 +69,7 @@ func TestTaxonomy_EveryFailureThisPackageProducesIsOneOfTheCategories(t *testing
 			name: "a scheme that is not HTTP",
 			want: "*ConfigError",
 			run: func(*testing.T) error {
-				_, err := New(Config{BaseURL: "unix:///var/run/backup-manager.sock"})
+				_, err := New(Config{BaseURL: "unix:///var/run/rclone-manager.sock"})
 				return err
 			},
 		},

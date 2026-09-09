@@ -2,19 +2,19 @@
 # fails the build if a question has no default here, or if this file
 # declares a value no question asks for.
 image:
-  reference: "ghcr.io/spdrman/backup-manager:0.3.3"
+  reference: "ghcr.io/spdrman/rclone-manager:0.3.3"
 
 storage:
   state:
-    hostPath: "/mnt/tank/backup-manager/state"
+    hostPath: "/mnt/tank/rclone-manager/state"
   backups:
-    hostPath: "/mnt/tank/backup-manager/backups"
+    hostPath: "/mnt/tank/rclone-manager/backups"
   configDir:
-    hostPath: "/mnt/tank/backup-manager/config"
+    hostPath: "/mnt/tank/rclone-manager/config"
   sshKey:
-    hostPath: "/mnt/tank/backup-manager/secrets/id_ed25519"
+    hostPath: "/mnt/tank/rclone-manager/secrets/id_ed25519"
   knownHosts:
-    hostPath: "/mnt/tank/backup-manager/secrets/known_hosts"
+    hostPath: "/mnt/tank/rclone-manager/secrets/known_hosts"
 
 network:
   webPort: 8080

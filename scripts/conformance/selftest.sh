@@ -633,7 +633,7 @@ expect_check_fails "the FR-16 identity re-check run and its answer ignored" "$d"
 # differently when half of them are objects in a bucket, and an operator
 # confirming a plan is confirming this text.
 d=$(mutant dry-run-does-not-name-the-medium)
-swap "$d/core/cmd/backup-manager/retention.go" \
+swap "$d/core/cmd/rbm/retention.go" \
   '	case loc.Status == retention.LocationConfirmed && loc.Medium != config.MediumLocal:
 		return " medium=" + loc.Medium' \
   '	case loc.Status == retention.LocationConfirmed && loc.Medium != config.MediumLocal:
@@ -641,7 +641,7 @@ swap "$d/core/cmd/backup-manager/retention.go" \
 		return ""'
 expect_unit_check_fails "a dry-run that does not say where a deletion would happen" "$d" \
   "does not say where its deletion would happen" \
-  ./cmd/backup-manager/ 'TestRun_RetentionNamesWhereADeletionWouldHappen'
+  ./cmd/rbm/ 'TestRun_RetentionNamesWhereADeletionWouldHappen'
 
 echo
 echo "==> the archive gate"

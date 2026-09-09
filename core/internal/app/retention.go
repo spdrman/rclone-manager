@@ -109,7 +109,7 @@ type RetentionSetReport struct {
 // what actually call into it — see that file's own doc for why it exists
 // as a sibling to this method rather than a replacement for it:
 // RetentionPreview's classification-only report is still what
-// cmd/backup-manager's `retention`/`retention --dry-run` commands render
+// cmd/rbm's `retention`/`retention --dry-run` commands render
 // today (see that command's own note on the CLI still not calling
 // PruneApply for a real, non-dry-run invocation, a separate, narrower gap
 // than this doc comment's own past staleness was).

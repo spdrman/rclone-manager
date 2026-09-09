@@ -150,7 +150,7 @@ func (b *BackupService) PreflightStorageMedium(ctx context.Context, id string) (
 	// "somebody pressed the button" is not the claim the mark makes.
 	//
 	// This is also why the CLI's by-id verb now goes through the same door
-	// `medium add` goes through (core/cmd/backup-manager's route.go): the
+	// `medium add` goes through (core/cmd/rbm's route.go): the
 	// process that clears the mark has to be the process whose
 	// configuration the mark is in.
 	if report.OK {

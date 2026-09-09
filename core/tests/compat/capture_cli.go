@@ -26,7 +26,7 @@ import (
 // so the usage block, the column padding, the error sentences and the exit
 // statuses of the commands listed below are pinned byte for byte from
 // here. Anything reworded on the other side of that boundary, in
-// core/cmd/backup-manager, arrives as a red cell in this package, which is
+// core/cmd/rbm, arrives as a red cell in this package, which is
 // the intended and only route.
 //
 // Three things are normalized before anything is compared and no more: the
@@ -56,7 +56,7 @@ import (
 // every run, which is a bad trade.
 func buildCLI(coreRoot, outDir string) (string, error) {
 	bin := filepath.Join(outDir, cliecho.Binary)
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/rbm")
 	cmd.Dir = coreRoot
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -179,7 +179,7 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 	// about. `unconfigured` and `medium preflight` both shipped that way
 	// and this cell stayed green throughout. That hole is closed from the
 	// other end, by TestUsage_EveryRegisteredCommandIsPinned in
-	// core/cmd/backup-manager, which is where the list of registered
+	// core/cmd/rbm, which is where the list of registered
 	// commands can be read rather than guessed at (#549).
 	var usage []string
 	for _, c := range []cliCase{

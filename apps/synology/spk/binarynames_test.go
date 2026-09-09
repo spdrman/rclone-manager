@@ -192,19 +192,19 @@ func TestTheBinaryNameGuardFailsOnAScriptThatMovedAlone(t *testing.T) {
 			name:    "the start script spawns a binary the payload does not carry",
 			file:    "scripts/start-stop-status",
 			old:     "${PKG_BIN}/" + CoreBinaries[1],
-			planted: "${PKG_BIN}/backup-manager-web",
+			planted: "${PKG_BIN}/rbm-web",
 		},
 		{
 			name:    "the liveness check watches for a binary the payload does not carry",
 			file:    "scripts/" + SharedScriptName,
 			old:     "${PKG_BIN}/" + CoreBinaries[1],
-			planted: "${PKG_BIN}/backup-manager-web",
+			planted: "${PKG_BIN}/rbm-web",
 		},
 		{
 			name:    "conf/privilege grants to a file the payload does not carry",
 			file:    "conf/privilege",
 			old:     `"` + PayloadBinDir + "/" + CoreBinaries[1] + `"`,
-			planted: `"` + PayloadBinDir + `/backup-manager-web"`,
+			planted: `"` + PayloadBinDir + `/rbm-web"`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -246,7 +246,7 @@ var docsBinRef = regexp.MustCompile(`release/[A-Za-z0-9_]+/([A-Za-z0-9._+-]+)`)
 // fourth copy of the same name. conf/privilege, start-stop-status and
 // common.sh are the three the guard above holds together; the README is
 // where an operator reads what to call the files in the first place, and
-// it drifted too: it said `release/amd64/backup-manager` while
+// it drifted too: it said `release/amd64/rclone-manager` while
 // stagePayload had been reading BinariesDir by CoreBinaries name for a
 // release already.
 func TestTheDocumentedBuildProcedureNamesTheBinariesThePackerReads(t *testing.T) {

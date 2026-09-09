@@ -28,7 +28,7 @@ import (
 // TestPollInterval_ReportsTheConfiguredValue is what lets a caller
 // outside core/ (apps/generic's serve command) drive RunOnSchedule at the
 // operator's own configured cadence without needing internal/config
-// access, which it cannot have (§7.2): cmd/backup-manager's own `daemon`
+// access, which it cannot have (§7.2): cmd/rbm's own `daemon`
 // command reads cfg.PollInterval.Duration() directly off a
 // *config.Config it constructed itself, a shortcut apps/ has no
 // equivalent for.

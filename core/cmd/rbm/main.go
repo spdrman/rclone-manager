@@ -1,6 +1,6 @@
 // Command rbm is the entry point for every execution mode this project
 // supports (FR-1, FR-26). It is `rbm` to an operator and this directory is
-// still cmd/backup-manager, because a Go package path is not something
+// still cmd/rbm, because a Go package path is not something
 // anybody types; the constant that decides what this binary prints itself
 // as, and the whole of that argument, are in core/cliecho/cliname.go.
 //
@@ -373,7 +373,7 @@ commands:
                                                   disclosure. The show form prints each tier's destination
   version                                        report version information
 
-every command except version accepts --config (default /etc/backup-manager/config/config.yaml;
+every command except version accepts --config (default /etc/rclone-manager/config/config.yaml;
 a directory resolves to config.yaml inside it, which is what packaging mounts)
 
 a configuration write goes one of three ways, and says which on a "mode:" line. With nothing

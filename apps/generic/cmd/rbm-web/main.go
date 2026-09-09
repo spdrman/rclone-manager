@@ -1,9 +1,9 @@
-// Command backup-manager-web is the generic Web host's own executable
+// Command rbm-web is the generic Web host's own executable
 // (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2): it runs alongside
-// cmd/backup-manager (core/cmd/backup-manager, unchanged by this issue)
+// cmd/rbm (core/cmd/rbm, unchanged by this issue)
 //
 // The directory keeps its name and this line keeps saying
-// backup-manager-web, because a Go package path is not operator-visible
+// rbm-web, because a Go package path is not operator-visible
 // and core/cliecho/cliname.go says so explicitly. What an operator types
 // IS renamed: 0.3.3 installs this binary as /rbm-web, and every string
 // this program prints about itself comes from cliecho.WebBinary rather
@@ -29,8 +29,8 @@
 // or later image and say so.
 //
 // Every other execution mode (`run`, `daemon`, `check`, `status`, ...)
-// stays on cmd/backup-manager: this binary is deliberately narrow rather
-// than a second, competing CLI, since core/cmd/backup-manager cannot be
+// stays on cmd/rbm: this binary is deliberately narrow rather
+// than a second, competing CLI, since core/cmd/rbm cannot be
 // imported from here (it is an unexported `package main`, and even if it
 // were, importing anything from apps/ back into a core/ package would be
 // the exact dependency-direction violation §7.1 forbids - this binary
@@ -77,21 +77,21 @@ import (
 )
 
 // Set at build time with -ldflags (see container/Dockerfile), exactly
-// like core/cmd/backup-manager's own version/commit vars.
+// like core/cmd/rbm's own version/commit vars.
 var (
 	version = "dev"
 	commit  = "none"
 )
 
-// defaultConfigPath matches core/cmd/backup-manager's own default and
+// defaultConfigPath matches core/cmd/rbm's own default and
 // container/compose.yaml's mount point. The mount is the DIRECTORY
-// /etc/backup-manager/config (issue #196) and config.yaml lives inside
+// /etc/rclone-manager/config (issue #196) and config.yaml lives inside
 // it; --config also accepts that directory.
-const defaultConfigPath = "/etc/backup-manager/config/config.yaml"
+const defaultConfigPath = "/etc/rclone-manager/config/config.yaml"
 
 // Where a FIRST-RUN configuration points its SQLite journal (issue #176)
 // is deliberately NOT a constant here. It is
-// core/service.StateDatabaseDefault, which core/cmd/backup-manager's own
+// core/service.StateDatabaseDefault, which core/cmd/rbm's own
 // --state-database also takes its default from, because #571 rests on
 // this process and a `backup-set create` typed on the same host naming
 // the same journal: this one announces about it before it serves the
@@ -154,7 +154,7 @@ func main() {
 // command, or one this binary does not have), 1 for a command that ran
 // and failed, and 3 for `serve` refused because something else already
 // serves this deployment (#551). That is the same split
-// core/cmd/backup-manager publishes in its own usage block, so a caller
+// core/cmd/rbm publishes in its own usage block, so a caller
 // scripting either binary reads them the same way. That last sentence was
 // already here while it was untrue: #551 gave the CLI a third status and
 // this binary kept returning 1 for the identical refusal, which is the
@@ -215,7 +215,7 @@ commands:
 
 serve flags:
   --config PATH               path to the manager's YAML config file
-                               (default /etc/backup-manager/config/config.yaml).
+                               (default /etc/rclone-manager/config/config.yaml).
                                If this file does not exist, serve starts
                                anyway and offers the first-run setup flow
                                instead of refusing to start (issue #176);
@@ -442,7 +442,7 @@ func cmdServe(args []string) int {
 	defer service.RunExitHandlers()
 
 	// The one signal handler in this binary, matching
-	// core/cmd/backup-manager/daemon.go's own convention exactly: this is
+	// core/cmd/rbm/daemon.go's own convention exactly: this is
 	// what makes ctx the "process shutdown context" §9.3 requires the HTTP
 	// server and the background scheduler to share - serve.RunEngine below
 	// is what actually drives both off it.
@@ -785,7 +785,7 @@ func cmdServeUI(args []string) int {
 }
 
 // cmdAuth dispatches `auth`'s own subcommands, one level deeper than
-// run's own top-level switch, the same shape core/cmd/backup-manager's
+// run's own top-level switch, the same shape core/cmd/rbm's
 // `catalog rebuild` uses for its one subcommand (catalog.go). `auth`
 // takes no flags of its own - only create-admin does - so there is no
 // flags-around-operands ordering to resolve the way catalog.go's own
@@ -957,7 +957,7 @@ func localHealthcheckURL(listenAddr string) string {
 //
 // # Why the numbers are written twice
 //
-// core/cmd/backup-manager carries the same four in its own setup.go, and
+// core/cmd/rbm carries the same four in its own setup.go, and
 // nothing imports them from here or from there. The layer rules run one
 // way, so a shared home would have to be a package under core/, and a
 // CLI's exit-status contract is not something the engine packages should

@@ -131,9 +131,9 @@ func TestTheReadOnlyConfigFileMountIsRefused(t *testing.T) {
 	//
 	// The first row is the one this control used to get wrong. Its
 	// comment said "the pre-#196 declaration, verbatim in shape:
-	// <host>/config/config.yaml:/etc/backup-manager/config.yaml:ro" and
+	// <host>/config/config.yaml:/etc/rclone-manager/config.yaml:ro" and
 	// then planted ConfigFilePath(), which is the config DIRECTORY plus
-	// config.yaml and therefore /etc/backup-manager/config/config.yaml,
+	// config.yaml and therefore /etc/rclone-manager/config/config.yaml,
 	// a path no deployment has ever used. So the rule named for the
 	// historical shape was proven against a value that is not it, and the
 	// historical shape itself would have come back through the generic
@@ -144,12 +144,12 @@ func TestTheReadOnlyConfigFileMountIsRefused(t *testing.T) {
 		containerPath string
 		hostPath      string
 	}{
-		{"the pre-#196 shape, literally", legacyPath, "/mnt/tank/backup-manager/config/config.yaml"},
-		{"the same mistake made against the new directory", c.ConfigFilePath(), "/mnt/tank/backup-manager/config/config.yaml"},
+		{"the pre-#196 shape, literally", legacyPath, "/mnt/tank/rclone-manager/config/config.yaml"},
+		{"the same mistake made against the new directory", c.ConfigFilePath(), "/mnt/tank/rclone-manager/config/config.yaml"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			legacy := []Service{{
-				Name:   "backup-manager",
+				Name:   "rclone-manager",
 				Source: "positive control: " + tc.name,
 				Mounts: []Mount{{
 					Role:          roleForContainerPath(c, tc.containerPath),
@@ -191,11 +191,11 @@ func TestTheReadOnlyConfigFileMountIsRefused(t *testing.T) {
 	// without going all the way back to a single file, and the
 	// legacy-path rule above would not see it.
 	readOnlyDir := []Service{{
-		Name:   "backup-manager",
+		Name:   "rclone-manager",
 		Source: "positive control: the config directory mounted :ro",
 		Mounts: []Mount{{
 			Role:          "config",
-			HostPath:      "/mnt/tank/backup-manager/config",
+			HostPath:      "/mnt/tank/rclone-manager/config",
 			ContainerPath: c.ContainerPaths.Config,
 			ReadOnly:      true,
 		}},
@@ -209,11 +209,11 @@ func TestTheReadOnlyConfigFileMountIsRefused(t *testing.T) {
 	// clean, so the two assertions above are about the mutation and not
 	// about the checker rejecting everything it is handed.
 	shipped := []Service{{
-		Name:   "backup-manager",
+		Name:   "rclone-manager",
 		Source: "control: the #196 shape",
 		Mounts: []Mount{{
 			Role:          "config",
-			HostPath:      "/mnt/tank/backup-manager/config",
+			HostPath:      "/mnt/tank/rclone-manager/config",
 			ContainerPath: c.ContainerPaths.Config,
 		}},
 	}}
@@ -237,11 +237,11 @@ func TestKeyMaterialStaysAReadOnlySingleFile(t *testing.T) {
 	}
 
 	writableKey := []Service{{
-		Name:   "backup-manager",
+		Name:   "rclone-manager",
 		Source: "positive control: key material mounted writable",
 		Mounts: []Mount{{
 			Role:          "sshKey",
-			HostPath:      "/mnt/tank/backup-manager/secrets/id_ed25519",
+			HostPath:      "/mnt/tank/rclone-manager/secrets/id_ed25519",
 			ContainerPath: c.ContainerPaths.SSHKey,
 		}},
 	}}
@@ -288,15 +288,15 @@ func TestTheHostPathProhibitionFires(t *testing.T) {
 		{"the Docker socket, the other spelling", "/run/docker.sock", true},
 		{"the host root", "/", true},
 		{"a host system directory", "/etc", true},
-		{"something beneath a host system directory", "/etc/backup-manager", true},
+		{"something beneath a host system directory", "/etc/rclone-manager", true},
 
 		// The controls that stop this rule from refusing everything. A
 		// prohibition that also fires on the real host paths would be
 		// switched off within a week.
-		{"a TrueNAS dataset", "/mnt/tank/backup-manager/state", false},
-		{"an Unraid appdata path", "/mnt/user/appdata/backup-manager/state", false},
-		{"an OMV data filesystem", "/srv/dev-disk-by-uuid/appdata/backup-manager/state", false},
-		{"a Synology volume", "/volume1/docker/backup-manager/state", false},
+		{"a TrueNAS dataset", "/mnt/tank/rclone-manager/state", false},
+		{"an Unraid appdata path", "/mnt/user/appdata/rclone-manager/state", false},
+		{"an OMV data filesystem", "/srv/dev-disk-by-uuid/appdata/rclone-manager/state", false},
+		{"a Synology volume", "/volume1/docker/rclone-manager/state", false},
 		{"an unexpanded variable, which is the operator's to resolve", "${STATE_DIR:?set STATE_DIR}", false},
 
 		// The near-misses. A prefix comparison that forgot the separator
@@ -308,7 +308,7 @@ func TestTheHostPathProhibitionFires(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svcs := []Service{{
-				Name:   "backup-manager",
+				Name:   "rclone-manager",
 				Source: "positive control",
 				Mounts: []Mount{{Role: "state", HostPath: tc.host, ContainerPath: "/data/state"}},
 			}}
@@ -357,8 +357,8 @@ func TestTheProhibitedHostPathSpellingsAllResolveToTheSameVerdict(t *testing.T) 
 		// the comparison.
 		{"/etcetera", false},
 		{"/etcetera/backups", false},
-		{"/mnt/tank/backup-manager/state", false},
-		{"/mnt/tank/../tank/backup-manager/state", false},
+		{"/mnt/tank/rclone-manager/state", false},
+		{"/mnt/tank/../tank/rclone-manager/state", false},
 
 		// An unexpanded reference is the operator's to resolve.
 		{"${STATE_DIR:?set STATE_DIR}", false},
