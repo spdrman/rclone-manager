@@ -51,14 +51,16 @@
 # the obvious alternative looks fine right up until it is measured.
 #
 #   - A second `COPY --from=build /out/rbm /backup-manager` would work.
-#     It also costs a second full copy of a ~35 MB Go binary in a new
-#     layer, twice over for the two of them, and the image-size gate
-#     added by #643 (apps/generic/tests/dockercli/imagesize_test.go)
-#     allows 1.05x of the 69,704,266 bytes recorded in
-#     docs/perf/baselines/darwin-arm64-mac17-2.json. That is about
+#     It also costs a second full copy of the binary in a new layer, and
+#     `docker history` on this image measures those two layers at 31.4 MB
+#     and 32.6 MB. The image-size gate added by #643
+#     (apps/generic/tests/dockercli/imagesize_test.go) allows 1.05x of
+#     the 69,704,266 bytes recorded in
+#     docs/perf/baselines/darwin-arm64-mac17-2.json, which is about
 #     3.4 MB of headroom against about 64 MB of duplicate binary, so the
-#     double copy fails the gate on the first run. Two symlinks cost
-#     about 100 bytes.
+#     double copy fails the gate on the first run. The symlink layer
+#     measures 0 B, and building this tree with and without it produced
+#     69,705,006 bytes both ways on the #643 benchmark host.
 #   - The runtime stage is distroless, which has no shell, so `RUN ln -s`
 #     cannot run there at all. Hence a stage that does have one. It is
 #     `FROM build` rather than a new base image so this file does not
