@@ -577,14 +577,14 @@ func fixtureManifest(p providerUnderTest, commit string) ReleaseManifest {
 	for _, arch := range p.canonical.Architectures {
 		hashes := map[string]string{}
 		for _, b := range p.canonical.Binaries {
-			// manifestBinaryKey, not a bare TrimPrefix: since the 0.3.3
-			// CLI rename the canonical binary paths (/rbm, /rbm-web) and
-			// the keys container/release-manifest.json records a hash
-			// under (backup-manager, backup-manager-web) are different
-			// strings, and a fixture that keyed on the path would be a
-			// manifest the real reader cannot read. Every positive
-			// control built on this would then fail for the fixture's
-			// reason rather than pass for the code's.
+			// manifestBinaryKey, not a bare TrimPrefix: the fixture has
+			// to key exactly the way the real reader keys, or it is a
+			// manifest that reader cannot read and every positive
+			// control built on it fails for the fixture's reason rather
+			// than passing for the code's. The two agree today, both
+			// dropping the leading slash off /rbm and /rbm-web and doing
+			// nothing else, and going through the same function is what
+			// keeps the fixture honest if they ever part company.
 			hashes[manifestBinaryKey(b)] = strings.Repeat("a", 64)
 		}
 		arches = append(arches, ReleaseArchitecture{Architecture: arch, BinarySHA256: hashes})

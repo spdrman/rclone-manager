@@ -109,7 +109,7 @@
     "derive.go has to hold four metadata formats to them, one of which is an",
     "Unraid XML template no Compose parser can read.",
     "",
-    "The engine's is a LIVENESS question and deliberately not `backup-manager",
+    "The engine's is a LIVENESS question and deliberately not `rbm",
     "status` (issue #206). Every adapter's Web UI declares",
     "`depends_on: <engine>: condition: service_healthy`, so whatever this asks",
     "stands between an operator and the only LAN-facing container in the",

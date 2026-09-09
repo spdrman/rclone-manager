@@ -2335,10 +2335,10 @@ class TestCounterDeltaNamesTheRule(unittest.TestCase):
 # container this project's own compose project labelled, and two it did
 # not.
 PS_NDJSON_MIXED_HOST = (
-    '{"Names": "backup-manager", "Image": "ghcr.io/spdrman/backup-manager:0.1.0", '
-    '"Labels": "com.docker.compose.project=rclone-manager,com.docker.compose.service=backup-manager"}\n'
-    '{"Names": "backup-manager-ui", "Image": "ghcr.io/spdrman/backup-manager:0.1.0", '
-    '"Labels": "com.docker.compose.project=rclone-manager,com.docker.compose.service=backup-manager-ui"}\n'
+    '{"Names": "rclone-manager", "Image": "ghcr.io/spdrman/backup-manager:0.1.0", '
+    '"Labels": "com.docker.compose.project=rclone-manager,com.docker.compose.service=rclone-manager"}\n'
+    '{"Names": "rclone-manager-ui", "Image": "ghcr.io/spdrman/backup-manager:0.1.0", '
+    '"Labels": "com.docker.compose.project=rclone-manager,com.docker.compose.service=rclone-manager-ui"}\n'
     '{"Names": "plex", "Image": "plexinc/pms-docker:latest", "Labels": "com.docker.compose.project=media"}\n'
     '{"Names": "portainer", "Image": "portainer/portainer-ce:latest", "Labels": ""}\n'
 )
@@ -2354,8 +2354,8 @@ class TestOtherRunningContainers(unittest.TestCase):
     def test_this_projects_own_containers_are_excluded(self):
         got = installer._other_containers_from_ps_ndjson(PS_NDJSON_MIXED_HOST, "rclone-manager")
         names = [name for name, _ in got]
-        self.assertNotIn("backup-manager", names)
-        self.assertNotIn("backup-manager-ui", names)
+        self.assertNotIn("rclone-manager", names)
+        self.assertNotIn("rclone-manager-ui", names)
 
     def test_containers_from_another_project_or_no_project_label_are_named(self):
         got = installer._other_containers_from_ps_ndjson(PS_NDJSON_MIXED_HOST, "rclone-manager")
@@ -2366,7 +2366,7 @@ class TestOtherRunningContainers(unittest.TestCase):
 
     def test_a_host_with_no_other_containers_reports_none(self):
         got = installer._other_containers_from_ps_ndjson(
-            '{"Names": "backup-manager", "Image": "x", '
+            '{"Names": "rclone-manager", "Image": "x", '
             '"Labels": "com.docker.compose.project=rclone-manager"}\n',
             "rclone-manager",
         )

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploys the generic backup-manager Docker app end to end (issue
+"""Deploys the generic rclone-manager Docker app end to end (issue
 #82/B4.1): validates an SSH private key and known_hosts file, renders
 config.yaml and a compose .env file, wires the mounts, and starts the
 container via `docker compose`.
@@ -109,7 +109,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         prog="deploy_generic.py",
-        description="Deploy the generic backup-manager Docker app (issue #82/B4.1).",
+        description="Deploy the generic rclone-manager Docker app (issue #82/B4.1).",
         formatter_class=_HelpFormatter,
         epilog=(
             "example:\n"
@@ -176,7 +176,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                                     "(not this script's own commit - deploy_generic.py has none to report).")
     deploy_group.add_argument(
         "--project-name",
-        default="backup-manager",
+        default="rclone-manager",
         help="docker compose project name. Re-running with the SAME name converges an "
              "existing deployment (unchanged services untouched, changed ones recreated) "
              "instead of creating a duplicate one - this is what makes the whole script "

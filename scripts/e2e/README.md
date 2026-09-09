@@ -22,7 +22,7 @@ which is every commit through `.husky/pre-commit`. The step:
 1. clones `rclone-manager-tests` at the sha in `tests-repo.pin` into
    `${XDG_CACHE_HOME:-$HOME/.cache}/rclone-manager-tests-gate/<sha>`, once
    per pin;
-2. builds `backup-manager` from **this working tree** and runs that
+2. builds `rbm` from **this working tree** and runs that
    repository's CLI smoke slice against it, 55 black-box cases in about
    eleven seconds. That is a signal this repository has never had: nothing
    here exercised the CLI black-box on a per-commit basis at all;

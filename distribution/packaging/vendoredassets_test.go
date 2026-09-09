@@ -50,7 +50,7 @@ func vendoredFixture() VendoredAsset {
 		CarriedAs:      VendoredCarriedAsSource,
 		VendoredInto:   []string{"src/art.tsx"},
 		Marker:         "Example Artwork 1.2.3",
-		LinkedInto:     []string{"backup-manager-web"},
+		LinkedInto:     []string{"rbm-web"},
 		SourceURL:      "https://example.invalid/artwork-1.2.3.tgz",
 		RecordedIn:     []string{"NOTICE"},
 	}
@@ -357,7 +357,7 @@ func vendoredFilesFixture() (VendoredAsset, map[string]string) {
 		VendoredInto:   []string{"ui/shared/public/fonts/Example-Regular.woff2"},
 		Digests:        map[string]string{"ui/shared/public/fonts/Example-Regular.woff2": SHA256Bytes([]byte(face))},
 		LicenceFile:    "ui/shared/public/fonts/LICENSE.txt",
-		LinkedInto:     []string{"backup-manager-web"},
+		LinkedInto:     []string{"rbm-web"},
 		SourceURL:      "https://example.invalid/example-sans-4.5.6.tgz",
 		RecordedIn:     []string{"NOTICE"},
 	}

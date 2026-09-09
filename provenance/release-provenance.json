@@ -1,5 +1,5 @@
 {
-  "schema": "backup-manager/release-provenance/1",
+  "schema": "rclone-manager/release-provenance/1",
   "note": [
     "Generated. Do not hand-edit: run `go run ./cmd/provenance -write` from apps/common.",
     "",
@@ -40,23 +40,23 @@
     },
     "notice": {
       "path": "NOTICE",
-      "sha256": "be43848c396b30ebcd2dfd80f6cd77794f506209facb08f32247aef5f9c53813"
+      "sha256": "fcaaaecda0f981aab4cf930ffe2e56c7a9d22b0a22d123cea8a52c8d4e84b33b"
     },
     "inventory": {
       "path": "provenance/third-party-licenses.json",
-      "sha256": "42f094bf3ee8ec9451b9321af9d716dd3f6c68073e8b0f746c363b8e875c2790",
-      "format": "backup-manager/third-party-licenses/1"
+      "sha256": "f9f1fc0495499ec9bece7dff474c83cc391587c456bdee814a6c5006b7d1e950",
+      "format": "rclone-manager/third-party-licenses/1"
     },
     "componentCount": 97
   },
   "sbom": {
     "path": "provenance/sbom.spdx.json",
-    "sha256": "070e67fc24bc17f4b80cd54e13ca90562e96252b9785bd0a49da11c71a8838fb",
+    "sha256": "276b9cfc72050c328dd460124365aa4ffd53af50588b4c77685150c89a81e89f",
     "format": "SPDX-2.3"
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "6e317bef2f3d4d3270a16c71d8b450952216cb207b1e2f51ffb869274bc00a56",
+    "sha256": "413476178d273669e98bdfd706cef7f09652a8d10f1996ddac63e1b5ef24b0d7",
     "format": "sha256sum"
   },
   "artifacts": [

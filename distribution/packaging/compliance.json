@@ -60,7 +60,7 @@
       "",
       "They are in the binaries and not merely in go.mod, which is a difference",
       "worth measuring rather than asserting: `go tool nm` on a linux/amd64",
-      "backup-manager finds 17 go-retryablehttp symbols and 1 go-cleanhttp symbol",
+      "rbm finds 17 go-retryablehttp symbols and 1 go-cleanhttp symbol",
       "surviving dead-code elimination, among them the code symbols NewClient,",
       "DefaultRetryPolicy, DefaultBackoff and DefaultPooledTransport. The MPL",
       "code ships and runs, and nothing below should be read as suggesting it",
@@ -243,7 +243,7 @@
         ],
         "marker": "Font Awesome Free 6.7.2",
         "linkedInto": [
-          "backup-manager-web"
+          "rbm-web"
         ],
         "sourceUrl": "https://registry.npmjs.org/@fortawesome/fontawesome-free/-/fontawesome-free-6.7.2.tgz",
         "recordedIn": [
@@ -306,7 +306,7 @@
         },
         "licenceFile": "ui/shared/public/fonts/LICENSE.txt",
         "linkedInto": [
-          "backup-manager-web"
+          "rbm-web"
         ],
         "sourceUrl": "https://registry.npmjs.org/@ibm/plex-sans/-/plex-sans-1.1.0.tgz",
         "recordedIn": [
@@ -333,7 +333,7 @@
           "one of them carries a digest this package re-derives on each run.",
           "",
           "The Latin1 subsets rather than the complete faces. The image carries the",
-          "web bundle six times over, once compiled into backup-manager-web and once",
+          "web bundle six times over, once compiled into rbm-web and once",
           "per adapter bundle under /ui/bundles, so a face costs six times its own",
           "size against a gated image ceiling, and the complete faces would have been",
           "roughly three times what these cost. docs/compliance/bundled-webfonts.md",
@@ -365,7 +365,7 @@
         },
         "licenceFile": "ui/shared/public/fonts/LICENSE.txt",
         "linkedInto": [
-          "backup-manager-web"
+          "rbm-web"
         ],
         "sourceUrl": "https://registry.npmjs.org/@ibm/plex-mono/-/plex-mono-2.5.0.tgz",
         "recordedIn": [
@@ -392,7 +392,7 @@
           "one of them carries a digest this package re-derives on each run.",
           "",
           "The Latin1 subsets rather than the complete faces. The image carries the",
-          "web bundle six times over, once compiled into backup-manager-web and once",
+          "web bundle six times over, once compiled into rbm-web and once",
           "per adapter bundle under /ui/bundles, so a face costs six times its own",
           "size against a gated image ceiling, and the complete faces would have been",
           "roughly three times what these cost. docs/compliance/bundled-webfonts.md",

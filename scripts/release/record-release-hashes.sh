@@ -183,13 +183,12 @@ for arch in $ARCHES; do
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
 
-  # /rbm and /rbm-web, never the /rbm and /rbm-web
-  # beside them, and this is not cosmetic (the 0.3.3 CLI rename). Those
-  # `docker cp` without -L would copy a link as a
-  # link, so this would write two dead links into $tmp and sha256 would
-  # fail on a file that is not there. The local names below stay the old
-  # ones on purpose: they are the keys binary_sha256 records, and the
-  # release ARTIFACT did not get renamed, only the command.
+  # /rbm and /rbm-web are the only executables in the image as of 0.3.3,
+  # and they are also the binary_sha256 keys $MANIFEST records under, so
+  # the name is the same on both sides of every later comparison. Copy
+  # them by their real path: `docker cp` without -L copies a link as a
+  # link, so a compatibility link beside them would land in $tmp dead
+  # and sha256 would fail on a file that is not there.
   docker cp "${cid}:/rbm" "${tmp}/rbm" >&2
   docker cp "${cid}:/rbm-web" "${tmp}/rbm-web" >&2
   docker rm "$cid" >/dev/null

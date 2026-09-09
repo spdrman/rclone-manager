@@ -170,7 +170,7 @@ type Inventory struct {
 }
 
 // InventorySchema is the current shape's identifier.
-const InventorySchema = "backup-manager/third-party-licenses/1"
+const InventorySchema = "rclone-manager/third-party-licenses/1"
 
 // ParseInventory reads an inventory document.
 func ParseInventory(data []byte) (Inventory, error) {
@@ -224,8 +224,8 @@ type GoBuildTarget struct {
 // binary appearing in the Dockerfile and not here is a difference someone
 // has to make on purpose.
 var ShippedGoBinaries = []GoBuildTarget{
-	{Binary: "backup-manager", ModuleDir: "core", Package: "./cmd/backup-manager"},
-	{Binary: "backup-manager-web", ModuleDir: "apps/generic", Package: "./cmd/backup-manager-web"},
+	{Binary: "rbm", ModuleDir: "core", Package: "./cmd/backup-manager"},
+	{Binary: "rbm-web", ModuleDir: "apps/generic", Package: "./cmd/backup-manager-web"},
 }
 
 // GoModuleRef is one module in a binary's linked graph.
@@ -385,7 +385,7 @@ func NPMProductionComponents(data []byte) ([]Component, error) {
 			Ecosystem:  EcosystemNPM,
 			LicenseID:  pkg.License,
 			Integrity:  pkg.Integrity,
-			LinkedInto: []string{"backup-manager-web"},
+			LinkedInto: []string{"rbm-web"},
 		})
 	}
 	SortComponents(out)
@@ -483,7 +483,7 @@ func BuildSPDX(inv Inventory, name, namespace, created string) SPDXDocument {
 		DocumentNamespace: namespace,
 		CreationInfo: SPDXCreationInfo{
 			Created:  created,
-			Creators: []string{"Tool: backup-manager-provenance", "Organization: The Backup Manager Authors"},
+			Creators: []string{"Tool: rclone-manager-provenance", "Organization: The Backup Manager Authors"},
 		},
 	}
 	for _, c := range inv.Components {
@@ -532,7 +532,7 @@ func BuildSPDX(inv Inventory, name, namespace, created string) SPDXDocument {
 // ---------------------------------------------------------------------
 
 // ProvenanceSchema is the current bundle shape's identifier.
-const ProvenanceSchema = "backup-manager/release-provenance/1"
+const ProvenanceSchema = "rclone-manager/release-provenance/1"
 
 // ProvenanceDir is where the generated compliance artifacts live.
 //
