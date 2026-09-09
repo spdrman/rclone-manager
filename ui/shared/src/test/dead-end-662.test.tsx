@@ -442,9 +442,30 @@ describe("what the browser offers an operator whose backup is stuck (#662 defect
       ).toBeGreaterThan(readsBefore)
     );
 
-    // And the answer, in words that say what the retry actually does about
-    // the collision this backup is stuck behind.
-    expect(await screen.findByRole("status")).toHaveTextContent(/Re-attempted/);
+    // And the answer, which must not read as a recovery. Measured against
+    // a real rbm in a container: `retry` exits 0 and prints "re-entering
+    // the pipeline" for a backup whose very next cycle lands FAILED again
+    // on the same collision. So a 204 says the row moved and nothing
+    // about the outcome, and a card that announced success here would be
+    // the product telling an operator their backup is fine while it sits
+    // FAILED — the exact shape of untruth #662 is about.
+    const answer = await screen.findByRole("status");
+    expect(answer).toHaveTextContent(/accepted the request/);
+    expect(
+      answer,
+      "the card reports an accepted retry as a completed recovery; the verb answers 204 before the pipeline has " +
+        "run, and its next attempt can land FAILED again"
+    ).not.toHaveTextContent(/recovered|repaired|fixed|no longer failed/i);
+
+    // The behavioural half of the same claim: the artifact this page
+    // re-read is still FAILED, so the control is still on offer. A page
+    // that cleared the card on a 204 would hide a backup that never
+    // recovered.
+    expect(
+      screen.getByRole("button", { name: /retry ingestion/i }),
+      "the Recovery card was cleared by the verb's own 204 rather than by the artifact's state, so a retry that " +
+        "left the backup FAILED reads as a backup that is fine"
+    ).toBeInTheDocument();
   });
 
   /**
@@ -467,7 +488,12 @@ describe("what the browser offers an operator whose backup is stuck (#662 defect
     renderDetail(healthy);
     await screen.findByText(healthy.filename);
 
-    expect(screen.queryByRole("heading", { name: /recovery/i })).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: /recovery/i }),
+      "the Recovery card renders over a verified, committed backup: whatever the card is gated on does not " +
+        "distinguish a stuck backup from a good one, so every artifact in the product is labelled as needing " +
+        "intervention and the marker stops meaning anything"
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: /retry ingestion/i }),
       "the Recovery card is not gated on anything that distinguishes a stuck backup from a good one, so every " +

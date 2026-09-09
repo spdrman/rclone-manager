@@ -115,11 +115,21 @@ export function BackupDetailPage({ readOnly = false }: { readOnly?: boolean }) {
     api
       .retryFailedIngestion(a.id)
       .then(() => {
+        // Accepted, not recovered, and the difference is measurable: the
+        // CLI's `retry` exits 0 and prints "re-entering the pipeline" for
+        // a backup whose very next cycle lands FAILED again on the same
+        // FR-12 collision (measured in a container against a real rbm).
+        // The verb's success says the row moved to DISCOVERED and nothing
+        // about what happens next, so this sentence must not read as "it
+        // is fixed", and the page goes and looks rather than asserting an
+        // outcome the response does not carry.
         setRecovery({
           tone: "ok",
           text:
-            "Re-attempted. If its local copy was already good and a retry keeps meeting a final-name collision, " +
-            "that retry verifies the copy against the remote object and trusts it in place."
+            "Re-attempted: the service accepted the request and has not carried it out yet, so what this page " +
+            "shows below is the state the next attempt leaves. If its local copy was already good and the retry " +
+            "keeps meeting a final-name collision, that retry verifies the copy against the remote object and " +
+            "trusts it in place. While this card is still here, the backup is still FAILED."
         });
         artifact.reload();
       })
