@@ -114,6 +114,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import stat
@@ -314,6 +315,45 @@ class Refusal(Exception):
 # ---------------------------------------------------------------------
 # Running things
 # ---------------------------------------------------------------------
+
+
+def primary_lan_address():
+    """The address of the interface this machine's default route uses.
+
+    The enrolment link this installer prints is opened from SOMEBODY
+    ELSE'S machine, on the same LAN, minutes after the install finishes.
+    So the two obvious answers are both wrong. `localhost` is right only
+    on the box that ran the install, and an operator who ran it over SSH
+    reads a link to their own laptop. `socket.gethostname()` is worse
+    than it looks: a NAS hostname resolves on the NAS and, without mDNS
+    or a DNS entry somebody set up, nowhere else, so the link fails for
+    the one reader it is written for.
+
+    An IP on the LAN works from any machine on that LAN with nothing
+    configured, which is the property the link needs.
+
+    No packets are sent. Connecting a UDP socket only asks the kernel to
+    pick a route and bind a local address, and 192.0.2.1 is TEST-NET-1
+    (RFC 5737), reserved for documentation and routed nowhere. Reading
+    the local end back reports the interface the default route would
+    leave by, which is why this returns the LAN address rather than a
+    Docker bridge or a loopback: those are not on the default route.
+
+    Returns None when there is no default route to ask about, which is a
+    real answer on an air-gapped host and is why the caller keeps a
+    fallback rather than treating this as always available.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 1))
+        addr = probe.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        probe.close()
+    if not addr or addr.startswith("127.") or addr == "0.0.0.0":
+        return None
+    return addr
 
 
 def run(argv, *, check=True, timeout=None, cwd=None, env=None, input=None):
@@ -899,6 +939,14 @@ class Preflight:
         the stack it installed is listening. So a bound port is only a
         refusal when the thing holding it is not this project.
         """
+        if getattr(self.args, "cli_only", False):
+            # Not a relaxation, an absence. web-ui is the only service with
+            # a `ports:` key, and CLI-only never starts it, so there is no
+            # host port to be in use and refusing over one somebody else
+            # holds would be refusing over a port this install will never
+            # touch.
+            self.note("no host port to check: --cli-only publishes none")
+            return
         port = self.args.listen_port
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1.5)
@@ -1227,8 +1275,73 @@ def render_env(args) -> str:
         f"VERSION={args.image_tag}",
         f"COMMIT={args.image_commit}",
         "",
+        "# Whether this deployment runs the Web UI. Compose never reads it;",
+        "# the installer does, so a later re-run with no flags keeps the shape",
+        "# the operator chose rather than quietly publishing a Web UI on a host",
+        "# that was deliberately installed without one.",
+        f"CLI_ONLY={'1' if getattr(args, 'cli_only', False) else '0'}",
+        "",
     ]
     return "\n".join(lines)
+
+
+def render_cli_wrapper(args) -> str:
+    """The `rbm` an operator types after a CLI-only install.
+
+    `run --rm`, not `exec`, and that is the design rather than a fallback.
+    A CLI-only install starts nothing until a config.yaml exists, so the
+    very first command anyone needs is the one that WRITES the first
+    configuration, and there is no container to exec into yet. A one-off
+    container off the same image gets the same mounts, the same uid and
+    the same network, so a command that has to reach a serving engine
+    still reaches it, and one that has to work with nothing running still
+    works.
+
+    --no-deps because a read should never start the engine as a side
+    effect: without it `compose run` brings up whatever the service
+    depends on, and `rbm status` would silently become `rbm status` plus a
+    deployment somebody did not ask to start.
+
+    The guard on an empty invocation is the awkward part, and it is not
+    defensive padding. `docker compose run` cannot express "no command":
+    given none it runs what the compose file says the service runs, which
+    on a CLI-only deployment is `/rbm daemon`. So a bare `rbm` would have
+    become `/rbm /rbm daemon`, and the operator would have read `unknown
+    command "/rbm"` naming something they did not type. rbm answers a bare
+    invocation with its own usage and exit 2, and there is no argv that
+    reproduces that through compose, so the wrapper says it itself and
+    exits the same 2 rather than letting the fall-through happen.
+
+    Rewritten on every run of the installer, like everything else it
+    stages, which is why it says so at the top rather than inviting edits.
+    """
+    quoted = " ".join(shlex.quote(part) for part in compose_argv(args))
+    return (
+        "#!/bin/sh\n"
+        "# Generated by scripts/install/install_docker_host.py --cli-only.\n"
+        "# Rewritten on every run of the installer, so keep your own edits elsewhere.\n"
+        "#\n"
+        "# Every rbm subcommand: `rbm status`, `rbm sources`, `rbm run`,\n"
+        "# `rbm backup-set create ...`.\n"
+        "set -e\n"
+        "\n"
+        "# docker compose run cannot express \"no command\": given none it runs\n"
+        "# what the compose file says this service runs, which here is\n"
+        "# `/rbm daemon`. A bare `rbm` would become `/rbm /rbm daemon` and\n"
+        "# report an unknown command nobody typed, so it stops here instead,\n"
+        "# with the same exit code rbm itself uses for a missing command.\n"
+        "if [ \"$#\" -eq 0 ]; then\n"
+        "  echo \"usage: rbm <command> [flags]\" >&2\n"
+        "  echo \"\" >&2\n"
+        "  echo \"This runs rbm inside the engine's own container and needs a\" >&2\n"
+        "  echo \"command to run. 'rbm status' is a safe first one; every command\" >&2\n"
+        "  echo \"is listed at https://spdrman.github.io/rclone-manager/reference.html\" >&2\n"
+        "  exit 2\n"
+        "fi\n"
+        "\n"
+        "exec " + quoted + " \\\n"
+        "  run --rm --no-deps --entrypoint /rbm " + ENGINE_SERVICE + " \"$@\"\n"
+    )
 
 
 def render_image_override(args) -> str:
@@ -1241,6 +1354,33 @@ def render_image_override(args) -> str:
     comes from the canonical file, unmodified, which is what keeps this a
     derivation rather than a tenth adapter.
     """
+    if getattr(args, "cli_only", False):
+        return (
+            "# Generated by scripts/install/install_docker_host.py --cli-only.\n"
+            "# Overlaid on the canonical container/compose.yaml, never in place of it.\n"
+            "#\n"
+            "# One service, because a CLI-only deployment has no Web UI. `web-ui` is\n"
+            "# still DEFINED by the canonical file, which is the runtime contract and\n"
+            "# not something a derivation gets to edit; it is simply never started, so\n"
+            "# nothing here publishes a port and nothing here serves HTTP.\n"
+            "#\n"
+            "# The two keys past image and pull_policy are the whole of what CLI-only\n"
+            "# means. `command:` runs /rbm daemon rather than /rbm-web serve, so the\n"
+            "# rbm-web binary is not executed anywhere in this deployment. Disabling\n"
+            "# the health check follows from that and is not a relaxation: the\n"
+            "# canonical check is an HTTP liveness probe against 127.0.0.1:8080, and a\n"
+            "# process with no listener would fail it forever. What replaces it is the\n"
+            "# installer's own check that the container is still running a while after\n"
+            "# it started rather than restarting, which is the only claim there is to\n"
+            "# make about a process that serves nothing.\n"
+            "services:\n"
+            f"  rclone-manager:\n"
+            f"    image: {args.image}\n"
+            "    pull_policy: never\n"
+            '    command: ["/rbm", "daemon"]\n'
+            "    healthcheck:\n"
+            "      disable: true\n"
+        )
     return (
         "# Generated by scripts/install/install_docker_host.py.\n"
         "# Overlaid on the canonical container/compose.yaml, never in place of it.\n"
@@ -2184,6 +2324,38 @@ def adopt_installed_credentials(args, installed_env: dict) -> None:
         say(f"==> Keeping the {flag} this install already uses: {installed}")
 
 
+def adopt_installed_shape(args, installed_env: dict) -> None:
+    """Keep running the shape the deployment was installed as.
+
+    Same reasoning as adopt_installed_credentials above and the same
+    precedence: a flag that was typed wins, and a run that typed nothing
+    gets what is actually here rather than what the defaults would guess.
+
+    It matters more here than it looks. The default is the full stack, so
+    without this a bare `install` re-run on a host somebody deliberately
+    installed with --cli-only would start web-ui and publish a port on the
+    LAN, which is the one thing that operator asked for the absence of. An
+    upgrade is not the place to change what a deployment exposes.
+    """
+    if not hasattr(args, "cli_only"):
+        return
+    was = installed_env.get("CLI_ONLY")
+    if was is None:
+        # An .env written before this key existed. Silent, because every
+        # install that predates the flag is a full stack, which is also
+        # what the default already resolves to.
+        pass
+    elif args.cli_only is None:
+        args.cli_only = was.strip() == "1"
+        if args.cli_only:
+            say("==> Keeping this a CLI-only deployment, which is how it was installed. "
+                "--no-cli-only converts it.")
+    elif args.cli_only != (was.strip() == "1"):
+        moving = "to the full stack, publishing the Web UI" if not args.cli_only else "to CLI-only, with no Web UI"
+        say(f"==> This run moves the deployment {moving}.")
+    args.cli_only = bool(args.cli_only)
+
+
 def _other_containers_from_ps_ndjson(raw: str, project: str):
     """Every entry in a `docker ps --format json` NDJSON stream that is
     NOT part of `project`, as (name, image) pairs.
@@ -3068,6 +3240,16 @@ def stage_payload(args) -> None:
     dest.write_bytes(incoming)
     (args.prefix / "compose.image.yaml").write_text(render_image_override(args), encoding="utf-8")
 
+    # Only on a CLI-only install, because only there is it the whole
+    # interface. A full install has a Web UI, and shipping a second way in
+    # that nothing tests and nothing documents is how the two drift.
+    if getattr(args, "cli_only", False):
+        bindir = args.prefix / "bin"
+        make_secure_dir(bindir)
+        wrapper = bindir / "rbm"
+        wrapper.write_text(render_cli_wrapper(args), encoding="utf-8")
+        os.chmod(wrapper, 0o755)
+
     env_path = args.prefix / ".env"
     env_path.write_text(render_env(args), encoding="utf-8")
     os.chmod(env_path, 0o600)
@@ -3368,7 +3550,11 @@ def cmd_install(args) -> int:
     # over a key that had already been generated. detect_existing reads
     # this file again below for the layout check; it is a handful of lines
     # and reading it twice is cheaper than threading it through.
-    adopt_installed_credentials(args, read_env_file(args.prefix / ".env"))
+    already_here = read_env_file(args.prefix / ".env")
+    adopt_installed_credentials(args, already_here)
+    # Beside it, and before Preflight rather than after, because Preflight
+    # checks the host port and a CLI-only deployment has none to check.
+    adopt_installed_shape(args, already_here)
 
     # Before Preflight, because Preflight VALIDATES these and this CREATES
     # them. A fresh host has neither, and validating first would refuse
@@ -3438,6 +3624,9 @@ def cmd_install(args) -> int:
     if args.image_archive is not None:
         say(f"==> Loading {args.image_archive}")
         run(["docker", "load", "-i", str(args.image_archive)], timeout=1800)
+
+    if args.cli_only:
+        return finish_cli_only_install(args)
 
     say("==> docker compose up -d")
     # --no-build, not merely pull_policy: never. The canonical definition
@@ -3516,6 +3705,155 @@ def cmd_install(args) -> int:
     say(f"    Compose: {' '.join(compose_argv(args))}")
     for line in first_run_epilog(args):
         say(line)
+    return EXIT_OK
+
+
+def compose_service_state(args, service: str) -> str:
+    """One compose service's state, lowercased, or what is true instead.
+
+    Reads through detect_existing rather than parsing `ps` again: that
+    function already answers on every `--format json` shape Compose has
+    emitted across versions, and a second reader would sooner or later
+    answer on fewer of them.
+    """
+    _, containers, _ = detect_existing(args)
+    for entry in containers:
+        if str(entry.get("Service", "")) == service:
+            return str(entry.get("State", "") or "unknown").lower()
+    return "not created"
+
+
+def wait_for_daemon_settled(args, timeout: int) -> str:
+    """A CLI-only engine serves nothing, so "still running" is the claim.
+
+    Sampled over a window rather than once, and that is the whole reason
+    this exists instead of a single `ps`. The failure it has to catch is a
+    daemon that starts, refuses whatever it was handed, and exits; for the
+    first second of that, `ps` says running, restart policy brings it
+    straight back, and a single sample would report a healthy install that
+    is really a restart loop. Staying running for the settle window is
+    what separates the two.
+    """
+    settle = max(5, min(15, timeout // 6))
+    deadline = time.time() + timeout
+    running_since = None
+    state = "not created"
+    while time.time() < deadline:
+        state = compose_service_state(args, ENGINE_SERVICE)
+        if state != "running":
+            running_since = None
+        elif running_since is None:
+            running_since = time.time()
+        elif time.time() - running_since >= settle:
+            return state
+        time.sleep(2)
+    # Never the last sample. A flapping container is running for part of
+    # every restart cycle, so whether the final sample lands on "running"
+    # is down to where the deadline happens to fall, and returning it
+    # would report a crash loop as an install roughly half the time. What
+    # did not happen is the whole answer here.
+    return f"never stayed up for {settle}s (last seen: {state})"
+
+
+def take_down_web_ui(args) -> None:
+    """Stop and remove a web-ui left over from when this was a full install.
+
+    `--remove-orphans` does not reach it and should not: web-ui is still a
+    service the canonical file defines, so it is not an orphan, it is
+    simply not something this deployment runs any more. Left alone it goes
+    on serving the LAN on the port the run that just finished promised to
+    publish nothing on, which is the one thing --cli-only is for.
+    """
+    _, containers, _ = detect_existing(args)
+    if not [c for c in containers if str(c.get("Service", "")) == "web-ui"]:
+        return
+    say("==> --cli-only: taking down the web-ui container this deployment used to run")
+    rm = run(compose_argv(args) + ["rm", "--stop", "--force", "web-ui"],
+             check=False, timeout=300, cwd=str(args.prefix))
+    if rm.returncode != 0:
+        raise Refusal(
+            EXIT_RUNTIME,
+            "the web-ui container is still here and could not be taken down:\n"
+            + (rm.stderr or rm.stdout).strip(),
+            "Finishing anyway would leave a Web UI serving the LAN on exactly the port this "
+            "install just said it publishes none of, so it stops here instead. Nothing else "
+            "has been changed.",
+        )
+
+
+def finish_cli_only_install(args) -> int:
+    """Bring a CLI-only deployment up, or deliberately not, and say which.
+
+    The not-bringing-up half is the part worth reading. A full install has
+    a first-run wizard, so it can come up with no configuration at all and
+    hand the operator a link. `rbm daemon` has no such thing: it is
+    refused rather than started when there is no config.yaml, so starting
+    it on a fresh host would produce a container that exits, gets
+    restarted, exits again, and an installer that either claims success
+    over a restart loop or waits out its timeout for a state that can
+    never arrive.
+
+    So a fresh CLI-only install stages everything and starts nothing, and
+    that is a normal success rather than a refusal: everything the
+    operator asked for is on disk and correct, and the one thing missing
+    is a decision only they can make. What it prints is the command that
+    writes the first configuration, because `backup-set create` on an
+    instance with no config.yaml writes the first one with it (#176), so
+    there is no config file to hand-author before anything works.
+    """
+    take_down_web_ui(args)
+
+    wrapper = args.prefix / "bin" / "rbm"
+    compose = " ".join(compose_argv(args))
+
+    if not (args.config_dir / "config.yaml").is_file():
+        say("")
+        say("==> Installed. Nothing is running yet, and that is what --cli-only means here:")
+        say("    `rbm daemon` is refused rather than started without a config.yaml, and a CLI-only")
+        say("    install has no first-run wizard to write one. Creating the first backup set writes")
+        say("    the first config.yaml with it:")
+        say(f"      {wrapper} backup-set create <source>/<backup-set> \\")
+        say("          --host HOST --user USER --remote-path /remote/path --local-path /backups/path \\")
+        say("          --ssh-key-file /etc/rclone-manager/id_ed25519 --trust-host-key \\")
+        say("          --completion-strategy stable")
+        say("")
+        say("    Then start the scheduler:")
+        say(f"      {compose} up -d --no-build {ENGINE_SERVICE}")
+        say("")
+        say(f"    CLI:     {wrapper}")
+        say(f"    Compose: {compose}")
+        return EXIT_OK
+
+    say(f"==> docker compose up -d {ENGINE_SERVICE}")
+    up = run(compose_argv(args) + ["up", "-d", "--no-build", ENGINE_SERVICE],
+             check=False, timeout=1800, cwd=str(args.prefix))
+    if up.returncode != 0:
+        raise Refusal(
+            EXIT_RUNTIME,
+            "docker compose up failed:\n"
+            f"--- stdout ---\n{up.stdout.rstrip()}\n--- stderr ---\n{up.stderr.rstrip()}",
+            "The stack is left as it is rather than torn down, so the container and its logs are "
+            "still there to read.",
+        )
+    say(up.stdout.rstrip() or up.stderr.rstrip())
+
+    say(f"==> Waiting up to {args.timeout}s for the daemon to stay up")
+    state = wait_for_daemon_settled(args, args.timeout)
+    say(f"     {ENGINE_SERVICE}: {state}")
+    if state != "running":
+        raise Refusal(
+            EXIT_VERIFY,
+            f"the daemon did not stay running: {ENGINE_SERVICE} is {state}.",
+            "A CLI-only deployment serves nothing, so there is no health endpoint to ask and the "
+            "container's own logs are the whole answer. Read them with:\n"
+            f"  {compose} logs --tail=100 {ENGINE_SERVICE}",
+        )
+
+    say("")
+    say("==> Installed.")
+    say(f"    CLI:     {wrapper}")
+    say(f"    Compose: {compose}")
+    say("    No Web UI, no published port, and nothing in this deployment serving HTTP.")
     return EXIT_OK
 
 
@@ -4890,8 +5228,25 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
     runtime.add_argument("--listen-port", type=int, default=DEFAULT_LISTEN_PORT,
                          help="Host port the Web UI is published on. The engine publishes nothing.")
     runtime.add_argument("--public-base-url", default=None,
-                         help="Externally reachable base URL, used for the one-time enrollment link. Defaults "
-                              "to http://<this host's name>:<listen port>.")
+                         help="Externally reachable base URL, used for the one-time enrollment link. "
+                              "Defaults to http://<this machine's LAN address>:<listen port>, because "
+                              "that link is opened from another machine and an address is the only form "
+                              "that works there with nothing configured. Falls back to this host's name "
+                              "when there is no default route to read an address off.")
+    runtime.add_argument("--cli-only", action="store_true", default=None, dest="cli_only",
+                         help="Install the command line and nothing else. The engine container runs "
+                              "`rbm daemon` instead of `rbm-web serve`, the web-ui container is never "
+                              "started, and no port is published on this host at all, so nothing in the "
+                              "deployment serves HTTP and the rbm-web binary is not executed. What drives "
+                              "it is the rbm wrapper this writes to <prefix>/bin/rbm. There is no "
+                              "enrollment link and no first-run wizard, so on a host with no config.yaml "
+                              "yet this stages everything, starts nothing, and prints the one command "
+                              "that writes the first configuration. Re-running without this flag on a "
+                              "deployment already installed this way keeps it that way; --no-cli-only "
+                              "converts it back to the full stack.")
+    runtime.add_argument("--no-cli-only", action="store_false", default=None, dest="cli_only",
+                         help="Convert a CLI-only deployment back to the full stack: the engine goes back "
+                              "to `rbm-web serve` and the Web UI is published on --listen-port again.")
     runtime.add_argument("--profile", default="generic",
                          help="Runtime profile, from container/compose.yaml's x-canonical-runtime.profiles.")
     runtime.add_argument("--timezone", default=None,
@@ -5311,7 +5666,12 @@ def resolve(args):
         tzfile = Path("/etc/timezone")
         args.timezone = tzfile.read_text().strip() if tzfile.is_file() else "UTC"
     if hasattr(args, "public_base_url") and args.public_base_url is None:
-        args.public_base_url = f"http://{socket.gethostname()}:{args.listen_port}"
+        # An IP first, because the enrolment link is opened from another
+        # machine and only an IP works there with nothing configured. The
+        # hostname is the fallback rather than the default: it resolves on
+        # this box and, without mDNS or a DNS entry, nowhere else.
+        host = primary_lan_address() or socket.gethostname()
+        args.public_base_url = f"http://{host}:{args.listen_port}"
     if hasattr(args, "image"):
         # _RecordsThatItWasSupplied only fires when the flag is on the
         # command line, so the attribute is simply absent otherwise.
