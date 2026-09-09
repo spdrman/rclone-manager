@@ -8,8 +8,15 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
-// The wizard's three SSH steps: import a key, probe a host key, test a
+// The wizard's SSH steps: import a key, probe a host key, test a
 // connection.
+//
+// Importing is two routes rather than one, because there are two ways to
+// end up holding a key reference and they are different acts. POST
+// /ssh-keys takes pasted material this host has never seen. POST
+// /ssh-keys/from-candidate takes an opaque handle for a key this host
+// already found, and no material crosses the network at all. They answer
+// with the same response, so a client keeps one result type.
 //
 // What they have in common is that none of them ever puts key material
 // back on the wire. An import answers with a reference; the server-side
@@ -24,9 +31,10 @@ import (
 // token even though nothing is persisted. They used to be listed as
 // CSRF-exempt, and that was the gap.
 //
-// The body limits differ per route on purpose: a private key is the only
-// thing here that legitimately runs to kilobytes, so the probe routes get
-// much tighter ceilings rather than inheriting one generous number.
+// The body limits differ per route on purpose: a pasted private key is
+// the only thing here that legitimately runs to kilobytes, so the probes
+// and the candidate selection get much tighter ceilings rather than
+// inheriting one generous number.
 
 // maxImportSSHKeyBodyBytes bounds POST /api/v1/ssh-keys' request body.
 // The largest private key this project has any real reason to see (an
@@ -34,6 +42,14 @@ import (
 // keysource.go's identical maxResolvedKeySize reasoning); this is wide
 // margin over that, not a realistic key-size ceiling.
 const maxImportSSHKeyBodyBytes = 1 << 16 // 64 KiB
+
+// maxImportSSHKeyFromCandidateBodyBytes bounds POST
+// /api/v1/ssh-keys/from-candidate's request body, and it is three orders
+// of magnitude tighter than its sibling above on purpose. That body
+// carries a private key; this one carries one opaque handle, so it gets
+// the probe routes' ceiling rather than inheriting the key-sized one. A
+// request that arrives here holding kilobytes is not a key selection.
+const maxImportSSHKeyFromCandidateBodyBytes = 1 << 12 // 4 KiB
 
 // maxHostKeyProbeBodyBytes and maxTestConnectionBodyBytes bound their own
 // requests generously: both bodies are a handful of short fields, never
@@ -56,6 +72,39 @@ const (
 type importSSHKeyRequest struct {
 	PrivateKeyPEM string `json:"private_key_pem"`
 	Passphrase    string `json:"passphrase"`
+}
+
+// importSSHKeyFromCandidateRequest is POST /api/v1/ssh-keys/from-candidate's
+// body: the wizard's "use the key that is already here" choice (#592).
+//
+// It is a SEPARATE operation from the paste above rather than a second
+// mode of it, and there are two reasons, one about clients and one about
+// the acts themselves.
+//
+// The client reason is the hard one. A single body with two optional
+// halves has to stop requiring private_key_pem, and this contract's
+// compatibility pin (core/tests/compat, FR-35 clause 3) may only grow:
+// "private_key_pem is required" is a promise POST /ssh-keys already made,
+// and withdrawing it is indistinguishable, to the gate and to anybody
+// reading a diff months later, from a server that quietly began refusing
+// something differently. Two operations means nothing is withdrawn.
+//
+// The honest-shape reason is that pasting material this host has never
+// seen and selecting a key this host already found are different acts
+// with different trust stories. The paste carries the private half across
+// the network; this one carries an opaque handle and no material at all,
+// and the key never leaves the machine that already holds it.
+//
+// The handle is never a path. It resolves only by matching against a
+// fresh scan of the fixed locations core decides, so a path, a traversal
+// and an id for a file outside those locations all fail the same way:
+// they are not in the scan. The private half is then read once,
+// server-side, through exactly the rclone.ValidateImportedPrivateKey a
+// paste goes through, so a candidate cannot be imported through a check a
+// paste would have failed, and the original file is left where it is,
+// which is the promise `--ssh-key-file` already makes.
+type importSSHKeyFromCandidateRequest struct {
+	CandidateID string `json:"candidate_id"`
 }
 
 // importSSHKeyResponse never carries KeyFile (the server-side path
@@ -95,7 +144,63 @@ func (h *handlers) importSSHKey(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to import SSH key")
+		h.internalError(w, r, "INTERNAL", "failed to import SSH key", err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, importSSHKeyResponse{
+		ID:          ref.ID,
+		Algorithm:   ref.Algorithm,
+		Fingerprint: ref.Fingerprint,
+	})
+}
+
+// importSSHKeyFromCandidate is POST /api/v1/ssh-keys/from-candidate: the
+// other way to end up holding a key reference (#592).
+//
+// Same tier as importSSHKey above and the same protections: CSRF because
+// it writes, no destructive gate because importing a key destroys
+// nothing. It answers with the SAME importSSHKeyResponse, so a client
+// keeps one result type no matter which of the two it called, and a
+// wizard that lets an operator switch between "paste" and "use this one"
+// has one success path rather than two.
+//
+// There is deliberately no passphrase here. A passphrase belongs to
+// material the caller is holding, a candidate's material is read on this
+// machine, and #269 already refuses a passphrase-protected key that
+// arrives without one. A field with nothing to apply it to would read
+// like a way to select an encrypted candidate, which it is not.
+func (h *handlers) importSSHKeyFromCandidate(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportSSHKeyFromCandidateBodyBytes)
+
+	var body importSSHKeyFromCandidateRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDecodeError(w, err, maxImportSSHKeyFromCandidateBodyBytes)
+		return
+	}
+	if body.CandidateID == "" {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "candidate_id is required")
+		return
+	}
+
+	ref, err := h.setup().ImportSSHKeyCandidate(r.Context(), body.CandidateID)
+	if err != nil {
+		if errors.Is(err, service.ErrSSHKeyCandidateNotFound) {
+			// The listing the caller acted on is not the machine's
+			// current state, which is an ordinary thing for a wizard pane
+			// left open to run into, not a failure of this deployment.
+			writeError(w, http.StatusBadRequest, "SSH_KEY_CANDIDATE_NOT_FOUND",
+				"no such key candidate; scan again and select from the current listing")
+			return
+		}
+		if errors.Is(err, service.ErrInvalidRequest) {
+			// Safe to echo, for the reason importSSHKey's own branch
+			// gives: the sentence describes the shape of the problem and
+			// never the key bytes.
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			return
+		}
+		h.internalError(w, r, "INTERNAL", "failed to import SSH key", err)
 		return
 	}
 
@@ -201,6 +306,34 @@ func (b testConnectionRequest) namesACandidate() bool {
 type testConnectionResponse struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message,omitempty"`
+
+	// Checks is what the test actually did (issues #592 and #596): one
+	// entry per step, always all of them, in the order they run.
+	// Additive: `ok` and `message` mean exactly what they meant, so a
+	// client reading only those keeps working.
+	//
+	// Populated in BOTH modes. There is one breakdown on this endpoint
+	// and not one per mode, so a caller never has to remember which
+	// request it sent to know which array it is reading.
+	Checks []connectionCheckResponse `json:"checks,omitempty"`
+}
+
+// connectionCheckResponse is one step of a connection test on the wire.
+// The fields are core/internal/sourcecheck's Check, flattened to
+// strings: `outcome` is passed/failed/skipped, `category` is the
+// machine-readable half a client branches on, and `detail` is a sentence
+// the engine composed, never an underlying transport error's text.
+type connectionCheckResponse struct {
+	Step     string `json:"step"`
+	Outcome  string `json:"outcome"`
+	Category string `json:"category,omitempty"`
+	Detail   string `json:"detail"`
+
+	// DurationMS is omitted rather than sent as 0 on the steps that are
+	// not measured on their own, which is what `omitempty` buys here:
+	// authenticate and list come out of one call, and a "0 ms" beside a
+	// green step reads as "instantly" when it means "never measured".
+	DurationMS int `json:"duration_ms,omitempty"`
 }
 
 // testConnection is POST /api/v1/backup-sets/test-connection: issue
@@ -270,9 +403,20 @@ func (h *handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "SSH_KEY_NOT_FOUND", "the referenced ssh_key_id does not exist; import a key first")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to test connection")
+		h.internalError(w, r, "INTERNAL", "failed to test connection", err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, testConnectionResponse{OK: result.OK, Message: result.Message})
+	// The steps travel exactly as the service reported them, including
+	// the skipped ones. Dropping a skipped step, or filtering to the
+	// interesting ones, is how a client ends up drawing five steps and
+	// letting a reader assume the sixth passed.
+	out := testConnectionResponse{OK: result.OK, Message: result.Message}
+	for _, c := range result.Checks {
+		out.Checks = append(out.Checks, connectionCheckResponse{
+			Step: c.Step, Outcome: c.Outcome, Category: c.Category, Detail: c.Detail,
+			DurationMS: c.DurationMs,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }

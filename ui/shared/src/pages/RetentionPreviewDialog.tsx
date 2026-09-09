@@ -25,9 +25,11 @@ import {
 import { useCausl } from "@shared/state/graph";
 import { useResource } from "@shared/state/resource";
 import type { RetentionPlan, RetentionVerdict } from "@shared/types/backup";
+import { Banner } from "@shared/components/Banner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { RetentionTierBadges } from "@shared/components/RetentionBadge";
+import { Icon } from "@shared/design-system/icons";
 import { bytes } from "@shared/utilities/format";
 
 function describeApplyError(e: unknown): ApiError {
@@ -286,13 +288,24 @@ export function RetentionPreviewDialog({
                     </div>
                     <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
                       {refuseVerdicts.map((v) => (
-                        <li key={v.artifact} className="banner banner--info" style={{ padding: "8px 10px", fontSize: "var(--text-sm)" }}>
+                        // Not dismissible (#620). These rows are the
+                        // plan's own evidence in a dialog the operator is
+                        // about to confirm, not a notice about it, so a
+                        // close control would offer to hide a refusal from
+                        // the list it is being read off.
+                        <Banner
+                          key={v.artifact}
+                          as="li"
+                          tone="info"
+                          dismissible={false}
+                          style={{ padding: "8px 10px", fontSize: "var(--text-sm)" }}
+                        >
                           <span aria-hidden="true" style={{ color: "var(--text-3)" }}>i</span>
                           <span>
                             <span className="mono">{v.artifact}</span>
                             <span style={{ color: "var(--text-2)" }}>{" — " + v.reason}</span>
                           </span>
-                        </li>
+                        </Banner>
                       ))}
                     </ul>
                   </div>
@@ -345,10 +358,12 @@ export function RetentionPreviewDialog({
             {bytes(p.reclaimBytes) + " will be reclaimed. This applies exactly plan " + p.planId + " — it will not be recalculated."}
           </p>
           {lastKnownGood ? (
-            <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
-              <span aria-hidden="true" style={{ color: "var(--ok)" }}>✓</span>
+            <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
+              <span aria-hidden="true" style={{ color: "var(--ok)", lineHeight: 1.5 }}>
+                <Icon name="success" />
+              </span>
               <span>The newest known-good backup is protected.</span>
-            </div>
+            </Banner>
           ) : null}
         </ConfirmationDialog>
       ) : null}

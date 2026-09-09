@@ -51,10 +51,12 @@ func TestEventNamesAreStable(t *testing.T) {
 		{"EventRemoteDelete", EventRemoteDelete, "remote_delete"},
 		{"EventReconciliation", EventReconciliation, "reconciliation"},
 		{"EventRetention", EventRetention, "retention"},
+		{"EventRetentionHold", EventRetentionHold, "retention_hold"},
 		{"EventRetry", EventRetry, "retry"},
 		{"EventStaleBackup", EventStaleBackup, "stale_backup"},
 		{"EventDiskPressure", EventDiskPressure, "disk_pressure"},
 		{"EventAlert", EventAlert, "alert"},
+		{"EventAPIAction", EventAPIAction, "api_action"},
 		{"EventError", EventError, "error"},
 	}
 	seen := make(map[string]string, len(cases))
@@ -173,7 +175,7 @@ func TestDiscoveryEvent(t *testing.T) {
 
 func TestLifecycleTransitionEvent(t *testing.T) {
 	l, buf := newRecorder(t)
-	l.LifecycleTransition(context.Background(), "prod/postgres/backup.dump", "VERIFIED", "COMMITTING", "")
+	l.LifecycleTransition(context.Background(), "prod/postgres/backup.dump", "VERIFIED", "COMMITTING", "", false)
 
 	lines := decodeLines(t, buf)
 	got := lines[0]
@@ -188,7 +190,7 @@ func TestLifecycleTransitionEvent(t *testing.T) {
 	}
 
 	buf.Reset()
-	l.LifecycleTransition(context.Background(), "prod/postgres/backup.dump", "VERIFYING", "FAILED", "hash mismatch")
+	l.LifecycleTransition(context.Background(), "prod/postgres/backup.dump", "VERIFYING", "FAILED", "hash mismatch", true)
 	lines = decodeLines(t, buf)
 	if lines[0]["detail"] != "hash mismatch" {
 		t.Errorf("detail = %v, want %q", lines[0]["detail"], "hash mismatch")

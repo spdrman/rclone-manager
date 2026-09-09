@@ -1,6 +1,7 @@
 package webhost
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -81,10 +82,20 @@ func (h *handlers) preflightStorageMedium(w http.ResponseWriter, r *http.Request
 				"this configuration declares no storage medium with that id")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to check the storage medium")
+		h.internalError(w, r, "INTERNAL", "failed to check the storage medium", err)
 		return
 	}
 
+	writeJSON(w, http.StatusOK, toMediumPreflightResponse(result))
+}
+
+// toMediumPreflightResponse projects one report onto the wire, in one
+// place, so the by-id preflight and the candidate preflight below cannot
+// render the same report two ways. Every check is carried, in the
+// engine's own order, including the skipped ones: a surface that dropped
+// them would be showing an operator a shorter list on a failure than on a
+// success, which is the one moment the full list matters most.
+func toMediumPreflightResponse(result service.MediumPreflight) mediumPreflightResponse {
 	body := mediumPreflightResponse{Medium: result.Medium, OK: result.OK, Checks: make([]mediumPreflightCheck, 0, len(result.Checks))}
 	for _, c := range result.Checks {
 		body.Checks = append(body.Checks, mediumPreflightCheck{
@@ -94,5 +105,450 @@ func (h *handlers) preflightStorageMedium(w http.ResponseWriter, r *http.Request
 			Detail:   c.Detail,
 		})
 	}
+	return body
+}
+
+// ------------------------------------------- declaring one (G2.2, #594) ---
+//
+// Everything below is the write half a storage destination did not have,
+// and the candidate probe that has to come before it.
+//
+// Two rules run through all of it.
+//
+// Credential MATERIAL crosses this boundary exactly once, at
+// importStorageCredentials, in one direction. Nothing here returns it,
+// echoes it, or derives anything displayable from it, and there is no
+// field on any response type below that one could travel in. That is the
+// same one-way door importSSHKey already is, and it is stricter in one
+// respect: an SSH import answers with an algorithm and a fingerprint,
+// because a public key's fingerprint is a safe thing to show a person,
+// and nothing derived from an S3 credential is (FR-33 treats the access
+// key id as secret alongside the secret access key).
+//
+// A destination that does not work is a 200 with ok false, and the error
+// path is for a request this deployment could not resolve into a
+// destination at all. That is preflightStorageMedium's rule above,
+// unchanged, applied to a candidate.
+
+// maxStorageMediumBodyBytes and maxImportStorageCredentialsBodyBytes bound
+// their own requests.
+//
+// Both are generous rather than tight, and neither is a realistic
+// ceiling: a medium is a handful of short strings, and a credential is
+// two. They are here because an unbounded body on an authenticated route
+// is an unbounded allocation, not because anything legitimate approaches
+// them.
+const (
+	maxStorageMediumBodyBytes            = 1 << 14 // 16 KiB
+	maxImportStorageCredentialsBodyBytes = 1 << 13 // 8 KiB
+)
+
+// importStorageCredentialsRequest is POST /api/v1/storage-credentials'
+// body: the wizard's step 2 "paste a key and let me store it", sent once
+// and discarded from the page the instant an id comes back.
+//
+// Every field is write-only. There is no response shape that carries any
+// of them and no operation anywhere in this contract that reads one back.
+type importStorageCredentialsRequest struct {
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+	SessionToken    string `json:"session_token"`
+}
+
+// importStorageCredentialsResponse is the reference, and nothing else.
+type importStorageCredentialsResponse struct {
+	ID string `json:"id"`
+}
+
+// storageMediumCredentialsReference is the credentials block on a medium
+// write or a candidate probe: a reference in four spellings, never
+// material.
+//
+// credentials_id is the spelling a browser uses, and it is the one that
+// makes verify-before-save possible at all: it is opaque, minted by this
+// deployment, and it names no path and no variable on this host, which is
+// the objection core/internal/app/mediumpreflight.go raised against a
+// candidate probe and the way that objection is answered.
+type storageMediumCredentialsReference struct {
+	CredentialsID string   `json:"credentials_id"`
+	File          string   `json:"file"`
+	Env           string   `json:"env"`
+	Command       []string `json:"command"`
+}
+
+// storageMediumRequest is one destination as a caller describes it, for
+// all three of create, replace and probe.
+//
+// One shape for the three deliberately: what is proven and what is saved
+// must be the same destination, and the interesting bug in this feature
+// is a medium that verifies green and then saves as something slightly
+// different.
+type storageMediumRequest struct {
+	ID                 string                            `json:"id"`
+	Type               string                            `json:"type"`
+	Region             string                            `json:"region"`
+	Endpoint           string                            `json:"endpoint"`
+	Bucket             string                            `json:"bucket"`
+	Prefix             string                            `json:"prefix"`
+	StorageClass       string                            `json:"storage_class"`
+	UploadVerification string                            `json:"upload_verification"`
+	Credentials        storageMediumCredentialsReference `json:"credentials"`
+
+	// SkipConnectionCheck writes this destination without proving it
+	// first (issue #636). The service runs the same eight-step check POST
+	// /api/v1/storage-mediums/preflight answers, in front of the write,
+	// and refuses with MEDIUM_CONNECTION_NOT_PROVEN when it fails; this is
+	// the deliberate opt-out, and a destination written under it is marked
+	// connection_unverified until a check passes.
+	//
+	// The mark is the service's own record of the skip, never a field a
+	// caller sets. That is the review finding PR #628 landed on the source
+	// side, applied here before it could happen twice: a body carrying the
+	// mark as a claim about what the caller had done is a claim any other
+	// client could simply omit.
+	//
+	// It is on the one shared shape, so it also arrives on the candidate
+	// probe, where it means nothing because the probe IS the check.
+	// Ignored there rather than refused: a field that is inert on one of
+	// three verbs is a smaller surprise than a 400 for a field a caller
+	// sent to every route it uses this shape for. Omitted or false checks,
+	// which is what every create should do.
+	SkipConnectionCheck bool `json:"skip_connection_check"`
+}
+
+// spec turns the wire shape into the service's, which is the only place
+// this package translates it.
+func (b storageMediumRequest) spec() service.StorageMediumSpec {
+	return service.StorageMediumSpec{
+		ID:                 b.ID,
+		Type:               b.Type,
+		Region:             b.Region,
+		Endpoint:           b.Endpoint,
+		Bucket:             b.Bucket,
+		Prefix:             b.Prefix,
+		StorageClass:       b.StorageClass,
+		UploadVerification: b.UploadVerification,
+		Credentials: service.StorageMediumCredentials{
+			ID:      b.Credentials.CredentialsID,
+			File:    b.Credentials.File,
+			Env:     b.Credentials.Env,
+			Command: b.Credentials.Command,
+		},
+		SkipConnectionCheck: b.SkipConnectionCheck,
+	}
+}
+
+// listStorageMediumsResponse wraps the list, matching every other list on
+// this API. A bare array has nowhere to grow a field.
+type listStorageMediumsResponse struct {
+	Mediums []storageMediumBody `json:"mediums"`
+}
+
+// storageMediumUsageResponse is FR-30's report: what is on a destination
+// right now, listed rather than only counted.
+type storageMediumUsageResponse struct {
+	Medium     string                            `json:"medium"`
+	Placements int                               `json:"placements"`
+	BackupSets []storageMediumUsageBySetResponse `json:"backup_sets"`
+}
+
+type storageMediumUsageBySetResponse struct {
+	Set          string `json:"set"`
+	Placements   int    `json:"placements"`
+	OnlyCopyHere int    `json:"only_copy_here"`
+}
+
+// importStorageCredentials is POST /api/v1/storage-credentials.
+//
+// CSRF, because it writes a file to this host. Not the destructive gate,
+// because nothing it can reach is backup data: it creates one new file at
+// a name it generated and touches nothing that already exists. That is
+// the same tier POST /ssh-keys sits in, for the same reason.
+func (h *handlers) importStorageCredentials(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportStorageCredentialsBodyBytes)
+
+	var body importStorageCredentialsRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDecodeError(w, err, maxImportStorageCredentialsBodyBytes)
+		return
+	}
+	if body.AccessKeyID == "" || body.SecretAccessKey == "" {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "access_key_id and secret_access_key are both required")
+		return
+	}
+
+	imported, importErr := h.backend.ImportStorageCredentials(r.Context(), body.AccessKeyID, body.SecretAccessKey, body.SessionToken)
+	if importErr != nil {
+		if errors.Is(importErr, service.ErrInvalidRequest) {
+			// Safe to echo: rclone.RenderImportedMediumCredentials'
+			// contract is that a refusal reports the SHAPE of the problem
+			// (empty, whitespace inside a value, not credentials text at
+			// all) and never quotes the bytes that failed. That is the
+			// same guarantee importSSHKey relies on above.
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", importErr.Error())
+			return
+		}
+		h.internalError(w, r, "INTERNAL", "failed to import storage credentials", importErr)
+		return
+	}
+	writeJSON(w, http.StatusCreated, importStorageCredentialsResponse{ID: imported.ID})
+}
+
+// listStorageMediums is GET /api/v1/storage-mediums.
+func (h *handlers) listStorageMediums(w http.ResponseWriter, r *http.Request) {
+	mediums, listErr := h.backend.ListStorageMediums(r.Context())
+	if listErr != nil {
+		h.internalError(w, r, "INTERNAL", "failed to read the storage destinations", listErr)
+		return
+	}
+	out := listStorageMediumsResponse{Mediums: make([]storageMediumBody, 0, len(mediums))}
+	for _, m := range mediums {
+		out.Mediums = append(out.Mediums, toStorageMediumBody(m))
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// getStorageMedium is GET /api/v1/storage-mediums/{id}.
+func (h *handlers) getStorageMedium(w http.ResponseWriter, r *http.Request) {
+	m, getErr := h.backend.GetStorageMedium(r.Context(), chi.URLParam(r, "id"))
+	if getErr != nil {
+		if errors.Is(getErr, service.ErrMediumNotFound) {
+			writeError(w, http.StatusNotFound, "MEDIUM_NOT_FOUND",
+				"this configuration declares no storage medium with that id")
+			return
+		}
+		h.internalError(w, r, "INTERNAL", "failed to read the storage destination", getErr)
+		return
+	}
+	writeJSON(w, http.StatusOK, toStorageMediumBody(m))
+}
+
+// getStorageMediumUsage is GET /api/v1/storage-mediums/{id}/usage: the
+// FR-30 report.
+//
+// It answers for an id the configuration no longer declares too, on
+// purpose. A removed medium is precisely the case where an operator needs
+// to know what was left on it, and a 404 would answer a different
+// question from the one being asked.
+func (h *handlers) getStorageMediumUsage(w http.ResponseWriter, r *http.Request) {
+	usage, usageErr := h.backend.StorageMediumUsage(r.Context(), chi.URLParam(r, "id"))
+	if usageErr != nil {
+		h.internalError(w, r, "INTERNAL", "failed to read what is on the storage destination", usageErr)
+		return
+	}
+	body := storageMediumUsageResponse{
+		Medium:     usage.Medium,
+		Placements: usage.Placements,
+		BackupSets: make([]storageMediumUsageBySetResponse, 0, len(usage.BackupSets)),
+	}
+	for _, s := range usage.BackupSets {
+		body.BackupSets = append(body.BackupSets, storageMediumUsageBySetResponse{
+			Set: s.Set, Placements: s.Placements, OnlyCopyHere: s.OnlyCopyHere,
+		})
+	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// preflightStorageMediumCandidate is POST
+// /api/v1/storage-mediums/preflight: prove a destination that has not
+// been saved.
+//
+// This is the route that did not exist and that made a setup wizard
+// impossible. It writes nothing whatever the report says, so it is
+// exactly as safe as the by-id preflight beside it and sits in the same
+// CSRF-but-not-destructive tier: the only object it can reach is the
+// probe it generated a random key for.
+//
+// It is registered as a STATIC path, before the "{id}" routes, so
+// "preflight" can never be read as a medium id.
+func (h *handlers) preflightStorageMediumCandidate(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxStorageMediumBodyBytes)
+
+	var body storageMediumRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDecodeError(w, err, maxStorageMediumBodyBytes)
+		return
+	}
+	result, checkErr := h.backend.PreflightStorageMediumCandidate(r.Context(), body.spec())
+	if checkErr != nil {
+		h.writeStorageMediumWriteError(w, r, checkErr, "failed to check the storage destination")
+		return
+	}
+	writeJSON(w, http.StatusOK, toMediumPreflightResponse(result))
+}
+
+// createStorageMedium is POST /api/v1/storage-mediums.
+//
+// CSRF, and not the destructive gate. Declaring a destination MOVES
+// NOTHING: artifacts arrive on a medium only once a retention tier names
+// it, which is a separate write with a disclosure of its own. Putting
+// this behind the destructive gate would train an operator to click
+// through the acknowledgment that actually matters.
+func (h *handlers) createStorageMedium(w http.ResponseWriter, r *http.Request) {
+	h.writeStorageMedium(w, r, false)
+}
+
+// updateStorageMedium is PUT /api/v1/storage-mediums/{id}.
+//
+// The path id wins over any id in the body, and a body naming a different
+// one is refused rather than resolved by precedence: a request that says
+// two things about which destination it is editing is ambiguous, and
+// silently preferring either is how a caller ends up shown a success for
+// a change to something else. That is testConnection's own rule for its
+// two modes.
+func (h *handlers) updateStorageMedium(w http.ResponseWriter, r *http.Request) {
+	h.writeStorageMedium(w, r, true)
+}
+
+func (h *handlers) writeStorageMedium(w http.ResponseWriter, r *http.Request, update bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxStorageMediumBodyBytes)
+
+	var body storageMediumRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDecodeError(w, err, maxStorageMediumBodyBytes)
+		return
+	}
+	if update {
+		id := chi.URLParam(r, "id")
+		if body.ID != "" && body.ID != id {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+				"the id in the path and the id in the body name different storage destinations")
+			return
+		}
+		body.ID = id
+	}
+
+	var (
+		medium   service.StorageMediumSummary
+		writeErr error
+		status   = http.StatusCreated
+	)
+	if update {
+		status = http.StatusOK
+		medium, writeErr = h.backend.UpdateStorageMedium(r.Context(), body.spec())
+	} else {
+		medium, writeErr = h.backend.CreateStorageMedium(r.Context(), body.spec())
+	}
+	if writeErr != nil {
+		h.writeStorageMediumWriteError(w, r, writeErr, "failed to save the storage destination")
+		return
+	}
+	writeJSON(w, status, toStorageMediumBody(medium))
+}
+
+// setDefaultStorageMedium is PUT
+// /api/v1/storage-mediums/{id}/default: make this the destination a
+// NEWLY CREATED retention tier starts on (H2.2, issue #622).
+//
+// CSRF, and deliberately not the destructive gate, and not the
+// storage-medium disclosure either. It moves no backup and rewrites no
+// tier: an existing tier goes on naming whatever it named, and the only
+// thing that changes is where the next tier somebody adds begins. The
+// disclosure stands in front of the settings save that actually sends a
+// tier's backups off this machine, and a second acknowledgment in front
+// of a write with no consequence would train an operator to click through
+// the one that matters. That is createStorageMedium's own argument, and
+// this write is even quieter than a create.
+//
+// The local hard drive is a legal target, named by its reserved id. It is
+// what a deployment that has never chosen anything already has, so
+// "put it back" has to be expressible or the first move to S3 would be
+// one-way.
+//
+// It is registered AFTER the static routes and under the "{id}" prefix,
+// so nothing here can read "preflight" as a medium id.
+func (h *handlers) setDefaultStorageMedium(w http.ResponseWriter, r *http.Request) {
+	medium, err := h.backend.SetDefaultStorageMedium(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		h.writeStorageMediumWriteError(w, r, err, "failed to set the default storage destination")
+		return
+	}
+	writeJSON(w, http.StatusOK, toStorageMediumBody(medium))
+}
+
+// removeStorageMedium is DELETE /api/v1/storage-mediums/{id}: FR-30's
+// refusal, at the surface that could otherwise break the invariant with
+// one click.
+//
+// A medium that still holds copies answers 409 and changes nothing.
+// Removing the declaration would not delete those copies; it would leave
+// this deployment with no bucket, no endpoint and no credential to reach
+// them with, so they would read as unreachable and no prune could ever
+// run against them.
+func (h *handlers) removeStorageMedium(w http.ResponseWriter, r *http.Request) {
+	if removeErr := h.backend.RemoveStorageMedium(r.Context(), chi.URLParam(r, "id")); removeErr != nil {
+		h.writeStorageMediumWriteError(w, r, removeErr, "failed to remove the storage destination")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeStorageMediumWriteError maps this file's four named refusals onto
+// their status codes, once, so five handlers cannot disagree about which
+// refusal is which.
+//
+// ErrStorageMediumInUse is a 409 rather than a 400 because the request
+// was understood perfectly and is being declined on the state of the
+// deployment, which is what 409 means; a 400 would read as "you sent me
+// something malformed" and send an operator to check their JSON.
+//
+// ErrStorageMediumIsDefault (#622) is a 409 for the identical reason and
+// under a code of its own, because the two refusals call for opposite
+// next steps: MEDIUM_IN_USE means backups are there and the caller wants
+// the list of affected backup sets, and MEDIUM_IS_DEFAULT means nothing
+// is necessarily there and the caller wants to move one setting. A
+// surface that could not tell them apart would render an empty
+// "what is affected" list under a refusal that was never about that.
+func (h *handlers) writeStorageMediumWriteError(w http.ResponseWriter, r *http.Request, err error, fallback string) {
+	switch {
+	case service.AsStorageMediumIsDefault(err):
+		// This package's own sentence plus an id. Nothing about a path, a
+		// credential or an endpoint can reach it: see core/service's
+		// storageMediumIsDefaultRefusal.
+		writeError(w, http.StatusConflict, "MEDIUM_IS_DEFAULT", err.Error())
+	case service.AsStorageMediumInUse(err):
+		// The message is this package's own sentence plus a count and a
+		// list of backup set ids. No path, no credential and no endpoint
+		// error text can reach it: see core/service's
+		// storageMediumInUseRefusal.
+		writeError(w, http.StatusConflict, "MEDIUM_IN_USE", err.Error())
+	case errors.Is(err, service.ErrStorageMediumNotProven):
+		// 409 and its own code, beside the two refusals above rather than
+		// folded into either: this one is not about a decision the
+		// operator has to confirm, it is about the world not being the way
+		// the write assumes, and what it offers is "fix the destination and
+		// save again" or "declare it unproven" rather than "do it anyway".
+		// A client that read it as INVALID_REQUEST would tell an operator
+		// their form was wrong when their form was right and their bucket
+		// was not there (issue #636).
+		//
+		// Safe to echo: core/service builds this message from
+		// internal/mediumcheck's own sentences and the facts this product
+		// already publishes about a destination, never from a provider's
+		// error text and never from a credential (FR-33).
+		writeError(w, http.StatusConflict, "MEDIUM_CONNECTION_NOT_PROVEN", err.Error())
+	case errors.Is(err, service.ErrStorageMediumExists):
+		writeError(w, http.StatusConflict, "MEDIUM_EXISTS", err.Error())
+	case errors.Is(err, service.ErrMediumCredentialNotFound):
+		writeError(w, http.StatusNotFound, "STORAGE_CREDENTIAL_NOT_FOUND",
+			"the referenced credentials_id does not exist; import the credentials first")
+	case errors.Is(err, service.ErrMediumNotFound):
+		writeError(w, http.StatusNotFound, "MEDIUM_NOT_FOUND",
+			"this configuration declares no storage medium with that id")
+	case errors.Is(err, service.ErrInvalidRequest):
+		// Safe to echo, on core/service's own guarantee: a
+		// config.ValidationError's text is built from that package's field
+		// descriptions and the caller's own submitted values, never from a
+		// state or rclone error string, and there is no field on this
+		// boundary a credential could have arrived in.
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	default:
+		// The one arm here that is not a named refusal, so it is the one
+		// arm whose error nobody else records. Deliberately not
+		// err.Error() in the response, for the reason the INVALID_REQUEST
+		// arm above states in reverse: an unclassified error can carry a
+		// path, an endpoint or an rclone internal. It goes to the log
+		// under the id the response carries instead.
+		h.internalError(w, r, "INTERNAL", fallback, err)
+	}
 }

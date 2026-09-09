@@ -16,15 +16,30 @@ import (
 // proves. This file is the two decisions about who may ask and when, and both
 // are narrower than the equivalent for a backup set's source.
 //
-// It takes an id and never a candidate, which is the opposite of a source
-// test-connection. A source is proven before it is written down, because the
-// wizard's whole job is to check a host somebody just typed. A medium cannot
-// work that way: the only fields that would make a candidate meaningful are
-// the three credential references, and putting those on a request body turns
-// a path on this host, or the name of an environment variable, into something
-// an API caller sends. FR-33 settles it the other way, so a medium is declared
-// in the configuration file and nowhere else, and this reads the reference
-// back out of it.
+// There are two entry points, and until G2.2 (#594) there was one. The
+// paragraph that used to stand here said a medium is declared in the
+// configuration file and nowhere else, so this could only ever take an
+// id: the only fields that would make a candidate meaningful are the
+// three credential references, and putting those on a request body turns
+// a path on this host, or the name of an environment variable, into
+// something an API caller sends.
+//
+// That premise is what changed, and it changed on its own terms rather
+// than by being overruled. core/service now mints an opaque credential id
+// (ImportMediumCredentials), which is a FOURTH spelling of a reference:
+// it is generated here, it names nothing about this host, and it resolves
+// server-side to a 0600 file this manager wrote beside config.yaml. A
+// candidate carrying one is meaningful without a path or a variable name
+// ever reaching a request body, which is exactly what the old paragraph
+// said could not exist. So PreflightMediumCandidate below takes a
+// candidate, and the wizard can check a destination BEFORE it is written
+// down, which is the ordering FR-30 wants: a destination that fails
+// verification is one no artifact was ever pointed at.
+//
+// This package still takes no position on where the reference came from.
+// config.StorageMedium is the same struct either way, and the boundary
+// that accepts a candidate from outside (core/service) is where the rule
+// about which spellings an API caller may send is written and enforced.
 //
 // And nothing calls it on a schedule. It writes a probe object into somebody's
 // bucket and deletes it, which is entirely reasonable when a person asked and
@@ -129,3 +144,102 @@ func (s *Service) declaresMedium(id string) bool {
 // errors.Is spelled out three times is three chances to spell it
 // differently.
 func AsMediumNotDeclared(err error) bool { return errors.Is(err, ErrMediumNotDeclared) }
+
+// MediumCandidate is a storage medium that is not (yet) declared in the
+// running configuration: a destination somebody has just described and
+// wants proven before it is written down.
+//
+// It is config.StorageMedium rather than a struct of its own, so a
+// candidate and a declared medium cannot be described differently and
+// then behave differently. The id is still required, because the report
+// names it and because a probe key is derived from the prefix, but it is
+// deliberately not checked for uniqueness here: whether the id is free is
+// a question about a configuration this function does not write.
+type MediumCandidate = config.StorageMedium
+
+// PreflightMediumCandidate proves a storage medium that IS NOT declared,
+// through the identical mediumcheck.Run every declared medium goes
+// through (G2.2, issue #594).
+//
+// It writes nothing, whatever the report says. That is the whole contract
+// and it is worth stating separately from "it does not persist the
+// candidate": it also does not adopt it, cache it, or leave it anywhere a
+// later call could find it. The only side effect this has is the one
+// PreflightMedium has, which is a probe object written into somebody's
+// bucket and deleted again.
+//
+// The credential reference inside candidate has already been resolved by
+// the caller into something this deployment is allowed to open. This
+// function does not, and must not, re-derive it: core/service is where an
+// opaque credentials id becomes a server-side path, and a second
+// resolution here would be a second answer to "which file", which is the
+// one question a credential reference cannot have two answers to.
+func (s *Service) PreflightMediumCandidate(ctx context.Context, candidate MediumCandidate) (mediumcheck.Report, error) {
+	if s.MediumStore == nil {
+		return mediumcheck.Report{}, fmt.Errorf("app: preflight: this instance has no way to reach a storage medium")
+	}
+	if candidate.ID == "" {
+		return mediumcheck.Report{}, fmt.Errorf("app: preflight: a candidate storage medium needs an id")
+	}
+	if candidate.ID == config.MediumLocal {
+		return mediumcheck.Report{}, fmt.Errorf(
+			"app: preflight: %q is the implicit local medium (a backup set's own local_path), not a destination that can be declared",
+			config.MediumLocal)
+	}
+
+	// MediumResolver over a one-element list, rather than a second
+	// translation from config.StorageMedium to transport.Medium written
+	// here. The mapping from a declared medium to a reachable one, and
+	// from upload_verification to a placement.Class, is FR-31's and it
+	// has exactly one home (mediums.go). A candidate resolved by a
+	// different route is a candidate that could be proven under rules the
+	// saved medium will not run under.
+	medium, class, err := MediumResolver([]config.StorageMedium{candidate}).Resolve(candidate.ID)
+	if err != nil {
+		return mediumcheck.Report{}, fmt.Errorf("app: preflight: %w", err)
+	}
+
+	deps := mediumcheck.Deps{
+		Store: s.MediumStore,
+		Observe: func(step mediumcheck.Step, err error) {
+			s.logger().Error(ctx, "medium-preflight", fmt.Errorf("candidate storage medium %q, %s check: %w", candidate.ID, step, err))
+		},
+	}
+	return mediumcheck.Run(ctx, deps, medium, class)
+}
+
+// PreflightLocalMedium proves the LOCAL hard drive works: the directory
+// this deployment's backups land in, checked the same way and reported in
+// the same shape as a storage medium (H2.2, issue #622).
+//
+// It is a separate entry point rather than a branch inside PreflightMedium
+// above, and the reason is the one declaresMedium already states: the
+// reserved local id is not a medium this boundary resolves. MediumResolver
+// refuses it in so many words, there is no config.StorageMedium behind it
+// and no transport.MediumStore that could reach it, so a branch inside
+// that function would be a function whose two halves share nothing but a
+// name. What they DO share is the Report, which is the part a surface
+// cares about.
+//
+// The thresholds come from this Service's own resolved Capacity rather
+// than from the raw config, so the free-space step weighs the same numbers
+// admitCapacity weighs before a real transfer. A check that used different
+// numbers from the guard would be a check that passes for a destination
+// the next transfer refuses.
+func (s *Service) PreflightLocalMedium(ctx context.Context) (mediumcheck.Report, error) {
+	if s.Config == nil {
+		return mediumcheck.Report{}, fmt.Errorf("app: preflight: this instance has no configuration to read a backup root out of")
+	}
+	return mediumcheck.RunLocal(ctx, func(step mediumcheck.Step, err error) {
+		// The one place the underlying cause is allowed to go, exactly as
+		// PreflightMedium's Observe is. An os error names a path on this
+		// machine, and the report is rendered in a browser and exported
+		// from a terminal; the operator's log is where their diagnostics
+		// already live.
+		s.logger().Error(ctx, "medium-preflight", fmt.Errorf("local storage destination, %s check: %w", step, err))
+	}, mediumcheck.LocalTarget{
+		Root:              s.Config.EffectiveBackupRoot(),
+		SafetyMarginBytes: s.Capacity.SafetyMarginBytes,
+		CriticalFreeBytes: s.Capacity.CriticalFreeBytes,
+	})
+}

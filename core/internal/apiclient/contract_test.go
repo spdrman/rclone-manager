@@ -159,6 +159,18 @@ func TestContract_EveryCallThisClientMakesIsAnOperationTheContractDeclares(t *te
 					args = append(args, reflect.ValueOf("a b/c"))
 				case in.Kind() == reflect.Struct:
 					args = append(args, reflect.Zero(in))
+				case in.Kind() == reflect.Int:
+					// A count, not a path parameter: ListActivity's limit
+					// and LiveActivity's are the ones so far. A positive
+					// value on purpose, because zero means "send no query
+					// at all" and would exercise the branch that builds
+					// the SIMPLER request of the two.
+					args = append(args, reflect.ValueOf(7))
+				case in.Kind() == reflect.Int64:
+					// A cursor. Positive for the same reason: zero is the
+					// "ask for whatever is held" branch, and the one worth
+					// exercising is the one that has to encode a value.
+					args = append(args, reflect.ValueOf(int64(7)))
 				default:
 					t.Fatalf("%s takes a %s, which this check does not know how to supply. Teach it, rather than letting the method go unchecked.", method.Name, in)
 				}

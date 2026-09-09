@@ -142,6 +142,37 @@ type UpdateBackupSetRequest struct {
 	// to a new path grant a re-trust they never looked at. Not a pointer,
 	// for the same reason AcknowledgeRepoint is not.
 	AcknowledgeHostKeyChange bool
+
+	// SkipConnectionCheck writes this edit without proving the connection
+	// first (issue #624). It is `backup-set patch --no-verify`, and it is
+	// spelled the same way `medium edit --no-verify` is, because it is the
+	// same decision about the other half of the same product.
+	//
+	// An edit that changes host, port, user, the key, the trusted line or
+	// the remote path is checked against the source before it is written
+	// and refused with ErrConnectionNotProven when the check fails; this
+	// is the way past that. A set written under it is marked
+	// ConnectionUnverified until a test passes, so the escape hatch does
+	// not leave a set indistinguishable from one that was proven.
+	//
+	// The check is run HERE, and on this path it could not be anywhere
+	// else, because a caller cannot assemble the candidate. A sparse edit
+	// names two or three fields, the rest come off the persisted set, and
+	// one of them is that set's trusted known_hosts line, which this API
+	// deliberately never publishes: a caller can be told which
+	// fingerprints a set pins and never the line itself. So the only place
+	// with everything the check needs is the process holding the
+	// configuration, which is also the process about to write it. The
+	// create path runs its check in the service too, since PR #628's
+	// review, for a different reason: a caller that checks for itself is a
+	// caller the service has to take at its word, and one that does not
+	// know about the check writes an unproven set with nothing to say so.
+	//
+	// Not a pointer, for the same reason the two acknowledgements are not:
+	// it is a yes/no about this one call rather than a sparse edit of a
+	// stored value, and false, the value a caller gets by not mentioning
+	// it, is the one that checks.
+	SkipConnectionCheck bool
 }
 
 // isEmpty reports whether this request names nothing at all. An update
@@ -258,12 +289,26 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 	// reload. A passphrase configured for the OLD key goes with it for the
 	// same reason it would not work: it is the passphrase for a key this
 	// set no longer uses.
+	//
+	// Unless the id names the key the set already uses. ImportSSHKey
+	// persists a key exactly as it was given, still passphrase-protected
+	// if it was, and nothing on this request can set a passphrase source,
+	// so the only way a set has one is that an operator configured it for
+	// this exact file. An edit form that sends every field it shows sends
+	// the ssh_key_id it was showing, and a version of this that replaced
+	// the Key regardless turned that into a set whose next cycle could not
+	// decrypt its own key (PR #628 review). The same file under either
+	// spelling is the same key, and the passphrase stays with it.
 	if req.SSHKeyID != nil {
 		keyFile, err := b.resolveSSHKeyFile(*req.SSHKeyID)
 		if err != nil {
 			return BackupSet{}, err
 		}
-		edited.Remote.Key = config.Key{File: keyFile}
+		var passphrase config.Passphrase
+		if keyFile == edited.Remote.Key.File || keyFile == edited.Remote.KeyFile {
+			passphrase = edited.Remote.Key.Passphrase
+		}
+		edited.Remote.Key = config.Key{File: keyFile, Passphrase: passphrase}
 		edited.Remote.KeyFile = ""
 	}
 
@@ -284,6 +329,43 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 		trust = staged
 	}
 
+	// Issue #624: an edit that changes what this set CONNECTS to is proven
+	// before it is written, and refused when it cannot be. That is the
+	// same shape `medium edit` has had since #443, arriving on the source
+	// side, and an edit is the case that most deserves it: a create that
+	// cannot connect has produced nothing, and an edit that cannot connect
+	// has broken a set that was working.
+	//
+	// The DECISION is made here and the check itself runs further down,
+	// after cfg.Validate. That split is deliberate. An edit that is not a
+	// configuration this deployment would load has to be refused as an
+	// invalid request rather than as an unprovable connection, because
+	// those are different sentences with different things for an operator
+	// to do, and a relative remote_path would otherwise come back as "the
+	// host could not be reached".
+	//
+	// The mark is settled here, before the bytes are encoded, and in the
+	// verifying branch it is settled OPTIMISTICALLY as cleared. That reads
+	// backwards and is not: nothing below writes anything unless the check
+	// passes, so the value encoded here is the value that is true if this
+	// edit lands at all.
+	proveConnection := false
+	if changesTheConnection(*target, edited, cfg.KeyEncryption) {
+		if req.SkipConnectionCheck {
+			// Marked rather than silently written, so tomorrow's operator
+			// can tell this edit apart from one that was checked. See
+			// backupsetverified.go for why the mark is a state and not a
+			// scar.
+			edited.ConnectionUnverified = true
+		} else {
+			proveConnection = true
+			// An operator who created a set offline and is now editing it
+			// against a host that answers has proven exactly what the
+			// mark was waiting for.
+			edited.ConnectionUnverified = false
+		}
+	}
+
 	*target = edited
 
 	// Encoded before cfg.Validate, which resolves Retention and Alerts in
@@ -300,6 +382,55 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 		// package's own field descriptions and the caller's own values,
 		// never from an internal/state or rclone error string.
 		return BackupSet{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+
+	// Issue #624's check, here rather than beside the decision above:
+	// cfg.Validate has just settled that this IS a configuration this
+	// deployment would load, so a failure from here on is genuinely about
+	// the far side and can say so.
+	//
+	// It runs against the edited set, so what is proven is the connection
+	// this write is about to make: the key already resolved above, and the
+	// trust anchor already staged, are the ones the check uses.
+	//
+	// It runs with configMu still held, which means a slow check delays
+	// other configuration writes for up to connectionTestTimeout. That is
+	// a trade made on purpose rather than an oversight. Dropping the lock
+	// to check and taking it again would prove a configuration that may
+	// not be the one that then gets written, unless the write re-read the
+	// set under the lock and refused if anything the check depended on had
+	// moved. That compare-and-swap is the right next shape for this path,
+	// and it is not in this change because it re-orders the trust staging
+	// and both acknowledgements around the check, which is most of what
+	// this method is careful about.
+	//
+	// What IS in this change is making the bound real, because it was not
+	// (PR #628 review). The ten seconds below went onto a context the SSH
+	// key exchange never saw: ssh.NewClientConn takes no context and reads
+	// no timeout, so against a host that accepted the connection and then
+	// sent nothing it blocked forever, holding this lock, and every other
+	// configuration writer in the process (UpdateSettings, CreateBackupSet,
+	// SetBackupSetEnabled, RemoveStorageMedium, clearConnectionUnverified)
+	// parked behind it until a restart. internal/sourcecheck now turns this
+	// context's deadline into a deadline on the socket itself, which is the
+	// one thing that interrupts that exchange, and
+	// TestUpdateBackupSet_ASilentHostCannotHoldTheConfigurationLock holds
+	// this call to coming back against exactly that host.
+	if proveConnection {
+		// The same ten seconds the button gets. A check that can hang
+		// indefinitely is an edit an operator cannot cancel, and here it
+		// would be an edit holding configMu while it hung; see above for
+		// how this deadline reaches the handshake.
+		testCtx, cancel := context.WithTimeout(ctx, connectionTestTimeout)
+		result := b.runConnectionTest(testCtx, id, &edited, connectionSourceFor(edited, cfg.KeyEncryption))
+		cancel()
+		if !result.OK {
+			// Safe to echo: Message is one of internal/sourcecheck's own
+			// sentences composed from the caller's own values, never an
+			// underlying transport error's text. See connectiontest.go's
+			// resultFromReport.
+			return BackupSet{}, fmt.Errorf("%w: %s", ErrConnectionNotProven, result.Message)
+		}
 	}
 
 	// Everything fallible about validator resolution happens before the

@@ -213,9 +213,22 @@ describe("storage pressure (\u00a756)", () => {
   // EXACTLY this one: a second one arriving fails here and has to be
   // argued for on its own terms rather than sliding in under a pattern
   // that had already been widened once.
-  it("has exactly one removal operation, and it removes configuration rather than backups", () => {
+  //
+  // removeStorageMedium (G2.2, #594) is the second one, and here is its
+  // argument. It removes a DESTINATION's declaration from config.yaml and
+  // nothing else. The copies on that destination stay exactly where they
+  // are: this product cannot delete an object off a medium except through
+  // a retention apply against a plan an operator has already seen, and
+  // this call reaches none of that. What removing the declaration would
+  // cost is the ability to CONFIRM those copies, which is why FR-30 makes
+  // the backend refuse it outright while any copy names the medium
+  // (MEDIUM_IN_USE), so the case where it could be dangerous is the case
+  // where it does not happen. That refusal is not enforced from here, and
+  // this assertion does not pretend to enforce it; what it enforces is
+  // that a THIRD removal-shaped call still has to come and argue.
+  it("has exactly two removal operations, and both remove configuration rather than backups", () => {
     const removals = Object.keys(httpApi).filter((name) => /delete|remove/i.test(name));
-    expect(removals).toEqual(["removeSet"]);
+    expect(removals.sort()).toEqual(["removeSet", "removeStorageMedium"]);
   });
 
   // applyRetention is the one call in the whole surface that removes

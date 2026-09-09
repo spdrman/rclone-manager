@@ -28,6 +28,14 @@ import type { BackupSet } from "@shared/types/backup";
  * banner, "Compare fingerprints" and "Keep set halted", had no onClick at
  * all: controls that looked like actions and were not, which is the same
  * defect one level along from the field this issue gave a producer.
+ *
+ * `dismissible={false}` below is that same rule reaching the close control
+ * #620 gave every other banner. It is the opt-out that issue asked for
+ * rather than an exemption from it: a set is halted for as long as the
+ * service says it is, and a banner an operator can clear off the screen is
+ * a banner the next person to look at the dashboard never sees. Putting it
+ * away would also be the closest thing this UI offers to acknowledging the
+ * halt, which is exactly the act §77 keeps out of band.
  */
 
 type HaltCopy = { eyebrow: string; title: string; body: string };
@@ -63,7 +71,13 @@ export function HaltBanner({ set, actions }: { set: BackupSet; actions?: ReactNo
   if (!set.haltReason) return null;
   const copy = HALT_COPY[set.haltReason](set.host);
   return (
-    <WarningBanner tone="danger" eyebrow={copy.eyebrow} title={copy.title} actions={actions}>
+    <WarningBanner
+      tone="danger"
+      eyebrow={copy.eyebrow}
+      title={copy.title}
+      actions={actions}
+      dismissible={false}
+    >
       {copy.body}
     </WarningBanner>
   );

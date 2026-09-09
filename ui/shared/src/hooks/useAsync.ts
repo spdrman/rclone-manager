@@ -16,7 +16,7 @@
  * wrapper by definition cannot show them.
  */
 import { useCallback, useEffect, useState } from "react";
-import { BackupManagerError } from "@shared/api/contracts";
+import { asApiError } from "@shared/api/failure";
 import type { ApiError } from "@shared/api/contracts";
 
 /** A fetch in one of its three states, plus the way to run it again.
@@ -31,7 +31,8 @@ export interface AsyncState<T> {
 }
 
 /** One place that turns a rejected promise into a typed, displayable error.
- *  No component ever touches a raw exception. */
+ *  No component ever touches a raw exception, and since #598 no component
+ *  loses one either: what the exception said travels with it. */
 export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -62,15 +63,17 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
       .then((value) => live && setData(value))
       .catch((e: unknown) => {
         if (!live) return;
-        setError(
-          e instanceof BackupManagerError
-            ? e.api
-            : {
-                code: "unknown",
-                message: "Backup Manager could not complete that request.",
-                correlationId: "unavailable"
-              }
-        );
+        // Issue #598. This used to bind `e`, never read it, and substitute
+        // one fixed sentence plus the literal correlation id
+        // "unavailable" for anything that was not a typed refusal, which
+        // is how an operator on a real NAS ended up with a red banner, an
+        // Advanced details panel, and not one fact about what had gone
+        // wrong. asApiError keeps the exception's own words and mints no
+        // id it cannot back up. The catch is still on the whole chain, so
+        // it also catches a mapper throwing on a response that DID
+        // arrive - that is a different failure, and asApiError now says
+        // so rather than calling it the same thing.
+        setError(asApiError(e));
       })
       .finally(() => live && setLoading(false));
     return () => {

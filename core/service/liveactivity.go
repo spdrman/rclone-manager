@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,6 +99,17 @@ const (
 // same way ListActivity's already is: an absent or nonsensical value gets
 // the default and an oversized one is clamped, because a client asking for
 // a feed should get a feed rather than a refusal over a number.
+//
+// It is clamped DOWN to the buffer size and deliberately not up to it.
+// Raising every limit to the buffer size would make Truncated impossible
+// to produce, which is one way to make paging safe: no page, no middle to
+// lose. It would also make a caller that asked for ten lines get two
+// hundred, turn a flag every client reads into a field that can never be
+// true, and leave the paging path in each of those clients untested and
+// therefore wrong the day the buffer grows. So the limit means what it
+// says, Truncated stays reachable, and the clients page: they hold their
+// cursor at whichever bucket said it had more, which is the property
+// tailOf's own doc argues for and the one this feed is honest about.
 const (
 	liveActivityDefaultLimit = 50
 	liveActivityMaxLimit     = liveActivityBufferSize
@@ -107,9 +119,27 @@ const (
 //
 // Most events name the set they happened in, or an artifact that does.
 // A few genuinely do not: a cycle starting covers every set, and a
-// capacity check is about a filesystem. Those are reported to every set's
-// strip, marked as deployment-wide, rather than dropped (which would hide
-// them) or pinned to one set (which would put them on the wrong screen).
+// capacity check is about a filesystem.
+//
+// Those used to be reported to EVERY set's strip, marked as
+// deployment-wide, because the alternatives on offer were dropping them
+// (which hides them) and pinning them to one set (which puts them on the
+// wrong screen), and both of those are worse. Issue #593 is what that
+// cost: with a bounded tail, the one shared ring crowded out each set's
+// own lines until every strip on a real deployment showed the same log,
+// and a strip that answers "what is the whole system doing" is not the
+// question the strip was put there to answer.
+//
+// The third option did not exist yet. It does now: issue #599's global
+// terminal is docked to the bottom of every page and carries the
+// deployment's own log, so a deployment-wide line has a screen it belongs
+// on. So the split is strict. A set's feed is that set's ring and nothing
+// else, and the deployment's ring is served in its own right (see
+// LiveActivity.Deployment). There is deliberately no allowlist of
+// deployment events that "still belong" on a strip: the permissive
+// version is exactly what made the strips useless, and a line an operator
+// needs beside a set is a line that should name that set when it is
+// emitted rather than be copied onto every strip by this package.
 const (
 	LiveActivityScopeSet        = "set"
 	LiveActivityScopeDeployment = "deployment"
@@ -187,6 +217,86 @@ type LiveActivityEvent struct {
 	Scope    string
 	Message  string
 	Fields   []LiveActivityField
+
+	// Result is how the operation this line reports WENT, one of the
+	// LiveActivityEventResult constants, empty when the line states none
+	// (issue #625).
+	//
+	// It is not a second spelling of Level and it is carried for the
+	// reason Level is: the emitter stated it. There is no "success"
+	// severity and there cannot be one, because a level is an ordering
+	// every reader treats as a threshold, so before this field existed a
+	// completion that went well arrived at info and was indistinguishable
+	// from a note. Every client that wanted to draw one as good news was
+	// re-deriving it from event names and lifecycle state values, and
+	// anything the derivation did not recognise silently stayed neutral.
+	//
+	// Absent is a real answer and not a default. A start has not gone any
+	// way yet, and an ordinary progress note reports no operation at all.
+	//
+	// It is called result and not outcome because connection_test already
+	// carries a field of its own called outcome (issue #596), and because
+	// LiveActivitySet.Outcome below is a different vocabulary in the same
+	// response: a client reading set.outcome and set.events[i].result for
+	// adjacent facts is told they are adjacent facts.
+	Result string
+
+	// Action and ActionID pair a start with its completion, structurally
+	// rather than by the habit of spelling one event cycle_start and the
+	// other cycle_end.
+	//
+	// Both are empty on every line that is neither half of a pair. A line
+	// carrying an ActionID and no Outcome is a start; one carrying both
+	// is that start's completion. That is what lets this feed report an
+	// action that announced itself and then went quiet, which is the
+	// state an operator most needs named and the one nothing could see.
+	Action   string
+	ActionID string
+}
+
+// LiveActivityEventResults lists every result an event on this feed can
+// state, in the order api/v1/openapi.json declares them.
+//
+// It is internal/obs's own vocabulary rather than a second spelling of
+// it, for the same reason LiveActivityOutcomes is internal/app's: this
+// package serves what the emitter said, and a copy of a closed vocabulary
+// is a copy that drifts.
+var LiveActivityEventResults = resultNames(obs.Results)
+
+// resultNames renders obs's typed vocabulary as the plain strings this
+// package's wire and its contract test compare.
+func resultNames(results []obs.Result) []string {
+	out := make([]string, 0, len(results))
+	for _, r := range results {
+		out = append(out, string(r))
+	}
+	return out
+}
+
+// LiveActivityAction is one action that started and has not reported an
+// outcome (issue #625).
+//
+// It is what makes "this announced itself and went quiet" a thing a
+// surface can say, rather than something an operator would have to notice
+// by reading every line and remembering which starts they had seen. An
+// action still legitimately running appears here too, and that is correct
+// rather than a false alarm: the honest sentence is "started four minutes
+// ago and has not reported an outcome", and whether four minutes is long
+// is a judgement the person reading it is far better placed to make than
+// this package is.
+type LiveActivityAction struct {
+	// Action is the action's stable name ("cycle", "connection_test"),
+	// and ActionID is what its two lines are paired by.
+	Action   string
+	ActionID string
+
+	// StartedAt is when the start line was emitted, which is the only
+	// thing anything can work out "and it has been quiet since" from.
+	StartedAt time.Time
+
+	// Sequence is the start line's own sequence, so a client can find the
+	// line this is about in the tail it already holds.
+	Sequence int64
 }
 
 // LiveActivitySet is one backup set's strip.
@@ -247,6 +357,17 @@ type LiveActivitySet struct {
 	// caller sent.
 	Events []LiveActivityEvent
 
+	// Unfinished is every action inside this set whose start is still
+	// held with no completion behind it, oldest first. See
+	// LiveActivityAction, and unfinishedIn for why it is derived from the
+	// tail rather than tracked in a structure of its own.
+	//
+	// It is NOT filtered by the cursor. A cursor asks "what is new", and
+	// an action that has been quiet for ten minutes is not new: it is
+	// exactly the thing a caller that has been polling all along would
+	// otherwise never be told about again.
+	Unfinished []LiveActivityAction
+
 	// Truncated says Limit cut this reading short and the rest is still
 	// held. Events above are the OLDEST held that are newer than the
 	// cursor, so a caller that wants the whole tail asks again from the
@@ -287,6 +408,52 @@ type LiveActivity struct {
 	PollAfter time.Duration
 
 	Sets []LiveActivitySet
+
+	// Deployment is the log that belongs to no single backup set, served
+	// in its own right rather than copied onto every strip (issue #593).
+	//
+	// Nil means this reading was not asked for it: a caller that narrowed
+	// to one backup set asked about that set, not about the deployment.
+	// A deployment with no configured sets still gets one, which is the
+	// case the old reading could not answer at all: it built its whole
+	// answer by walking the configured sets, so a fresh install answered
+	// with an empty list and the bucket behind it was unreachable, at
+	// exactly the moment a new operator is pressing buttons in a wizard
+	// and most needs to see something.
+	Deployment *LiveActivityDeployment
+}
+
+// LiveActivityDeployment is the deployment-wide tail: the events that
+// name no single backup set.
+//
+// It carries the same four honesty flags a set's strip does and for the
+// same reasons (see LiveActivitySet), and deliberately none of the
+// progress counters: there is no such thing as how far through its own
+// pass a deployment is.
+type LiveActivityDeployment struct {
+	// Events is the tail, oldest first, filtered by whatever cursor the
+	// caller sent.
+	Events []LiveActivityEvent
+
+	// Unfinished is every deployment-wide action whose start is still
+	// held with no completion behind it, oldest first. A cycle is the one
+	// this matters most for: it belongs to no single set, so this bucket
+	// is the only place a cycle that started and went quiet can be
+	// reported.
+	Unfinished []LiveActivityAction
+
+	// Truncated says Limit cut this reading short and the rest is still
+	// held.
+	Truncated bool
+
+	// Dropped says lines this caller's cursor had not reached yet fell
+	// out of the bounded buffer before this read did.
+	Dropped bool
+
+	// OldestSequence and LatestSequence are the bounds of what is still
+	// held, NOT of the slice above.
+	OldestSequence int64
+	LatestSequence int64
 }
 
 // LiveActivityRequest is what a caller asks for.
@@ -305,6 +472,16 @@ type LiveActivityRequest struct {
 	// Limit bounds how many events come back per set. See
 	// liveActivityDefaultLimit for why it is advisory.
 	Limit int
+
+	// DeploymentOnly narrows the read to the deployment-wide bucket and
+	// no set at all.
+	//
+	// It is the read a terminal following the deployment's own log wants,
+	// and the one half of the set/deployment distinction that a
+	// BackupSetID cannot express: naming no set already means "every
+	// set". Setting both is not an error, and the narrower answer wins:
+	// a caller that named a set asked about that set.
+	DeploymentOnly bool
 }
 
 // LiveActivity reports what every configured backup set is doing.
@@ -334,15 +511,31 @@ func (b *BackupService) LiveActivity(_ context.Context, req LiveActivityRequest)
 
 	st := b.state.Load()
 	var ids []string
-	for _, src := range st.inner.Config.Sources {
-		for _, bs := range src.BackupSets {
-			id := src.Name + "/" + bs.Name
-			if req.BackupSetID != "" && id != req.BackupSetID {
-				continue
+	// A named set is answered even when the deployment scope was asked
+	// for beside it, which is what LiveActivityRequest.DeploymentOnly's
+	// own doc promises: setting both is not an error, and the narrower
+	// answer wins. Reading the two flags independently was how a request
+	// carrying both came back with no sets AND no deployment bucket, and
+	// an empty reading is exactly the silence this feed exists to
+	// prevent: it reads as a quiet deployment rather than as a question
+	// nobody answered.
+	if req.BackupSetID != "" || !req.DeploymentOnly {
+		for _, src := range st.inner.Config.Sources {
+			for _, bs := range src.BackupSets {
+				id := src.Name + "/" + bs.Name
+				if req.BackupSetID != "" && id != req.BackupSetID {
+					continue
+				}
+				ids = append(ids, id)
 			}
-			ids = append(ids, id)
 		}
 	}
+
+	// Whether the deployment's own bucket is part of this reading. A
+	// caller that named a set asked about that set; everybody else gets
+	// it, including a deployment with nothing configured, which is the
+	// whole of the case the old reading could not answer.
+	wantDeployment := req.BackupSetID == ""
 
 	// Every set, under ONE lock acquisition. The client holds a single
 	// cursor and it is the highest sequence anywhere in the reading, so a
@@ -351,11 +544,13 @@ func (b *BackupService) LiveActivity(_ context.Context, req LiveActivityRequest)
 	// cursor lands on the latest of them and whatever arrived for an
 	// earlier bucket meanwhile is filtered out of the next poll and never
 	// returned to anybody. One reading is one moment.
+	sets, deployment := b.activity.read(ids, wantDeployment, req.Since, limit)
 	out := LiveActivity{
 		ObservedAt: now(),
 		Epoch:      b.activity.epochID(),
 		PollAfter:  liveActivityIdlePoll,
-		Sets:       b.activity.snapshotAll(ids, req.Since, limit),
+		Sets:       sets,
+		Deployment: deployment,
 	}
 	for _, set := range out.Sets {
 		// Truncated asks for the busy cadence for the same reason Active
@@ -365,6 +560,9 @@ func (b *BackupService) LiveActivity(_ context.Context, req LiveActivityRequest)
 		if set.Active || set.Truncated {
 			out.PollAfter = liveActivityBusyPoll
 		}
+	}
+	if out.Deployment != nil && out.Deployment.Truncated {
+		out.PollAfter = liveActivityBusyPoll
 	}
 	return out, nil
 }
@@ -384,6 +582,25 @@ type liveActivity struct {
 	// without the lock. See LiveActivity.Epoch for what a client does
 	// with it.
 	epoch string
+
+	// configures reports whether the RUNNING configuration names a
+	// backup set id, and it is what keeps the bucket map bounded: see
+	// setLocked for the hole it closes and why the recorder's own check
+	// is not enough on its own.
+	//
+	// It is a function rather than a list because the configuration is
+	// hot-reloadable, so the answer has to be asked at the moment the
+	// question comes up rather than copied at construction. It reads the
+	// service's own atomic snapshot and takes no lock of this package's,
+	// and it is written once, before this feed is reachable by anything,
+	// so it needs none of ours either.
+	//
+	// It is asked only when a bucket has to be MINTED, which is once per
+	// set for the life of the process, so walking the configuration for
+	// the answer costs the event stream nothing: RecordEvent's promise
+	// about what it does per event is the whole reason this feed exists
+	// in this shape.
+	configures func(id string) bool
 
 	mu  sync.Mutex
 	seq int64
@@ -418,12 +635,31 @@ type liveActivitySetState struct {
 	finishedAt         *time.Time
 }
 
-func newLiveActivity() *liveActivity {
+// newLiveActivity builds the feed.
+//
+// configures is not optional and there is deliberately no constructor
+// without it: a feed that cannot tell a configured set from an invented
+// one is the bug this parameter exists to prevent, and a nil predicate
+// names nothing rather than everything.
+func newLiveActivity(configures func(id string) bool) *liveActivity {
 	return &liveActivity{
 		epoch:      newLiveActivityEpoch(),
+		configures: configures,
 		deployment: newLiveActivityRing(liveActivityBufferSize),
 		sets:       make(map[string]*liveActivitySetState),
 	}
+}
+
+// configuredSet reports whether the running configuration names id.
+//
+// Nil-safe in both directions, and a feed with no predicate names no
+// sets: the fail-closed answer is the one that cannot be turned into a
+// way to make this process hold memory.
+func (l *liveActivity) configuredSet(id string) bool {
+	if l == nil || l.configures == nil || id == "" {
+		return false
+	}
+	return l.configures(id)
 }
 
 // newLiveActivityEpoch mints the name one process's feed goes by.
@@ -480,6 +716,14 @@ func (l *liveActivity) RecordEvent(r obs.Record) {
 		Event:    r.Event,
 		Scope:    scope,
 		Message:  r.Message,
+		// Carried through unchanged, exactly as the level is, and for the
+		// same reason: the emitter stated how the operation went and
+		// which action it opens or closes, and this package's whole
+		// discipline is to serve what it said rather than a verdict
+		// invented on the way to a screen.
+		Result:   string(r.Result),
+		Action:   r.Action,
+		ActionID: r.ActionID,
 		Fields:   make([]LiveActivityField, 0, len(r.Fields)),
 	}
 	for _, f := range r.Fields {
@@ -491,6 +735,18 @@ func (l *liveActivity) RecordEvent(r obs.Record) {
 		return
 	}
 	st := l.setLocked(setID)
+	if st == nil {
+		// This deployment does not have that set, so there is no strip
+		// for the line to land on: LiveActivity builds its list of
+		// strips from the configuration, and a bucket minted here would
+		// be one nothing can ever read (see setLocked). It goes to the
+		// deployment's bucket rather than being dropped, because that is
+		// what the deployment's bucket is for, and the global terminal
+		// showing somebody probing this API is the point.
+		e.Scope = LiveActivityScopeDeployment
+		l.deployment.add(e)
+		return
+	}
 	st.ring.add(e)
 	if isTerminalFailureTransition(r) {
 		st.failures++
@@ -512,14 +768,18 @@ func (l *liveActivity) ObserveProgress(p app.Progress) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	st := l.setLocked(p.BackupSetID)
+	if st == nil {
+		// Nothing this process is configured to back up, so there is no
+		// strip these numbers could be drawn on. See setLocked.
+		return
+	}
 	if l.current != p.BackupSetID {
 		l.finishCurrentLocked()
 		l.current = p.BackupSetID
-		st := l.setLocked(p.BackupSetID)
 		st.beginPass(now())
 	}
 
-	st := l.setLocked(p.BackupSetID)
 	st.stage = p.Stage
 	st.artifact = p.Artifact
 	st.artifactsCompleted = p.SetArtifactsCompleted
@@ -545,7 +805,9 @@ func (l *liveActivity) ObserveSetOutcome(backupSetID, outcome string) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.setLocked(backupSetID).outcome = outcome
+	if st := l.setLocked(backupSetID); st != nil {
+		st.outcome = outcome
+	}
 }
 
 // beginCycle and endCycle bracket one run of the engine.
@@ -593,14 +855,46 @@ func (l *liveActivity) finishCurrentLocked() {
 	l.current = ""
 }
 
-// setLocked returns the state for id, creating it on first sight. The
-// caller holds l.mu.
+// setLocked returns the state for id, creating it on first sight, or nil
+// when the running configuration does not name id. The caller holds l.mu.
+//
+// # Why it refuses
+//
+// A bucket is 200 slots, and this map used to mint one for whatever id
+// it was handed. The ids stopped being the engine's the moment the API
+// action log landed (issue #599): the middleware records every non-GET
+// request and builds the set id straight out of the chi route
+// parameters, so `PATCH /api/v1/backup-sets/ghost-src/ghost-set` minted
+// a bucket whatever the request answered. 404, or 403 with no CSRF token
+// presented at all, made no difference, because the line is recorded
+// after the handler and a refusal is exactly what an operator most needs
+// to see.
+//
+// None of those buckets was ever readable: LiveActivity builds its list
+// of strips from the configuration, so an invented id has no strip. And
+// nothing removed them. So it was retained garbage at request rate,
+// reachable by any authenticated session without a CSRF token: 50,000
+// such requests left 50,000 buckets and 22.2 MB.
+//
+// RecordAPIAction checks the id too, and that is not this check being
+// duplicated. That one keeps a line about a set that does not exist
+// honest (it is a deployment-scoped line, and it says so); this one is
+// what makes the map bounded no matter who is feeding it, so the next
+// recorder wired in beside that one inherits the guarantee instead of
+// having to remember it.
+//
+// A bucket already open is returned whatever the configuration now says,
+// which is what keeps a set's own strip readable across the moment it is
+// renamed or removed rather than blanking it mid-reading.
 func (l *liveActivity) setLocked(id string) *liveActivitySetState {
-	st, ok := l.sets[id]
-	if !ok {
-		st = &liveActivitySetState{ring: newLiveActivityRing(liveActivityBufferSize)}
-		l.sets[id] = st
+	if st, ok := l.sets[id]; ok {
+		return st
 	}
+	if !l.configuredSet(id) {
+		return nil
+	}
+	st := &liveActivitySetState{ring: newLiveActivityRing(liveActivityBufferSize)}
+	l.sets[id] = st
 	return st
 }
 
@@ -624,38 +918,48 @@ func (st *liveActivitySetState) beginPass(at time.Time) {
 	st.finishedAt = nil
 }
 
-// snapshot builds one set's strip: its counters, plus its own events and
-// the deployment-wide ones merged into a single ordered tail.
-//
-// Merging by sequence is what makes the tail readable. The sequence
-// counter is one counter across every bucket, so "cycle finished with an
-// error" lands after the transition that failed rather than wherever a
-// per-bucket counter happened to put it.
+// snapshot builds one set's strip: its counters and its own events, and
+// nothing that happened in another set or across the deployment.
 func (l *liveActivity) snapshot(id string, since int64, limit int) LiveActivitySet {
-	sets := l.snapshotAll([]string{id}, since, limit)
+	sets, _ := l.read([]string{id}, false, since, limit)
 	return sets[0]
 }
 
-// snapshotAll builds every named set's strip under ONE lock acquisition.
+// read builds every named set's strip, and optionally the deployment's
+// own bucket, under ONE lock acquisition.
 //
 // That is not an optimisation, it is the correctness of the cursor. A
-// caller holds one cursor across every set in a reading, so two buckets
-// read at two different moments hand it a cursor that is ahead of one of
-// them: see LiveActivity's own comment for what that loses.
-func (l *liveActivity) snapshotAll(ids []string, since int64, limit int) []LiveActivitySet {
+// caller holds one cursor across every bucket in a reading, so two
+// buckets read at two different moments hand it a cursor that is ahead of
+// one of them: see LiveActivity's own comment for what that loses. The
+// deployment's bucket is inside the same acquisition for exactly that
+// reason, and it is now a bucket a client polls rather than a ring copied
+// into every set (issue #593).
+func (l *liveActivity) read(ids []string, wantDeployment bool, since int64, limit int) ([]LiveActivitySet, *LiveActivityDeployment) {
 	out := make([]LiveActivitySet, 0, len(ids))
 	if l == nil {
 		for _, id := range ids {
 			out = append(out, LiveActivitySet{BackupSetID: id, ProgressBasis: LiveActivityBasisUnknown})
 		}
-		return out
+		if wantDeployment {
+			return out, &LiveActivityDeployment{Events: []LiveActivityEvent{}, Unfinished: []LiveActivityAction{}}
+		}
+		return out, nil
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, id := range ids {
 		out = append(out, l.snapshotLocked(id, since, limit))
 	}
-	return out
+	if !wantDeployment {
+		return out, nil
+	}
+	deployment := &LiveActivityDeployment{}
+	deployment.OldestSequence, deployment.LatestSequence = boundsOf(l.deployment)
+	deployment.Events, deployment.Truncated = tailOf(l.deployment, since, limit)
+	deployment.Dropped = droppedSince(since, l.deployment)
+	deployment.Unfinished = unfinishedIn(l.deployment)
+	return out, deployment
 }
 
 // snapshotLocked is snapshot's body. The caller holds l.mu.
@@ -684,18 +988,47 @@ func (l *liveActivity) snapshotLocked(id string, since int64, limit int) LiveAct
 	if st != nil {
 		own = st.ring
 	}
-	out.OldestSequence, out.LatestSequence = boundsOf(own, l.deployment)
-	out.Events, out.Truncated = mergeTail(own, l.deployment, since, limit)
-	out.Dropped = droppedSince(since, own, l.deployment)
+	// This set's own ring, and only it. See the scope constants for what
+	// merging the deployment's ring in here cost, and for where those
+	// events go instead.
+	out.OldestSequence, out.LatestSequence = boundsOf(own)
+	out.Events, out.Truncated = tailOf(own, since, limit)
+	out.Dropped = droppedSince(since, own)
+	out.Unfinished = unfinishedIn(own)
 	return out
 }
 
 // liveActivityRing is a fixed-capacity, oldest-first buffer. Nothing here
 // grows: an entry beyond capacity displaces the oldest, which is what
 // "bounded" has to mean for a process that runs for months.
+//
+// # Why it is an actual ring
+//
+// It used to be a slice that appended and then re-sliced itself onto a
+// fresh array whenever it went over capacity. Once full that is two
+// allocations and two 200-element copies for every single event, about
+// 73 KB and 7 microseconds, paid inside the feed's mutex on whichever
+// goroutine the cycle had reached the event on: 703 MB through the heap
+// for ten thousand events into one bucket. RecordEvent's own doc promises
+// the opposite ("one lock, one append and a return"), and the promise
+// matters more now than when it was written, because since issue #599
+// every non-GET request on the API records a line here too.
+//
+// So the array is allocated once at its full length and never touched
+// again. head is the slot the next event goes into, count is how many
+// slots hold a live event, and an add on a full ring is one index write.
+// Overwriting the slot is also what releases the displaced event: the
+// whole struct goes, strings and all, so nothing dropped is kept alive
+// by the buffer that dropped it.
+//
+// The cost of that is that the events are no longer one contiguous
+// slice, so nothing outside this file may read them directly: len, at
+// and copyFrom below are the whole accessor surface, and they are what
+// boundsOf, tailOf and snapshotLocked walk.
 type liveActivityRing struct {
 	events []LiveActivityEvent
-	cap    int
+	head   int
+	count  int
 
 	// evicted is the sequence of the newest event this buffer has ever
 	// discarded, or 0 if it has discarded none. It is what lets a read
@@ -707,32 +1040,180 @@ type liveActivityRing struct {
 }
 
 func newLiveActivityRing(capacity int) *liveActivityRing {
-	return &liveActivityRing{cap: capacity}
+	if capacity < 0 {
+		capacity = 0
+	}
+	return &liveActivityRing{events: make([]LiveActivityEvent, capacity)}
 }
 
+// add files one event, displacing the oldest once the ring is full.
+//
+// One index write and two increments, no allocation, no copy. See the
+// type's own doc for what this replaced and why.
 func (r *liveActivityRing) add(e LiveActivityEvent) {
-	r.events = append(r.events, e)
-	if len(r.events) > r.cap {
-		r.evicted = r.events[len(r.events)-r.cap-1].Sequence
-		// Re-slice onto a fresh backing array rather than sliding within
-		// the old one: keeping the old array alive would hold on to every
-		// string in the dropped events for as long as this buffer lives.
-		kept := make([]LiveActivityEvent, r.cap)
-		copy(kept, r.events[len(r.events)-r.cap:])
-		r.events = kept
+	if len(r.events) == 0 {
+		// A ring with no capacity holds nothing, so everything put into
+		// it is discarded the moment it arrives and the cursor has to be
+		// told, exactly as it is for anything that falls off the back.
+		r.evicted = e.Sequence
+		return
+	}
+	if r.count == len(r.events) {
+		// Full, so head is sitting on the oldest event and that is the
+		// one about to go.
+		r.evicted = r.events[r.head].Sequence
+	} else {
+		r.count++
+	}
+	r.events[r.head] = e
+	r.head++
+	if r.head == len(r.events) {
+		r.head = 0
 	}
 }
 
-// boundsOf reports the lowest and highest sequence still held across the
-// buffers a strip reads from. Empty buffers contribute nothing, so a set
-// with no events of its own reports the deployment feed's bounds rather
-// than a zero that would read as "nothing has ever happened".
-func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
-	for _, r := range rings {
-		if r == nil || len(r.events) == 0 {
+// len is how many events the ring currently holds, and at is the i'th
+// oldest of them. Nil-safe, because a set that has never been written to
+// has no ring at all.
+func (r *liveActivityRing) len() int {
+	if r == nil {
+		return 0
+	}
+	return r.count
+}
+
+func (r *liveActivityRing) at(i int) LiveActivityEvent {
+	return r.events[r.slot(i)]
+}
+
+// slot maps an oldest-first position onto the array index holding it.
+//
+// The oldest live event sits count places behind head, and both wraps
+// are a single subtraction rather than a modulo because i is never more
+// than count and count is never more than the length.
+func (r *liveActivityRing) slot(i int) int {
+	start := r.head - r.count
+	if start < 0 {
+		start += len(r.events)
+	}
+	j := start + i
+	if j >= len(r.events) {
+		j -= len(r.events)
+	}
+	return j
+}
+
+// copyFrom fills dst with len(dst) events starting at the from'th oldest.
+//
+// At most two copies: a ring's contents are contiguous except where they
+// wrap past the end of the array, so this is the same memmove a slice
+// copy would be, without the intermediate slice that used to be sized by
+// what the bucket HELD rather than by what the read returns.
+func (r *liveActivityRing) copyFrom(dst []LiveActivityEvent, from int) {
+	if r == nil || len(dst) == 0 {
+		return
+	}
+	n := copy(dst, r.events[r.slot(from):])
+	if n < len(dst) {
+		copy(dst[n:], r.events[:len(dst)-n])
+	}
+}
+
+// unfinishedIn is every action in r whose start is still held and whose
+// completion is not, oldest first (issue #625).
+//
+// # Why it is derived rather than tracked
+//
+// The obvious implementation is a map of open actions kept beside the
+// ring, written on a start and cleared on a completion. It is also a leak
+// with a nice name, and the leak is the exact case this exists to report:
+// a start whose completion never arrives is a key nothing ever removes,
+// and a process that runs for months would accumulate one per unfinished
+// action for ever. Every fix for that is an eviction policy, and every
+// eviction policy has to choose which unfinished action to forget, which
+// is choosing which of them to hide.
+//
+// Deriving it from the ring has no such choice to make. The tail is
+// already bounded, and an action whose start has scrolled out of it is
+// forgotten along with every other line from that far back, which is the
+// same promise the buffer already makes about everything else it holds.
+// The durable record of what happened is the journal.
+//
+// # Why it is not filtered by the cursor
+//
+// A cursor asks what is NEW. An action that has been quiet for ten
+// minutes is not new, and a client that has been polling all along would
+// otherwise be told about it once, at the moment it started, and never
+// again. So this walks everything held rather than the slice a cursor
+// asked for, and it is the reading's answer to "what is currently open"
+// rather than a second copy of the tail.
+//
+// A start and its completion are told apart by the rule action.go states:
+// an action id with no result opens the action, and an action id with a
+// result closes it. Nothing here needs to know either event's name.
+func unfinishedIn(r *liveActivityRing) []LiveActivityAction {
+	held := r.len()
+	// Every completion first, then every start that is not among them.
+	//
+	// Two walks rather than one that adds on a start and removes on a
+	// completion, and the second walk is cheap (at most a bucket's two
+	// hundred entries) next to what the single-pass version would cost to
+	// be right. That one has to remove from an ordered result, and it is
+	// only correct at all while a start always precedes its completion
+	// inside one bucket, which is true because of how the sequence is
+	// handed out under the mutex rather than because of anything stated
+	// here. This version does not care about the order at all.
+	var ended map[string]bool
+	for i := 0; i < held; i++ {
+		e := r.at(i)
+		if e.ActionID == "" || e.Result == "" {
 			continue
 		}
-		first, last := r.events[0].Sequence, r.events[len(r.events)-1].Sequence
+		if ended == nil {
+			ended = make(map[string]bool)
+		}
+		ended[e.ActionID] = true
+	}
+
+	var out []LiveActivityAction
+	var seen map[string]bool
+	for i := 0; i < held; i++ {
+		e := r.at(i)
+		if e.ActionID == "" || e.Result != "" || ended[e.ActionID] || seen[e.ActionID] {
+			continue
+		}
+		// One entry per action id, the oldest start of it. An id is
+		// minted per action so two live starts cannot share one, but the
+		// id can also come from a caller (a cycle's own id is the
+		// clearest case), and a caller that repeated one would otherwise
+		// put the same action on this list twice, where a client keying
+		// a list by it has two rows claiming to be the same thing.
+		if seen == nil {
+			seen = make(map[string]bool)
+		}
+		seen[e.ActionID] = true
+		out = append(out, LiveActivityAction{
+			Action:    e.Action,
+			ActionID:  e.ActionID,
+			StartedAt: e.At,
+			Sequence:  e.Sequence,
+		})
+	}
+	return out
+}
+
+// boundsOf reports the lowest and highest sequence still held across the
+// buffers it is given. Empty buffers contribute nothing, so a bucket that
+// has never held an event reports 0..0, which is what "nothing has
+// happened here" has to look like now that a set's strip reads its own
+// ring alone (issue #593).
+func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
+	for _, r := range rings {
+		held := r.len()
+		if held == 0 {
+			continue
+		}
+		first, last := r.at(0).Sequence, r.at(held-1).Sequence
 		if oldest == 0 || first < oldest {
 			oldest = first
 		}
@@ -743,14 +1224,17 @@ func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
 	return oldest, latest
 }
 
-// mergeTail returns the OLDEST limit events across own and deployment
-// that are newer than since, oldest first, and whether limit cut it short.
+// tailOf returns the OLDEST limit events in r that are newer than since,
+// oldest first, and whether limit cut it short.
 //
-// It merges rather than concatenates because the two buffers interleave in
-// time and a strip reads top to bottom: the line before an error is
-// usually what explains it, and that line is often the other buffer's.
-// One shared sequence counter is what makes the merge a comparison of two
-// numbers rather than a comparison of two clocks.
+// One ring, since issue #593. It used to merge a set's ring with the
+// deployment's, on the argument that the two interleave in time and the
+// line before an error is often the other buffer's. That argument is
+// still true and it is why the deployment's bucket carries the same
+// sequence numbers: a client holding both can interleave them itself,
+// which is what the global terminal does. What it may not do is put the
+// whole deployment log on every set's strip, which is what merging here
+// meant.
 //
 // Oldest is what makes the limit safe. A client advances its cursor to the
 // newest sequence it was handed, so a reading that answers a cursor with
@@ -759,36 +1243,30 @@ func boundsOf(rings ...*liveActivityRing) (oldest, latest int64) {
 // with nothing in the response saying so. Handing back the oldest instead
 // turns the limit into a page rather than a gap, and the flag says there
 // is another page to ask for.
-func mergeTail(own, deployment *liveActivityRing, since int64, limit int) ([]LiveActivityEvent, bool) {
-	a, b := ringEvents(own), ringEvents(deployment)
-	merged := make([]LiveActivityEvent, 0, len(a)+len(b))
-	i, j := 0, 0
-	for i < len(a) || j < len(b) {
-		switch {
-		case j == len(b) || (i < len(a) && a[i].Sequence < b[j].Sequence):
-			merged = append(merged, a[i])
-			i++
-		default:
-			merged = append(merged, b[j])
-			j++
-		}
-	}
-	kept := merged[:0]
-	for _, e := range merged {
-		if e.Sequence > since {
-			kept = append(kept, e)
-		}
-	}
+func tailOf(r *liveActivityRing, since int64, limit int) ([]LiveActivityEvent, bool) {
+	held := r.len()
+	// Binary search rather than a linear filter, and it is legal because
+	// a bucket's sequences increase strictly: l.seq++ and the add into
+	// the bucket happen under one mutex, so no two events in a bucket can
+	// be numbered out of the order they were filed in. That is a property
+	// of the locking rather than of anything declared here, so there is a
+	// test asserting it directly against concurrent writers
+	// (liveactivityring_test.go) and a change to how seq is handed out
+	// fails there rather than quietly returning a wrong answer here.
+	first := sort.Search(held, func(i int) bool { return r.at(i).Sequence > since })
+
+	count := held - first
 	truncated := false
-	if limit > 0 && len(kept) > limit {
-		kept = kept[:limit]
+	if limit > 0 && count > limit {
+		count = limit
 		truncated = true
 	}
-	// A fresh slice, because the one above still points into the merge
-	// buffer and a caller must never hold a window onto anything this
-	// package will write again.
-	out := make([]LiveActivityEvent, len(kept))
-	copy(out, kept)
+	// One allocation, of exactly what is being handed back, and it is a
+	// fresh array rather than a window onto the ring's own, because a
+	// caller must never hold one onto anything this package will write
+	// again.
+	out := make([]LiveActivityEvent, count)
+	r.copyFrom(out, first)
 	return out, truncated
 }
 
@@ -799,20 +1277,27 @@ func mergeTail(own, deployment *liveActivityRing, since int64, limit int) ([]Liv
 // cursor and gets a slice back has no way to tell "nothing else happened"
 // from "the rest is gone", and presenting the second as the first is a log
 // that looks continuous and is not.
+//
+// A caller with no cursor at all is the one case where there is nothing
+// to be honest about. since == 0 means "whatever is still held", and a
+// client that has never asked holds nothing, so there is no gap between
+// what it has and the tail it is being handed: the events this buffer
+// discarded are ones that client was never going to be shown either way.
+// Without this, the first load of any deployment up long enough to
+// overflow a bucket said "earlier lines are not held here any more",
+// which is a warning about a hole that does not exist, on the one signal
+// this feed is proudest of. An operator who learns to ignore it will
+// ignore the real one too.
 func droppedSince(since int64, rings ...*liveActivityRing) bool {
+	if since <= 0 {
+		return false
+	}
 	for _, r := range rings {
 		if r != nil && r.evicted > since {
 			return true
 		}
 	}
 	return false
-}
-
-func ringEvents(r *liveActivityRing) []LiveActivityEvent {
-	if r == nil {
-		return nil
-	}
-	return r.events
 }
 
 // copyInt and copyTime hand back a value that shares no memory with the

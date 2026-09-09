@@ -116,6 +116,12 @@ func (r *engineRoute) CreateBackupSet(ctx context.Context, req service.CreateBac
 			ValidatorID:        string(req.ValidatorID),
 			Disabled:           req.Disabled,
 			ReadOnly:           req.ReadOnly,
+			// Issue #624's opt-out, carried across for the reason the
+			// patch route carries its own: the engine runs the check in
+			// front of the write and marks the set when told not to, so a
+			// routed --no-verify that dropped this flag would be refused
+			// where the direct one writes.
+			SkipConnectionCheck: req.SkipConnectionCheck,
 		},
 		RunImmediately:     req.RunImmediately,
 		AcknowledgeRepoint: req.AcknowledgeRepoint,
@@ -174,6 +180,12 @@ func (r *engineRoute) UpdateBackupSet(ctx context.Context, id string, req servic
 
 		AcknowledgeRepoint:       req.AcknowledgeRepoint,
 		AcknowledgeHostKeyChange: req.AcknowledgeHostKeyChange,
+		// Issue #624's opt-out, carried across for the same reason the
+		// two acknowledgements are: an edit refused by the engine for a
+		// connection it could not prove has one way past it, and a
+		// routed --no-verify that dropped this flag would be refused
+		// where the direct one succeeds.
+		SkipConnectionCheck: req.SkipConnectionCheck,
 	}
 	if req.ValidatorID != nil {
 		v := string(*req.ValidatorID)
@@ -203,6 +215,65 @@ func (r *engineRoute) UpdateBackupSet(ctx context.Context, id string, req servic
 		return service.BackupSet{}, err
 	}
 	return backupSetFromWire(updated), nil
+}
+
+// TestConnection is POST /backup-sets/test-connection in its CANDIDATE
+// mode: prove a source described by a request, before any set exists for
+// it (issue #624).
+//
+// Made by the ENGINE rather than here, for ProbeHostKey's reason restated
+// with a sharper edge: `backup-set create` verifies before it writes, so
+// the check and the write have to happen in the same world. A route proven
+// from this shell and a set declared in a process on the other side of a
+// container boundary would be two different claims about two different
+// networks, reported as one.
+func (r *engineRoute) TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
+	return connectionTestFromWire(r.client.TestConnection(ctx, apicontract.TestConnectionRequest{
+		Host:           req.Host,
+		Port:           req.Port,
+		User:           req.User,
+		SSHKeyID:       req.SSHKeyID,
+		KnownHostsLine: req.KnownHostsLine,
+		RemotePath:     req.RemotePath,
+	}))
+}
+
+// TestBackupSetConnection is the same route in its PERSISTED mode: prove
+// the set this id names, by id alone.
+//
+// The connection details come off the engine's own configuration, which is
+// the half that makes this mode worth having: a caller asking whether
+// "nas-a/photos" still works neither knows nor has to echo back that set's
+// key reference and trusted line, so a read-only check cannot be turned
+// into a check of something else.
+//
+// This is also where a passing check clears issue #624's unverified mark,
+// in the process that holds the configuration the mark is in.
+func (r *engineRoute) TestBackupSetConnection(ctx context.Context, id string) (service.ConnectionTestResult, error) {
+	if !isBackupSetID(id) {
+		return service.ConnectionTestResult{}, fmt.Errorf("%q is not a backup set id; a backup set id is exactly source/name", id)
+	}
+	return connectionTestFromWire(r.client.TestConnection(ctx, apicontract.TestConnectionRequest{BackupSetID: id}))
+}
+
+// connectionTestFromWire is the one translation both modes come back
+// through, so the routed answer and the direct one cannot describe the
+// same six steps differently.
+func connectionTestFromWire(resp apicontract.TestConnectionResponse, err error) (service.ConnectionTestResult, error) {
+	if err != nil {
+		return service.ConnectionTestResult{}, err
+	}
+	result := service.ConnectionTestResult{OK: resp.OK, Message: resp.Message}
+	for _, c := range resp.Checks {
+		result.Checks = append(result.Checks, service.ConnectionCheck{
+			Step:       c.Step,
+			Outcome:    c.Outcome,
+			Category:   c.Category,
+			Detail:     c.Detail,
+			DurationMs: c.DurationMs,
+		})
+	}
+	return result, nil
 }
 
 // RemoveBackupSet is DELETE /backup-sets/{source}/{set}.
@@ -262,6 +333,12 @@ func backupSetFromWire(s apicontract.BackupSet) service.BackupSet {
 		Disabled:            s.Disabled,
 		ReadOnly:            s.ReadOnly,
 		RetentionIsOverride: s.RetentionIsOverride,
+		// Issue #624. An engine older than this field answers false,
+		// which reads as "nothing here says this set's connection was
+		// skipped" rather than as a claim that it was proven, and that
+		// is the same reading the configuration file's own absent key
+		// gets.
+		ConnectionUnverified: s.ConnectionUnverified,
 	}
 }
 
@@ -312,10 +389,12 @@ func (r *engineRoute) UpdateSettings(ctx context.Context, req service.UpdateSett
 			WeekStartsOn:         req.Retention.WeekStartsOn,
 			ProtectLastKnownGood: req.Retention.ProtectLastKnownGood,
 		}
-		// Tiers is nil from this CLI, which does not expose a whole-chain
-		// replacement (cmdSettings' own doc says why), and mapped anyway
-		// so that the one type doing the translating does not have a hole
-		// in it the day something else fills that field in.
+		// Tiers used to be nil from this CLI, which did not expose a
+		// whole-chain replacement, and was mapped anyway so that the one
+		// type doing the translating would not have a hole in it the day
+		// something else filled that field in. That day is #595:
+		// `settings patch --policy-file` fills it, and this line is why
+		// the routed half of it needed nothing.
 		for _, t := range req.Retention.Tiers {
 			retention.Tiers = append(retention.Tiers, retentionTierToWire(t))
 		}
@@ -372,14 +451,7 @@ func settingsFromWire(s apicontract.SettingsResponse) service.Settings {
 		})
 	}
 	for _, m := range s.Mediums {
-		out.Mediums = append(out.Mediums, service.StorageMediumSummary{
-			ID:                  m.ID,
-			Type:                m.Type,
-			Bucket:              m.Bucket,
-			Region:              m.Region,
-			StorageClass:        m.StorageClass,
-			ReadsRequireRestore: m.ReadsRequireRestore,
-		})
+		out.Mediums = append(out.Mediums, storageMediumFromWire(m))
 	}
 	return out
 }
@@ -393,4 +465,190 @@ func retentionTierToWire(t service.RetentionTier) apicontract.RetentionTier {
 		WindowUnit:  t.WindowUnit,
 		Medium:      t.Medium,
 	}
+}
+
+// The storage-destination half of this route (G2.2, issue #594).
+//
+// It exists for the reason settingsRoute exists: `medium add`, `edit` and
+// `remove` write configuration, and a configuration write left in the file
+// beside a running engine is a change that process would never read
+// (#538/#543). Without these, those three verbs would be permanently
+// refused next to a live deployment, which is the position `settings
+// patch` was in before #543.
+//
+// The import is the one that carries a secret, and it is the reason the
+// CLI has no flag that takes one. The material is read from this
+// process's stdin and put straight into a request body over the session
+// this client already holds: never an argument, so never in the process
+// table and never in shell history, and the response is an id, so nothing
+// printed afterwards has anything to redact.
+
+func (r *engineRoute) ImportStorageCredentials(ctx context.Context, accessKeyID, secretAccessKey, sessionToken string) (service.MediumCredentialRef, error) {
+	resp, err := r.client.ImportStorageCredentials(ctx, apicontract.ImportStorageCredentialsRequest{
+		AccessKeyID:     accessKeyID,
+		SecretAccessKey: secretAccessKey,
+		SessionToken:    sessionToken,
+	})
+	if err != nil {
+		return service.MediumCredentialRef{}, err
+	}
+	// File is deliberately left empty. The engine wrote that path on its
+	// own host, which may not be this one, and the API does not report it
+	// for exactly that reason: an id is the whole of what a caller may
+	// hold.
+	return service.MediumCredentialRef{ID: resp.ID}, nil
+}
+
+func (r *engineRoute) ListStorageMediums(ctx context.Context) ([]service.StorageMediumSummary, error) {
+	resp, err := r.client.ListStorageMediums(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]service.StorageMediumSummary, 0, len(resp.Mediums))
+	for _, m := range resp.Mediums {
+		out = append(out, storageMediumFromWire(m))
+	}
+	return out, nil
+}
+
+func (r *engineRoute) GetStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error) {
+	resp, err := r.client.GetStorageMedium(ctx, id)
+	if err != nil {
+		return service.StorageMediumSummary{}, err
+	}
+	return storageMediumFromWire(resp), nil
+}
+
+func (r *engineRoute) StorageMediumUsage(ctx context.Context, id string) (service.StorageMediumUsage, error) {
+	resp, err := r.client.StorageMediumUsage(ctx, id)
+	if err != nil {
+		return service.StorageMediumUsage{}, err
+	}
+	out := service.StorageMediumUsage{Medium: resp.Medium, Placements: resp.Placements}
+	for _, s := range resp.BackupSets {
+		out.BackupSets = append(out.BackupSets, service.StorageMediumUsageBySet{
+			Set: s.Set, Placements: s.Placements, OnlyCopyHere: s.OnlyCopyHere,
+		})
+	}
+	return out, nil
+}
+
+func (r *engineRoute) PreflightStorageMediumCandidate(ctx context.Context, spec service.StorageMediumSpec) (service.MediumPreflight, error) {
+	resp, err := r.client.PreflightStorageMediumCandidate(ctx, storageMediumToWire(spec))
+	if err != nil {
+		return service.MediumPreflight{}, err
+	}
+	return mediumPreflightFromWire(resp), nil
+}
+
+func (r *engineRoute) PreflightStorageMedium(ctx context.Context, id string) (service.MediumPreflight, error) {
+	resp, err := r.client.PreflightStorageMedium(ctx, id)
+	if err != nil {
+		return service.MediumPreflight{}, err
+	}
+	return mediumPreflightFromWire(resp), nil
+}
+
+func (r *engineRoute) CreateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	resp, err := r.client.CreateStorageMedium(ctx, storageMediumToWire(spec))
+	if err != nil {
+		return service.StorageMediumSummary{}, err
+	}
+	return storageMediumFromWire(resp), nil
+}
+
+func (r *engineRoute) UpdateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	resp, err := r.client.UpdateStorageMedium(ctx, spec.ID, storageMediumToWire(spec))
+	if err != nil {
+		return service.StorageMediumSummary{}, err
+	}
+	return storageMediumFromWire(resp), nil
+}
+
+func (r *engineRoute) RemoveStorageMedium(ctx context.Context, id string) error {
+	return r.client.RemoveStorageMedium(ctx, id)
+}
+
+func (r *engineRoute) SetDefaultStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error) {
+	resp, err := r.client.SetDefaultStorageMedium(ctx, id)
+	if err != nil {
+		return service.StorageMediumSummary{}, err
+	}
+	return storageMediumFromWire(resp), nil
+}
+
+// storageMediumFromWire is the one place the engine's answer becomes this
+// binary's shape, shared by the settings read and by every medium verb, so
+// the two cannot come to disagree about a destination.
+func storageMediumFromWire(m apicontract.StorageMediumSummary) service.StorageMediumSummary {
+	return service.StorageMediumSummary{
+		ID:                  m.ID,
+		Type:                m.Type,
+		Bucket:              m.Bucket,
+		Region:              m.Region,
+		Endpoint:            m.Endpoint,
+		Prefix:              m.Prefix,
+		StorageClass:        m.StorageClass,
+		UploadVerification:  m.UploadVerification,
+		ReadsRequireRestore: m.ReadsRequireRestore,
+		// H2.2's three (#622). Carried across rather than dropped for the
+		// reason this function exists at all: `medium list` beside a
+		// serving engine has to print what the engine's own settings page
+		// shows, and a mapping that lost is_default would print a list
+		// with no default in it, which is a list no deployment can
+		// actually be in.
+		Path:      m.Path,
+		IsLocal:   m.IsLocal,
+		IsDefault: m.IsDefault,
+		// #636's mark, carried for the identical reason: `medium show`
+		// beside a serving engine has to say what that engine's own
+		// destinations card says, and a mapping that lost this would
+		// print a destination as though it had been proven.
+		ConnectionUnverified: m.ConnectionUnverified,
+	}
+}
+
+// storageMediumToWire is the write direction. The credentials block is
+// sent as the caller spelled it, EMPTY INCLUDED: on an edit the engine
+// reads an unnamed credential as "keep the one already configured", and a
+// mapping that invented a value here would rotate a credential nobody
+// asked to rotate.
+func storageMediumToWire(spec service.StorageMediumSpec) apicontract.StorageMediumRequest {
+	return apicontract.StorageMediumRequest{
+		ID:                 spec.ID,
+		Type:               spec.Type,
+		Region:             spec.Region,
+		Endpoint:           spec.Endpoint,
+		Bucket:             spec.Bucket,
+		Prefix:             spec.Prefix,
+		StorageClass:       spec.StorageClass,
+		UploadVerification: spec.UploadVerification,
+		Credentials: apicontract.StorageMediumCredentialsReference{
+			CredentialsID: spec.Credentials.ID,
+			File:          spec.Credentials.File,
+			Env:           spec.Credentials.Env,
+			Command:       spec.Credentials.Command,
+		},
+		// Issue #636's instruction, carried rather than dropped. A route
+		// that lost it would send `medium add --no-verify` to an engine
+		// as an ordinary create, which either refuses against a bucket
+		// this host cannot reach or writes an unmarked destination: two
+		// ways for one flag to mean nothing in the one mode where an
+		// operator most needs it, which is the fleet.
+		SkipConnectionCheck: spec.SkipConnectionCheck,
+	}
+}
+
+// mediumPreflightFromWire carries every check through, skipped ones
+// included. A route that dropped them would print a shorter list on a
+// failure than on a success, which is the one moment the full list matters
+// most.
+func mediumPreflightFromWire(r apicontract.MediumPreflightResponse) service.MediumPreflight {
+	out := service.MediumPreflight{Medium: r.Medium, OK: r.OK, Checks: make([]service.MediumPreflightCheck, 0, len(r.Checks))}
+	for _, c := range r.Checks {
+		out.Checks = append(out.Checks, service.MediumPreflightCheck{
+			Step: c.Step, Outcome: c.Outcome, Category: c.Category, Detail: c.Detail,
+		})
+	}
+	return out
 }

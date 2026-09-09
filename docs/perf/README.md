@@ -10,16 +10,27 @@ they mean, and exactly what a later Phase 6 change has to beat.
 
 On host `darwin-arm64-mac17-2` under workload `phase6-baseline-v1`, a later
 Phase 6 change fails the performance gate if the median of five captures shows
-**`GET /api/v1/backup-sets` p95 above 0.180 ms**, or **transfer throughput below
-483.9 MB/s**. That p95 number carries two conditions and both have to hold, so
+**`GET /api/v1/backup-sets` p95 above 0.218 ms**, or **transfer throughput below
+448.1 MB/s**. Both of those are much wider than the 10% ratio they look like, and
+for the same underlying reason in each case: the threshold is sized from measured
+movement rather than chosen, and neither metric can resolve 10% on this host. That
+p95 number carries two conditions and both have to hold, so
 the 0.05 ms absolute floor is what binds rather than the 10% ratio; the section
 below works the arithmetic through. Three more metrics are gated alongside them,
 two are recorded but not gated, and every number below is derived from
 measurement rather than chosen.
 
-Nothing runs the comparison automatically. `--compare` is a manual step on the
-benchmark host, and what CI enforces is that a complete baseline exists and that
-the gate can still fail. See "Running it" at the bottom.
+Six of the seven comparisons are manual. `--compare` is a step somebody takes
+deliberately on the benchmark host, and what CI enforces for those six is that a
+complete baseline exists and that the gate can still fail.
+
+**`image_size_bytes` is the exception, and is enforced on every full local gate
+run** (#635). It is not a timing measurement: two builds of one commit produce
+byte-identical sizes, so nothing about a loaded machine can move it, and
+`apps/generic/tests/dockercli` already builds `container/Dockerfile` for its
+licence and CLI proofs. `TestTheBuiltImageIsInsideTheRecordedSizeBudget` reads
+the size off that image and applies this file's own ratio to the record below,
+which costs one `docker image inspect`. See "Running it" at the bottom.
 
 ## What is here
 
@@ -104,15 +115,32 @@ rule applied to `api_read_p95_ms` would have failed against an unchanged tree,
 and a gate that goes red on an unchanged tree teaches everyone to ignore it.
 So:
 
-- **`transfer_mb_per_second`, `idle_rss_bytes`, `image_size_bytes`** are gated
-  on a ratio alone. Their noise is 11x, 45x and infinitely below the budget
-  respectively, so the ratio is a real gate.
+- **`idle_rss_bytes` and `image_size_bytes`** are gated on a ratio alone. Their
+  noise is 45x and infinitely below the budget respectively, so the ratio is a
+  real gate. Nothing #635 measured touches either: idle RSS is a process property
+  and an image size is a function of the tree and the target architecture.
+- **`transfer_mb_per_second`** was in that list on the strength of the 0.93%
+  above, and #635 established that the 0.93% measures the wrong quantity. Both of
+  those baselines were taken back to back on a quiet machine, so what they
+  measured is repeatability under ONE condition, not sensitivity to condition,
+  and a 256 MiB disk-to-disk copy is the metric here most exposed to the
+  difference. Six runs of an unchanged tree on a loaded machine span **1.398x**,
+  which is fourteen times a 10% budget rather than a ninth of it.
+
+  So its ratio is now **0.60**, sized from those six runs, and what that really
+  says is that this metric can only carry a gate against large regressions. See
+  "What moved" below for the measurements, the arithmetic and what to do when it
+  fails.
 - **`api_read_p95_ms`** is gated on a ratio **and** a measured absolute floor
   of 0.05 ms, and **both** must be exceeded before it fails. Two conditions that
-  must both hold means the wider one is what is enforced: against the 0.130 ms
-  baseline the ratio allows 0.143 ms and the floor allows 0.180 ms, so the floor
-  always binds and the budget this metric really carries is **+38.5%**, not
-  +10%. The floor is there because 0.05 ms is 2.6x the observed 0.019 ms
+  must both hold means the wider one is what is enforced: against the 0.168 ms
+  baseline the ratio allows 0.185 ms and the floor allows 0.218 ms, so the floor
+  always binds and the budget this metric really carries is **+29.8%**, not
+  +10%. (Those two numbers were 0.143 ms and 0.180 ms, for +38.5%, against the
+  0.130 ms baseline this record replaced in #635. The floor is absolute, so a
+  larger baseline narrows the effective budget rather than widening it, and
+  `scripts/perf/selftest.sh` refuses the whole run if the floor ever stops
+  binding first.) The floor is there because 0.05 ms is 2.6x the observed 0.019 ms
   movement, and sub-millisecond latencies do not support a percentage-only gate;
   a gate that goes red on an unchanged tree teaches everyone to ignore it.
 
@@ -127,8 +155,9 @@ So:
   number over the same noise would only produce a gate that fails against an
   unchanged tree. `scripts/perf/selftest.sh` pins which condition binds, with
   one control just under the floor that must pass and one just over it that
-  must fail, so the band between 0.143 ms and 0.180 ms is exercised rather than
-  assumed.
+  must fail, so the band between 0.185 ms and 0.218 ms is exercised rather than
+  assumed. Those two controls are derived from the record rather than written
+  down, so they follow a re-capture on their own.
 - **`config_write_p95_ms`** is gated on a ratio, with about two times headroom
   over its noise. It is the tightest of the gated metrics and the one most
   likely to need re-measurement rather than a fix if it trips.
@@ -149,26 +178,222 @@ Derived from `gate.json` and `baselines/darwin-arm64-mac17-2.json`:
 
 | metric | baseline | fails when | effective threshold |
 |---|---|---|---|
-| `api_read_p95_ms` | 0.130 ms | above 0.143 ms **and** more than 0.05 ms above baseline | **0.180 ms (+38.5%)** |
-| `transfer_mb_per_second` | 537.702 MB/s | below 483.932 MB/s | 483.932 MB/s (-10%) |
-| `idle_rss_bytes` | 98,861,056 | above 108,747,162 | 108,747,162 (+10%) |
-| `config_write_p95_ms` | 11.357 ms | above 12.493 ms | 12.493 ms (+10%) |
-| `image_size_bytes` | 43,008,762 | above 45,159,200 | 45,159,200 (+5%) |
+| `api_read_p95_ms` | 0.168 ms | above 0.185 ms **and** more than 0.05 ms above baseline | **0.218 ms (+29.8%)** |
+| `transfer_mb_per_second` | 746.867 MB/s | below 448.120 MB/s | **448.120 MB/s (-40%)** |
+| `idle_rss_bytes` | 106,725,376 | above 117,397,913.6 | 117,397,913.6 (+10%) |
+| `config_write_p95_ms` | 11.586 ms | above 12.745 ms | 12.745 ms (+10%) |
+| `image_size_bytes` | 69,704,266 | above 73,189,479.3 | 73,189,479.3 (+5%) |
 
 `api_read_p95_ms` is the only row with two conditions, and because both have to
 hold, the wider of the two is what is enforced. Here that is the floor, so read
-the last column rather than the ratio: 0.180 ms, not 0.143 ms. Every other row
+the last column rather than the ratio: 0.218 ms, not 0.185 ms. Every other row
 has a single condition and the two columns agree.
+
+## What moved between `8ad3100` and `186ba0c7`, and why each of it moved
+
+The record here was captured at `8ad3100` on 2026-08-31 and replaced at
+`186ba0c7` on 2026-09-08, 834 commits later. Three of the seven metrics moved
+enough to need an account, and `image_size_bytes` moved to 1.62x of a metric
+gated at 1.05x. A baseline is not allowed to absorb a number like that on the
+grounds that it is the current number, so this is the accounting that was done
+before it was re-captured (#635). Every figure below was produced on this host
+on 2026-09-08.
+
+### `image_size_bytes`, 43,008,762 -> 69,704,266 (1.621x)
+
+Two builds, one at each commit, with the flags the capture driver uses:
+
+```sh
+docker build --platform linux/arm64 -f container/Dockerfile -t <tag> .
+docker image inspect <tag> --format '{{.Size}}'
+```
+
+`8ad3100` came back at **43,008,762**: the recorded value, to the byte, eight
+days and 834 commits later, on a host under a load average of 4.76. That is
+worth stating on its own, because it is the premise of everything else here.
+`gate.json` says this metric has no noise to allow for, and this is what that
+claim looks like when it is re-tested rather than quoted.
+
+The components, copied back out of both images with `docker create` plus
+`docker cp` and sized with `stat`:
+
+| component | `8ad3100` | `186ba0c7` | delta |
+|---|---|---|---|
+| `/backup-manager` | 19,792,032 | 31,391,904 | +11,599,872 |
+| `/backup-manager-web` | 21,102,752 | 32,637,088 | +11,534,336 |
+| `/ui/bundles`, five adapter bundles | not carried | 3,503,996 | +3,503,996 |
+| `/licenses` | not carried | 57,300 | +57,300 |
+| distroless base layers | 2,113,978 | 2,113,978 | 0 |
+| **image** | **43,008,762** | **69,704,266** | **+26,695,504** |
+
+Both columns sum to their image exactly, so nothing is unattributed.
+
+**9,502,720 bytes of each binary is rclone's S3 backend**, which #369 imported
+for EPIC E's MediumStore. Measured by building each command for `linux/arm64`
+with the Dockerfile's own flags and then again with that one blank import
+commented out: `backup-manager` goes 31,391,904 -> 21,889,184 and
+`backup-manager-web` goes 31,981,728 -> 22,479,008. Identical deltas, because it
+is the same dependency tree in both: the AWS SDK v2, the IBM COS SDK, Swift,
+go-openapi and the rest of what arrived in `core/go.mod` alongside it. So
+19,005,440 bytes, **71.2% of the whole move, is one shipped feature**.
+
+The remaining 4,128,768 across the two binaries is product code. 77,422 net
+lines of non-test Go landed under `core/`, `apps/common/` and `apps/generic/`
+between the two commits, which is about 56 bytes of image per line: an
+unremarkable ratio, and the same order in both binaries.
+
+`/ui/bundles` is #180's five adapter bundles and `/licenses` is #407's licence
+material. Neither existed to be measured when the old record was taken.
+
+Ruled out, so that "expected" means something: the Go builder and the distroless
+runtime are pinned by **identical digest** at both commits, so no part of this is
+toolchain drift. Both build stages carry `-ldflags "-s -w"`, so there are no
+debug symbols in either binary. There is no vendor tree. `rclone` stayed at
+v1.75.0. Each bundle's JS chunk is distinct (its own provider bridge), so there
+is no duplicate to remove there.
+
+One real duplication, recorded rather than blessed: the seven IBM Plex woff2
+faces #632 added are byte-identical in all five bundles and embedded a sixth
+time in `backup-manager-web`. That is 139,744 bytes per copy and **558,976 bytes
+of pure redundancy** in `/ui/bundles`. It follows from a bundle being a
+self-contained document root, which is what `serve-ui --ui-root <root>/<profile>`
+resolves, so removing it needs a shared asset route and a change to every
+bundle's CSS. That is a design change, not a fix, and it is on #635 rather than
+quietly absorbed here.
+
+### `idle_rss_bytes`, 98,861,056 -> 106,725,376 (1.08x, inside its 1.10 gate)
+
+**6,144,000 of the 7,864,320 is the same S3 backend.** Three runtime captures
+with the blank import and three without, everything else identical: the median
+idle RSS is 106,774,528 with it and 100,630,528 without. That is 78% of the
+growth, and it is the cost of a backend registering itself and its dependency
+tree at init.
+
+### `startup_to_healthy_ms`, 19.652 -> 41.061 (2.09x, not gated)
+
+This one is not what it looks like, and the workload definition is why.
+
+The harness gives every capture a fresh temporary directory, so **every capture
+measures a first boot**: `state.db` is created and every migration is applied
+inside the window being timed. Four consecutive starts of each engine against
+one state directory, so run 1 pays for the migrations and runs 2 to 4 do not:
+
+| | `8ad3100` (3 migrations) | `186ba0c7` (8 migrations) |
+|---|---|---|
+| run 1, cold | 22.421 ms | 45.817 ms |
+| runs 2-4, warm | 14.631 / 14.447 / 14.402 ms | 19.533 / 17.126 / 17.059 ms |
+| first-boot migration cost | 7.974 ms | 28.691 ms |
+
+So of the 21.4 ms the recorded metric moved, about **20.7 ms is first-boot
+schema migration** (`core/migrations/` went from three files to eight over this
+range, at roughly 3 ms each) and about 2.7 ms is the engine itself starting
+slower. It is not the S3 backend: the differential above puts that at 0.3 ms of
+startup, which is inside this metric's own run-to-run movement.
+
+That is worth reading twice, because it says something about the metric rather
+than about the tree. As defined by this workload, `startup_to_healthy_ms` is a
+**first-boot** number, and it will keep climbing every time a migration is added,
+for as long as the workload gives each capture an empty database. An operator
+restarting a container that already has its schema pays the warm number, which
+moved 14.4 ms -> 17.1 ms. Anyone reading this metric as "how long the engine
+takes to come up" is reading the wrong thing, and #635 carries the note.
+
+### `transfer_mb_per_second`, 537.702 -> 746.867 (1.39x), and its ratio 0.90 -> 0.60
+
+Two things happened here. The recorded value moved and could not be attributed,
+and measuring why turned up something worse: at the ratio it had, this metric
+failed on a tree where nothing changed.
+
+**The value is recorded without an attribution, and that is a statement about the
+metric.** Read it as "what a quiet machine produced on 2026-09-08", not as "what
+this tree does". The account that was available for the image is not available
+here: the transfer harness did not exist at `8ad3100` (`core/tests/perfbaseline`
+is one of the uncommitted files that made that record `working_tree_dirty`), so
+there is no old-code side to run and no way to separate a code improvement from a
+faster machine.
+
+**What can be measured is how much of the number is the machine, and the answer
+is most of it.** Six runs of the SAME unchanged tree later the same day, while a
+full gate was running and the load average sat between 11.3 and 12.6:
+
+```
+479.584  492.995  619.020  624.583  651.716  670.434   MB/s
+```
+
+A **1.398x spread with nothing changed**, against a 0.90 ratio that allows 1.11x.
+The recorded 746.867 was taken at 88.33% idle on a load average of 2.84, and is
+1.114x the best of the six.
+
+**So the 0.90 ratio was unpassable.** All six of those runs are below the 672.180
+floor it sets. That is this directory's own failure mode pointed at the future
+instead of the past: a baseline that goes red on an unchanged tree teaches
+everyone to ignore it just as surely as one nobody runs, and the next person to
+use `--compare` would have spent a day on a regression that was a busy afternoon.
+
+It is not a defect of this capture, either, which is worth knowing before anyone
+proposes reverting the value. **One of those six is also below the 483.932 floor
+the PREVIOUS baseline set.** The old number had the same property at a lower rate
+and nobody had measured it.
+
+**The threshold is therefore sized from the measurement, which is what every
+other number in `gate.json` claims to be.** 0.60 puts the floor at 448.120 MB/s,
+7.0% below the worst of the six. Not 0.64, which would clear the worst observed
+by 0.3%: six samples at one load level do not locate the tail, and fitting a
+threshold to the worst sample in hand is the same error that produced the 0.93%
+figure in the first place.
+
+Read what that buys honestly. **It is a gate against the structural regression
+class and not a marginal one.** It still refuses a halving, which is the mutation
+`scripts/perf/selftest.sh` applies, so an extra copy in the data path or a lost
+fast path still goes red. It will not notice a 20% loss. That is the real
+capability of this metric on this host, and saying so is better than implying 10%
+and enforcing something nobody has checked.
+
+**Why this is the same rule as `image_size_bytes` and not an exception to it.**
+That metric keeps a tight 1.05 precisely because it is deterministic: two builds
+of one commit are byte-identical, so measurement precision is the only thing
+setting its threshold, and widening it would forgive growth nobody explained.
+This one is not deterministic and now has a number for how far from it: 1.398x.
+One rule, applied to both, is that a threshold comes from measured movement. It
+gives a tight ratio there and a wide one here because the two metrics really are
+that different.
+
+**No `noise_floor_abs`, unlike `api_read_p95_ms`.** That floor exists because a
+sub-millisecond number sits near its own measurement resolution. This quantity is
+large and varies multiplicatively, so a ratio is the right instrument, and the
+0.60 ratio already allows a 298.7 MB/s drop; a second condition on top would only
+widen a rule that is already wide, and two conditions nobody can reason about are
+worse than one they can.
+
+**Still capture this metric on a quiet machine.** The wider ratio makes a loaded
+run pass rather than making the number meaningful. If it does go red and nothing
+touched the transport, re-capture on a quiet host before looking for a regression.
+
+### The other two
+
+`config_write_p95_ms` moved 1.02x. `api_read_p95_ms` moved 1.292x in ratio terms
+and passed on its absolute floor, delta 0.038 ms against a floor of 0.05 ms,
+which is the gate working the way the section above describes rather than being
+lenient: that metric's own spread within this capture was 64% of its median.
 
 ## About `working_tree_dirty: true` in the checked-in record
 
-The record names commit `8ad3100` with `working_tree_dirty: true`, and that is
-accurate rather than sloppy: the capture harness itself was the only
-uncommitted thing in the tree, and it is a `_test.go` package plus three shell
-scripts, none of which is compiled into the binary being measured or into the
-image being sized. So the artifact measured is byte-for-byte what `8ad3100`
-produces. Capturing before the move was the whole point, and there was no
-earlier commit that already contained the harness to capture from.
+The record names commit `186ba0c7` with `working_tree_dirty: true`, and that is
+accurate rather than sloppy. What was uncommitted at capture time is #635's own
+change: two `_test.go` files in `apps/generic/tests/dockercli`, and comment-only
+edits to `container/Dockerfile`, `ui/shared/scripts/build-bundles.mjs`,
+`distribution/packaging` and two documents. None of it is compiled into the
+engine binary the runtime harness measures, and none of it changes a byte of the
+image.
+
+That last part is measured rather than argued. `186ba0c7` was built clean, before
+any of those edits existed, and came to 69,704,266 bytes; the dirty tree's build
+during the capture came to 69,704,266 bytes. So the artifact measured is
+byte-for-byte what `186ba0c7` produces.
+
+The record this replaced named `8ad3100`, also dirty, for the same reason one
+step earlier: the capture harness itself was the only uncommitted thing in that
+tree, and there was no earlier commit that already contained it to capture from.
 
 ## Running it
 
@@ -194,13 +419,44 @@ environment rather than blocking ordinary CI on noisy numbers, and a shared
 runner is not that environment.
 
 Plainly, so nobody reads "gated" as "enforced on every change": **no gate
-anywhere runs `--compare`.** `scripts/ci-local.sh` and
-`.github/workflows/ci.yml` wire presence mode and the mutation self-test, and
-nothing else. Every regression number in a Phase 6 pull request is therefore an
-author self-report taken by hand on the host named above, and a reviewer who
-wants to reproduce one has to capture on that host. What CI does enforce is that
-a complete baseline for the designated host exists and that the gate is still
-capable of failing, which is what the self-test proves.
+anywhere runs `--compare`,** and for six of the seven metrics that is still the
+whole story. `scripts/ci-local.sh` and `.github/workflows/ci.yml` wire presence
+mode and the mutation self-test. Every timing number in a Phase 6 pull request
+is therefore an author self-report taken by hand on the host named above, and a
+reviewer who wants to reproduce one has to capture on that host.
+
+**`image_size_bytes` is the exception** (#635). It is not a timing measurement,
+so none of the reasoning above applies to it: two builds of one commit produce
+byte-identical sizes, load cannot move it, and nothing about a shared runner
+makes it noisy. What made it awkward to gate was cost, not noise, and that turned
+out to be a false constraint: `apps/generic/tests/dockercli` already builds
+`container/Dockerfile` once per test process for the licence and CLI proofs, so
+`TestTheBuiltImageIsInsideTheRecordedSizeBudget` reads the size off an image that
+exists and applies this file's ratio to the record. One `docker image inspect`,
+no second build, and it runs on every full `scripts/ci-local.sh`.
+
+It compares only when the built image's architecture matches the one the record
+names, and skips with that reason otherwise, because an image size is a property
+of the tree AND the target architecture.
+
+That one condition is the whole limit on this arm, and it is worth stating
+precisely rather than as "it only runs locally". GitHub CI **does** run this
+package: `.github/workflows/ci.yml`'s `apps/generic build, vet, test` job runs
+`go test -race ./...` in `apps/generic` on `ubuntu-latest`, `tests/dockercli` is
+in that package list, there are no build tags or env guards on it, and Docker is
+present on the runner. So CI builds the image and then takes the skip, because
+`runtime.GOARCH` there is amd64 and the only checked-in record is arm64. CI pays
+for the container build and asserts nothing about its size.
+
+Closing that means an amd64 record, which means a designated amd64 benchmark
+host, because `benchmark_host_id` pins one machine and therefore one
+architecture. Until there is one, every automated statement about this metric
+comes from a run on `darwin-arm64-mac17-2`, and what CI enforces is presence plus
+the self-test.
+
+The reason it exists at all is that this metric drifted to 1.62x with nothing
+going red for eight days and 834 commits, which is what a gate nobody runs looks
+like from the inside.
 
 ## Nothing here writes a credential to disk
 
@@ -217,3 +473,23 @@ finding to explain, not a baseline to re-cut. Re-capturing the baseline to make
 a red gate green is how the contract stops meaning anything; the record carries
 `commit`, `captured_at` and `working_tree_dirty` so a re-cut is visible in
 review.
+
+Shipping features does move them, and the record has been re-cut once, at
+`186ba0c7` (#635). The order that made that legitimate is the part to copy:
+**account for it first, capture second.** "What moved between `8ad3100` and
+`186ba0c7`" above is what a re-cut has to look like. Every component of the
+26,695,504-byte image move is attributed to a named change by a measurement
+somebody can repeat, the parts that are NOT explained by the obvious candidate
+are called out as such, and the one piece of real waste it turned up is written
+down rather than folded into the new number. A re-capture with none of that
+behind it records a regression as the new normal, which is the one use this
+directory must never be put to.
+
+There is a second way to put it to that use, and #635 nearly did. A threshold
+that a normal run cannot meet fails on trees nobody regressed, and a gate that
+always fails gets ignored exactly as fast as a gate nobody runs: the same ending
+by a different road. So the rule has a second half. **A threshold is sized from
+that metric's own measured movement, and a re-cut that leaves one unpassable is
+not finished.** `transfer_mb_per_second` above is the worked example, and the
+check is cheap: run the capture twice under conditions that differ, and see
+whether an unchanged tree clears its own floor both times.

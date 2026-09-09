@@ -66,6 +66,7 @@ function slashIdSet(overrides: Partial<BackupSet> = {}): BackupSet {
     stableForSeconds: 0,
     destination: "/data/backups/production/api-server/",
     retentionIsOverride: false,
+    connectionUnverified: false,
     validations: ["transfer"],
     state: "healthy",
     stateNote: "Verified nightly.",
@@ -78,6 +79,7 @@ function slashIdSet(overrides: Partial<BackupSet> = {}): BackupSet {
     retainedBytes: 1024,
     trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:test-fingerprint" }],
     trustedHostKeyRecordedAt: "2026-08-02T10:14:00Z",
+    sshKeyId: "key_a1b2c3",
     readOnly: false,
     readOnlyRetainedCount: 0,
     ...overrides

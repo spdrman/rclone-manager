@@ -23,6 +23,7 @@ import { usePlatform } from "@shared/platform/PlatformContext";
 import { notificationCopy } from "@shared/platform/capabilities";
 import { useCausl } from "@shared/state/graph";
 import { configuredNode, versionNode } from "@shared/state/appNodes";
+import { Banner } from "@shared/components/Banner";
 import { PageHeader } from "@shared/components/PageHeader";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
 import { ErrorState } from "@shared/components/EmptyState";
@@ -30,6 +31,7 @@ import { apiErrorOf, describeFailure } from "@shared/api/failure";
 import type { OperatorFailure } from "@shared/api/failure";
 import { RetentionPolicyCard } from "@shared/pages/RetentionPolicyCard";
 import { CapacityCard } from "@shared/pages/CapacityCard";
+import { StorageDestinationsCard } from "@shared/pages/StorageDestinationsCard";
 import { HelpField } from "@shared/components/FieldHelp";
 import { PasswordInput } from "@shared/components/PasswordInput";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
@@ -43,6 +45,20 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
   // which version is current.
   const version = useCausl(versionNode);
   const configured = useCausl(configuredNode);
+
+  // The two cards below read the same destinations twice, from two
+  // endpoints, into two independent fetches: the destinations card lists
+  // them, and the retention card needs them for its per-tier picker and
+  // for which one a NEW tier starts on. Neither can reload the other, so
+  // the page holds the one fact they have to agree about (#634).
+  //
+  // A revision rather than lifting the fetch itself, deliberately. The
+  // two reads answer different questions of different endpoints, and
+  // hoisting them into one would put a settings fetch in a page that has
+  // no other use for it and give the destinations card a shape nothing
+  // else on this page wants. What actually has to travel between them is
+  // one bit, "what you read is now out of date", and this is that bit.
+  const [destinationsRevision, setDestinationsRevision] = useState(0);
 
   return (
     <>
@@ -79,16 +95,28 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
               default, and the chain is not three fixed tiers). It is now
               the real thing, read from and written to the running
               config. */}
-          <RetentionPolicyCard readOnly={readOnly} />
+          <RetentionPolicyCard readOnly={readOnly} destinationsRevision={destinationsRevision} />
+
+          {/* G2.2 (#594). Beside the retention plan deliberately: a
+              retention tier's Medium field is a picker over exactly this
+              list, so the place where a destination is declared and the
+              place where a tier is pointed at one belong on the same
+              screen. Before this card there was no such place at all, and
+              declaring a destination meant editing config.yaml by hand,
+              which is the one thing EPIC G is about not having to do. */}
+          <StorageDestinationsCard
+            readOnly={readOnly}
+            onChanged={() => setDestinationsRevision((n) => n + 1)}
+          />
 
           <section className="card">
             <div className="card__header"><h2 className="eyebrow">Notifications</h2></div>
             <div className="card__body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {/* Honest capability copy — never present a fallback as native (§22). */}
-              <div className="banner banner--info" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
+              <Banner tone="info" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
                 <span aria-hidden="true" style={{ color: "var(--text-3)" }}>i</span>
                 <span>{notificationCopy(bridge.capabilities(), bridge.name)}</span>
-              </div>
+              </Banner>
               {/* Issue #299: this row used to present
                   "https://hooks.internal/bm" as a live webhook delivery
                   target. config.Alerts' own doc comment says where an
@@ -169,9 +197,17 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
                 // versionNode's one fetch is owned by App.tsx, not this page,
                 // so there is nothing here to retry (mirrors BackupSetsPage's
                 // operations.error inline notice, same reasoning).
-                <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+                <Banner
+                  tone="danger"
+                  style={{ fontSize: "var(--text-sm)" }}
+                  // The sentence names the failure it is reporting, so the
+                  // dismissal is scoped to THAT failure: a different one
+                  // puts the banner back without waiting for a remount
+                  // (#620).
+                  dismissKey={version.error.message}
+                >
                   {"Version information is unavailable (" + version.error.message + ") — details below may be out of date."}
-                </div>
+                </Banner>
               ) : (
                 <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Loading version information…</p>
               )}
@@ -319,9 +355,9 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
             )}
           </HelpField>
           {success ? (
-            <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
+            <Banner tone="ok" style={{ fontSize: "var(--text-sm)" }}>
               Password changed. Other signed-in sessions have been signed out.
-            </div>
+            </Banner>
           ) : null}
           {failure ? (
             <ErrorState

@@ -77,8 +77,14 @@ func setNamed(t *testing.T, live LiveActivity, id string) LiveActivitySet {
 
 // TestLiveActivity_ReportsTheStepsARealCycleGoesThroughInOrder is the
 // claim, against a real cycle: an operator watching this feed sees the
-// set discover, transfer, verify, commit and finish, in that order, with
-// every one of those lines attributed to the set it happened in.
+// set discover, transfer, verify and commit, in that order, with every
+// one of those lines attributed to the set it happened in, and sees the
+// cycle itself start and end on the deployment's own feed.
+//
+// Those are two readings since issue #593, and that is the point of it.
+// A set's strip carries the set's own work; the cycle brackets belong to
+// no single set and are served in their own right rather than copied onto
+// every strip.
 func TestLiveActivity_ReportsTheStepsARealCycleGoesThroughInOrder(t *testing.T) {
 	configPath := writeTestConfigFile(t)
 
@@ -112,12 +118,10 @@ func TestLiveActivity_ReportsTheStepsARealCycleGoesThroughInOrder(t *testing.T) 
 	}
 
 	want := []string{
-		obs.EventCycleStart,
 		obs.EventDiscovery,
 		obs.EventLifecycleTransition,
 		obs.EventTransferStats,
 		obs.EventCommit,
-		obs.EventCycleEnd,
 	}
 	if missing, ok := followsInOrder(want, names); !ok {
 		t.Errorf("the feed never reached %q in order. It reported:\n  %s\nand the steps a cycle goes through are:\n  %s",
@@ -137,13 +141,11 @@ func TestLiveActivity_ReportsTheStepsARealCycleGoesThroughInOrder(t *testing.T) 
 		t.Errorf("the set reports latest sequence %d and its last event is %d", set.LatestSequence, set.Events[len(set.Events)-1].Sequence)
 	}
 
-	// Every line says which set it is about, and the cycle-wide ones say
-	// they are cycle-wide rather than pretending to belong to this set.
+	// Every line on this strip is about this set, carries a clock and
+	// carries something to print.
 	for _, e := range set.Events {
-		switch e.Scope {
-		case LiveActivityScopeSet, LiveActivityScopeDeployment:
-		default:
-			t.Errorf("event %q has scope %q, which is neither of the two this feed defines", e.Event, e.Scope)
+		if e.Scope != LiveActivityScopeSet {
+			t.Errorf("event %q on a set's own strip has scope %q; since #593 a strip carries that set's ring and nothing else", e.Event, e.Scope)
 		}
 		if e.At.IsZero() {
 			t.Errorf("event %q carries no timestamp, so nothing could put a clock beside it", e.Event)
@@ -152,11 +154,26 @@ func TestLiveActivity_ReportsTheStepsARealCycleGoesThroughInOrder(t *testing.T) 
 			t.Errorf("event %q carries no message, so a terminal has nothing to print", e.Event)
 		}
 	}
-	if scope := findEvent(set, obs.EventCycleStart).Scope; scope != LiveActivityScopeDeployment {
-		t.Errorf("cycle_start is scoped %q; a cycle covers every set, and claiming it belongs to one would make a per-set count of them wrong", scope)
-	}
 	if scope := findEvent(set, obs.EventDiscovery).Scope; scope != LiveActivityScopeSet {
 		t.Errorf("discovery is scoped %q, and it names the set it discovered", scope)
+	}
+
+	// The cycle's own brackets, on the deployment's feed. Nothing is lost
+	// by taking them off the strip: they are still one poll away, still
+	// carrying the same sequence numbers, so a client holding both can
+	// interleave them exactly where they happened.
+	if live.Deployment == nil {
+		t.Fatalf("a reading of every set carries no deployment bucket, so a cycle starting and ending is on no screen at all")
+	}
+	deploymentNames := eventNamesOf(live.Deployment.Events)
+	if missing, ok := followsInOrder([]string{obs.EventCycleStart, obs.EventCycleEnd}, deploymentNames); !ok {
+		t.Errorf("the deployment's feed never reached %q in order. It reported:\n  %s",
+			missing, strings.Join(deploymentNames, "\n  "))
+	}
+	for _, e := range live.Deployment.Events {
+		if e.Scope != LiveActivityScopeDeployment {
+			t.Errorf("event %q in the deployment bucket is scoped %q", e.Event, e.Scope)
+		}
 	}
 
 	// The discovery line carries its own numbers, so a client renders
@@ -220,7 +237,7 @@ func TestLiveActivity_ListsEverySetIncludingOnesWithNothingToSay(t *testing.T) {
 // a client that has fallen behind can tell it missed something instead
 // of reading a gap as continuity.
 func TestLiveActivity_KeepsABoundedTailAndSaysWhereItStarts(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	total := liveActivityBufferSize + 50
 	for i := 0; i < total; i++ {
 		rec.RecordEvent(obs.Record{
@@ -252,7 +269,7 @@ func TestLiveActivity_KeepsABoundedTailAndSaysWhereItStarts(t *testing.T) {
 // pollable without re-sending the whole tail on every tick, and it is
 // also the shape a CLI following the feed would use.
 func TestLiveActivity_SinceReturnsOnlyWhatIsNewer(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	for i := 0; i < 5; i++ {
 		rec.RecordEvent(obs.Record{
 			At:      time.Now(),
@@ -286,12 +303,16 @@ func TestLiveActivity_SinceReturnsOnlyWhatIsNewer(t *testing.T) {
 }
 
 // TestLiveActivity_AttributesAnEventByWhateverNamesItsSet pins the three
-// ways a record reaches the right strip, including the one that matters
-// most: an error that names neither a set nor an artifact still belongs
-// to the set whose pass was running, because that is the line explaining
-// why the set stopped.
+// ways a record is sorted: an event that names its own set, an event that
+// names an artifact inside one, and an event that names neither and
+// therefore belongs to the deployment.
+//
+// Attribution was never the bug in #593 and this test is why: it was
+// already sorting events into the right buckets. What changed under it is
+// where the third bucket is READ, which is the half the assertions below
+// had to follow.
 func TestLiveActivity_AttributesAnEventByWhateverNamesItsSet(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 
 	rec.RecordEvent(obs.Record{
 		At: time.Now(), Level: obs.LevelInfo, Event: obs.EventDiscovery, Message: "discovery pass complete",
@@ -307,35 +328,40 @@ func TestLiveActivity_AttributesAnEventByWhateverNamesItsSet(t *testing.T) {
 	})
 
 	set := rec.snapshot("alpha/nightly", 0, 100)
-	if len(set.Events) != 3 {
-		t.Fatalf("the set's feed holds %d events; the discovery names it, the commit's artifact belongs to it, and the deployment-wide error reaches every strip", len(set.Events))
+	if len(set.Events) != 2 {
+		t.Fatalf("the set's feed holds %d events; the discovery names it and the commit's artifact belongs to it, and nothing else does", len(set.Events))
 	}
-	own := 0
 	for _, e := range set.Events {
 		switch e.Event {
 		case obs.EventDiscovery, obs.EventCommit:
-			own++
 			if e.Scope != LiveActivityScopeSet {
 				t.Errorf("event %q is scoped %q and it names this set", e.Event, e.Scope)
 			}
+		default:
+			t.Errorf("event %q reached alpha/nightly's strip and names neither the set nor an artifact in it", e.Event)
 		}
 	}
-	if own != 2 {
-		t.Errorf("%d of the set's events were attributed to it by name, and two were", own)
+
+	// The set that saw nothing of its own says so, with an empty feed.
+	// Before #593 it showed the deployment's error instead, which is how
+	// two sets doing entirely different things drew identical strips.
+	other := rec.snapshot("alpha/weekly", 0, 100)
+	if len(other.Events) != 0 {
+		t.Fatalf("a set that saw nothing of its own reports %v; a strip answers what THIS set is doing", eventNamesOf(other.Events))
 	}
 
-	// The unattributed error reaches every set's strip, marked as what it
-	// is. Dropping it instead would hide the failure entirely, and
-	// silently pinning it to one set would put it on the wrong screen.
-	other := rec.snapshot("alpha/weekly", 0, 100)
-	if len(other.Events) != 1 {
-		t.Fatalf("a set that saw nothing of its own reports %d events; the deployment-wide error should reach it", len(other.Events))
+	// The unattributed error is not dropped: it is on the deployment's
+	// own feed, marked as what it is and still carrying its level, so the
+	// global terminal can colour it.
+	_, deployment := rec.read(nil, true, 0, 100)
+	if deployment == nil || len(deployment.Events) != 1 {
+		t.Fatalf("the deployment bucket holds %v; the unattributed error belongs to it", deployment)
 	}
-	if other.Events[0].Scope != LiveActivityScopeDeployment {
-		t.Errorf("the unattributed error is scoped %q", other.Events[0].Scope)
+	if deployment.Events[0].Scope != LiveActivityScopeDeployment {
+		t.Errorf("the unattributed error is scoped %q", deployment.Events[0].Scope)
 	}
-	if other.Events[0].Level != "error" {
-		t.Errorf("the error arrived at level %q; a strip that cannot colour an error is a strip an operator has to read line by line", other.Events[0].Level)
+	if deployment.Events[0].Level != "error" {
+		t.Errorf("the error arrived at level %q; a terminal that cannot colour an error is one an operator has to read line by line", deployment.Events[0].Level)
 	}
 }
 
@@ -344,7 +370,7 @@ func TestLiveActivity_AttributesAnEventByWhateverNamesItsSet(t *testing.T) {
 // field, and a client renders the fraction from two numbers rather than
 // being handed one it cannot check.
 func TestLiveActivity_CountsArtifactsAndSaysSo(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	planned := 41
 	rec.ObserveProgress(app.Progress{
 		Stage:                 app.StageTransferring,
@@ -387,7 +413,7 @@ func TestLiveActivity_CountsArtifactsAndSaysSo(t *testing.T) {
 // headline. It is per set and per pass: last week's failure is not this
 // pass's, and another set's is not this one's.
 func TestLiveActivity_CountsThisPassesFailuresPerSet(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	fail := func(setID, artifact, to string) {
 		rec.RecordEvent(obs.Record{
 			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventLifecycleTransition, Message: "lifecycle transition",
@@ -499,7 +525,7 @@ func eventField(e LiveActivityEvent, key string) (string, bool) {
 // with the response saying nothing about it. Oldest first is what makes
 // a cursor mean "carry on from here" rather than "jump to the end".
 func TestLiveActivity_ACursoredReadHandsBackTheOldestFirst(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	const burst = 120
 	const limit = 10
 	for i := 0; i < burst; i++ {
@@ -553,23 +579,31 @@ func TestLiveActivity_ReadsEverySetAsOfOneMoment(t *testing.T) {
 	svc := newTestService(t, config.Source{Name: "alpha", BackupSets: sets})
 	t.Cleanup(func() { _ = svc.Close() })
 
-	// Deployment-scoped events, so every set's strip reads the same
-	// buffer and any disagreement between two of them in one reading is
-	// the read having torn rather than the sets genuinely differing.
+	// Strict alternation between the FIRST and the LAST set in the
+	// reading, which is what makes a torn read detectable now that a set
+	// reads its own ring alone (issue #593). At any single instant those
+	// two buckets' newest sequences differ by exactly one; a loop that
+	// released the lock between them can show any gap at all, and the six
+	// buckets between them are the distance it has to tear across.
+	first, last := "alpha/one", "alpha/six"
 	stop := make(chan struct{})
 	var writers sync.WaitGroup
 	writers.Add(1)
 	go func() {
 		defer writers.Done()
+		record := func(id string) {
+			svc.activity.RecordEvent(obs.Record{
+				At: time.Now(), Level: obs.LevelInfo, Event: obs.EventDiscovery, Message: "discovery pass complete",
+				Fields: []obs.Field{{Key: "backup_set", Value: id}},
+			})
+		}
 		for {
 			select {
 			case <-stop:
 				return
 			default:
-				svc.activity.RecordEvent(obs.Record{
-					At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCycleStart, Message: "cycle starting",
-					Fields: []obs.Field{{Key: "cycle_id", Value: "c1"}},
-				})
+				record(first)
+				record(last)
 			}
 		}
 	}()
@@ -583,11 +617,17 @@ func TestLiveActivity_ReadsEverySetAsOfOneMoment(t *testing.T) {
 		if len(live.Sets) != len(sets) {
 			t.Fatalf("the reading holds %d sets and the configuration declares %d", len(live.Sets), len(sets))
 		}
-		for _, s := range live.Sets[1:] {
-			if s.LatestSequence != live.Sets[0].LatestSequence {
-				t.Fatalf("one reading reports %s at sequence %d and %s at %d. Every set here reads the same deployment-wide buffer, so two different answers mean the reading was assembled from two different moments, and the client's single cursor will land on the later one and skip whatever the earlier bucket gained in between",
-					live.Sets[0].BackupSetID, live.Sets[0].LatestSequence, s.BackupSetID, s.LatestSequence)
-			}
+		a, b := setNamed(t, live, first), setNamed(t, live, last)
+		if a.LatestSequence == 0 || b.LatestSequence == 0 {
+			continue // nothing has been written into both buckets yet
+		}
+		gap := a.LatestSequence - b.LatestSequence
+		if gap < 0 {
+			gap = -gap
+		}
+		if gap > 1 {
+			t.Fatalf("one reading reports %s at sequence %d and %s at %d. The writer alternates strictly between the two, so at any single instant they differ by one; a gap of %d means the reading was assembled from two different moments, and the client's single cursor will land on the later one and skip whatever the earlier bucket gained in between",
+				first, a.LatestSequence, last, b.LatestSequence, gap)
 		}
 	}
 }
@@ -597,7 +637,7 @@ func TestLiveActivity_ReadsEverySetAsOfOneMoment(t *testing.T) {
 // there are has to be able to tell that from having caught up, or it
 // waits out an idle interval while the process is holding lines for it.
 func TestLiveActivity_SaysWhenALimitCutTheReadingShort(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	for i := 0; i < 30; i++ {
 		rec.RecordEvent(obs.Record{
 			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
@@ -628,7 +668,7 @@ func TestLiveActivity_SaysWhenALimitCutTheReadingShort(t *testing.T) {
 // holds, and a panel that draws that hole as a continuous log is lying
 // about the very thing it exists to show.
 func TestLiveActivity_SaysWhenACursorFellOffTheBackOfTheBuffer(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	record := func() {
 		rec.RecordEvent(obs.Record{
 			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
@@ -668,7 +708,7 @@ func TestLiveActivity_SaysWhenACursorFellOffTheBackOfTheBuffer(t *testing.T) {
 // headline from those two paints it exactly the way it paints a set with
 // nothing to do. The pass's own verdict is the fact that separates them.
 func TestLiveActivity_CarriesHowThePassEndedNotJustItsFailureCount(t *testing.T) {
-	rec := newLiveActivity()
+	rec := newLiveActivity(configuredSets("alpha/nightly", "alpha/weekly"))
 	rec.ObserveProgress(app.Progress{Stage: app.StageDiscovering, BackupSetID: "alpha/nightly"})
 	rec.ObserveSetOutcome("alpha/nightly", app.SetOutcomeFailed)
 
@@ -693,5 +733,59 @@ func TestLiveActivity_CarriesHowThePassEndedNotJustItsFailureCount(t *testing.T)
 	rec.ObserveProgress(app.Progress{Stage: app.StageDiscovering, BackupSetID: "alpha/nightly"})
 	if got := rec.snapshot("alpha/nightly", 0, 100).Outcome; got != "" {
 		t.Errorf("a fresh pass over alpha/nightly still reports outcome %q from the pass before it", got)
+	}
+}
+
+// TestLiveActivity_AFirstReadIsNotToldLinesWereDropped is the honesty
+// flag's own honesty.
+//
+// since=0 means "whatever is still held", and a client that has never
+// asked has missed nothing: it has no cursor for the buffer to have
+// overflowed past, so there is no gap between what it holds (nothing)
+// and the tail it is handed. Reporting a drop there puts "Earlier lines
+// are not held here any more" on the FIRST load of every deployment that
+// has been up long enough to overflow a bucket, and a browser that
+// carries the flag forward once it has seen it keeps that warning on
+// screen for the life of the tab.
+//
+// A gap warning that fires when there is no gap is worse than no warning
+// at all: it is the one signal this feed is proudest of, and an operator
+// who has learnt to ignore it will ignore the real one too.
+func TestLiveActivity_AFirstReadIsNotToldLinesWereDropped(t *testing.T) {
+	rec := newLiveActivity(configuredSets("alpha/nightly"))
+	record := func() {
+		rec.RecordEvent(obs.Record{
+			At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCommit, Message: "durable commit complete",
+			Fields: []obs.Field{{Key: "artifact", Value: "alpha/nightly/one.dump"}},
+		})
+	}
+	// Comfortably past the bucket's capacity, so it really has thrown
+	// lines away and `evicted` really is above zero.
+	for i := 0; i < liveActivityBufferSize+60; i++ {
+		record()
+	}
+
+	first := rec.snapshot("alpha/nightly", 0, liveActivityMaxLimit)
+	if first.Dropped {
+		t.Errorf("the first read of a set's strip reports dropped=true. since=0 asks for whatever is still held, and a client that has never asked has missed nothing; this is the panel telling every operator on a long-running deployment that its log has a hole in it before they have read a single line")
+	}
+
+	// The deployment's own bucket answers the same question the same way,
+	// and it is the bucket a freshly opened terminal reads first.
+	rec.RecordEvent(obs.Record{At: time.Now(), Level: obs.LevelInfo, Event: obs.EventCycleStart, Message: "cycle starting"})
+	_, deployment := rec.read(nil, true, 0, liveActivityMaxLimit)
+	if deployment == nil {
+		t.Fatal("the read carries no deployment bucket")
+	}
+	if deployment.Dropped {
+		t.Errorf("the first read of the deployment bucket reports dropped=true, for the same reason and on the same screen")
+	}
+
+	// The control, and the reason this is a narrowing rather than a
+	// removal: a cursor that really did fall off the back still says so.
+	behind := rec.snapshot("alpha/nightly", 5, liveActivityMaxLimit)
+	if !behind.Dropped {
+		t.Errorf("a cursor at 5 after %d events overflowed a %d-event buffer reports dropped=false; narrowing this flag to a client that HAS a cursor must not silence it for the client whose cursor was passed",
+			liveActivityBufferSize+60, liveActivityBufferSize)
 	}
 }

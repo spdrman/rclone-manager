@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/spdrman/rclone-manager/core/apicontract"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
@@ -54,7 +55,13 @@ import (
 // POST /api/v1/backup-sets/{id}/run) are later-phase work that needs
 // backup-set CRUD/addressing this issue deliberately does not build; see
 // this package's introducing PR description.
-const ActionRunCycle = "run_cycle"
+// The value itself is apicontract's, because the same string is the wire
+// value of SubmitOperationRequest.Action, the durable operations.action
+// column, and what core/cliecho switches on to name the equivalent
+// command. That last reader had its own literal and it was wrong: it
+// switched on "restore", which nothing sends. One spelling cannot be
+// wrong in one place.
+const ActionRunCycle = apicontract.ActionRunCycle
 
 // ErrConfigRevisionStale is returned by SubmitRunCycle when the caller's
 // ConfigRevision does not match BackupService.ConfigRevision(): the
@@ -706,7 +713,14 @@ func summarizeCycle(report app.CycleReport) string {
 // So the two counts are read as pointers and a summary missing them is
 // reported as no outcome at all.
 func parseCycleSummary(rec state.Operation) *CycleOutcome {
-	if rec.Action != ActionRunCycle || rec.Status != state.OperationCompleted || rec.Result == "" {
+	// Both run actions, because summarizeFetch (runbackupset.go) records
+	// the same shape on purpose: a per-set run's counts mean the same
+	// thing a cycle's do, and giving them a second format would make
+	// every reader above this layer learn two.
+	if rec.Action != ActionRunCycle && rec.Action != ActionRunBackupSet {
+		return nil
+	}
+	if rec.Status != state.OperationCompleted || rec.Result == "" {
 		return nil
 	}
 	var raw struct {

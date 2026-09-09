@@ -59,7 +59,7 @@ func TestSinkSeesEveryEventTheLogLineDoes(t *testing.T) {
 	ctx := context.Background()
 	logger.CycleStart(ctx, "2026-09-07T00:16:29Z")
 	logger.Discovery(ctx, "api-server/var-backups", 41, 15, 26, 0, 0, 0)
-	logger.LifecycleTransition(ctx, "api-server/var-backups/dpkg.status.2.gz", "DISCOVERED", "TRANSFERRING", "")
+	logger.LifecycleTransition(ctx, "api-server/var-backups/dpkg.status.2.gz", "DISCOVERED", "TRANSFERRING", "", false)
 	logger.TransferStats(ctx, "api-server/var-backups/dpkg.status.2.gz", 4194304, 0, false)
 
 	got := sink.all()

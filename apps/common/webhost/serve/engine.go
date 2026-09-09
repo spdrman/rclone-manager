@@ -76,6 +76,14 @@ type EngineConfig struct {
 	// webhost.NewRouter's own NotYetImplementedGate default.
 	Gate webhost.DestructiveGate
 
+	// Recorder is where every action taken through /api/v1 is recorded so
+	// an operator can read it (issue #599). Left nil, newEngineHandler
+	// uses the Backend itself when it can record, which is the case for
+	// every real deployment: core/service.BackupService implements both
+	// seams. A host that wants the API to leave no trace has to build a
+	// Backend that cannot record, rather than get silence by omission.
+	Recorder webhost.ActionRecorder
+
 	// FirstRun is the setup surface of an instance that may have no
 	// configuration yet (issue #176). Set it, leave Backend nil, and
 	// build the engine with NewFirstRunEngine (firstrun.go) rather than
@@ -89,6 +97,14 @@ type EngineConfig struct {
 	// returns, which is what a provider passes straight through). Called
 	// at most once, and only by a FirstRunEngine.
 	Activate func(ctx context.Context) (webhost.BackupServiceClient, func() error, error)
+
+	// Logger, when non-nil, is where the API's own refusals go instead of
+	// this process's stdout (#598). Nil is the ordinary production case
+	// and is not silence: webhost.NewRouter falls back to JSON on stdout,
+	// which is what `docker logs` on the engine container shows. A host
+	// that can reach core/internal/obs (one inside the core module) can
+	// pass its own obs.Logger here and get redaction with it.
+	Logger webhost.Logger
 
 	BinaryVersion string
 	Commit        string

@@ -54,13 +54,48 @@ type liveActivityFieldResponse struct {
 // is what the emitter picked when it decided a line was a warning rather
 // than a note, so it is passed through rather than re-derived here.
 type liveActivityEventResponse struct {
-	Sequence int64                       `json:"sequence"`
-	At       string                      `json:"at"`
-	Level    string                      `json:"level"`
-	Event    string                      `json:"event"`
-	Scope    string                      `json:"scope"`
-	Message  string                      `json:"message"`
-	Fields   []liveActivityFieldResponse `json:"fields"`
+	Sequence int64  `json:"sequence"`
+	At       string `json:"at"`
+	Level    string `json:"level"`
+
+	// Result is how the operation this line reports WENT, and it is not
+	// a second spelling of Level (issue #625). The level says how loudly
+	// the emitter logged; the result says how the thing turned out, and
+	// there is no "success" severity to fold the two into, because a
+	// level is an ordering every reader treats as a threshold. Before
+	// this field existed, a completion that went well arrived at info,
+	// read as a neutral note, and every client that wanted to draw it as
+	// good news re-derived one from event names and lifecycle state
+	// values, with anything the derivation had never heard of staying
+	// grey. Passed through, never composed here, for the same reason
+	// Level is.
+	//
+	// Named result and not outcome deliberately. connection_test carries
+	// a field of its own called outcome, and LiveActivitySet.Outcome in
+	// this same response is a third vocabulary again: a client reading
+	// set.outcome beside set.events[i].result is told those are different
+	// questions rather than left to notice it from two enums.
+	Result string `json:"result,omitempty"`
+
+	// Action and ActionID pair a start with its completion. Omitted on
+	// every line that is neither half of a pair; a line carrying an id
+	// and no result is a start, and one carrying both closes it.
+	Action   string `json:"action,omitempty"`
+	ActionID string `json:"action_id,omitempty"`
+
+	Event   string                      `json:"event"`
+	Scope   string                      `json:"scope"`
+	Message string                      `json:"message"`
+	Fields  []liveActivityFieldResponse `json:"fields"`
+}
+
+// liveActivityActionResponse is one action that started and has not
+// reported an outcome (issue #625).
+type liveActivityActionResponse struct {
+	Action    string `json:"action"`
+	ActionID  string `json:"action_id"`
+	StartedAt string `json:"started_at"`
+	Sequence  int64  `json:"sequence"`
 }
 
 // liveActivitySetResponse is one backup set's strip.
@@ -93,12 +128,48 @@ type liveActivitySetResponse struct {
 
 	Events []liveActivityEventResponse `json:"events"`
 
+	// UnfinishedActions is every action inside this set that announced
+	// itself and has not said how it went. Always present rather than
+	// omitted when empty, so a client has one shape to render: an absent
+	// key and an empty list would otherwise read the same, and one of
+	// them is a server that stopped answering the question.
+	UnfinishedActions []liveActivityActionResponse `json:"unfinished_actions"`
+
 	// Truncated and Dropped are the two ways this tail can be less than
 	// what the caller asked for, and they are always present rather than
 	// omitted-when-false: a client reading an absent key as "nothing is
 	// missing" reads a server that stopped sending them the same way, and
 	// the whole point of both is that silence about a gap is what this
 	// feed must never do.
+	Truncated bool `json:"truncated"`
+	Dropped   bool `json:"dropped"`
+
+	OldestSequence int64 `json:"oldest_sequence"`
+	LatestSequence int64 `json:"latest_sequence"`
+}
+
+// liveActivityDeploymentResponse is the log that belongs to no single
+// backup set (issue #593).
+//
+// It used to be copied into every set's feed, on the argument that
+// dropping it would hide it and pinning it to one set would put it on the
+// wrong screen. Both of those are true and both alternatives are worse;
+// what was missing was a third place to put it, which is what issue
+// #599's global terminal is. So the shared ring is served here, once,
+// and a set's feed carries that set's own ring alone.
+type liveActivityDeploymentResponse struct {
+	Events []liveActivityEventResponse `json:"events"`
+
+	// UnfinishedActions is every deployment-wide action still owing an
+	// outcome. A cycle is the one this matters most for: it belongs to no
+	// single set, so this bucket is the only place a cycle that started
+	// and went quiet can be reported at all.
+	UnfinishedActions []liveActivityActionResponse `json:"unfinished_actions"`
+
+	// The same two honesty flags a set's strip carries, always present
+	// rather than omitted when false, for the same reason: a client
+	// reading an absent key as "nothing is missing" reads a server that
+	// stopped sending them the same way.
 	Truncated bool `json:"truncated"`
 	Dropped   bool `json:"dropped"`
 
@@ -124,6 +195,12 @@ type liveActivityResponse struct {
 	PollAfterMS int `json:"poll_after_ms"`
 
 	Sets []liveActivitySetResponse `json:"sets"`
+
+	// Deployment is omitted, not empty, when this reading was narrowed to
+	// one backup set: a caller that named a set asked about that set, and
+	// an empty bucket would read as "the deployment has said nothing"
+	// rather than "you did not ask".
+	Deployment *liveActivityDeploymentResponse `json:"deployment,omitempty"`
 }
 
 // getLiveActivity is GET /api/v1/activity/live. Read-only (§50), so no
@@ -138,6 +215,13 @@ type liveActivityResponse struct {
 // feed for a set that does not exist reads exactly like a quiet set.
 func (h *handlers) getLiveActivity(w http.ResponseWriter, r *http.Request) {
 	req := service.LiveActivityRequest{BackupSetID: r.URL.Query().Get("backup_set")}
+	// scope is advisory in the same way since and limit are: the one
+	// value it takes narrows the reading, and anything else is ignored
+	// rather than refused, because blanking a panel over a query string
+	// is the one thing this feed exists not to do.
+	if r.URL.Query().Get("scope") == service.LiveActivityScopeDeployment {
+		req.DeploymentOnly = true
+	}
 	if raw := r.URL.Query().Get("since"); raw != "" {
 		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
 			req.Since = parsed
@@ -155,7 +239,7 @@ func (h *handlers) getLiveActivity(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to read live activity")
+		h.internalError(w, r, "INTERNAL", "failed to read live activity", err)
 		return
 	}
 
@@ -171,7 +255,60 @@ func (h *handlers) getLiveActivity(w http.ResponseWriter, r *http.Request) {
 	for _, s := range live.Sets {
 		resp.Sets = append(resp.Sets, liveActivitySetOf(s))
 	}
+	if live.Deployment != nil {
+		resp.Deployment = &liveActivityDeploymentResponse{
+			Events:            liveActivityEventsOf(live.Deployment.Events),
+			UnfinishedActions: liveActivityActionsOf(live.Deployment.Unfinished),
+			Truncated:         live.Deployment.Truncated,
+			Dropped:           live.Deployment.Dropped,
+			OldestSequence:    live.Deployment.OldestSequence,
+			LatestSequence:    live.Deployment.LatestSequence,
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// liveActivityEventsOf renders one bucket's events. Shared by a set's
+// strip and the deployment's bucket, so the two can never drift into
+// describing the same event differently.
+func liveActivityEventsOf(events []service.LiveActivityEvent) []liveActivityEventResponse {
+	out := make([]liveActivityEventResponse, 0, len(events))
+	for _, e := range events {
+		event := liveActivityEventResponse{
+			Sequence: e.Sequence,
+			At:       formatTime(e.At),
+			Level:    e.Level,
+			Result:   e.Result,
+			Action:   e.Action,
+			ActionID: e.ActionID,
+			Event:    e.Event,
+			Scope:    e.Scope,
+			Message:  e.Message,
+			Fields:   make([]liveActivityFieldResponse, 0, len(e.Fields)),
+		}
+		for _, f := range e.Fields {
+			event.Fields = append(event.Fields, liveActivityFieldResponse{Key: f.Key, Value: f.Value})
+		}
+		out = append(out, event)
+	}
+	return out
+}
+
+// liveActivityActionsOf renders one bucket's unfinished actions. A
+// non-nil empty slice, so a bucket with nothing open serialises
+// "unfinished_actions": [] rather than null and a client has one shape to
+// render instead of two.
+func liveActivityActionsOf(actions []service.LiveActivityAction) []liveActivityActionResponse {
+	out := make([]liveActivityActionResponse, 0, len(actions))
+	for _, a := range actions {
+		out = append(out, liveActivityActionResponse{
+			Action:    a.Action,
+			ActionID:  a.ActionID,
+			StartedAt: formatTime(a.StartedAt),
+			Sequence:  a.Sequence,
+		})
+	}
+	return out
 }
 
 func liveActivitySetOf(s service.LiveActivitySet) liveActivitySetResponse {
@@ -188,7 +325,8 @@ func liveActivitySetOf(s service.LiveActivitySet) liveActivitySetResponse {
 		BytesPerSecond:     s.BytesPerSecond,
 		Failures:           s.Failures,
 		Outcome:            s.Outcome,
-		Events:             make([]liveActivityEventResponse, 0, len(s.Events)),
+		Events:             liveActivityEventsOf(s.Events),
+		UnfinishedActions:  liveActivityActionsOf(s.Unfinished),
 		Truncated:          s.Truncated,
 		Dropped:            s.Dropped,
 		OldestSequence:     s.OldestSequence,
@@ -199,21 +337,6 @@ func liveActivitySetOf(s service.LiveActivitySet) liveActivitySetResponse {
 	}
 	if s.FinishedAt != nil {
 		out.FinishedAt = formatTime(*s.FinishedAt)
-	}
-	for _, e := range s.Events {
-		event := liveActivityEventResponse{
-			Sequence: e.Sequence,
-			At:       formatTime(e.At),
-			Level:    e.Level,
-			Event:    e.Event,
-			Scope:    e.Scope,
-			Message:  e.Message,
-			Fields:   make([]liveActivityFieldResponse, 0, len(e.Fields)),
-		}
-		for _, f := range e.Fields {
-			event.Fields = append(event.Fields, liveActivityFieldResponse{Key: f.Key, Value: f.Value})
-		}
-		out.Events = append(out.Events, event)
 	}
 	return out
 }

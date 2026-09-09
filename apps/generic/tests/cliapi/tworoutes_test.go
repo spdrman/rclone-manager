@@ -418,6 +418,15 @@ func createArgs(configPath, keyPath, id string, extra ...string) []string {
 		// written there: no cycle runs for a set created in these tests.
 		"--local-path", "/data/backups/api",
 		"--completion-strategy", "rename",
+		// Issue #624: `create` proves the connection before it writes,
+		// and source.example.internal is a name that resolves nowhere.
+		// Every test in this package is about where the change LANDS, on
+		// which route, in which mode, so they skip the check the way an
+		// operator building configuration offline does. Whether the check
+		// happens at all is core/cmd/backup-manager's own suite, and
+		// whether it happens against two real machines is
+		// scripts/e2e/two-machine-backup.sh.
+		"--no-verify",
 	}, extra...)
 }
 
@@ -662,8 +671,19 @@ type surface struct {
 	// because an argv turned out to be inert.
 	writes bool
 
-	// routed says a serving engine can carry this write. False on a write
-	// is a gap, and why is recorded in note rather than left to a reader.
+	// routed says this invocation goes through the write door, so a
+	// serving engine carries it and an unreachable one refuses it. False
+	// on a write is a gap, and why is recorded in note rather than left to
+	// a reader.
+	//
+	// It used to be readable as "a serving engine can carry this WRITE",
+	// because every row that had it was a write. #636 moved `medium
+	// preflight` onto that door without making it one: a check that passes
+	// clears a destination's unverified mark, which is a configuration
+	// write, but the invocation this table drives names a destination
+	// nothing declares and so writes nothing. The field is what it always
+	// checked, which is the door, and the reads test below reads it that
+	// way.
 	routed bool
 
 	// mode is the announcement this invocation makes with nothing serving:
@@ -728,6 +748,13 @@ var surfaces = []surface{
 		}},
 	{verb: "artifacts", name: "the whole journal", mode: "direct", exit: 0, needsArtifacts: true,
 		argv: func(f fixture) []string { return []string{"artifacts", "--config", f.configPath} }},
+	{verb: "activity", name: "the durable log", mode: "direct", exit: 0, needsArtifacts: true,
+		argv: func(f fixture) []string { return []string{"activity", "--config", f.configPath} }},
+	{verb: "activity", name: "the live feed, which only a serving engine has", skipDirect: true, exit: 0,
+		note: "--follow reads the feed the serving process holds in memory, so unlike the durable log above it has no direct answer at all: a deployment with nothing serving it has no live feed to show, which is why this row is routed-only",
+		argv: func(f fixture) []string {
+			return []string{"activity", "--config", f.configPath, "--follow", "--limit", "1"}
+		}},
 	{verb: "fetch", name: "one set on demand", mode: "", exit: 0,
 		argv: func(f fixture) []string {
 			return []string{"fetch", "--config", f.configPath, "--source", "production", "--backup-set", "pg"}
@@ -749,8 +776,12 @@ var surfaces = []surface{
 		}},
 	{verb: "unconfigured", name: "what the journal remembers", mode: "", exit: 0,
 		argv: func(f fixture) []string { return []string{"unconfigured", "--config", f.configPath} }},
-	{verb: "medium", name: "preflight", mode: "", exit: 1,
-		note: "this deployment declares no storage medium, so this refuses for the missing subject",
+	{verb: "medium", name: "preflight", mode: "direct", exit: 1, routed: true,
+		note: "this deployment declares no storage medium, so this refuses for the missing subject. " +
+			"It names a mode as of #636 and did not before: a check that PASSES now clears that destination's " +
+			"unverified mark, which is a configuration write, so the verb moved onto the door the medium writes " +
+			"already go through. It is not a write ITSELF, which is why this row does not carry `writes`: the one " +
+			"thing it can change is a mark, and only on a destination that both exists and passes",
 		argv: func(f fixture) []string {
 			return []string{"medium", "--config", f.configPath, "preflight", "no-such-medium"}
 		}},
@@ -1242,7 +1273,16 @@ func TestAReadBesideAnEngineItCannotReachSaysSoRatherThanAnsweringAsIfNothingWer
 
 	var reads int
 	for _, s := range surfaces {
-		if s.mode == "" || s.writes {
+		// A read is a row that names a mode, writes nothing, and does not
+		// go through the write door. The third clause arrived with #636
+		// and is not a loosening: a command on that door is REFUSED beside
+		// an engine it cannot reach, which is the opposite of what every
+		// assertion in this loop asks for, and `medium preflight` is on it
+		// now because a check that passes clears a mark. Without the
+		// clause it fell in here for the one reason this table cannot see
+		// on its own, which is that the invocation it drives names a
+		// destination nothing declares and therefore writes nothing.
+		if s.mode == "" || s.writes || s.routed {
 			continue
 		}
 		reads++
@@ -1269,8 +1309,8 @@ func TestAReadBesideAnEngineItCannotReachSaysSoRatherThanAnsweringAsIfNothingWer
 			}
 		})
 	}
-	if reads != 4 {
-		t.Fatalf("%d rows are recorded as reads that name a mode; #544 gave four surfaces one, and a table that has lost or gained one is describing a different product", reads)
+	if reads != 5 {
+		t.Fatalf("%d rows are recorded as reads that name a mode; #544 gave four surfaces one and #598 made activity the fifth, and a table that has lost or gained one is describing a different product", reads)
 	}
 }
 
@@ -1842,6 +1882,15 @@ func TestTheWizardsReadOnlyChoiceSurvivesTheFirstRunSave(t *testing.T) {
 		// The tick under test. Everything above it is here so the save is
 		// a real one rather than a minimal one.
 		ReadOnly: true,
+		// Issue #624: the service proves a first set's connection in front
+		// of the write, and source.example.internal is a name that
+		// resolves nowhere. This case is about the read-only tick surviving
+		// a real save, activation and a read back, not about the check, so
+		// it skips it the way every `backup-set create` in this package
+		// does (createArgs). The check's own cases are in core/service and
+		// apps/common/webhost, and its real-machine proof is
+		// scripts/e2e/two-machine-backup.sh.
+		SkipConnectionCheck: true,
 	}
 
 	code, body := view.post("/api/v1/system/first-run", spec)

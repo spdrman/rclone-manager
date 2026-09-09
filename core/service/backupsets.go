@@ -43,6 +43,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/rclone-manager/core/internal/sourcecheck"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
@@ -152,6 +153,26 @@ type BackupSet struct {
 	// something to pre-select a picklist with.
 	ValidatorID ValidatorID
 
+	// SSHKeyID is the key-store id this set's configured key file
+	// resolves to (#592), the same value ImportSSHKey returned, ListSSHKeys
+	// lists and UpdateBackupSetRequest.SSHKeyID takes. Never the path,
+	// for the reason ValidatorID above is not one either.
+	//
+	// EMPTY IS A REAL ANSWER and has to be rendered as one: it means this
+	// set uses a key this deployment does not manage, which is every set
+	// pointing at a mounted or hand-provisioned key.file and is a
+	// perfectly ordinary shape. A surface that showed a blank where an id
+	// goes would be saying "this set has no key" about a set that has
+	// one.
+	//
+	// It is here because it was the field that made the edit box
+	// unusable. UpdateBackupSetRequest has always been able to WRITE
+	// ssh_key_id and nothing could read it back, so the detail page could
+	// not name the key it was about to replace, and "replace the existing
+	// method" is meaningless when the thing being replaced is never
+	// shown.
+	SSHKeyID string
+
 	Disabled bool
 
 	// ReadOnly is the fully-resolved answer to issue #282's "may this
@@ -188,6 +209,27 @@ type BackupSet struct {
 	// trustedHostKeysFor for why a hand-maintained file's timestamp is not
 	// an answer to "when was this host key trusted".
 	TrustedHostKeyRecordedAt time.Time
+
+	// ConnectionUnverified reports that this backup set was written
+	// without its SSH connection ever having been proven (issue #624,
+	// config.BackupSet.ConnectionUnverified).
+	//
+	// True means the caller told this service to skip the check it runs
+	// in front of every create and every connection-changing edit
+	// (SkipConnectionCheck on either request, `--no-verify` on the CLI,
+	// `skip_connection_check` on the API), and nothing else writes it: the
+	// mark is this service's own record of what it did not do, never a
+	// caller's claim about what it did. False is every other set,
+	// including every set written before the mark existed, which is why
+	// absence is not read as "unverified" (see the config field's own doc
+	// for why an upgrade must not declare every existing set unproven).
+	//
+	// It is reported so a surface can DRAW the difference. A set nobody
+	// ever proved and a set checked against a real server used to be
+	// indistinguishable in every list, on every screen and in every
+	// command's output, which is what made --no-verify a hole rather than
+	// an escape hatch.
+	ConnectionUnverified bool
 
 	// RetentionIsOverride reports whether this backup set declares its own
 	// retention policy rather than being retained under the deployment's
@@ -298,6 +340,30 @@ type CreateBackupSetRequest struct {
 	// run_cycle operation RunImmediately submits. Unused when
 	// RunImmediately is false or Disabled is true.
 	Actor string
+
+	// SkipConnectionCheck writes this set without proving its connection
+	// first (issue #624). It is `backup-set create --no-verify`, spelled
+	// the same way `medium add --no-verify` and
+	// UpdateBackupSetRequest.SkipConnectionCheck are, because it is the
+	// same decision on every write that declares a connection.
+	//
+	// CreateBackupSet runs the candidate check itself, the same six steps
+	// TestConnection answers for the wizard's button, and refuses with
+	// ErrConnectionNotProven when it fails; this is the way past that. A
+	// set written under it is marked ConnectionUnverified until a test
+	// passes, and the mark is THIS method's own record of what it did not
+	// do rather than anything a caller said. An earlier shape of this
+	// request carried the mark itself, as a statement about what the
+	// caller had done, and that made it a claim the server could not
+	// check: any client that was not this repository's own CLI or wizard
+	// could omit it and write an unproven set indistinguishable on every
+	// screen from one checked against a real server, which is the exact
+	// state the mark exists to end (PR #628 review).
+	//
+	// Not a pointer, for the same reason the acknowledgement below is
+	// not: it is a yes/no about this one call, and false, the value a
+	// caller gets by not mentioning it, is the one that checks.
+	SkipConnectionCheck bool
 
 	// AcknowledgeRepoint confirms that the caller means to create this
 	// backup set somewhere other than where the history already on its id
@@ -411,6 +477,13 @@ func newBackupSetFor(configPath, sourceName, keyFile string, req CreateBackupSet
 		// with an error naming a directory rather than the cause.
 		Validation: config.Validation{Hash: "", ValidatorID: string(req.ValidatorID)},
 		Disabled:   req.Disabled,
+		// Issue #624's mark, written by this method and not by the caller:
+		// a set the caller told us not to check says so in the file, and a
+		// set created the ordinary way, which is a set whose check passed
+		// before either create path got here, leaves the key out entirely
+		// (omitempty), which is what keeps absence meaning what it meant
+		// in every configuration written before this field existed.
+		ConnectionUnverified: req.SkipConnectionCheck,
 	}
 	// A pointer to a fresh local, never &req.ReadOnly: req is this
 	// function's own by-value parameter, so its address is safe to persist
@@ -452,6 +525,52 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	keyFile, err := b.resolveSSHKeyFile(req.SSHKeyID)
 	if err != nil {
 		return CreateBackupSetResult{}, err
+	}
+
+	// Issue #624: the connection this set declares is proven before it
+	// is written, by this method and not by whoever called it, and the
+	// write is refused when it cannot be. The first shape of the feature
+	// left the check to the CLI and the wizard and took the MARK from the
+	// request, as a statement about what the caller had done; the service
+	// wrote whatever it was told, so any other client could omit the
+	// field and write an unproven set indistinguishable from a checked
+	// one (PR #628 review). The mark is now newBackupSetFor's own record
+	// of the skip below, and nothing a caller sends can write it.
+	//
+	// It is the candidate check, the same TestConnection the wizard's
+	// button and the CLI's own pre-write check call, because a create is
+	// the one write whose request carries everything the check needs.
+	// That is also why it runs HERE, before configMu, and not where
+	// UpdateBackupSet runs its check: nothing about a candidate depends on
+	// the configuration the lock protects, and holding a process-wide
+	// lock across network I/O is the thing this PR's review found, so it
+	// is not done where it does not have to be. It runs after
+	// validateCreateRequest and the key resolution so a malformed request
+	// or an unknown key is refused as what it is rather than as an
+	// unreachable host. The one ordering cost is that a create whose
+	// whole-configuration problem only cfg.Validate below can see, a
+	// duplicate id say, is refused for its connection first when the host
+	// answers nothing and for the duplicate once it does; those are two
+	// things wrong with one request, and each refusal names its own.
+	//
+	// The CLI and the wizard both run this same check before they submit,
+	// so a set created through either is checked twice on the way in.
+	// That is the price of the service never taking a caller's word for
+	// it, and it is a few hundred milliseconds against a host that
+	// answers; against one that does not, the caller's own check refuses
+	// first and this one never runs.
+	if !req.SkipConnectionCheck {
+		result, err := b.TestConnection(ctx, candidateConnectionFor(req))
+		if err != nil {
+			return CreateBackupSetResult{}, err
+		}
+		if !result.OK {
+			// Safe to echo, for the reason UpdateBackupSet gives: Message
+			// is one of internal/sourcecheck's own sentences composed
+			// from the caller's own values, never a transport error's
+			// text.
+			return CreateBackupSetResult{}, fmt.Errorf("%w: %s", ErrConnectionNotProven, result.Message)
+		}
 	}
 
 	sourceName := req.SourceName
@@ -808,6 +927,7 @@ func toServiceBackupSet(configPath, sourceName string, bs config.BackupSet) Back
 		StableFor:          bs.Completion.StableFor.Duration(),
 		StaleAfter:         bs.StaleAfter.Duration(),
 		ValidatorID:        ValidatorID(bs.Validation.ValidatorID),
+		SSHKeyID:           sshKeyIDFor(configPath, bs.Remote),
 		Disabled:           bs.Disabled,
 		// bs.ReadOnly, not bs.ReadOnlyConfig: every caller here reads the
 		// resolved answer, the same discipline this field's own doc in
@@ -824,6 +944,11 @@ func toServiceBackupSet(configPath, sourceName string, bs config.BackupSet) Back
 		// point of pinning it is that a later edit to the deployment's
 		// policy will not move it.
 		RetentionIsOverride: bs.RetentionIsOverride(),
+		// Read straight off the configuration rather than derived from
+		// anything: whether a connection was ever proven is not something
+		// a set's own history can answer, so it is only ever what somebody
+		// wrote (issue #624).
+		ConnectionUnverified: bs.ConnectionUnverified,
 
 		TrustedHostKeys:          trusted,
 		TrustedHostKeyRecordedAt: recordedAt,
@@ -1077,6 +1202,52 @@ type ConnectionTestRequest struct {
 type ConnectionTestResult struct {
 	OK      bool
 	Message string
+
+	// Checks is what the test actually did, one entry per
+	// sourcecheck.Step and always all of them, in Steps order (issues
+	// #592 and #596). BOTH modes fill it: the persisted mode resolves the
+	// key, the known_hosts and the remote path off the set, the candidate
+	// mode off the request, and they answer the same six questions so a
+	// caller never has to remember which request it sent to know what
+	// came back.
+	//
+	// OK keeps meaning exactly what it meant, so a client reading only
+	// ok and message keeps working.
+	Checks []ConnectionCheck
+}
+
+// ConnectionCheck is one step of a connection test, as the wire carries
+// it. It is sourcecheck.Check flattened to strings on purpose: apps/ and
+// the API contract serve these values and neither may reach into
+// core/internal for a type.
+type ConnectionCheck struct {
+	// Step is one of sourcecheck.Steps: credentials, resolve, connect,
+	// host_key, authenticate, list.
+	Step string
+
+	// Outcome is passed, failed or skipped. Skipped is a first-class
+	// answer and never a quiet pass: see sourcecheck's own argument.
+	Outcome string
+
+	// Category is the machine-readable half a surface branches on, empty
+	// when the step passed or was skipped.
+	Category string
+
+	// Detail is one of sourcecheck's own sentences, never an underlying
+	// error's text.
+	Detail string
+
+	// DurationMs is how long this step took on its own, in milliseconds,
+	// and is ABSENT (zero, omitted on the wire) rather than 0 on the
+	// steps that have no timing of their own.
+	//
+	// Absent and zero have to stay distinguishable here, which is why
+	// authenticate and list do not carry one: they are decided from a
+	// single Deps.List call, so there is no separate duration to report,
+	// and rendering "0 ms" beside a green "Authenticated" tells an
+	// operator the server answered instantly when what happened is that
+	// nobody measured.
+	DurationMs int
 }
 
 // TestConnection performs a real, non-destructive reachability/auth
@@ -1091,7 +1262,20 @@ type ConnectionTestResult struct {
 // decision is final until CreateBackupSet actually runs).
 func (b *BackupService) TestConnection(ctx context.Context, req ConnectionTestRequest) (ConnectionTestResult, error) {
 	st := b.state.Load()
-	return testConnectionVia(ctx, st.inner.Transport, b.configPath, st.inner.Config.KeyEncryption, req)
+	result, err := testConnectionVia(ctx, st.inner.Transport, b.configPath, st.inner.Config.KeyEncryption, req)
+	if err != nil {
+		return result, err
+	}
+	// The steps go on the feed here rather than inside testConnectionVia,
+	// because that function is shared with the first-run surface, which
+	// has no BackupService and therefore no feed to write to (firstrun.go).
+	// This is the mode #596 did not reach: the persisted check has put its
+	// six steps in the terminal since that issue and the candidate check
+	// left nothing anywhere, so pressing the wizard's Test connection
+	// button was visible only to the browser that pressed it. See
+	// recordCandidateConnectionTest for why these lines name no backup set.
+	b.recordCandidateConnectionTest(ctx, req.Host, result)
+	return result, nil
 }
 
 // testConnectionVia is TestConnection's transport-and-configPath-only
@@ -1133,6 +1317,17 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 		root = "/"
 	}
 
+	// The candidate's known_hosts line was written by the host key probe
+	// through knownhosts.Line, which addresses port 22 as a bare host and
+	// every other port as [host]:port. The steps below dial and verify
+	// against this same number, so it is defaulted here rather than left
+	// at zero: a check that dialled port 0 and then compared the answer
+	// against a line addressed to 22 would be two different questions.
+	port := req.Port
+	if port <= 0 {
+		port = defaultSSHPort
+	}
+
 	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -1161,18 +1356,51 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 		Root:                 root,
 	}
 
-	if _, err := tr.List(testCtx, src); err != nil {
-		// Not %w-wrapped, and not returned as a Go error at all: a failed
-		// connection test is an expected, ordinary OUTCOME (a typo'd
-		// hostname, a not-yet-authorized key), not a service failure, so
-		// it is reported through ConnectionTestResult.OK/Message, exactly
-		// like every other "this is what an operator did wrong, not what
-		// broke" case in this package. err's own text may embed rclone
-		// internals (a dial error, an sftp protocol string), so it is
-		// deliberately not put in Message: TestConnection's caller (the
-		// HTTP layer) gets a generic, safe-to-render reason instead.
-		return ConnectionTestResult{OK: false, Message: "could not connect and list the remote path"}, nil
+	// The SAME six steps the persisted mode answers, over the same
+	// sourcecheck (#592, #596). One engine for both modes rather than
+	// two: the questions are identical, the request only differs in
+	// where the key, the trusted line and the path are read FROM, and a
+	// second implementation is how the two modes ended up with two
+	// different breakdowns in the first place.
+	target := sourcecheck.Target{
+		Host:                 req.Host,
+		Port:                 port,
+		User:                 req.User,
+		RemotePath:           root,
+		KeyReference:         "the key you selected",
+		PassphraseConfigured: false,
+	}
+	deps := sourcecheck.Deps{
+		// The candidate's key is a store id by definition (the request
+		// carries one and nothing else is accepted), so the reference has
+		// already resolved by the time we get here and the store can name
+		// its public half. The mode and directory-chain rule is still the
+		// transport's own, asked of the same code.
+		Credentials: func(context.Context) (string, error) {
+			if err := rclone.CheckSourceKeyFile(src); err != nil {
+				return "", err
+			}
+			return storedKeyFingerprint(configPath, req.SSHKeyID), nil
+		},
+		Trusted: func(context.Context) ([]sourcecheck.TrustedKey, error) { return trustedHostKeys(tmpPath) },
+		Verify:  hostKeyVerifier(tmpPath),
+		List: func(ctx context.Context) (int, error) {
+			entries, err := tr.List(ctx, src)
+			if err != nil {
+				return 0, err
+			}
+			return len(entries), nil
+		},
 	}
 
-	return ConnectionTestResult{OK: true}, nil
+	// Not %w-wrapped, and not returned as a Go error at all: a failed
+	// connection test is an expected, ordinary OUTCOME (a typo'd
+	// hostname, a not-yet-authorized key), not a service failure, so it
+	// is reported through ConnectionTestResult.OK/Message, exactly like
+	// every other "this is what an operator did wrong, not what broke"
+	// case in this package. A transport error's own text may embed rclone
+	// internals (a dial error, an sftp protocol string), so it is
+	// deliberately never put in Message or in a check's Detail: both are
+	// built from sourcecheck's own sentences and the caller's own values.
+	return resultFromReport(sourcecheck.Run(testCtx, target, deps)), nil
 }

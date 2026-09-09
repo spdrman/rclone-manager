@@ -196,6 +196,23 @@ type BackupSetInputs struct {
 	// never reaches decideState. That is not a convention: decideState's
 	// evidence parameter has no field it could arrive through.
 	HaltReason string
+
+	// RetentionHoldReason is why retention for this backup set is refusing
+	// to delete anything, or empty when it is not (FR-30, issue #602).
+	//
+	// It is internal/retention's own sentence, saying that the restore
+	// point FR-19 reports as protected has no confirmed readable copy, so
+	// every deletion in the set is being held until somebody reconciles
+	// what it actually holds. The caller computes it (internal/app's
+	// BuildHealthReport, through retention.LastKnownGoodUnconfirmed);
+	// nothing in this package could, since it takes no filesystem and no
+	// retention chain.
+	//
+	// Empty means "nothing is holding retention", which is the ordinary
+	// answer and, unlike HaltReason's empty, is a positive one: the check
+	// runs on every report and its empty result is a confirmation that ran
+	// rather than a question nobody asked.
+	RetentionHoldReason string
 }
 
 // TransferInProgress names one artifact currently in the TRANSFERRING
@@ -365,6 +382,30 @@ type BackupSetHealth struct {
 	// from journal evidence alone, and that State is usually STALE, which
 	// is true and incomplete. This is the missing half of the sentence.
 	HaltReason string
+
+	// RetentionHoldReason is why retention for this set is refusing to
+	// delete anything, empty when nothing is holding it (FR-30, issue
+	// #602). See BackupSetInputs for what computes it.
+	//
+	// # Why this is a condition and not a State
+	//
+	// It sits beside the verdict for the same reason HaltReason does, and
+	// the reason is stronger here: the backups themselves are fine. Every
+	// restore point this set holds is exactly as readable as it was, and a
+	// pass that deletes nothing has removed nothing. What is wrong is that
+	// the journal and the disk disagree about the newest one, so the one
+	// KEEP that authorises deleting everything else cannot be trusted, and
+	// this manager stops rather than guess. Reading that as DEGRADED would
+	// say the backups are degraded, which is the opposite of what the
+	// refusal accomplished.
+	//
+	// What it IS, is an operator action. A held set never prunes again on
+	// its own: it accumulates local copies until FR-21's capacity refusal
+	// starts refusing transfers, for a reason that names neither this set
+	// nor this cause. So the condition is reported for as long as it
+	// lasts, next to the state, where the thing to do about it can be
+	// said in a sentence (reconcile the set, FR-17).
+	RetentionHoldReason string
 }
 
 // Report bundles one ProcessHealth with every configured backup set's

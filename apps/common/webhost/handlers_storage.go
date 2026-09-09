@@ -215,13 +215,13 @@ func (h *handlers) systemStorage(w http.ResponseWriter, r *http.Request) {
 		// The message is this package's own sentence rather than err's,
 		// for the reason every other handler here gives: an unclassified
 		// error can carry a mount path or an errno.
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not assess storage capacity")
+		h.internalError(w, r, "INTERNAL", "could not assess storage capacity", err)
 		return
 	}
 
 	statuses, err := h.backend.ListStorageStatus(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "could not assess storage capacity")
+		h.internalError(w, r, "INTERNAL", "could not assess storage capacity", err)
 		return
 	}
 

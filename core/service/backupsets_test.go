@@ -47,6 +47,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/sourcecheck"
 )
 
 // testFixtureEd25519Key is a throwaway, unencrypted ed25519 private key
@@ -97,6 +98,15 @@ func validCreateReq(t *testing.T, svc *BackupService, name string) CreateBackupS
 		LocalPath:          filepath.Join(t.TempDir(), name),
 		Include:            []string{"*.dump"},
 		CompletionStrategy: "marker",
+		// Every create built from this carries the skip, and that is a
+		// statement about scope rather than a workaround. CreateBackupSet
+		// proves the connection in front of the write since PR #628's
+		// review, and this fixture's host is a name that answers nothing,
+		// so without the skip every case in this package that needs a set
+		// to exist would drive #624's refusal instead of whatever it is
+		// about. The check has its own cases, in
+		// backupsetcreatecheck_test.go, and they turn the skip back off.
+		SkipConnectionCheck: true,
 	}
 }
 
@@ -677,14 +687,26 @@ func TestImportSSHKey_NoKeyEncryptionConfigured_StaysPlaintext(t *testing.T) {
 // at all), and that the first real use of an imported key after a
 // key_encryption source is configured rewrites it in place.
 //
-// The connection itself is against an address nothing listens on, so it
-// fails -- TestConnection reports that as OK: false, never as a Go error
-// (see its own doc) -- but key resolution (and, here, migration) happens
-// synchronously inside sftpConfig, before any network I/O is attempted,
-// so the migration this test cares about has already happened regardless
-// of the connection's own outcome.
+// The connection itself still fails -- TestConnection reports that as
+// OK: false, never as a Go error (see its own doc) -- but key resolution
+// (and, here, migration) happens synchronously inside sftpConfig, before
+// any network I/O is attempted, so the migration this test cares about
+// has already happened regardless of the SESSION's own outcome.
+//
+// It runs against a real, in-process SSH server (startTestSSHServer,
+// testconnectioncandidate_test.go) whose host key this set trusts, rather
+// than against a port nothing listens on. That changed with the #592/#596
+// six-step check and the change is the point: a check now stops at the
+// first step that fails, so one against an unreachable address no longer
+// opens the transport at all, and no longer rewrites the key store as a
+// side effect of a failed dial. Migration is still opportunistic and
+// still happens on the first use of the key that actually reaches the
+// adapter -- every real cycle, and every check that gets past the host
+// key -- which is what this case now proves, on a path that genuinely got
+// that far rather than on one that never left the dialer.
 func TestConnection_MigratesImportedKeyToAtRestEncryptionWhenConfigured(t *testing.T) {
 	svc, _ := openTestService(t)
+	host, port, knownHostsLine := startTestSSHServer(t)
 
 	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 	if err != nil {
@@ -699,14 +721,23 @@ func TestConnection_MigratesImportedKeyToAtRestEncryptionWhenConfigured(t *testi
 	t.Setenv(envName, "test-connection-level-dek")
 	svc.state.Load().inner.Config.KeyEncryption = config.KeyEncryption{Env: envName}
 
-	if _, err := svc.TestConnection(context.Background(), ConnectionTestRequest{
-		Host:           "127.0.0.1",
-		Port:           1, // nothing listens on port 1; the dial itself is expected to fail
+	res, err := svc.TestConnection(context.Background(), ConnectionTestRequest{
+		Host:           host,
+		Port:           port,
 		User:           "backup-agent",
 		SSHKeyID:       ref.ID,
-		KnownHostsLine: "example.internal ssh-ed25519 AAAAtestfixtureline",
-	}); err != nil {
+		KnownHostsLine: knownHostsLine,
+	})
+	if err != nil {
 		t.Fatalf("TestConnection returned a Go error rather than ConnectionTestResult.OK == false: %v", err)
+	}
+	// The fixture authorises nothing, so authentication is where this
+	// stops. Asserted rather than assumed: if the run stopped EARLIER the
+	// adapter was never reached, and the migration assertion below would
+	// then be measuring the wrong thing.
+	if got := checkNamed(t, res, string(sourcecheck.StepAuthenticate)).Outcome; got != string(sourcecheck.Failed) {
+		t.Fatalf("the authenticate step is %q, want %q. The migration below only happens once the adapter resolves the key, which needs the run to have reached it: %v",
+			got, sourcecheck.Failed, checkOutcomes(res))
 	}
 
 	after, err := os.ReadFile(ref.KeyFile)

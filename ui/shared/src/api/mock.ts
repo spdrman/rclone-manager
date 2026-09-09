@@ -10,15 +10,22 @@ import type {
   FirstRunResult,
   HostKeyProbeResult,
   ManagerStorage,
+  MediumPreflight,
   MediumPreflightCheck,
+  StorageMedium,
+  StorageMediumSpec,
+  StorageMediumUsage,
   RetentionOverride,
   RetentionSettings,
   RetentionTierSetting,
   SSHKeyImportResult,
+  SSHKeyListing,
+  SSHKeyDiscovery,
+  ConnectionCheck,
   UpdateSettingsRequest,
   ValidatorCatalogEntry
 } from "./contracts";
-import { BackupManagerError } from "./contracts";
+import { BackupManagerError, LOCAL_DESTINATION_ID } from "./contracts";
 import type { BackupArtifact, BackupSet, RetentionPlan } from "@shared/types/backup";
 import type {
   ActivityEvent,
@@ -26,7 +33,7 @@ import type {
   SystemHealth,
   VersionInfo
 } from "@shared/types/operation";
-import type { SetActivity, SetActivityEvent } from "@shared/types/activity";
+import type { DeploymentActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
 
 /** Development fixtures. Covers every scenario the brief requires (§42):
  *  healthy / stale / failing sets, active transfer, quarantine, retention
@@ -36,7 +43,25 @@ import type { SetActivity, SetActivityEvent } from "@shared/types/activity";
  *  "empty" one with a configuration and no backup sets. Toggle scenarios
  *  with ?scenario= in the URL. */
 
-export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch" | "first-run" | "no-medium";
+export type Scenario =
+  | "default"
+  | "empty"
+  | "storage-critical"
+  | "catalog-recovery"
+  | "version-mismatch"
+  | "first-run"
+  | "no-medium"
+  // Issue #598, and the only scenario here that is a FAILURE rather than a
+  // state of the deployment. listActivity rejects with a plain
+  // SyntaxError, which is what a 2xx carrying something other than the
+  // JSON this build expected looks like from a page's side, and it is the
+  // exact shape reported from a real 0.3.2 NAS: not a refusal, so nothing
+  // typed it, so every surface that ran this call said one fixed sentence
+  // and quoted a correlation id that appears in no log. Only this one call
+  // fails, so the rest of both pages renders normally and what is
+  // asserted is what the failing panel says rather than whether the page
+  // came up at all.
+  | "activity-unreadable";
 
 /** Reads the scenario out of the URL, falling back to the default for
  *  anything unrecognised. A closed allow-list rather than a cast, so a
@@ -44,7 +69,10 @@ export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recov
  *  half exists. */
 export function scenarioFromLocation(): Scenario {
   const s = new URLSearchParams(window.location.search).get("scenario");
-  const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch", "first-run", "no-medium"];
+  const allowed: Scenario[] = [
+    "default", "empty", "storage-critical", "catalog-recovery",
+    "version-mismatch", "first-run", "no-medium", "activity-unreadable"
+  ];
   return (allowed as string[]).includes(s ?? "") ? (s as Scenario) : "default";
 }
 
@@ -116,6 +144,7 @@ const SET_RETENTION_OVERRIDES: ReadonlyArray<readonly [string, RetentionOverride
  */
 const SETS: BackupSet[] = [
   {
+    connectionUnverified: false,
     id: "production/postgres-primary", source: "production", set: "postgres-primary", name: "Production PostgreSQL",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/backups/postgresql/", includePatterns: ["*.dump.zst"],
@@ -130,9 +159,11 @@ const SETS: BackupSet[] = [
     lastValidation: "passed", expectedIntervalHours: 24,
     retainedCount: 32, retainedBytes: 421 * GB,
     trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM" }],
-    trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00"
+    trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00",
+    sshKeyId: "key_a1b2c3"
   },
   {
+    connectionUnverified: false,
     id: "production/billing-mysql", source: "production", set: "billing-mysql", name: "Billing MySQL",
     host: "billing-db.internal", port: 22, username: "backup-agent",
     remoteFolder: "/srv/backups/mysql/", includePatterns: ["*.sql.gz"],
@@ -154,9 +185,14 @@ const SETS: BackupSet[] = [
       { algorithm: "ssh-ed25519", fingerprint: "SHA256:7bTmQ4Kp+Xr9vNc2yLdE8sJf0UwZoGqR3iHuVeM1kAx" },
       { algorithm: "ssh-rsa", fingerprint: "SHA256:5dWnP1Hj+Kt6xRc9yMbE3sJf8UwZoGqT4iLrDuVeN2m" }
     ],
-    trustedHostKeyRecordedAt: "2026-07-19T09:02:00+02:00"
+    trustedHostKeyRecordedAt: "2026-07-19T09:02:00+02:00",
+    // The same key as the set above, so the listing has a row that is
+    // genuinely used by two sets: "used by nothing" and "used by four
+    // sets" are the two ends of the column the wizard decides on.
+    sshKeyId: "key_a1b2c3"
   },
   {
+    connectionUnverified: false,
     id: "production/auth-config", source: "production", set: "auth-config", name: "Auth service config",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/etc/auth-service/backups/", includePatterns: ["*.tar.zst"],
@@ -175,9 +211,11 @@ const SETS: BackupSet[] = [
     // The set whose anchor this deployment did not write: it points at a
     // known_hosts an operator maintains, so there is no honest answer to
     // "when was this trusted" and the panel says so.
-    trustedHostKeyRecordedAt: null
+    trustedHostKeyRecordedAt: null,
+    sshKeyId: "key_d4e5f6"
   },
   {
+    connectionUnverified: false,
     id: "media/weekly-archive", source: "media", set: "weekly-archive", name: "Media archive",
     host: "media-01.internal", port: 2222, username: "archive",
     remoteFolder: "/export/weekly/", includePatterns: ["*.tar"],
@@ -197,7 +235,11 @@ const SETS: BackupSet[] = [
     lastValidation: "passed", expectedIntervalHours: 168,
     retainedCount: 31, retainedBytes: 3.4 * TB,
     trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:4cRnW2Yk+Qp8mLb6vTdF1sJe9UzXoGhS5iNrCuJeP3t" }],
-    trustedHostKeyRecordedAt: "2026-05-11T14:20:00+02:00"
+    trustedHostKeyRecordedAt: "2026-05-11T14:20:00+02:00",
+    // The set on a key this deployment does not manage: a mounted or
+    // hand-provisioned key.file resolves to no store id, and "" is the
+    // honest answer rather than a blank where an id goes.
+    sshKeyId: ""
   }
 ];
 
@@ -467,9 +509,27 @@ function liveEvent(
   fields: Record<string, string>,
   level: "info" | "warn" | "error" = "info",
   scope: "set" | "deployment" = "set",
-  message = ""
+  message = "",
+  /** How the engine says the operation this line reports went (issue
+   *  #625). Absent for the lines that state none: a start, and a
+   *  lifecycle transition, which is a state change rather than the
+   *  completion of anything. Set here rather than left off everywhere,
+   *  because a fixture whose completions all read as neutral notes is a
+   *  fixture nobody would notice the fix in. */
+  result?: SetActivityEvent["result"],
+  pair?: { action: string; actionId: string }
 ): SetActivityEvent {
-  return { sequence, at: "2026-08-29T02:01:1" + (sequence % 10) + "+02:00", level, event, scope, message, fields };
+  return {
+    sequence,
+    at: "2026-08-29T02:01:1" + (sequence % 10) + "+02:00",
+    level,
+    event,
+    scope,
+    message,
+    fields,
+    ...(result ? { result } : {}),
+    ...(pair ? { action: pair.action, actionId: pair.actionId } : {})
+  };
 }
 
 const IDLE_ACTIVITY = {
@@ -508,13 +568,12 @@ const LIVE_ACTIVITY: SetActivity[] = [
     bytesPerSecond: 118 * 1024 ** 2,
     startedAt: "2026-08-29T02:00:11+02:00",
     events: [
-      liveEvent(1, "cycle_start", { cycle_id: "c_1" }, "info", "deployment", "cycle starting"),
-      liveEvent(2, "discovery", { backup_set: "production/postgres-primary", discovered: "41", pending: "26" }, "info", "set", "discovery pass complete"),
+      liveEvent(2, "discovery", { backup_set: "production/postgres-primary", discovered: "41", pending: "26" }, "info", "set", "discovery pass complete", "info"),
       liveEvent(3, "lifecycle_transition", { artifact: "production/postgres-primary/postgres-2026-08-28.dump.zst", from: "VERIFYING", to: "VERIFIED" }, "info", "set", "lifecycle transition"),
-      liveEvent(4, "commit", { artifact: "production/postgres-primary/postgres-2026-08-28.dump.zst", local_path: "/data/backups/production/postgres/postgres-2026-08-28.dump.zst" }, "info", "set", "durable commit complete"),
+      liveEvent(4, "commit", { artifact: "production/postgres-primary/postgres-2026-08-28.dump.zst", local_path: "/data/backups/production/postgres/postgres-2026-08-28.dump.zst" }, "info", "set", "durable commit complete", "success"),
       liveEvent(5, "lifecycle_transition", { artifact: "production/postgres-primary/postgres-2026-08-29.dump.zst", from: "DISCOVERED", to: "TRANSFERRING" }, "info", "set", "lifecycle transition")
     ],
-    oldestSequence: 1,
+    oldestSequence: 2,
     latestSequence: 5
   },
   {
@@ -528,12 +587,10 @@ const LIVE_ACTIVITY: SetActivity[] = [
     startedAt: "2026-08-29T00:16:00+02:00",
     finishedAt: "2026-08-29T00:16:55+02:00",
     events: [
-      liveEvent(6, "lifecycle_transition", { artifact: "production/auth-config/dpkg.status.1.gz", from: "VERIFYING", to: "FAILED", detail: "md5 differs: source a70969a2 destination d41d8cd9 (empty)" }, "info", "set", "lifecycle transition"),
-      liveEvent(7, "error", { op: "record-failure", error: "could not record FAILED: artifact is REMOTE_RETAINED, not TRANSFERRING" }, "warn", "deployment", "error"),
-      liveEvent(8, "cycle_end", { cycle_id: "c_0", error: "2 artifacts failed" }, "error", "deployment", "cycle finished with an error")
+      liveEvent(6, "lifecycle_transition", { artifact: "production/auth-config/dpkg.status.1.gz", from: "VERIFYING", to: "FAILED", detail: "md5 differs: source a70969a2 destination d41d8cd9 (empty)" }, "info", "set", "lifecycle transition")
     ],
     oldestSequence: 6,
-    latestSequence: 8
+    latestSequence: 6
   },
   {
     ...IDLE_ACTIVITY,
@@ -543,7 +600,7 @@ const LIVE_ACTIVITY: SetActivity[] = [
     artifactsTotal: 18,
     progressBasis: "artifacts",
     finishedAt: "2026-08-29T01:04:44+02:00",
-    events: [liveEvent(9, "cycle_end", { cycle_id: "c_0" }, "info", "deployment", "cycle finished")],
+    events: [liveEvent(9, "commit", { artifact: "production/billing-mysql/billing-2026-08-29.sql.zst", local_path: "/data/backups/production/billing/billing-2026-08-29.sql.zst" }, "info", "set", "durable commit complete", "success")],
     oldestSequence: 9,
     latestSequence: 9
   },
@@ -555,11 +612,65 @@ const LIVE_ACTIVITY: SetActivity[] = [
     artifactsTotal: 51,
     progressBasis: "artifacts",
     finishedAt: "2026-08-29T01:35:40+02:00",
-    events: [liveEvent(10, "retention", { artifact: "media/weekly-archive/week-31.tar", backup_set: "media/weekly-archive", tier: "weekly", decision: "keep" }, "info", "set", "retention decision")],
+    events: [liveEvent(10, "retention", { artifact: "media/weekly-archive/week-31.tar", backup_set: "media/weekly-archive", tier: "weekly", decision: "keep" }, "info", "set", "retention decision", "info")],
     oldestSequence: 10,
     latestSequence: 10
   }
 ];
+
+/** The deployment's own log: what belongs to no single backup set.
+ *
+ * Since #593 these are a bucket of their own rather than a copy inside
+ * every set, and this fixture is where that split is visible without a
+ * running engine. It carries what the global terminal is for: the cycle's
+ * own brackets, an error nothing could attribute, and the actions taken
+ * in the browser with the `backup-manager` command each one is equivalent
+ * to. */
+const LIVE_DEPLOYMENT: DeploymentActivity = {
+  unfinishedActions: [{ action: "cycle", actionId: "c_1", startedAt: "2026-08-29T02:01:11+02:00", sequence: 1 }],
+  events: [
+    // The cycle that is still running in this fixture: a start with no
+    // end behind it, which is what puts the "started and has not
+    // reported an outcome" line under the terminal without a running
+    // engine to produce one.
+    liveEvent(1, "cycle_start", { cycle_id: "c_1" }, "info", "deployment", "cycle starting", undefined, { action: "cycle", actionId: "c_1" }),
+    liveEvent(7, "error", { op: "record-failure", error: "could not record FAILED: artifact is REMOTE_RETAINED, not TRANSFERRING" }, "warn", "deployment", "error", "error"),
+    liveEvent(8, "cycle_end", { cycle_id: "c_0", error: "2 artifacts failed" }, "error", "deployment", "cycle finished with an error", "error", { action: "cycle", actionId: "c_0" }),
+    liveEvent(
+      11,
+      "api_action",
+      {
+        actor: "admin",
+        route: "PATCH /api/v1/backup-sets/{source}/{set}",
+        status: "200",
+        command: "backup-manager backup-set patch production/auth-config --stale-after 48h"
+      },
+      "info",
+      "deployment",
+      "backup set updated",
+      "success"
+    ),
+    liveEvent(
+      12,
+      "api_action",
+      {
+        actor: "admin",
+        route: "POST /api/v1/backup-sets/test-connection",
+        status: "200",
+        command_gap: "no backup-manager equivalent yet",
+        command_gap_detail: "there is no verb that tests a connection before a set exists"
+      },
+      "info",
+      "deployment",
+      "connection test succeeded",
+      "success"
+    )
+  ],
+  truncated: false,
+  dropped: false,
+  oldestSequence: 1,
+  latestSequence: 12
+};
 
 const ACTIVITY: ActivityEvent[] = [
   { id: "ev_1", at: "2026-08-29T04:12:08+02:00", type: "host-key-changed", severity: "error", setId: "production/auth-config", setName: "Auth service config", text: "SSH host key changed", detail: "set halted, remote artifacts untouched", correlationId: "cid_9f2a41" },
@@ -869,6 +980,108 @@ const notFound = <T,>(): Promise<T> =>
 const mockImportedKeyFingerprint = "SHA256:7pMwK3nRt+Vc9jXe1sHfB0oZaGdQ8yTiKrEuM4x";
 const mockProbedFingerprint = "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM";
 
+/** The fingerprint of the key the installer generated and compose
+ *  mounted, which on a default install is the ONE candidate a brand new
+ *  operator has and the whole reason discovery exists. */
+const mockCandidateFingerprint = "SHA256:wjJmbzfYx2FEBhBBqHHnfm7tcyk0SnWVqdWysm/9kho";
+
+/**
+ * Issue #592: the key store this fixture serves.
+ *
+ * Three rows, chosen so the wizard's own list is exercised rather than
+ * decorated: one key several sets share, one nothing references, and one
+ * that is passphrase-protected and therefore listed and not offerable.
+ * "Used by nothing" and "needs a passphrase" are both states the page has
+ * to render differently, and a fixture of three identical healthy keys
+ * would prove neither.
+ */
+const MOCK_SSH_KEYS: SSHKeyListing[] = [
+  {
+    id: "key_a1b2c3",
+    algorithm: "ssh-ed25519",
+    fingerprint: "SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI",
+    publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImocksharedkey rclone-manager",
+    importedAt: "2026-03-11T09:00:00+02:00",
+    passphraseProtected: false,
+    usedBy: []
+  },
+  {
+    id: "key_d4e5f6",
+    algorithm: "ssh-ed25519",
+    fingerprint: "SHA256:3anIqszP1Gm9GDNcq51b5ndeWt5yAF/7t1uS6/0HQbE",
+    publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImockunusedkey rclone-manager",
+    importedAt: "2026-08-02T11:30:00+02:00",
+    passphraseProtected: false,
+    usedBy: []
+  },
+  {
+    id: "key_g7h8i9",
+    algorithm: "ssh-rsa",
+    fingerprint: "SHA256:cDBzeNvm6cSIbi8xmhwQ/SkONr9ZNoVv5NlA1hx8GmE",
+    publicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADmockprotectedkey rclone-manager",
+    importedAt: "2025-11-27T16:45:00+01:00",
+    passphraseProtected: true,
+    usedBy: []
+  }
+];
+
+/** Which sets currently point at a key, read from the SETS fixture rather
+ *  than written down twice, so the column cannot drift from the sets the
+ *  rest of this mock serves. */
+function mockKeyUsage(keyId: string): string[] {
+  return SETS.filter((s) => s.sshKeyId === keyId)
+    .map((s) => s.id)
+    .sort();
+}
+
+/** A connection test where all six steps hold, in the order they run.
+ *
+ *  ONE fixture for both modes of the route, because there is one array on
+ *  the wire (issues #592 and #596). The mock used to answer the candidate
+ *  mode with stages the server never sent in that mode, which is a
+ *  fixture that agrees with no deployment.
+ *
+ *  Six entries rather than a bare `ok`, because a fixture that answered
+ *  with only the boolean would let a page that ignores the breakdown look
+ *  correct in every browser test.
+ *
+ *  `durationMs` is on the four steps that are measured on their own and
+ *  ABSENT on authenticate and list, which the engine decides from a
+ *  single call. A fixture that put a number on all six would make a
+ *  render site that prints "0 ms" beside a green row look correct here
+ *  and wrong in production.
+ */
+function mockPassingChecks(user: string): ConnectionCheck[] {
+  const addr = SETS[0].host + ":" + SETS[0].port;
+  return [
+    {
+      step: "credentials",
+      outcome: "passed",
+      detail:
+        "this backup set's key resolves to a key this deployment holds, and its file and directory permissions are unchanged; its public half is " +
+        mockImportedKeyFingerprint,
+      durationMs: 3
+    },
+    { step: "resolve", outcome: "passed", detail: SETS[0].host + " is 203.0.113.24 (A)", durationMs: 12 },
+    {
+      step: "connect",
+      outcome: "passed",
+      detail: "TCP to " + addr + " in 41ms · SSH-2.0-OpenSSH_9.6p1",
+      durationMs: 41
+    },
+    {
+      step: "host_key",
+      outcome: "passed",
+      detail:
+        "the server offered " + SETS[0].trustedHostKeys[0].algorithm + " " + SETS[0].trustedHostKeys[0].fingerprint +
+        ", matching the key this backup set trusts on line 1 of its known_hosts",
+      durationMs: 18
+    },
+    { step: "authenticate", outcome: "passed", detail: "the server accepted publickey for " + user },
+    { step: "list", outcome: "passed", detail: SETS[0].remoteFolder + " listed, 41 entries" }
+  ];
+}
+
 function completionMethodFromStrategy(strategy: CreateBackupSetRequest["completionStrategy"]): BackupSet["completionMethod"] {
   if (strategy === "rename") return "atomic-rename";
   if (strategy === "stable") return "stable-size";
@@ -884,6 +1097,7 @@ function completionMethodFromStrategy(strategy: CreateBackupSetRequest["completi
 function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet {
   const sourceName = req.sourceName ?? "api";
   return {
+    connectionUnverified: false,
     id: sourceName + "/" + req.name,
     // The same two halves core/service joins to build the id above
     // (backupsets.go: `ID: sourceName + "/" + bs.Name`), kept separate
@@ -918,7 +1132,8 @@ function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet 
     retainedCount: 0,
     retainedBytes: 0,
     trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: mockProbedFingerprint }],
-    trustedHostKeyRecordedAt: new Date().toISOString()
+    trustedHostKeyRecordedAt: new Date().toISOString(),
+    sshKeyId: req.sshKeyId
   };
 }
 
@@ -970,25 +1185,55 @@ function defaultSettings(): AppSettings {
     retention: {
       timezone: "Europe/Berlin",
       weekStartsOn: "monday",
+      // Every tier names a destination, the local hard drive included,
+      // which is what a real deployment answers since #622. A fixture
+      // that left the local tiers naming nothing would let a surface that
+      // still reads absence as local pass here and break against the
+      // server.
       tiers: [
-        { name: "daily", granularity: "day", keep: 7 },
-        { name: "weekly", granularity: "week", keep: 3, windowUnit: "month" },
+        { name: "daily", granularity: "day", keep: 7, medium: LOCAL_DESTINATION_ID },
+        { name: "weekly", granularity: "week", keep: 3, windowUnit: "month", medium: LOCAL_DESTINATION_ID },
         { name: "monthly", granularity: "month", keep: 12, medium: "offsite_s3" }
       ],
       protectLastKnownGood: true
     },
     capacity: defaultCapacitySettings(),
-    // Two mediums, one of them an archive class, so the dev server shows
-    // both halves of the picker: a place that serves on demand and a place
-    // that cannot be read at all without a restore.
+    // The local hard drive leads, then two declared mediums, one of them
+    // an archive class, so the dev server shows all three halves of the
+    // picker: the drive backups already land on, a place that serves on
+    // demand, and a place that cannot be read at all without a restore.
+    //
+    // The local entry is here rather than synthesised by the mock's own
+    // list call, because it is part of the settings response on a real
+    // deployment: the retention form reads the destinations out of
+    // `mediums` and the destinations card reads them out of
+    // listStorageMediums, and a fixture that only fed one of the two
+    // would let one surface go green while the other has no local entry
+    // at all.
     mediums: [
       {
+        id: LOCAL_DESTINATION_ID, type: "local", bucket: "", path: "/data/backups",
+        storageClass: "", uploadVerification: "readback",
+        readsRequireRestore: false, isLocal: true, isDefault: true,
+        connectionUnverified: false
+      },
+      {
         id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1",
-        storageClass: "STANDARD_IA", readsRequireRestore: false
+        prefix: "monthly", storageClass: "STANDARD_IA", uploadVerification: "readback",
+        readsRequireRestore: false, isLocal: false, isDefault: false,
+        connectionUnverified: false
       },
       {
         id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1",
-        storageClass: "DEEP_ARCHIVE", readsRequireRestore: true
+        prefix: "annual", storageClass: "DEEP_ARCHIVE", uploadVerification: "readback",
+        readsRequireRestore: true, isLocal: false, isDefault: false,
+        // False on all three, like #628's own backup-set fixtures. The
+        // mark is a state an operator reaches by using --no-verify, and a
+        // demo that shipped one would put ", never proven" into every
+        // destination label the black-box suite reads without that suite
+        // having asked for it. The surfaces that draw it have their own
+        // cases, which inject the mark rather than inheriting it.
+        connectionUnverified: false
       }
     ],
     schema: {
@@ -1074,6 +1319,14 @@ const SERVED_WHILE_UNCONFIGURED: ReadonlySet<keyof BackupManagerApi> = new Set([
   "importSSHKey",
   "probeHostKey",
   "testCandidateConnection",
+  // Issue #592: the setup wizard needs to LOOK before an instance is
+  // configured, and it is the surface that needs it most. A brand new
+  // install has exactly one key on the machine, the one the installer
+  // generated and compose mounted, and setup is the moment somebody is
+  // looking for it.
+  "listSSHKeys",
+  "listSSHKeyCandidates",
+  "importSSHKeyCandidate",
   "login",
   "enrollAdministrator",
   "rotatePassword",
@@ -1129,6 +1382,8 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // scenario rather than a variant of "empty" because the point is a
   // FULLY populated instance that simply never heard of the feature.
   const noMedium = scenario === "no-medium";
+  // Issue #598. One call fails, and it fails the way the NAS did.
+  const activityUnreadable = scenario === "activity-unreadable";
   // Every previewRetention call advances this backup set's "inventory" by
   // one tick and issues a plan captured against it. applyRetention only
   // ever honors the plan_id from the LATEST tick — anything older is,
@@ -1148,8 +1403,19 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     // of the product rather than of a configuration, and a deployment with
     // one local copy per backup still has copies whose class means
     // something.
-    settings.mediums = [];
-    settings.retention.tiers = settings.retention.tiers.map((t) => ({ ...t, medium: undefined }));
+    // The drive backups land on STAYS, and that is what a medium-free
+    // deployment actually looks like since #622: the local entry is
+    // synthesised from the configuration rather than declared in it, so a
+    // file that never mentioned storage_mediums still has one
+    // destination and every tier still names it. What this scenario is
+    // about is a deployment that declared nothing, and a fixture with an
+    // empty list would now be modelling an engine older than this page
+    // rather than a configuration.
+    settings.mediums = settings.mediums.filter((m) => m.isLocal);
+    settings.retention.tiers = settings.retention.tiers.map((t) => ({
+      ...t,
+      medium: LOCAL_DESTINATION_ID
+    }));
   }
   // Every backup keeps exactly one local copy under that scenario: the
   // shape migration 0007's backfill leaves every pre-EPIC-E deployment in.
@@ -1175,6 +1441,12 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // Mutable, because completing setup is what makes it configured — the
   // same one-way transition the real backend makes in-process.
   let configured = scenario !== "first-run";
+  // How many credentials this fixture has been asked to import, purely so
+  // successive imports mint different ids. The MATERIAL is never kept:
+  // there is no read side for it in the real backend either, and a
+  // fixture that stored it would be the one place in this codebase where
+  // an S3 secret sits at rest.
+  let importedCredentialCount = 0;
 
   const api: BackupManagerApi = {
     getVersion: () =>
@@ -1251,6 +1523,21 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       return delay(withRetentionAttribution(retentionOverrides, [found])[0]);
     },
     runCycle: () => delay(undefined),
+    // The mock REFUSES a run of a set it does not have, rather than
+    // answering "fine" whatever it was handed. A mock that accepts every
+    // id makes a page that sent the wrong one look correct in the
+    // browser suite, which is the same shape as the enable/disable mocks
+    // below and the reason those apply to the fixture.
+    runBackupSet: (backupSetId) =>
+      SETS.some((s) => s.id === backupSetId)
+        ? delay(undefined)
+        : Promise.reject(
+            new BackupManagerError({
+              code: "BACKUP_SET_NOT_FOUND",
+              message: "no such backup set",
+              correlationId: "cid_mock404"
+            })
+          ),
     // The mock ECHOES the window it was given rather than a fixed one, so
     // a screen that dropped windowDays on the way to the client looks
     // wrong here rather than plausible. It says the class's published
@@ -1266,7 +1553,11 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         billing:
           "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list, so it cannot and will not tell you the amount"
       }),
-    testConnection: () => delay({ ok: true, fingerprint: SETS[0].trustedHostKeys[0].fingerprint }),
+    // Six steps, not a verdict (issues #592 and #596). A mock that
+    // answered {ok: true} alone would let a surface that renders nothing
+    // at all look exactly like one that renders the steps, which is
+    // precisely the state 0.3.2 shipped in.
+    testConnection: () => delay({ ok: true, checks: mockPassingChecks(SETS[0].username) }),
     // Both APPLY to the SETS fixture rather than resolving and leaving it
     // alone, for the reason updateBackupSet's own comment below gives:
     // a mock that answers "fine" without changing anything makes every
@@ -1377,14 +1668,54 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       delay({ id: "key_mock_" + Math.random().toString(36).slice(2, 10), algorithm: "ssh-ed25519", fingerprint: mockImportedKeyFingerprint }),
     probeHostKey: (): Promise<HostKeyProbeResult> =>
       delay({ algorithm: "ssh-ed25519", fingerprint: mockProbedFingerprint, knownHostsLine: "mock-host.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5mock" }),
-    testCandidateConnection: (): Promise<ConnectionTestOutcome> => delay({ ok: true }),
+    testCandidateConnection: (params): Promise<ConnectionTestOutcome> =>
+      delay({ ok: true, checks: mockPassingChecks(params.user) }),
+    // Issue #592's two reads. Both answer the way a packaged install
+    // does, which means the scan reports a location it found nothing in:
+    // the page has to be exercised against "I looked here and there was
+    // nothing", because that is what a real deployment mostly returns and
+    // it is the answer a bare empty list would get wrong.
+    listSSHKeys: (): Promise<SSHKeyListing[]> => delay(MOCK_SSH_KEYS.map((k) => ({ ...k, usedBy: mockKeyUsage(k.id) }))),
+    listSSHKeyCandidates: (): Promise<SSHKeyDiscovery> =>
+      delay({
+        locations: [
+          { path: "/etc/backup-manager", kind: "mount", found: 1 },
+          { path: "/home/backup-manager/.ssh", kind: "home", found: 0, problem: "this location is not present in this deployment" }
+        ],
+        candidates: [
+          {
+            id: "cand_mock_installer",
+            path: "/etc/backup-manager/id_ed25519",
+            location: "/etc/backup-manager",
+            algorithm: "ssh-ed25519",
+            fingerprint: mockCandidateFingerprint,
+            publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImockinstallerkey rclone-manager",
+            mode: "0600",
+            inStore: false,
+            selectable: true
+          }
+        ]
+      }),
+    importSSHKeyCandidate: (): Promise<SSHKeyImportResult> =>
+      delay({ id: "key_mock_" + Math.random().toString(36).slice(2, 10), algorithm: "ssh-ed25519", fingerprint: mockCandidateFingerprint }),
 
     listArtifacts: (setId) =>
       delay(empty ? [] : artifacts.filter((a) => !a.quarantine && (!setId || a.setId === setId))),
     getArtifact: (id) => delay(artifacts.find((a) => a.id === id) ?? artifacts[0]),
 
     listOperations: () => delay(empty ? [] : OPERATIONS),
-    listActivity: () => delay(empty ? [] : ACTIVITY),
+    listActivity: () =>
+      activityUnreadable
+        ? delay(null).then(() => {
+            // Thrown, not rejected with a BackupManagerError: the whole
+            // point of #598's scenario is a failure this frontend has no
+            // type for, reproduced exactly. `request()` would have
+            // labelled this a RequestFailure; a mock cannot go through
+            // request(), so it throws the browser's own exception and
+            // the classifier has to cope with the harder case.
+            throw new SyntaxError("Unexpected token '<', \"<!doctype \"... is not valid JSON");
+          })
+        : delay(empty ? [] : ACTIVITY),
     getLiveActivity: (options) =>
       delay({
         observedAt: "2026-08-29T02:01:20+02:00",
@@ -1396,7 +1727,12 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         // moving. A mock that answered with the idle one would let a
         // surface be built against a poll that never keeps up.
         pollAfterMs: 1000,
-        sets: (empty ? [] : LIVE_ACTIVITY).filter((a) => !options?.setId || a.setId === options.setId)
+        sets: (empty ? [] : LIVE_ACTIVITY).filter((a) => !options?.setId || a.setId === options.setId),
+        // Absent for a reading narrowed to one set, exactly as the
+        // service omits it: a caller that named a set asked about that
+        // set. Present for a deployment with nothing configured, which is
+        // the case the feed could not answer at all before #599.
+        deployment: options?.setId ? null : LIVE_DEPLOYMENT
       }),
     listQuarantine: () => delay(empty ? [] : artifacts.filter((a) => a.quarantine)),
     revalidate: () => delay(undefined),
@@ -1617,38 +1953,167 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       // says so at the same step the engine does rather than reporting a
       // uniform green: a form built against an always-passing fixture
       // never renders the one answer an operator has to act on.
-      const deliverable = !medium.readsRequireRestore;
-      const skipped = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
-        ({ step, outcome: "skipped", category: "", detail });
-      const passed = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
-        ({ step, outcome: "passed", category: "", detail });
-      const checks: MediumPreflightCheck[] = [
-        passed("credentials", `the credential storage medium "${medium.id}" declares was obtained and the endpoint accepted it`),
-        passed("reach", `the endpoint answered and holds bucket "${medium.bucket}"`),
-        deliverable
-          ? passed("deliverable", `storage class ${medium.storageClass} reads on demand, so a backup delivered here can be verified and later restored`)
-          : {
-              step: "deliverable",
-              outcome: "failed",
-              category: "",
-              detail: `storage class ${medium.storageClass} holds objects that cannot be read until an explicit restore has finished, so a retention tier cannot deliver to this medium`
+      return delay(mockPreflightFor(medium), 700);
+    },
+
+    // G2.2 (#594). The fixture keeps the mediums it was given and lets
+    // them be added to, edited and removed, because the interesting
+    // things about this surface are all about state that changes: a
+    // wizard that saves a destination and does not see it in the list, an
+    // edit that silently clears the credential, a removal that is refused.
+    // A read-only fixture would render every one of those as a pass.
+    importStorageCredentials: (accessKeyId, secretAccessKey) => {
+      if (!accessKeyId || !secretAccessKey)
+        return Promise.reject(new BackupManagerError({
+          code: "INVALID_REQUEST",
+          message: "access_key_id and secret_access_key are both required",
+          correlationId: "cid_mockcreds400"
+        }));
+      // The material is deliberately dropped on the floor here rather than
+      // stored anywhere on this fixture. There is no read side for it in
+      // the real backend either, and a fixture that kept it would be the
+      // one place in this codebase where a stored S3 secret is reachable.
+      importedCredentialCount += 1;
+      return delay("mock-credential-" + importedCredentialCount, 400);
+    },
+
+    listStorageMediums: () => delay(structuredClone(settings.mediums), 200),
+
+    getStorageMedium: (mediumId) => {
+      const medium = settings.mediums.find((m) => m.id === mediumId);
+      return medium
+        ? delay(structuredClone(medium), 150)
+        : Promise.reject(mediumNotFound());
+    },
+
+    // A count with two sets behind it, so a surface that renders only the
+    // total is visibly missing something in the dev fixture rather than
+    // only against a real deployment.
+    getStorageMediumUsage: (mediumId) =>
+      delay<StorageMediumUsage>(
+        mediumId === "offsite_s3"
+          ? {
+              medium: mediumId,
+              placements: 148,
+              backupSets: [
+                { set: "api-server/var-backups", placements: 96, onlyCopyHere: 96 },
+                { set: "nas-media/photos", placements: 52, onlyCopyHere: 52 }
+              ]
             }
-      ];
-      const rest: [MediumPreflightCheck["step"], string][] = [
-        ["write", `an object was written to bucket "${medium.bucket}" with storage class ${medium.storageClass}`],
-        ["read_back", "the object was read back and is byte for byte what was written"],
-        ["storage_class", `the endpoint stored the object as ${medium.storageClass}, which is the class this medium declares`],
-        ["verification", "this medium requires the content class, which is reading the bytes back and comparing them"],
-        ["delete", "the probe object was deleted, and the endpoint confirms it is gone"]
-      ];
-      for (const [step, detail] of rest) {
-        checks.push(
-          deliverable
-            ? passed(step, detail)
-            : skipped(step, "nothing was written, because a backup cannot be delivered to this medium's storage class")
-        );
-      }
-      return delay({ medium: medium.id, ok: deliverable, checks }, 700);
+          : { medium: mediumId, placements: 0, backupSets: [] },
+        200
+      ),
+
+    // Verify before save: this writes nothing, whatever it answers. The
+    // fixture fails on an archive class at the `deliverable` step and
+    // skips the five after it, which is the refusal pane the mockup draws
+    // and the one shape a form built against an always-green fixture
+    // never renders.
+    //
+    // The candidate goes through mockMediumOf, the same projection a
+    // create goes through, rather than being assembled here (issue #633).
+    // It used to be assembled here, with its own `archive` expression and
+    // that expression handed to mockPreflightFor a second time as the
+    // deliverable flag, where it needed to be negated and was not. So a
+    // STANDARD candidate came back failed at `deliverable` and a
+    // DEEP_ARCHIVE one came back green: since S3DestinationWizard gates
+    // Save on `report.ok`, dev and every browser case that drove the
+    // wizard could save no ordinary destination at all, and could save
+    // the one class config.Validate refuses a retention tier (#442).
+    // Projecting the spec is what makes that unrepeatable, because the
+    // archive question now has exactly one answer in this file and both
+    // preflights read it off the medium.
+    preflightStorageMediumCandidate: (spec) =>
+      delay(
+        mockPreflightFor({
+          ...mockMediumOf(spec),
+          // A candidate carries no mark. The mark is what a WRITE records
+          // about the check it did not run, and a probe writes nothing
+          // whatever it answers, so the projection's `skipConnectionCheck`
+          // reading is the one field of it that does not apply here.
+          connectionUnverified: false
+        }),
+        700
+      ),
+
+    createStorageMedium: (spec) => {
+      if (settings.mediums.some((m) => m.id === spec.id))
+        return Promise.reject(new BackupManagerError({
+          code: "MEDIUM_EXISTS",
+          message: `service: storage medium already declared: ${spec.id}`,
+          correlationId: "cid_mockmedium409"
+        }));
+      const medium = mockMediumOf(spec);
+      settings.mediums.push(medium);
+      return delay(structuredClone(medium), 400);
+    },
+
+    updateStorageMedium: (mediumId, spec) => {
+      const at = settings.mediums.findIndex((m) => m.id === mediumId);
+      if (at < 0) return Promise.reject(mediumNotFound());
+      const medium = mockMediumOf({ ...spec, id: mediumId });
+      settings.mediums[at] = medium;
+      return delay(structuredClone(medium), 400);
+    },
+
+    // FR-30: refused while any copy names it, with the count and the sets
+    // in the message, because "148 copies affected" with nothing listed is
+    // a number rather than a report.
+    removeStorageMedium: (mediumId) => {
+      const at = settings.mediums.findIndex((m) => m.id === mediumId);
+      if (at < 0) return Promise.reject(mediumNotFound());
+      if (mediumId === "offsite_s3")
+        return Promise.reject(new BackupManagerError({
+          code: "MEDIUM_IN_USE",
+          message:
+            'service: storage medium still holds copies: 148 copies on storage medium "offsite_s3", across ' +
+            "api-server/var-backups (96), nas-media/photos (52). Removing the declaration would not delete them, " +
+            "it would leave this deployment with no bucket, no endpoint and no credential to reach them with, so " +
+            "they would read as unreachable and no prune could ever run against them; 148 of them are the only " +
+            "confirmed copy of their artifact anywhere",
+          correlationId: "cid_mockmedium409inuse"
+        }));
+      if (settings.mediums[at].isLocal)
+        return Promise.reject(new BackupManagerError({
+          code: "MEDIUM_IS_DEFAULT",
+          message:
+            "service: storage medium is this deployment's default destination: local is the drive this deployment's " +
+            "backups land on. It is not declared in the configuration and cannot be un-declared",
+          correlationId: "cid_mockmedium409local"
+        }));
+      if (settings.mediums[at].isDefault)
+        return Promise.reject(new BackupManagerError({
+          code: "MEDIUM_IS_DEFAULT",
+          message:
+            "service: storage medium is this deployment's default destination: " + mediumId +
+            " is the destination a newly created retention tier starts on, so this deployment would have no default " +
+            "if it went away. Nothing is necessarily stored on it. Make another destination the default first, then " +
+            "remove this one",
+          correlationId: "cid_mockmedium409default"
+        }));
+      settings.mediums.splice(at, 1);
+      // #622's third invariant: a removal that leaves exactly one
+      // destination leaves that one as the default. Here it is
+      // belt-and-braces, since the two refusals above already make it
+      // unreachable, and it is written anyway so this fixture cannot
+      // produce a list with no default in it.
+      if (settings.mediums.length === 1) settings.mediums[0].isDefault = true;
+      return delay(undefined, 300);
+    },
+
+    // Moving the destination a NEWLY CREATED retention tier starts on.
+    // Exactly one entry carries the mark, which is the invariant a
+    // surface renders, so the fixture clears the others rather than only
+    // setting one: a list with two defaults is a list no deployment can
+    // be in and would let a broken renderer pass.
+    setDefaultStorageMedium: (mediumId) => {
+      const at = settings.mediums.findIndex((m) => m.id === mediumId);
+      if (at < 0) return Promise.reject(mediumNotFound());
+      settings.mediums.forEach((m) => {
+        m.isDefault = false;
+      });
+      settings.mediums[at].isDefault = true;
+      return delay(structuredClone(settings.mediums[at]), 300);
     },
 
     scanCatalog: () =>
@@ -1673,4 +2138,176 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   };
 
   return refusingWhileUnconfigured(api, () => configured);
+}
+
+// mockPreflightFor builds the eight-step report both preflight fixtures
+// answer with, so the by-id check and the candidate check cannot drift
+// into two different ideas of what a report looks like.
+//
+// The archive case is not decoration. A destination whose class cannot
+// take delivery fails at `deliverable` and skips the five steps after it,
+// and a form built against an always-green fixture never renders the one
+// answer an operator has to act on.
+//
+// Whether it can take delivery is READ OFF THE MEDIUM and is not a
+// parameter (issue #633). It was a parameter, and the two callers derived
+// it independently: the by-id check passed `!medium.readsRequireRestore`
+// and the candidate check passed the same fact unnegated, so the fixture
+// answered the archive question one way for a declared medium and the
+// opposite way for a candidate. Two call sites computing one fact is what
+// let them disagree, and a boolean that reads the same either way round
+// is what made the disagreement invisible. There is nothing to pass now,
+// so there is nothing to pass backwards.
+function mockPreflightFor(medium: StorageMedium): MediumPreflight {
+  const deliverable = !medium.readsRequireRestore;
+  const skipped = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
+    ({ step, outcome: "skipped", category: "", detail });
+  const passed = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
+    ({ step, outcome: "passed", category: "", detail });
+  const checks: MediumPreflightCheck[] = [
+    passed("credentials", `the credential storage medium "${medium.id}" declares was obtained and the endpoint accepted it`),
+    passed("reach", `the endpoint answered and holds bucket "${medium.bucket}"`),
+    deliverable
+      ? passed("deliverable", `storage class ${medium.storageClass} reads on demand, so a backup delivered here can be verified and later restored`)
+      : {
+          step: "deliverable",
+          outcome: "failed",
+          category: "configuration",
+          detail: `storage class ${medium.storageClass} holds objects that cannot be read until an explicit restore has finished, so a retention tier cannot deliver to this medium`
+        }
+  ];
+  // The five steps that only mean anything once a probe has been written.
+  // They are built as finished checks rather than as [step, detail] pairs
+  // because one of them is not always a pass: `verification` asks a
+  // question about this medium's own configuration, and on one answer the
+  // engine fails it (see mockVerificationCheck).
+  const written: MediumPreflightCheck[] = [
+    passed("write", `an object was written to bucket "${medium.bucket}" with storage class ${medium.storageClass}`),
+    passed("read_back", "the object was read back and is byte for byte what was written"),
+    passed("storage_class", `the endpoint stored the object as ${medium.storageClass}, which is the class this medium declares`),
+    mockVerificationCheck(medium),
+    // The delete runs after a FAILED verification, and passes. It is a
+    // rollback of this preflight's own probe and not a verdict on the
+    // medium's configuration, so the engine runs it whatever the step
+    // above answered (mediumcheck.run.written). That makes it the one
+    // place in this fixture where a pass follows a failure, which is a
+    // report shape a surface has to draw correctly and could not be
+    // handed by an archive refusal.
+    passed("delete", "the probe object was deleted, and the endpoint confirms it is gone")
+  ];
+  for (const check of written) {
+    checks.push(
+      deliverable
+        ? check
+        : skipped(check.step, "nothing was written, because a backup cannot be delivered to this medium's storage class")
+    );
+  }
+  // Read off the checks, exactly as mediumcheck.run.report does it, and
+  // not from `deliverable`. It used to be `ok: deliverable`, which was
+  // true only while the storage class was the sole thing that could fail;
+  // the moment a second step could, that expression would have reported a
+  // green overall verdict over a failed step inside it. One fact, one
+  // expression, which is the lesson of #633 applied to this line.
+  return { medium: medium.id, ok: checks.every((c) => c.outcome !== "failed"), checks };
+}
+
+/**
+ * The `verification` step, which asks whether the class this medium's own
+ * configuration requires can actually be achieved here.
+ *
+ * This step was an unconditional pass with a hardcoded sentence, and that
+ * is #633 a second time on an axis the first fix did not reach (found in
+ * review of the first). `uploadVerification` was not read at all, so
+ * there was no expression to have backwards and no way to find it by
+ * looking for one.
+ *
+ * What it cost is what #633 cost. S3DestinationWizard offers `attested`
+ * in its own dropdown, `config.Validate` refuses an s3 medium that
+ * declares it (validateUploadVerificationIsAchievable), and the engine's
+ * preflight fails it here: measured against the rclone this build embeds,
+ * no s3 endpoint can produce a full-object digest, so the class can never
+ * be achieved and every move would refuse after the upload. An operator
+ * who picked it saw eight green steps and an enabled Save.
+ *
+ * The sentences are the engine's own (mediumcheck.run.verification),
+ * because this is a mock of the SERVER: a fixture that said it differently
+ * would hide the drift the real surface is built to prevent, which is the
+ * argument the storage schema block above already makes.
+ */
+function mockVerificationCheck(medium: StorageMedium): MediumPreflightCheck {
+  // Empty means readback, the same resolution config.EffectiveUploadVerification
+  // does, so a medium that names no class is not treated as naming an
+  // unknown one.
+  const required = medium.uploadVerification || "readback";
+  if (required === "readback")
+    return {
+      step: "verification",
+      outcome: "passed",
+      category: "",
+      detail: "this medium requires the content class, which is reading the bytes back and comparing them, and that is exactly what the read-back step just did"
+    };
+  if (required === "attested")
+    return {
+      step: "verification",
+      outcome: "failed",
+      // A capability the endpoint does not have, not a configuration
+      // mistake, and the distinction is the whole reason `category` is
+      // separate from `detail`: an operator scanning that column is
+      // deciding whose problem this is.
+      category: "unsupported_capability",
+      detail:
+        "this medium declares upload_verification: attested, and this endpoint cannot produce a full-object sha256 digest, " +
+        "so that class can never be achieved here and every move to this medium will refuse rather than fall back to a weaker check. " +
+        "Measured against the rclone this build embeds, no s3 endpoint can: the only digest it serves is not a hash of the whole " +
+        "stored object, so comparing it to the hash recorded at ingestion would prove nothing. Declare readback instead"
+    };
+  // The engine's third answer, and it refuses rather than reporting a
+  // class it did not run: a weaker check wearing a stronger name is what
+  // deletes a local copy against an upload nobody verified. A fixture that
+  // waved an unrecognised class through would be the same defect this
+  // whole function exists to stop.
+  return {
+    step: "verification",
+    outcome: "failed",
+    category: "configuration",
+    detail: `this medium resolves to the "${required}" verification class, which this preflight has no way to prove`
+  };
+}
+
+// mockMediumOf projects a submitted spec onto the summary a read returns,
+// resolving the two defaults the backend resolves and dropping the
+// credential, which the real summary has no field for either.
+function mockMediumOf(spec: StorageMediumSpec): StorageMedium {
+  const storageClass = spec.storageClass ?? "STANDARD";
+  return {
+    id: spec.id,
+    type: spec.type,
+    bucket: spec.bucket,
+    region: spec.region,
+    endpoint: spec.endpoint,
+    prefix: spec.prefix,
+    storageClass,
+    uploadVerification: spec.uploadVerification ?? "readback",
+    readsRequireRestore: storageClass === "GLACIER" || storageClass === "DEEP_ARCHIVE",
+    // A destination declared through this fixture is never local and is
+    // never the default. Declaring one moves nothing and starts nothing:
+    // the default moves only through setDefaultStorageMedium, which is a
+    // separate act, and a create that quietly took it would be the one
+    // behaviour #622 says a create must not have.
+    isLocal: false,
+    isDefault: false,
+    // The mark tracks the skip and nothing else (issue #636). This UI
+    // never sends the skip, because the wizard cannot save until its own
+    // check has passed, so a destination declared through this fixture is
+    // always a proven one.
+    connectionUnverified: spec.skipConnectionCheck === true
+  };
+}
+
+function mediumNotFound(): BackupManagerError {
+  return new BackupManagerError({
+    code: "MEDIUM_NOT_FOUND",
+    message: "this configuration declares no storage medium with that id",
+    correlationId: "cid_mockmedium404"
+  });
 }

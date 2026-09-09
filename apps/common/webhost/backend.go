@@ -73,6 +73,14 @@ type BackupServiceClient interface {
 	// re-implementing.
 	SubmitRunCycle(ctx context.Context, req service.RunCycleRequest) (service.Operation, error)
 
+	// SubmitRunBackupSet is the same durable submission narrowed to one
+	// backup set (issue #597): the second action on POST
+	// /api/v1/operations, not a route of its own. It shares
+	// SubmitRunCycle's single-flight lock, so the two cannot overlap and
+	// the loser is refused rather than queued. See
+	// core/service.BackupService.SubmitRunBackupSet.
+	SubmitRunBackupSet(ctx context.Context, req service.RunBackupSetRequest) (service.Operation, error)
+
 	// SubmitRestorePlacement persists and starts a restore of one archived
 	// copy (EPIC E, FR-34). Unlike SubmitRunCycle, nothing about the work
 	// it starts happens in this process: the provider carries on
@@ -138,6 +146,23 @@ type BackupServiceClient interface {
 	// unencrypted key; see service.BackupService.ImportSSHKey's own doc
 	// for what a non-empty one does (#269).
 	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
+
+	// The three calls the SSH wizard's first step is made of (#592).
+	//
+	// ListSSHKeys backs GET /api/v1/ssh-keys and is the read this API
+	// never had: an imported key's id crossed the wire exactly once, in
+	// the response to the POST that created it, so `--ssh-key-id` and the
+	// edit box both took a value nothing would tell anybody.
+	//
+	// DiscoverSSHKeyCandidates backs GET /api/v1/ssh/key-candidates: what
+	// this engine can actually see, over a fixed set of locations, with
+	// every location reported whether or not it held anything.
+	//
+	// ImportSSHKeyCandidate backs the mode POST /api/v1/ssh-keys grows,
+	// selecting a discovered key by its opaque id rather than pasting it.
+	ListSSHKeys(ctx context.Context) ([]service.SSHKeyListing, error)
+	DiscoverSSHKeyCandidates(ctx context.Context) (service.SSHKeyDiscovery, error)
+	ImportSSHKeyCandidate(ctx context.Context, candidateID string) (service.SSHKeyRef, error)
 
 	// ProbeHostKey backs POST /api/v1/ssh/host-key-probe: the wizard's
 	// "Verify server" step, fetching a real fingerprint instead of a
@@ -314,6 +339,48 @@ type BackupServiceClient interface {
 	// does not declare.
 	PreflightStorageMedium(ctx context.Context, id string) (service.MediumPreflight, error)
 
+	// The storage-destination write surface (G2.2, issue #594), which is
+	// what turns a medium from something only a YAML editor can create
+	// into something a wizard can.
+	//
+	// ImportStorageCredentials is POST /api/v1/storage-credentials: the
+	// only call in this interface that ever holds S3 credential
+	// material, and it holds it once, in one direction. What comes back
+	// is an opaque id, exactly as ImportSSHKey answers with a reference
+	// rather than a key.
+	//
+	// PreflightStorageMediumCandidate is POST
+	// /api/v1/storage-mediums/preflight, and it is the reason the import
+	// above exists in this shape. The by-id preflight can only check
+	// something already saved, so without a candidate probe the only way
+	// to find out whether a destination works is to write it into the
+	// operator's configuration first. The candidate carries a
+	// credentials_id, which names nothing about the manager's host, so
+	// the probe is possible without a path or a variable name ever
+	// reaching a request body.
+	//
+	// RemoveStorageMedium is the FR-30 refusal: it declines while any
+	// copy names the medium, because un-declaring a destination leaves
+	// this deployment with no way to confirm the copies on it. Since
+	// H2.2 (#622) it declines in two more cases, and both are invariants
+	// rather than data safety: the drive this deployment's backups land
+	// on is not declared and cannot be un-declared, and the destination a
+	// newly created tier starts on has to be moved before it can go.
+	//
+	// SetDefaultStorageMedium moves that destination (#622). It moves
+	// nothing else: no existing tier is rewritten and no backup is
+	// relocated, which is why it carries CSRF and not the destructive
+	// gate and why there is no disclosure in front of it.
+	ImportStorageCredentials(ctx context.Context, accessKeyID, secretAccessKey, sessionToken string) (service.MediumCredentialRef, error)
+	ListStorageMediums(ctx context.Context) ([]service.StorageMediumSummary, error)
+	GetStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
+	StorageMediumUsage(ctx context.Context, id string) (service.StorageMediumUsage, error)
+	PreflightStorageMediumCandidate(ctx context.Context, spec service.StorageMediumSpec) (service.MediumPreflight, error)
+	CreateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
+	UpdateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
+	RemoveStorageMedium(ctx context.Context, id string) error
+	SetDefaultStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
+
 	// ListActivity backs GET /api/v1/activity: a read of the durable,
 	// append-only lifecycle record, not a second event stream.
 	ListActivity(ctx context.Context, limit int) ([]service.ActivityEvent, error)
@@ -349,3 +416,10 @@ type BackupServiceClient interface {
 }
 
 var _ BackupServiceClient = (*service.BackupService)(nil)
+
+// The same assertion for the recorder seam (issue #599, actionlog.go).
+// It is a separate interface from the one above because it is a separate
+// concern: a recorder is a place lines go, not a read or a write this
+// package performs, and a host is free to wire the same BackupService
+// into both, one, or neither.
+var _ ActionRecorder = (*service.BackupService)(nil)

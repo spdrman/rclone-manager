@@ -326,10 +326,53 @@ describe("mapping one backup set's tier to a storage medium", () => {
     expect((tier(3).getByLabelText("Storage medium for tier 3") as HTMLSelectElement).value).toBe("offsite_s3");
   });
 
-  it("offers no medium picker at all for a deployment that never heard of storage mediums", async () => {
+  // This used to assert no picker at all on the FR-35 deployment, and
+  // #622 reversed the picker half while leaving the disclosure half
+  // exactly as it was. Both halves are the point.
+  //
+  // The picker is there, offering the one destination that deployment
+  // has, because "where do these backups live" is worth answering even
+  // when there is nothing to choose between. The disclosure is NOT, and
+  // that is unchanged: nothing is leaving this machine, so there is
+  // nothing to consent to, and a panel that appeared anyway would be the
+  // acknowledgment-fatigue FR-27 is careful to avoid.
+  // The per-set half of #634. #622's acceptance says the default governs
+  // where a newly created tier starts, and there are two editors that
+  // create tiers. This one never asked: it seeded its draft with no
+  // medium at all, toDraft filled that with the local id, and a set's own
+  // policy started its tiers on the drive whatever the deployment marked.
+  //
+  // The api is injected rather than taken from the page's own fixture, so
+  // "the default is a bucket" is reachable at all: the browser suite
+  // could not pin this because its mock is rebuilt on every reload with
+  // the mark back on the drive.
+  it("starts a tier added to a set's own policy on the deployment's default destination", async () => {
+    const api = createMockApi();
+    const settings = await api.getSettings();
+    const moved = {
+      ...settings,
+      mediums: settings.mediums.map((m) => ({ ...m, isDefault: m.id === "offsite_s3" }))
+    };
+    vi.spyOn(api, "getSettings").mockImplementation(() => Promise.resolve(moved));
+    await openEditor(api);
+
+    const before = screen.getAllByRole("group", { name: /^Tier / }).length;
+    fireEvent.click(screen.getByRole("button", { name: "Add tier" }));
+
+    const added = tier(before + 1).getByLabelText("Storage medium for tier " + (before + 1)) as HTMLSelectElement;
+    expect(added.value).toBe("offsite_s3");
+    // And the tiers that were already there kept what they named. The
+    // default decides where the NEXT tier starts and nothing else, which
+    // is the whole of what it governs.
+    expect((tier(1).getByLabelText("Storage medium for tier 1") as HTMLSelectElement).value).toBe("local");
+  });
+
+  it("offers the local hard drive and nothing else for a deployment that declared no destination", async () => {
     await openEditor(createMockApi("no-medium"));
 
-    expect(tier(1).queryByLabelText("Storage medium for tier 1")).toBeNull();
+    const picker = tier(1).getByLabelText("Storage medium for tier 1") as HTMLSelectElement;
+    const selectable = Array.from(picker.options).filter((o) => !o.disabled).map((o) => o.value);
+    expect(selectable).toEqual(["local"]);
     expect(screen.queryByRole("group", { name: "Storage medium disclosure" })).toBeNull();
   });
 

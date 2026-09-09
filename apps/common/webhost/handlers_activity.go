@@ -58,7 +58,7 @@ func (h *handlers) listActivity(w http.ResponseWriter, r *http.Request) {
 
 	events, err := h.backend.ListActivity(r.Context(), limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list activity")
+		h.internalError(w, r, "INTERNAL", "failed to list activity", err)
 		return
 	}
 

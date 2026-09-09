@@ -38,6 +38,7 @@ import { createMockApi } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
 
 const SET: BackupSet = {
+  connectionUnverified: false,
   id: "production/postgres-primary",
   source: "production",
   set: "postgres-primary",
@@ -65,7 +66,8 @@ const SET: BackupSet = {
   retainedCount: null,
   retainedBytes: null,
   trustedHostKeys: [],
-  trustedHostKeyRecordedAt: null
+  trustedHostKeyRecordedAt: null,
+  sshKeyId: "key_a1b2c3"
 };
 
 function open(set: BackupSet) {

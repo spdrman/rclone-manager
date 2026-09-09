@@ -89,18 +89,37 @@ var provenanceNote = []string{
 }
 
 // noticeHeader is the fixed part of NOTICE.
+//
+// The last %s is the one sentence in it that is conditional, and it is
+// conditional on a fact rather than on taste. This file used to call the
+// inventory "the complete inventory" of third-party software, which was
+// true while every piece of it arrived through a package manager. Once
+// this project vendors somebody else's material into its own source
+// (#621), it stops being true: the inventory is derived from a module
+// graph and a lockfile and neither can report a file this repository
+// carries. Pointing a reader at a file that does not have the thing they
+// came for is worse than pointing them nowhere, so the sentence appears
+// exactly when there is something it has to warn them about.
 const noticeHeader = `%s
 %s
 
-This product includes third-party software. The complete inventory, with each
-component's version, the SPDX identifier of its licence and the SHA-256 of the
-licence text as that component ships it, is %s.
+This product includes third-party software. Every dependency, with its version,
+the SPDX identifier of its licence and the SHA-256 of the licence text as that
+component ships it, is listed in %s.
 It is generated from the module graph and the frontend lockfile on every run
-rather than maintained by hand.
+rather than maintained by hand.%s
 
 This file is the NOTICE file Apache-2.0 section 4(d) refers to. Redistributing
 this work, or a derivative of it, means carrying this file with it.
 `
+
+// noticeVendoredCaveat is that conditional sentence.
+const noticeVendoredCaveat = `
+
+Which is also why that file is not the whole picture. This project carries
+some third-party material inside its own SOURCE, where no package manager can
+see it and nothing can derive it from the tree, and that material is listed
+under "Third-party material this project vendors into its own source" below.`
 
 // noticeObligationHeader introduces the part of NOTICE that is an offer
 // rather than an attribution.
@@ -166,6 +185,95 @@ func noticeObligationSection(c Compliance, inv Inventory) string {
 	return b.String()
 }
 
+// noticeVendoredHeader introduces the vendored-material listing.
+//
+// It sits before the component listing and after the source offer, in the
+// same position and for the same reason the offer sits where it does: it
+// is a licence CONDITION rather than a courtesy, and burying a condition
+// after several hundred lines of module names is how a discharge becomes
+// technically present and practically absent.
+const noticeVendoredHeader = `
+Third-party material this project vendors into its own source
+-------------------------------------------------------------
+
+The components listed further down are derived from a module graph and a
+frontend lockfile. These are not, and cannot be: they are carried inside this
+repository's own source, which no package manager reports. They are declared
+in distribution/packaging/compliance.json and checked against the files they
+name on every run, so upgrading the material and leaving this behind is a
+failed build rather than a notice that quietly describes something else.
+`
+
+// noticeVendoredSection renders the register, or nothing when the project
+// vendors no third-party material.
+//
+// Each entry prints the five things CC BY 4.0 section 3(a)(1) asks an
+// attribution to carry (the creator, the copyright notice, the licence,
+// a URI to its text, and a statement about modification) and then the
+// three that make it useful rather than merely compliant: which part of
+// the upstream material actually ships, which file in this repository
+// carries it, and where the hand-written record is. The first of those
+// three matters most here. Font Awesome Free is three licences at once
+// and only the icons are used, so a notice that named the project and
+// not the part would be claiming obligations this project does not have
+// and hiding the one it does.
+func noticeVendoredSection(c Compliance) string {
+	if len(c.License.VendoredAssets) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(noticeVendoredHeader)
+	// One label width for the whole block, derived from the longest label
+	// rather than counted by hand, so adding a row cannot silently leave
+	// one value out of the column.
+	row := func(label, value string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		fmt.Fprintf(&b, "  %-*s %s\n", noticeVendoredLabelWidth, label+":", value)
+	}
+	for _, v := range c.License.VendoredAssets {
+		fmt.Fprintf(&b, "\n%s %s\n", v.Name, v.Version)
+		row("Creator", v.Creator)
+		row("Copyright", v.Copyright)
+		licence := v.SPDXID
+		if v.LicenceName != "" {
+			licence += ", " + v.LicenceName
+		}
+		row("Licence", licence)
+		row("Licence text", v.LicenceTextURL)
+		// Where the licence text sits INSIDE the artifact, for the
+		// material whose licence asks to travel with every copy rather
+		// than to be linked. A recipient holding the image can open this
+		// path; the URL above needs the network this product is built to
+		// do without.
+		row("Licence copy", v.LicenceFile)
+		row("Modification", v.ModifiedNote)
+		row("What ships", v.WhatShips)
+		row("Carried in", strings.Join(v.VendoredInto, ", "))
+		row("Linked into", strings.Join(v.LinkedInto, ", "))
+		row("Upstream", v.SourceURL)
+		// NOTICE is one of the recordedIn artifacts and is this file, so
+		// pointing a reader here from here would be a loop rather than a
+		// reference.
+		var elsewhere []string
+		for _, rel := range v.RecordedIn {
+			if rel != c.License.NoticeFile {
+				elsewhere = append(elsewhere, rel)
+			}
+		}
+		row("Also stated in", strings.Join(elsewhere, ", "))
+	}
+	return b.String()
+}
+
+// noticeVendoredLabelWidth is the width of the label column in the block
+// above, including the colon. It is the longest label this project writes
+// and nothing computes it, which is the one hand-maintained number here;
+// a label longer than this pushes its own value right rather than
+// breaking anything, so the failure mode is cosmetic and visible.
+const noticeVendoredLabelWidth = 15
+
 // noticeComponentsHeader introduces the attribution listing.
 const noticeComponentsHeader = `
 Components by licence
@@ -175,8 +283,13 @@ Components by licence
 // buildNotice renders NOTICE from the inventory.
 func buildNotice(c Compliance, inv Inventory) []byte {
 	var b strings.Builder
-	fmt.Fprintf(&b, noticeHeader, c.Project.DisplayName, c.Project.Copyright, c.License.Inventory)
+	caveat := ""
+	if len(c.License.VendoredAssets) > 0 {
+		caveat = noticeVendoredCaveat
+	}
+	fmt.Fprintf(&b, noticeHeader, c.Project.DisplayName, c.Project.Copyright, c.License.Inventory, caveat)
 	b.WriteString(noticeObligationSection(c, inv))
+	b.WriteString(noticeVendoredSection(c))
 	b.WriteString(noticeComponentsHeader)
 
 	byLicence := map[string][]string{}

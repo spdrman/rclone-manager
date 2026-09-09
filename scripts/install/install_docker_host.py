@@ -235,7 +235,7 @@ SOURCE_PORT_ENV = "RCLONE_MANAGER_SOURCE_PORT"
 #
 # The digest is what makes `--release` safe to offer at all. A tag is a
 # mutable pointer (scripts/release/publish-image.sh says so in its own
-# words), so "install 0.3.2" is a claim about a name until something
+# words), so "install 0.3.3" is a claim about a name until something
 # compares the name against a recorded identity. One anonymous HEAD does
 # that, with no cosign and no dependency, which is why the digest is here
 # and not derived.
@@ -255,7 +255,7 @@ SOURCE_PORT_ENV = "RCLONE_MANAGER_SOURCE_PORT"
 # It proves exactly one version: this one. A release cut after this
 # installer was written has no digest here and cannot get one, which is
 # the reason the --image default is pinned rather than floating.
-CARRIED_RELEASE = "0.3.2"
+CARRIED_RELEASE = "0.3.3"
 CARRIED_RELEASE_DIGEST = None
 
 # Where that release lives. Split into two halves rather than written as
@@ -999,7 +999,7 @@ class Preflight:
 
         Then the proof, which is what makes naming a release safe to
         offer at all. A tag is a mutable pointer, and this project says so
-        in its own release tooling, so "install 0.3.2" is a claim about a
+        in its own release tooling, so "install 0.3.3" is a claim about a
         name until something compares the name against a recorded
         identity. container/release-manifest.json records that identity at
         push time and CARRIED_RELEASE_DIGEST is a copy of it, so one
@@ -1571,6 +1571,28 @@ def compare_versions(installed: str, target: str) -> str:
     if a is None or b is None:
         return "unknown"
     return "same" if a == b else ("older" if a < b else "newer")
+
+
+def describe_what_is_here(container_count: int, running_count: int,
+                          here: str, here_from: str, target: str) -> str:
+    """The one line that says what is installed and what this installer
+    carries, with the relationship between them.
+
+    The bracketed word describes the version it follows, and the version
+    it follows is the one this installer CARRIES, so the comparison is
+    asked in that order. compare_versions answers where its first
+    argument sits, so passing (here, target) here states the relationship
+    backwards: upgrading a real NAS from 0.3.1 to 0.3.3 printed "This
+    installer carries 0.3.3 (older)", which is issue #588 and is the one
+    sentence that stops somebody mid-upgrade. The other two callers of
+    compare_versions ask about the installed version and pass it first,
+    correctly.
+    """
+    return ("==> An install is already here: "
+            f"{container_count} container(s), {running_count} running, "
+            f"version {here or 'unknown'}"
+            f"{f' (from {here_from})' if here_from else ''}. This installer carries "
+            f"{target or 'unknown'} ({compare_versions(target, here)}).")
 
 
 # The service name the engine runs under in container/compose.yaml. The
@@ -3348,10 +3370,7 @@ def cmd_install(args) -> int:
     # is running and what the next `up` would start are different claims,
     # and when the stack is down only the second one can be answered.
     if installed:
-        say(f"==> An install is already here: {len(containers)} container(s), {len(running)} running, "
-            f"version {here or 'unknown'}"
-            f"{f' (from {here_from})' if here_from else ''}. This installer carries "
-            f"{target or 'unknown'} ({compare_versions(here, target)}).")
+        say(describe_what_is_here(len(containers), len(running), here, here_from, target))
 
     mode, from_prompt = choose_install_mode(
         args, installed=installed, here=here, target=target, interactive=interactive)
@@ -3464,12 +3483,37 @@ def cmd_install(args) -> int:
     say("==> Installed.")
     say(f"    Web UI:  {args.public_base_url}")
     say(f"    Compose: {' '.join(compose_argv(args))}")
-    say("")
-    say("    No config.yaml was written, on purpose. Issue #176 shipped a first-run setup flow")
-    say("    precisely so that a fresh install does not need one hand-written before it starts.")
-    say("    Open the Web UI and follow it. The enrollment link is in the engine's log:")
-    say(f"      {' '.join(compose_argv(args))} logs rclone-manager | grep enroll")
+    for line in first_run_epilog(args):
+        say(line)
     return EXIT_OK
+
+
+def first_run_epilog(args: argparse.Namespace) -> list[str]:
+    """What to say after "Installed." about the setup flow, which is
+    nothing at all when there is already a configuration.
+
+    Issue #588. These three sentences are true of a fresh install and
+    false of an upgrade, and they used to print unconditionally. An
+    upgrade of a real NAS kept its config.yaml, both backup sets and its
+    administrator record, and then told the operator none of it had been
+    written and to go and enroll. Somebody following that hunts the
+    engine log for a link to an account they already have, and reasonably
+    concludes the upgrade lost their configuration.
+
+    The question is asked of the configuration directory rather than of
+    the mode, because "did an operator end up with a config" is what the
+    sentences are about, and a fresh install pointed at a directory that
+    already holds one is in the same position as an upgrade.
+    """
+    if (args.config_dir / "config.yaml").is_file():
+        return []
+    return [
+        "",
+        "    No config.yaml was written, on purpose. Issue #176 shipped a first-run setup flow",
+        "    precisely so that a fresh install does not need one hand-written before it starts.",
+        "    Open the Web UI and follow it. The enrollment link is in the engine's log:",
+        f"      {' '.join(compose_argv(args))} logs rclone-manager | grep enroll",
+    ]
 
 
 # ---------------------------------------------------------------------
@@ -4791,7 +4835,7 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
                               "test, so this installer needs no checkout on the host. Supply it to install "
                               "a locally modified runtime from a checkout; naming a path that does not "
                               "exist is still a refusal.")
-    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.3.2",
+    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.3.3",
                          action=_RecordsThatItWasSupplied,
                          help="Image reference both services run.")
     runtime.add_argument("--release", default=CARRIED_RELEASE,
@@ -4948,7 +4992,7 @@ def build_parser() -> argparse.ArgumentParser:
             "      --prefix /volume1/backup-manager \\\n"
             "      --ssh-key /volume1/backup-manager/secrets/id_ed25519 \\\n"
             "      --known-hosts /volume1/backup-manager/secrets/known_hosts \\\n"
-            "      --image ghcr.io/spdrman/backup-manager:0.3.2\n"
+            "      --image ghcr.io/spdrman/backup-manager:0.3.3\n"
         ),
     )
     _add_shared_groups(sp_install)
@@ -5107,7 +5151,7 @@ def resolve_release(args) -> None:
             EXIT_USAGE,
             f"--release is {args.release!r}, which is not a version.",
             "It takes a released X.Y.Z, and a prerelease suffix if that is what you mean "
-            "(0.3.2-rc.1). It deliberately does not take a moving name like `latest`: that "
+            "(0.3.3-rc.1). It deliberately does not take a moving name like `latest`: that "
             "tag orders against nothing, so it would be written into the .env as the "
             "installed version and leave this host un-orderable by every later installer. "
             "Name the version you want.",

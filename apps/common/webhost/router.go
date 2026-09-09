@@ -2,7 +2,9 @@ package webhost
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 
@@ -73,8 +75,56 @@ type RouterConfig struct {
 	// setup — the configuration is on disk either way.
 	OnConfigured func(context.Context) error
 
+	// Recorder, when non-nil, is where every action taken through this
+	// API is recorded so an operator can read it (issue #599,
+	// actionlog.go). Nil means nothing is recorded, which is what a
+	// handler test wants and what a host that has not wired one gets:
+	// the API still serves, it is just invisible.
+	//
+	// It is its own field rather than a method on Backend because it is
+	// not part of the read/write seam this package talks to core/
+	// through. A recorder is a place lines go, and a host is free to
+	// wire the same BackupService into both or neither.
+	Recorder ActionRecorder
+	// Logger is where a refusal this package cannot explain to the
+	// client goes instead (#598). Nil means the default below, which
+	// writes to this process's own stdout: a host has to opt OUT of
+	// logging its 500s, never get silence by omission, because the
+	// correlation id every one of those responses carries is worth
+	// nothing if it matches no line anywhere.
+	//
+	// It is an interface, and its one method is exactly
+	// core/internal/obs.Logger's Event (obs.Level is an alias for
+	// slog.Level, so that type satisfies this as it stands). A host
+	// inside core/ can therefore hand its own obs.Logger straight in and
+	// get redaction and the FR-23 event catalog for free; this module
+	// cannot import that package itself, because obs is internal to the
+	// core module and this is a different module.
+	Logger Logger
+
 	BinaryVersion string
 	Commit        string
+}
+
+// Logger is the narrow seam this package writes to. See
+// RouterConfig.Logger for why it is an interface and what satisfies it.
+type Logger interface {
+	Event(ctx context.Context, level slog.Level, event, msg string, attrs ...slog.Attr)
+}
+
+// stdoutLogger is what a host that named no Logger gets: newline-delimited
+// JSON on stdout, one object per event, with the event name in its own
+// field. The same shape core/internal/obs writes, so a deployment running
+// the engine and this host in one image produces one parseable stream
+// rather than two formats.
+type stdoutLogger struct{ base *slog.Logger }
+
+func (l stdoutLogger) Event(ctx context.Context, level slog.Level, event, msg string, attrs ...slog.Attr) {
+	l.base.LogAttrs(ctx, level, msg, append([]slog.Attr{slog.String("event", event)}, attrs...)...)
+}
+
+func newStdoutLogger() Logger {
+	return stdoutLogger{base: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))}
 }
 
 // handlers bundles what the HTTP methods in handlers_system.go and
@@ -103,6 +153,10 @@ type handlers struct {
 	// names; see firstrun.go for what each is for.
 	firstRun     FirstRunClient
 	onConfigured func(context.Context) error
+
+	// logger is RouterConfig.Logger, resolved: never nil after NewRouter,
+	// so internalError (refusal.go) has nothing to branch on.
+	logger Logger
 }
 
 // NewRouter builds the /api/v1 HTTP surface plus /health/live and
@@ -132,6 +186,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		gate = NotYetImplementedGate{}
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = newStdoutLogger()
+	}
+
 	h := &handlers{
 		platform:      cfg.Platform,
 		backend:       cfg.Backend,
@@ -140,6 +199,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		gate:          gate,
 		firstRun:      cfg.FirstRun,
 		onConfigured:  cfg.OnConfigured,
+		logger:        logger,
 	}
 
 	// An instance with a first-run surface and no backend has no
@@ -160,6 +220,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(authMiddleware(cfg.Platform))
+		// After authentication, so a recorded line can name the actor,
+		// and over the WHOLE group, so it covers the refusals that never
+		// reach a handler at all: a CSRF failure and a
+		// destructive-operations denial are exactly the refusals an
+		// operator most needs to see, and neither one gets as far as a
+		// handler body. See actionlog.go for why this is middleware
+		// rather than a line in every handler.
+		r.Use(recordActions(cfg.Recorder))
 
 		r.Get("/system/version", h.systemVersion)
 		r.Get("/system/capabilities", h.systemCapabilities)
@@ -389,6 +457,38 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// reach is the one it just wrote (see handlers_mediums.go).
 		r.With(requireCSRF).Post("/storage-mediums/{id}/preflight", h.preflightStorageMedium)
 
+		// G2.2 (issue #594): the storage-destination write surface, so a
+		// destination can be added without hand-editing config.yaml, and
+		// the candidate probe that proves one BEFORE it is written down.
+		//
+		// The static "/storage-mediums/preflight" is registered here,
+		// beside the "{id}" routes rather than buried among them, because
+		// the order it reads in is load-bearing to a person even though
+		// it is not to chi: chi's trie matches static before param, so
+		// "preflight" can never be read as a medium id whichever order
+		// these lines appear in, and writing them adjacent is what makes
+		// that visible to whoever adds the next route.
+		//
+		// CSRF on every write, and on the candidate probe for the reason
+		// the by-id probe above carries it: it writes a real object into
+		// somebody's bucket and deletes it again. Not the destructive
+		// gate on any of them. Declaring a destination MOVES NOTHING
+		// (artifacts arrive only once a retention tier names it, which is
+		// a separate write with its own disclosure), removing one deletes
+		// no backup data and is refused outright while any copy names it,
+		// and the probe can reach only the object it just wrote. Gating
+		// these would train an operator to click through the
+		// acknowledgment that actually matters.
+		r.With(requireCSRF).Post("/storage-credentials", h.importStorageCredentials)
+		r.Get("/storage-mediums", h.listStorageMediums)
+		r.With(requireCSRF).Post("/storage-mediums", h.createStorageMedium)
+		r.With(requireCSRF).Post("/storage-mediums/preflight", h.preflightStorageMediumCandidate)
+		r.Get("/storage-mediums/{id}", h.getStorageMedium)
+		r.With(requireCSRF).Put("/storage-mediums/{id}", h.updateStorageMedium)
+		r.With(requireCSRF).Delete("/storage-mediums/{id}", h.removeStorageMedium)
+		r.With(requireCSRF).Put("/storage-mediums/{id}/default", h.setDefaultStorageMedium)
+		r.Get("/storage-mediums/{id}/usage", h.getStorageMediumUsage)
+
 		// Issue #211: FR-9 catalog recovery, the API expression of
 		// `backup-manager catalog rebuild` and its --dry-run. Rebuild only
 		// ever adds records whose recovery manifests are already on disk
@@ -408,7 +508,31 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/validators", h.listValidators)
 
 		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
+		// The other way to end up holding a key reference (#592):
+		// selecting one this machine already holds, by the opaque handle
+		// the candidate scan gave it. Its own route rather than a second
+		// mode of the one above, because pasting material this host has
+		// never seen and choosing a key it already found are different
+		// acts, and because a shared body would have had to stop
+		// requiring private_key_pem, which is a promise POST /ssh-keys
+		// has already made. Same tier, so the same CSRF and the same
+		// absence of a destructive gate.
+		r.With(requireCSRF).Post("/ssh-keys/from-candidate", h.importSSHKeyFromCandidate)
 		r.With(requireCSRF).Post("/ssh/host-key-probe", h.probeHostKey)
+
+		// Issue #592: the two reads this surface never had. Everything
+		// else under /ssh is a write or a probe, which is exactly why an
+		// imported key's id crossed the wire once and could never be
+		// asked for again.
+		//
+		// Read-only under §50 and unlike their neighbours in the truest
+		// sense: neither opens an outbound connection to anything, so
+		// neither carries requireCSRF, matching every other GET here. The
+		// candidate scan reads a fixed, constant set of locations decided
+		// in core, never a caller-supplied path, so there is no request
+		// shape that turns it into a filesystem oracle.
+		r.Get("/ssh-keys", h.listSSHKeys)
+		r.Get("/ssh/key-candidates", h.listSSHKeyCandidates)
 
 		// Issue #140 (B3.7): the one generic settings surface — a read
 		// and a partial write covering every server-side setting the

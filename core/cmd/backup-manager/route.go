@@ -132,6 +132,24 @@ type backupSetRoute interface {
 
 	CreateBackupSet(ctx context.Context, req service.CreateBackupSetRequest) (service.CreateBackupSetResult, error)
 	UpdateBackupSet(ctx context.Context, id string, req service.UpdateBackupSetRequest) (service.BackupSet, error)
+
+	// The two modes of the connection check (issue #624). They are here
+	// beside the writes, and not left to the local service, for exactly
+	// mediumRoute's reason: `backup-set create` verifies before it
+	// writes, so the check and the write have to happen in the SAME
+	// world. Proving a route to a host from this shell and then
+	// declaring the set in a process on the other side of a container
+	// boundary would be two claims about two networks reported as one.
+	//
+	// TestBackupSetConnection is here for a second reason of its own: a
+	// check that passes now clears that set's unverified mark, which is
+	// a configuration write, so it belongs on the door configuration
+	// writes go through rather than beside the reads.
+	//
+	// *service.BackupService satisfies both as it already stands, which
+	// is the property this interface's own doc asks to preserve.
+	TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error)
+	TestBackupSetConnection(ctx context.Context, id string) (service.ConnectionTestResult, error)
 }
 
 // settingsRoute is `settings patch`'s half of the same seam.
@@ -152,6 +170,71 @@ type settingsRoute interface {
 	UpdateSettings(ctx context.Context, req service.UpdateSettingsRequest) (service.Settings, error)
 }
 
+// mediumRoute is the storage-destination verbs' half of the same seam
+// (G2.2, issue #594).
+//
+// It is here for settingsRoute's reason, restated for a different noun:
+// `medium add`, `edit` and `remove` write configuration, so beside a
+// running engine a write left in the file is a change that process would
+// never read. Without this interface those three would be permanently
+// refused next to a live deployment, which is exactly the position
+// `settings patch` was in before #543 and exactly what that issue decided
+// was not good enough.
+//
+// The reads and the probe are here beside the writes rather than left to
+// the local service, and that is deliberate rather than convenient.
+// `medium add` verifies before it writes, so the probe and the write have
+// to happen in the SAME world: probing from this host and writing to the
+// engine would mean proving one deployment's route to a bucket and then
+// declaring the destination on another. `list` and `show` are here for the
+// same reason `settingsRoute` carries Settings beside UpdateSettings,
+// which is that a route that could write and not read could not report
+// what it had done.
+//
+// ImportStorageCredentials belongs to this set because the id it mints is
+// only meaningful to whoever wrote the file behind it. An id minted here
+// and used in a write routed to the engine would name a file on the wrong
+// host.
+type mediumRoute interface {
+	ImportStorageCredentials(ctx context.Context, accessKeyID, secretAccessKey, sessionToken string) (service.MediumCredentialRef, error)
+	ListStorageMediums(ctx context.Context) ([]service.StorageMediumSummary, error)
+	GetStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
+	StorageMediumUsage(ctx context.Context, id string) (service.StorageMediumUsage, error)
+	PreflightStorageMediumCandidate(ctx context.Context, spec service.StorageMediumSpec) (service.MediumPreflight, error)
+
+	// PreflightStorageMedium is the by-id check, and it is here as of
+	// #636 for the reason TestBackupSetConnection is here as of #624: a
+	// check that passes now clears that destination's unverified mark,
+	// which is a configuration write, so it belongs on the door
+	// configuration writes go through.
+	//
+	// That is a real change for this verb and worth naming rather than
+	// letting somebody discover it. `medium preflight <id>` used to be a
+	// read of THIS host's configuration and was never refused beside a
+	// running engine (cmdMedium's own doc said so). It is now refused
+	// beside a serving engine that this command has not been told how to
+	// reach, exactly as `medium add`, `edit` and `remove` already are.
+	// The alternative was worse in a way that is hard to see and hard to
+	// undo: a mark cleared in the file beside a running engine is a change
+	// that process never reads, and its next configuration write would put
+	// the mark back from a stale copy. `list` and `show` stay on the read
+	// door, so looking at your own destinations still works with nothing
+	// configured.
+	PreflightStorageMedium(ctx context.Context, id string) (service.MediumPreflight, error)
+
+	CreateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
+	UpdateStorageMedium(ctx context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error)
+	RemoveStorageMedium(ctx context.Context, id string) error
+
+	// SetDefaultStorageMedium moves the destination a newly created
+	// retention tier starts on (H2.2, issue #622). It is a configuration
+	// write like the three above it and is here for the same #538 reason:
+	// a default changed in the file beside a running engine is a change
+	// that process would never read, and the next tier added through its
+	// web UI would start somewhere else.
+	SetDefaultStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
+}
+
 // configWriteRoute is where a routed configuration write goes: both halves
 // together, because both are reached through one door and one claim.
 //
@@ -164,6 +247,7 @@ type settingsRoute interface {
 type configWriteRoute interface {
 	backupSetRoute
 	settingsRoute
+	mediumRoute
 }
 
 // attachToEngine builds this invocation's route to the serving process,

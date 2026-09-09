@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -67,6 +68,13 @@ type fakeEngine struct {
 	sessions map[string]bool
 	csrf     map[string]bool
 	seen     []string
+
+	// The live feed this engine hands out, one reading per request, and
+	// every cursor it was asked with. See liveActivity below for why this
+	// one answer is stated rather than produced.
+	liveReadings []apicontract.LiveActivityResponse
+	liveSince    []int64
+	liveScope    []string
 }
 
 // startFakeEngine announces that this process serves the deployment
@@ -278,6 +286,14 @@ func (e *fakeEngine) api(w http.ResponseWriter, r *http.Request, path, token str
 		e.updateBackupSet(w, r, strings.TrimPrefix(path, "/backup-sets/"))
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/backup-sets/"):
 		e.removeBackupSet(w, r, strings.TrimPrefix(path, "/backup-sets/"))
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/edit-hold"):
+		e.getEditHold(w, r, strings.TrimSuffix(strings.TrimPrefix(path, "/backup-sets/"), "/edit-hold"))
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/edit-hold/release"):
+		e.releaseEditHold(w, r, strings.TrimSuffix(strings.TrimPrefix(path, "/backup-sets/"), "/edit-hold/release"))
+	case r.Method == http.MethodGet && path == "/activity":
+		e.listActivity(w, r)
+	case r.Method == http.MethodGet && path == "/activity/live":
+		e.liveActivity(w, r)
 	case r.Method == http.MethodGet && path == "/settings":
 		e.getSettings(w, r)
 	case r.Method == http.MethodPatch && path == "/settings":
@@ -373,8 +389,9 @@ func (e *fakeEngine) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		// The actor is the SESSION's, never the request's. That is the
 		// whole authorization argument for routing: an engine records who
 		// asked, and the caller does not get to say.
-		Actor:              e.username,
-		AcknowledgeRepoint: body.AcknowledgeRepoint,
+		Actor:               e.username,
+		AcknowledgeRepoint:  body.AcknowledgeRepoint,
+		SkipConnectionCheck: body.SkipConnectionCheck,
 	}
 	result, err := e.svc.CreateBackupSet(r.Context(), req)
 	if err != nil {
@@ -505,6 +522,11 @@ func toContractSettings(s service.Settings) apicontract.SettingsResponse {
 		out.Mediums = append(out.Mediums, apicontract.StorageMediumSummary{
 			ID: m.ID, Type: m.Type, Bucket: m.Bucket, Region: m.Region,
 			StorageClass: m.StorageClass, ReadsRequireRestore: m.ReadsRequireRestore,
+			// H2.2's three (#622), carried across for this fake's whole
+			// reason for existing: it mirrors the real projection field
+			// for field, and a field it drops is a field every routed
+			// test here would go on passing without.
+			Path: m.Path, IsLocal: m.IsLocal, IsDefault: m.IsDefault,
 		})
 	}
 	return out
@@ -527,19 +549,25 @@ func toContractSettings(s service.Settings) apicontract.SettingsResponse {
 // is a legal value for every one of them.
 func toContractBackupSet(s service.BackupSet) apicontract.BackupSet {
 	return apicontract.BackupSet{
-		ID:                  s.ID,
-		SourceName:          s.SourceName,
-		Name:                s.Name,
-		Host:                s.Host,
-		Port:                s.Port,
-		User:                s.User,
-		RemotePath:          s.RemotePath,
-		LocalPath:           s.LocalPath,
-		Include:             s.Include,
-		CompletionStrategy:  s.CompletionStrategy,
-		StableForSeconds:    int(s.StableFor / time.Second),
-		StaleAfterSeconds:   int(s.StaleAfter / time.Second),
-		ValidatorID:         string(s.ValidatorID),
+		ID:                 s.ID,
+		SourceName:         s.SourceName,
+		Name:               s.Name,
+		Host:               s.Host,
+		Port:               s.Port,
+		User:               s.User,
+		RemotePath:         s.RemotePath,
+		LocalPath:          s.LocalPath,
+		Include:            s.Include,
+		CompletionStrategy: s.CompletionStrategy,
+		StableForSeconds:   int(s.StableFor / time.Second),
+		StaleAfterSeconds:  int(s.StaleAfter / time.Second),
+		ValidatorID:        string(s.ValidatorID),
+		// Issue #592: which key in the store this set uses. Carried for
+		// the reason the guard below states, and it is the field that
+		// makes `backup-set patch --ssh-key-id` reviewable at all: an
+		// engine that reports no key id is one where "replace the key
+		// this set uses" cannot name what it is replacing.
+		SSHKeyID:            s.SSHKeyID,
 		Disabled:            s.Disabled,
 		ReadOnly:            s.ReadOnly,
 		RetentionIsOverride: s.RetentionIsOverride,
@@ -549,6 +577,13 @@ func toContractBackupSet(s service.BackupSet) apicontract.BackupSet {
 		// one no routed test can catch dropping it.
 		TrustedHostKeys:          toContractTrustedHostKeys(s.TrustedHostKeys),
 		TrustedHostKeyRecordedAt: contractTimeOrEmpty(s.TrustedHostKeyRecordedAt),
+		// Issue #624: whether this set's connection was ever proven.
+		// Carried for the guard's reason, and for one of its own: a
+		// routed `backup-set create --no-verify` prints the set the
+		// engine answered with, so a fixture that dropped this would
+		// report a set as proven on the one path where it deliberately
+		// was not.
+		ConnectionUnverified: s.ConnectionUnverified,
 	}
 }
 
@@ -608,6 +643,7 @@ func TestTheFixtureCarriesEveryFieldTheContractHas(t *testing.T) {
 		StableFor:           90 * time.Second,
 		StaleAfter:          36 * time.Hour,
 		ValidatorID:         service.ValidatorID("control-validator"),
+		SSHKeyID:            "control-ssh-key-id",
 		Disabled:            true,
 		ReadOnly:            true,
 		RetentionIsOverride: true,
@@ -615,6 +651,7 @@ func TestTheFixtureCarriesEveryFieldTheContractHas(t *testing.T) {
 			{Algorithm: "control-algorithm", Fingerprint: "SHA256:controlfingerprint"},
 		},
 		TrustedHostKeyRecordedAt: time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC),
+		ConnectionUnverified:     true,
 	}
 
 	// Nothing is exempt today, and that is the point of writing the list
@@ -669,4 +706,145 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// listActivity and liveActivity are #598's two feeds, served the way this
+// file serves everything else: off the real BackupService behind it, with
+// only the projection to the wire written here.
+//
+// The projection is the part core cannot borrow (it lives in
+// apps/common/webhost, which core may not import), so it is mirrored,
+// deliberately narrowly, and the client's own contract check is what
+// catches a mistake in the mirror.
+func (e *fakeEngine) listActivity(w http.ResponseWriter, r *http.Request) {
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
+		}
+	}
+	events, err := e.svc.ListActivity(r.Context(), limit)
+	if err != nil {
+		refuse(w, http.StatusInternalServerError, apicontract.ErrorCodeInternal, "failed to list activity")
+		return
+	}
+	resp := apicontract.ListActivityResponse{Events: make([]apicontract.ActivityEvent, 0, len(events))}
+	for _, ev := range events {
+		resp.Events = append(resp.Events, apicontract.ActivityEvent{
+			ArtifactID:   ev.ArtifactID,
+			ArtifactName: ev.ArtifactName,
+			BackupSetID:  ev.BackupSetID,
+			SourceName:   ev.SourceName,
+			SetName:      ev.SetName,
+			From:         ev.From,
+			To:           ev.To,
+			OccurredAt:   ev.OccurredAt.Format(time.RFC3339Nano),
+			Detail:       ev.Detail,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// liveActivity answers from whatever this engine has been told to hold
+// (see holdLiveActivity), rather than from the service's own in-memory
+// tail.
+//
+// That is the one place this file substitutes a fixture for the real
+// thing, and it is deliberate: the questions `activity --follow` has to
+// answer are about the CURSOR and the EPOCH, and driving those off a real
+// engine would mean provoking real work and then restarting a real
+// process inside a unit test. What is under test here is the client's
+// half of that contract, so the engine's half is stated rather than
+// produced.
+func (e *fakeEngine) liveActivity(w http.ResponseWriter, r *http.Request) {
+	since := int64(0)
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			since = parsed
+		}
+	}
+
+	e.mu.Lock()
+	readings := e.liveReadings
+	if len(readings) == 0 {
+		e.mu.Unlock()
+		writeJSON(w, http.StatusOK, apicontract.LiveActivityResponse{
+			Epoch: "epoch-empty", PollAfterMs: 1, Sets: []apicontract.LiveActivitySet{},
+		})
+		return
+	}
+	next := readings[0]
+	if len(readings) > 1 {
+		e.liveReadings = readings[1:]
+	}
+	e.liveSince = append(e.liveSince, since)
+	e.liveScope = append(e.liveScope, r.URL.Query().Get("scope"))
+	e.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, next)
+}
+
+// holdLiveActivity queues the readings GET /activity/live will answer
+// with, in order. The last one is repeated once the queue runs down, so a
+// poll loop that keeps asking gets a stable answer rather than an error.
+func (e *fakeEngine) holdLiveActivity(readings ...apicontract.LiveActivityResponse) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.liveReadings = readings
+}
+
+// cursorsSeen is every `since` the client sent, in order. It is the only
+// way to prove the cursor advanced, and the only way to prove it was
+// dropped when the epoch changed.
+func (e *fakeEngine) cursorsSeen() []int64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]int64(nil), e.liveSince...)
+}
+
+// scopesSeen is every `scope` the client sent, in order, empty string
+// included. It is the only way to prove a deployment-scoped follow asked
+// for the deployment bucket rather than merely rendering one it happened
+// to be handed.
+func (e *fakeEngine) scopesSeen() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.liveScope...)
+}
+
+// getEditHold and releaseEditHold are #600's gap, served off the real
+// BackupService like everything else here: the hold registry behind them
+// is core/service's own, so a release this test performs is the release
+// the engine performs and a state it reports is the one core/service
+// holds. Nothing about the lease is faked.
+func (e *fakeEngine) getEditHold(w http.ResponseWriter, r *http.Request, id string) {
+	state, err := e.svc.BackupSetEditState(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, service.ErrBackupSetNotFound) {
+			refuse(w, http.StatusNotFound, apicontract.ErrorCodeBackupSetNotFound, "no such backup set")
+			return
+		}
+		refuse(w, http.StatusInternalServerError, apicontract.ErrorCodeInternal, "failed to read this backup set's edit hold")
+		return
+	}
+	resp := apicontract.BackupSetEditHoldState{BackupSetID: id, Held: state.Held}
+	if !state.ExpiresAt.IsZero() {
+		resp.ExpiresAt = state.ExpiresAt.Format(time.RFC3339Nano)
+	}
+	if state.Running != nil {
+		resp.Running = &apicontract.RunningWork{Artifact: state.Running.Artifact, Stage: state.Running.Stage}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (e *fakeEngine) releaseEditHold(w http.ResponseWriter, r *http.Request, id string) {
+	if err := e.svc.EndBackupSetEdit(r.Context(), id); err != nil {
+		if errors.Is(err, service.ErrBackupSetNotFound) {
+			refuse(w, http.StatusNotFound, apicontract.ErrorCodeBackupSetNotFound, "no such backup set")
+			return
+		}
+		refuse(w, http.StatusInternalServerError, apicontract.ErrorCodeInternal, "failed to release this backup set's edit hold")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

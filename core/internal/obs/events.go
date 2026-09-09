@@ -46,6 +46,60 @@ import (
 // rather than inventing parallel names, so a reader who already knows this
 // codebase's domain vocabulary does not have to learn a second one just for
 // the logs.
+//
+// # Which of these state an outcome, and which do not
+//
+// Every event below that reports a COMPLETION states how it went, as an
+// Result (action.go) rather than as something a client works out from
+// the absence of an error field. That is most of this list: a cycle end,
+// a discovery pass, a transfer, a validation, a commit, a remote delete,
+// a reconciliation, a retention verdict, a retention hold, a retry, an
+// alert delivered, and Error, which is the completion of whatever its op
+// names.
+//
+// Four kinds state nothing, or state only half, and the absence is the
+// point rather than an oversight.
+//
+// Startup and RcloneVersion are announcements. Nothing was attempted, so
+// there is no way it went.
+//
+// Hash is a measurement. A digest is neither good nor bad news; what is
+// done with it later is.
+//
+// StaleBackup and DiskPressure report a CONDITION rather than an
+// operation. Nothing ran, so nothing went any way: a filesystem crossing
+// a threshold is a fact about the world this process noticed, and calling
+// that a warning outcome would stretch the field from "how the thing I
+// did turned out" to "how I feel about what I saw", which is the second
+// vocabulary this one exists to avoid needing. Both are already emitted
+// at a level that says how much attention they want, and that half was
+// never the problem.
+//
+// LifecycleTransition states HALF an outcome, and it is the one worth
+// saying out loud, because it is the event a reader most expects to find
+// a whole one on.
+//
+// It states the failure. An artifact that ended an attempt in one of the
+// three states this machine calls exceptional produced no backup, which
+// is the manager failing at the one thing it is for, and no screen has to
+// be consulted to know it. Its caller passes that in as a bool (see the
+// method), so this package still does not know a state name. Until issue
+// #625 the line arrived at info, which meant `activity --follow
+// --severity error` answered "did a backup fail" with silence while the
+// browser painted the very same line red off a list of state names it was
+// keeping itself.
+//
+// It states nothing about the rest. An artifact reaching VERIFIED is good
+// news, but WHICH resting states in the FR-10 machine deserve to READ as
+// good news is a decision about a screen: ActivityStrip's own
+// SETTLED_STATES set says so at length, differs from
+// internal/retention's managed-complete set at both ends, and is
+// registered as differing from it in that package's
+// managedcompleteprose_test.go. Deciding that here would move a display
+// decision into the engine's vocabulary, which is the thing
+// service/activity.go correctly refuses to do. The transition carries
+// from and to, which is the fact; what a log makes of them is the
+// client's.
 const (
 	// EventStartup marks the process starting: binary version, commit and
 	// the Go toolchain it was built with.
@@ -103,6 +157,14 @@ const (
 	// single artifact.
 	EventRetention = "retention"
 
+	// EventRetentionHold records a whole backup set's retention pass
+	// refusing to delete anything, because the restore point FR-19
+	// reports as protected has no confirmed readable copy (FR-30, issue
+	// #602). It is a condition to be reconciled, not a verdict, which is
+	// why it is not an EventRetention line with a different decision on
+	// it.
+	EventRetentionHold = "retention_hold"
+
 	// EventRetry records one FR-22 bounded-backoff retry attempt.
 	EventRetry = "retry"
 
@@ -124,6 +186,25 @@ const (
 	// so the log answers "who was told what, and when" rather than
 	// re-stating a still-unresolved condition on every poll.
 	EventAlert = "alert"
+
+	// EventAPIAction records one action somebody took through the
+	// /api/v1 surface: what was asked, by whom, what came back, and the
+	// `backup-manager` command that would have done the same thing
+	// (issue #599).
+	//
+	// It is the one event in this catalog that is not emitted by the
+	// cycle, and that is the gap it closes. Every step a cycle takes has
+	// been on this list since FR-23, and nothing the Web UI did emitted
+	// anything at all: a connection test returned a sentence to one
+	// caller and vanished, a settings patch left no trace, a refusal
+	// reached a dialog that closed. So an operator watching a button do
+	// nothing could not tell "it refused" from "it failed" from "it was
+	// never wired up", and none of those three left a line anywhere.
+	//
+	// One line per action, refusals included, which is the half that
+	// matters: a refusal is the case where an operator has nothing else
+	// to go on.
+	EventAPIAction = "api_action"
 
 	// EventError is the catch-all for an error that does not already have
 	// a more specific event above attached to it (for example, a failure
@@ -160,8 +241,16 @@ func (l *Logger) RcloneVersion(ctx context.Context, version string) {
 // id for this pass (for example a timestamp or a counter); this package
 // does not mint one itself, since deciding what identifies a cycle is the
 // caller's business, not this package's.
+// The cycle id is also the ACTION id both lines carry, which is what
+// pairs them by something other than the habit of spelling one event
+// cycle_start and the other cycle_end (issue #625). Nothing else about
+// either line changes, and no caller has to do anything: the two halves
+// were already given the same cycle id, so the pairing was sitting there
+// unused. What it buys is that a reader can now notice a cycle that
+// announced itself and never reported an outcome, which is the state an
+// operator most needs named and the one nothing could see.
 func (l *Logger) CycleStart(ctx context.Context, cycleID string) {
-	l.emit(ctx, LevelInfo, EventCycleStart, "cycle starting",
+	l.emitMarked(ctx, LevelInfo, mark{action: ActionCycle, actionID: cycleID}, EventCycleStart, "cycle starting",
 		slog.String("cycle_id", cycleID),
 	)
 }
@@ -173,18 +262,18 @@ func (l *Logger) CycleStart(ctx context.Context, cycleID string) {
 // an operator's alerting should be able to key off of by level alone,
 // without also having to know to check for an error field's presence.
 func (l *Logger) CycleEnd(ctx context.Context, cycleID string, duration time.Duration, err error) {
-	level := LevelInfo
+	result := ResultSuccess
 	msg := "cycle finished"
 	attrs := []slog.Attr{
 		slog.String("cycle_id", cycleID),
 		slog.Duration("duration", duration),
 	}
 	if err != nil {
-		level = LevelError
+		result = ResultError
 		msg = "cycle finished with an error"
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
-	l.emit(ctx, level, EventCycleEnd, msg, attrs...)
+	l.emitMarked(ctx, result.Level(), mark{result: result, action: ActionCycle, actionID: cycleID}, EventCycleEnd, msg, attrs...)
 }
 
 // Discovery logs EventDiscovery: a summary of one discovery pass over
@@ -194,7 +283,11 @@ func (l *Logger) CycleEnd(ctx context.Context, cycleID string, duration time.Dur
 // Result's Discovered, AlreadyKnown, Pending, Rejected, Conflicts and
 // Errors fields respectively).
 func (l *Logger) Discovery(ctx context.Context, backupSet string, discovered, alreadyKnown, pending, rejected, conflicts, errored int) {
-	l.emit(ctx, LevelInfo, EventDiscovery, "discovery pass complete",
+	result := ResultInfo
+	if errored > 0 {
+		result = ResultWarn
+	}
+	l.emitMarked(ctx, result.Level(), mark{result: result}, EventDiscovery, "discovery pass complete",
 		slog.String("backup_set", backupSet),
 		slog.Int("discovered", discovered),
 		slog.Int("already_known", alreadyKnown),
@@ -213,7 +306,30 @@ func (l *Logger) Discovery(ctx context.Context, backupSet string, discovered, al
 // error's raw text if that text might embed a path (see Retry and
 // RemoteDelete below for how those handle an error argument instead of a
 // free-text detail).
-func (l *Logger) LifecycleTransition(ctx context.Context, artifact, from, to, detail string) {
+// failed says the artifact landed in one of the states the machine calls
+// exceptional, which is a backup that did not happen. It is a bool the
+// CALLER computes rather than something this package works out from `to`,
+// and that is the whole of the split the catalog note above describes:
+// which state names mean a failed attempt is internal/lifecycle's to
+// answer (IsExceptionalState), and this package declining to import a
+// domain vocabulary is what keeps it the standalone sink it is. The shape
+// is Validation's, one event over, for the same reason: the caller knows
+// how it went and this decides what that costs in severity.
+//
+// A true logs at LevelError with an error outcome. That is a departure
+// from the convention Alert and RetentionHold state, and a deliberate
+// one: those two reserve LevelError for the manager failing at something
+// rather than for correctly reporting a problem it found, and an artifact
+// that ended its attempt in FAILED or QUARANTINED IS the manager failing
+// at the one thing it exists to do. `activity --follow --severity error`
+// is where an operator goes to ask whether a backup did not happen, and
+// before issue #625 the answer was silence.
+//
+// A false is exactly what it always was, and that is the point. Which of
+// the OTHER states read as good news is a decision about a screen (see
+// the catalog note above), and stating a success here would take that
+// decision away from every client at once.
+func (l *Logger) LifecycleTransition(ctx context.Context, artifact, from, to, detail string, failed bool) {
 	attrs := []slog.Attr{
 		slog.String("artifact", artifact),
 		slog.String("from", from),
@@ -222,7 +338,11 @@ func (l *Logger) LifecycleTransition(ctx context.Context, artifact, from, to, de
 	if detail != "" {
 		attrs = append(attrs, slog.String("detail", detail))
 	}
-	l.emit(ctx, LevelInfo, EventLifecycleTransition, "lifecycle transition", attrs...)
+	if !failed {
+		l.emit(ctx, LevelInfo, EventLifecycleTransition, "lifecycle transition", attrs...)
+		return
+	}
+	l.emitMarked(ctx, ResultError.Level(), mark{result: ResultError}, EventLifecycleTransition, "lifecycle transition", attrs...)
 }
 
 // TransferStats logs EventTransferStats for one completed FR-11 transfer:
@@ -237,7 +357,7 @@ func (l *Logger) LifecycleTransition(ctx context.Context, artifact, from, to, de
 // FR-35, and it stays honest because false is exactly what "no copy-time
 // checksum was recorded" should read as.
 func (l *Logger) TransferStats(ctx context.Context, artifact string, bytesTransferred int64, duration time.Duration, checksummed bool) {
-	l.emit(ctx, LevelInfo, EventTransferStats, "transfer complete",
+	l.emitMarked(ctx, LevelInfo, mark{result: ResultSuccess}, EventTransferStats, "transfer complete",
 		slog.String("artifact", artifact),
 		slog.Int64("bytes_transferred", bytesTransferred),
 		slog.Duration("duration", duration),
@@ -264,9 +384,9 @@ func (l *Logger) Hash(ctx context.Context, artifact, alg, hash string) {
 // validator did its job correctly; it found something wrong with the
 // content, which is a successful check, not a system failure).
 func (l *Logger) Validation(ctx context.Context, artifact string, passed bool, detail string) {
-	level := LevelInfo
+	result := ResultSuccess
 	if !passed {
-		level = LevelWarn
+		result = ResultWarn
 	}
 	attrs := []slog.Attr{
 		slog.String("artifact", artifact),
@@ -275,7 +395,7 @@ func (l *Logger) Validation(ctx context.Context, artifact string, passed bool, d
 	if detail != "" {
 		attrs = append(attrs, slog.String("detail", detail))
 	}
-	l.emit(ctx, level, EventValidation, "validation result", attrs...)
+	l.emitMarked(ctx, result.Level(), mark{result: result}, EventValidation, "validation result", attrs...)
 }
 
 // Commit logs EventCommit for FR-14's durable local commit: localPath is
@@ -284,7 +404,7 @@ func (l *Logger) Validation(ctx context.Context, artifact string, passed bool, d
 // a credential, so it is logged in the clear; it is what durable commit
 // actually IS, from an audit-trail standpoint.
 func (l *Logger) Commit(ctx context.Context, artifact, localPath string) {
-	l.emit(ctx, LevelInfo, EventCommit, "durable commit complete",
+	l.emitMarked(ctx, LevelInfo, mark{result: ResultSuccess}, EventCommit, "durable commit complete",
 		slog.String("artifact", artifact),
 		slog.String("local_path", localPath),
 	)
@@ -295,18 +415,18 @@ func (l *Logger) Commit(ctx context.Context, artifact, localPath string) {
 // credential); err is the deletion attempt's outcome, nil for success. A
 // non-nil err logs at LevelError.
 func (l *Logger) RemoteDelete(ctx context.Context, artifact, remotePath string, err error) {
-	level := LevelInfo
+	result := ResultSuccess
 	msg := "remote source deleted"
 	attrs := []slog.Attr{
 		slog.String("artifact", artifact),
 		slog.String("remote_path", remotePath),
 	}
 	if err != nil {
-		level = LevelError
+		result = ResultError
 		msg = "remote delete failed"
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
-	l.emit(ctx, level, EventRemoteDelete, msg, attrs...)
+	l.emitMarked(ctx, result.Level(), mark{result: result}, EventRemoteDelete, msg, attrs...)
 }
 
 // Reconciliation logs EventReconciliation for one FR-17 reconciliation
@@ -316,7 +436,7 @@ func (l *Logger) RemoteDelete(ctx context.Context, artifact, remotePath string, 
 // about it (for example "advance_to_complete", "quarantine_local",
 // "resume_transfer").
 func (l *Logger) Reconciliation(ctx context.Context, artifact, scenario, action string) {
-	l.emit(ctx, LevelInfo, EventReconciliation, "reconciliation decision",
+	l.emitMarked(ctx, LevelInfo, mark{result: ResultInfo}, EventReconciliation, "reconciliation decision",
 		slog.String("artifact", artifact),
 		slog.String("scenario", scenario),
 		slog.String("action", action),
@@ -328,11 +448,45 @@ func (l *Logger) Reconciliation(ctx context.Context, artifact, scenario, action 
 // "monthly", "protected", or "" for none); decision is the resulting policy
 // action ("keep" or "delete").
 func (l *Logger) Retention(ctx context.Context, artifact, backupSet, tier, decision string) {
-	l.emit(ctx, LevelInfo, EventRetention, "retention decision",
+	l.emitMarked(ctx, LevelInfo, mark{result: ResultInfo}, EventRetention, "retention decision",
 		slog.String("artifact", artifact),
 		slog.String("backup_set", backupSet),
 		slog.String("tier", tier),
 		slog.String("decision", decision),
+	)
+}
+
+// RetentionHold logs EventRetentionHold: a retention pass over backupSet
+// refused every deletion in it, because the restore point FR-19 reports as
+// protected has no confirmed readable copy (FR-30, issue #602). reason is
+// internal/retention's own sentence, which names the last known good it
+// could not confirm and what was wrong with it.
+//
+// The artifact is carried inside that sentence rather than as a field of
+// its own, because this event is about a backup SET: the hold stops every
+// deletion in it, an alert on it groups by backup_set, and a second
+// artifact-shaped field on the verdicts that carry this reason would be a
+// parallel copy of a fact the sentence already states.
+//
+// LevelWarn, and the level is the point of the event. Every other refusal
+// in a retention plan is a routine outcome an operator reads in the plan;
+// this one means retention for this backup set has stopped and will stay
+// stopped until somebody reconciles its inventory (FR-17), while the only
+// other symptom is local copies quietly accumulating until FR-21's
+// capacity refusal starts refusing transfers for a reason that names
+// neither this set nor this cause. It is deliberately not LevelError, for
+// the reason Alert's own doc gives: this package reserves that for the
+// manager failing at something, and refusing to delete a backup it cannot
+// prove is safe to delete is the manager working exactly as designed.
+//
+// Emitted from an apply and never from a preview. The condition is
+// permanent until it is fixed, so a preview surface that logged it would
+// write one of these per dashboard poll for as long as the set stayed
+// broken, which is how a real signal gets filtered out.
+func (l *Logger) RetentionHold(ctx context.Context, backupSet, reason string) {
+	l.emitMarked(ctx, LevelWarn, mark{result: ResultWarn}, EventRetentionHold, "retention held: no confirmed copy of this backup set's last known good",
+		slog.String("backup_set", backupSet),
+		slog.String("reason", reason),
 	)
 }
 
@@ -354,7 +508,7 @@ func (l *Logger) Retry(ctx context.Context, op string, attempt int, category str
 	if err != nil {
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
-	l.emit(ctx, LevelWarn, EventRetry, "retrying after a transient failure", attrs...)
+	l.emitMarked(ctx, LevelWarn, mark{result: ResultWarn}, EventRetry, "retrying after a transient failure", attrs...)
 }
 
 // StaleBackup logs EventStaleBackup: backupSet's newest known-good restore
@@ -382,7 +536,7 @@ func (l *Logger) StaleBackup(ctx context.Context, backupSet string, age, thresho
 // it detected. A delivery that FAILED is logged through Error instead, by
 // internal/alert, since that one is the manager failing.
 func (l *Logger) Alert(ctx context.Context, kind, backupSet, detail string) {
-	l.emit(ctx, LevelWarn, EventAlert, "proactive alert delivered",
+	l.emitMarked(ctx, LevelWarn, mark{result: ResultWarn}, EventAlert, "proactive alert delivered",
 		slog.String("alert_kind", kind),
 		slog.String("backup_set", backupSet),
 		slog.String("detail", detail),
@@ -431,7 +585,7 @@ func (l *Logger) DiskPressure(ctx context.Context, path string, freeBytes, total
 // is too late; a Secret must be wrapped where it is read (see secret.go),
 // not where it is logged.
 func (l *Logger) Error(ctx context.Context, op string, err error) {
-	l.emit(ctx, LevelError, EventError, "error",
+	l.emitMarked(ctx, LevelError, mark{result: ResultError}, EventError, "error",
 		slog.String("op", op),
 		slog.String("error", err.Error()),
 	)

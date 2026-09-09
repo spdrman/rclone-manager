@@ -386,6 +386,13 @@ func TestLiveActivity_ScopesAndBasesAreExactlyTheContractsEnums(t *testing.T) {
 		// drifts, and this feed is the second place it is written down.
 		{"LiveActivitySet", "stage", service.OperationStages},
 		{"LiveActivitySet", "outcome", service.LiveActivityOutcomes},
+		// How an EVENT went, which is a different vocabulary from how a
+		// set's pass ended one row up, and is spelled `result` rather
+		// than `outcome` for exactly that reason. Registered here
+		// because internal/obs owns it, the contract writes it down a
+		// second time, and a closed vocabulary written down twice is one
+		// that drifts (issue #625).
+		{"LiveActivityEvent", "result", service.LiveActivityEventResults},
 	} {
 		declared := doc.Components.Schemas[c.schema].Properties[c.property].Enum
 		if len(declared) == 0 {
@@ -461,5 +468,139 @@ func TestLiveActivity_SerializesTheFactsThatKeepTheFeedHonest(t *testing.T) {
 	}
 	if _, ok := quiet["outcome"]; ok {
 		t.Errorf("a set whose pass has not ended serialises an outcome anyway (%v); absent is how the feed says it has no verdict yet", quiet["outcome"])
+	}
+}
+
+// The deployment bucket on the wire (issues #593 and #599).
+//
+// It is a separate key rather than a synthetic set, and the two cases
+// below are why. A client has to be able to tell "the deployment has said
+// nothing" from "I did not ask", because the first is a quiet system and
+// the second is a narrowed reading, and a bucket that serialised the same
+// way for both would have the global terminal go blank whenever a set
+// page happened to be the thing polling.
+
+func deploymentBucket() *service.LiveActivityDeployment {
+	return &service.LiveActivityDeployment{
+		Events: []service.LiveActivityEvent{{
+			Sequence: 412,
+			At:       time.Date(2026, 9, 7, 0, 16, 21, 0, time.UTC),
+			Level:    "info",
+			Event:    "cycle_start",
+			Scope:    service.LiveActivityScopeDeployment,
+			Message:  "cycle starting",
+			Fields:   []service.LiveActivityField{{Key: "cycle_id", Value: "c1"}},
+		}},
+		OldestSequence: 400,
+		LatestSequence: 412,
+	}
+}
+
+func TestLiveActivity_SerializesTheDeploymentsOwnLog(t *testing.T) {
+	router, backend := newLiveActivityTestRouter(t)
+	backend.setLiveActivity(service.LiveActivity{
+		ObservedAt: time.Date(2026, 9, 7, 0, 16, 30, 0, time.UTC),
+		Epoch:      "e1",
+		PollAfter:  time.Second,
+		Sets:       []service.LiveActivitySet{transferringSet()},
+		Deployment: deploymentBucket(),
+	})
+
+	body := getLiveActivity(t, router, "")
+	bucket, ok := body["deployment"].(map[string]any)
+	if !ok {
+		t.Fatalf("the response carries no deployment bucket: %v", body)
+	}
+	events, ok := bucket["events"].([]any)
+	if !ok || len(events) != 1 {
+		t.Fatalf("the deployment bucket carries %v", bucket["events"])
+	}
+	event, ok := events[0].(map[string]any)
+	if !ok {
+		t.Fatalf("the deployment's event is %#v, want an object", events[0])
+	}
+	if event["scope"] != service.LiveActivityScopeDeployment {
+		t.Errorf("the deployment's own line is scoped %v", event["scope"])
+	}
+	if event["sequence"] != float64(412) {
+		t.Errorf("the deployment's line reports sequence %v; the counter is one counter for the whole process and the terminal orders both buckets by it", event["sequence"])
+	}
+	// The two honesty flags are present even when nothing is missing, for
+	// the same reason a set's are: an absent key and a false one must not
+	// be the same reading.
+	for _, key := range []string{"truncated", "dropped"} {
+		if _, present := bucket[key]; !present {
+			t.Errorf("the deployment bucket omits %q; a client cannot tell a server that has nothing missing from one that stopped saying", key)
+		}
+	}
+	if bucket["latest_sequence"] != float64(412) || bucket["oldest_sequence"] != float64(400) {
+		t.Errorf("the deployment bucket reports bounds %v..%v", bucket["oldest_sequence"], bucket["latest_sequence"])
+	}
+}
+
+// A deployment with no configured backup sets is the case that used to
+// have no answer at all: the reading was built by walking the configured
+// sets, so a fresh install served "sets": [] and the bucket behind it was
+// unreachable. That is exactly the operator clicking through a wizard
+// with nothing set up yet.
+func TestLiveActivity_ServesTheDeploymentWithNoConfiguredSets(t *testing.T) {
+	router, backend := newLiveActivityTestRouter(t)
+	backend.setLiveActivity(service.LiveActivity{
+		ObservedAt: time.Date(2026, 9, 7, 0, 16, 30, 0, time.UTC),
+		Epoch:      "e1",
+		PollAfter:  10 * time.Second,
+		Deployment: deploymentBucket(),
+	})
+
+	body := getLiveActivity(t, router, "")
+	if sets := liveSets(t, body); len(sets) != 0 {
+		t.Fatalf("a deployment with nothing configured reported %d sets", len(sets))
+	}
+	bucket, ok := body["deployment"].(map[string]any)
+	if !ok {
+		t.Fatalf("a deployment with nothing configured carries no deployment bucket, so the wizard's own lines reach no screen: %v", body)
+	}
+	if events, _ := bucket["events"].([]any); len(events) != 1 {
+		t.Errorf("the deployment bucket carries %d events", len(events))
+	}
+}
+
+// scope=deployment is the request half of the same distinction, and it is
+// what a terminal following the deployment's log alone asks for. It is
+// advisory like every other parameter on this route: an unknown value is
+// ignored rather than refused.
+func TestLiveActivity_ScopeDeploymentNarrowsTheReading(t *testing.T) {
+	router, backend := newLiveActivityTestRouter(t)
+	backend.setLiveActivity(service.LiveActivity{
+		ObservedAt: time.Date(2026, 9, 7, 0, 16, 30, 0, time.UTC),
+		Epoch:      "e1",
+		Deployment: deploymentBucket(),
+	})
+
+	getLiveActivity(t, router, "?scope=deployment")
+	if got := backend.lastLiveActivityRequest(); !got.DeploymentOnly {
+		t.Errorf("scope=deployment reached the service as %+v; a caller asking for the deployment's log alone got every set's as well", got)
+	}
+
+	getLiveActivity(t, router, "?scope=nonsense")
+	if got := backend.lastLiveActivityRequest(); got.DeploymentOnly {
+		t.Errorf("an unrecognised scope narrowed the reading to the deployment; every parameter on this route is advisory, because blanking the panel an operator went to look at over a query string is the one thing this feed exists not to do")
+	}
+}
+
+// A reading narrowed to one backup set omits the bucket rather than
+// sending an empty one, which is the distinction the omitempty on the
+// wire exists for.
+func TestLiveActivity_ASetScopedReadingOmitsTheDeploymentBucket(t *testing.T) {
+	router, backend := newLiveActivityTestRouter(t)
+	backend.setLiveActivity(service.LiveActivity{
+		ObservedAt: time.Date(2026, 9, 7, 0, 16, 30, 0, time.UTC),
+		Epoch:      "e1",
+		Sets:       []service.LiveActivitySet{transferringSet()},
+	})
+
+	body := getLiveActivity(t, router, "?backup_set=api-server/var-backups")
+	if _, present := body["deployment"]; present {
+		t.Errorf("a reading narrowed to one set still carries a deployment bucket: %v", body["deployment"])
 	}
 }

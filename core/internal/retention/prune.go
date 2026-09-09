@@ -214,6 +214,25 @@ type PruneVerdict struct {
 	// package doc and FR-20's own text, "a retention engine you cannot
 	// interrogate is one you cannot trust."
 	Reason string
+
+	// HoldReason is set, on a PruneRefuse and never on anything else,
+	// when this verdict was refused because the whole backup set was
+	// held: the restore point FR-19 reports as protected has no confirmed
+	// readable copy (FR-30, issue #602). It names what could not be
+	// confirmed, and Reason carries the same sentence wrapped in the
+	// refusal.
+	//
+	// It is a field rather than something a caller pattern-matches out of
+	// Reason because the two say different things. Every other REFUSE in
+	// this package is a routine outcome of a plan, decided per artifact
+	// and read where plans are read. This one is a standing fact about
+	// the SET which stops retention for it entirely until somebody
+	// reconciles the inventory, and the layer above has to be able to
+	// tell those apart to raise the second as a condition without raising
+	// the first (see internal/app's PruneApplySnapshot and
+	// BuildHealthReport). Matching on a sentence would make an operator's
+	// wording change into an alerting change.
+	HoldReason string
 }
 
 // LocationStatus is how well an ArtifactLocator could answer "where is
@@ -824,8 +843,219 @@ func PruneDecide(now time.Time, cfg config.Retention, bs config.BackupSet, recor
 		}
 		out = append(out, pruneEvaluate(bs, rec, v, lkg, where))
 	}
+	pruneHoldEveryDelete(out, pruneLastKnownGoodUnconfirmed(bs, recByArtifact, lkg, where))
 	sortPruneVerdicts(out)
 	return out, nil
+}
+
+// LastKnownGoodUnconfirmed answers FR-30's question about one backup set
+// without deciding, planning or removing anything: is there actually a
+// readable copy of the restore point FR-19 is protecting?
+//
+// It returns the empty string when there is, and the one sentence
+// pruneLastKnownGoodUnconfirmed composes when there is not. The arguments
+// mean exactly what PruneDecide's do, and it runs the same DecideKeep pass
+// PruneDecide would, so the answer cannot come from a different reading of
+// the journal than the one a plan is drawn from.
+//
+// This exists for the surfaces that report rather than prune. A held pass
+// stops retention for a backup set until somebody reconciles it, and until
+// this existed the only way to find that out was to ask for a plan and
+// read the refusals in it: FR-24's health report computes DecideKeep and
+// PlanHomeMoves and never asked this at all, so a set could sit wedged for
+// weeks with local copies piling up and nothing anywhere saying why. See
+// internal/app's BuildHealthReport.
+//
+// It stats and reads only, like everything else on this path, and it asks
+// no medium anything (FR-32).
+func LastKnownGoodUnconfirmed(now time.Time, cfg config.Retention, bs config.BackupSet, records []state.Record, where ArtifactLocator) (string, error) {
+	if bs.ID.IsZero() {
+		return "", fmt.Errorf("retention: LastKnownGoodUnconfirmed needs a non-zero backup set id")
+	}
+	if where == nil {
+		return "", fmt.Errorf("retention: LastKnownGoodUnconfirmed needs a way to say where each artifact's durable copy is; " +
+			"pass AllLocal for a deployment with no storage mediums, and internal/app.ActiveMediumFromRecords otherwise")
+	}
+
+	_, lkg, err := DecideKeep(now, cfg, bs.ID, records)
+	if err != nil {
+		return "", fmt.Errorf("retention: last known good: %w", err)
+	}
+
+	recByArtifact := make(map[model.ArtifactID]state.Record, len(records))
+	for _, rec := range records {
+		recByArtifact[rec.Artifact] = rec
+	}
+	return pruneLastKnownGoodUnconfirmed(bs, recByArtifact, lkg, where), nil
+}
+
+// pruneLastKnownGoodUnconfirmed answers the question FR-19 never asked: is
+// there actually a copy of the restore point this policy is protecting?
+//
+// It returns the empty string when there is, and one sentence naming what
+// is wrong when there is not (issue #602).
+//
+// # Why the question has to be asked at all
+//
+// FR-19's protection is computed from journal rows and nothing else
+// (lastknowngood.go takes no filesystem, no clock and, per FR-32, nothing
+// a medium reported). That is the right shape for a decision and it makes
+// the protection exactly as good as the row behind it. A row whose file is
+// gone (an operator's rm, a disk that failed, a restore that went
+// sideways: everything FR-17 reconciliation exists to notice) still
+// protects a NAME, while every other artifact in the set is still selected
+// for deletion on its age alone. Carrying that plan out empties the backup
+// set, and the preview the operator confirmed said "kept by the
+// LAST_KNOWN_GOOD tier" about a file that was not there.
+//
+// FR-30's invariant is that at no instant may an artifact have no
+// confirmed readable copy, and that is what this closes: the last delete
+// in such a pass lands at an instant when nothing in the set has one.
+//
+// # It fires only when the operator asked for the protection
+//
+// lkg.Protected is false both when the set has no eligible artifact and
+// when protect_last_known_good is explicitly false, and the second of
+// those is a deployment saying out loud that retention may empty this
+// backup set. Overriding that would silently stop a documented
+// configuration working the first time a file went missing, so the guard
+// has nothing to say about it. See
+// TestPruneDeletesWhenTheOperatorTurnedTheProtectionOff.
+//
+// # What counts as confirmed, per medium, and why the answers differ
+//
+// A durable copy CONFIRMED on a storage medium is confirmed by its own
+// ACTIVE placement row, which the locator read one package up where
+// reading it is not a retention decision. Nothing here asks the medium
+// anything, because FR-32 says nothing a medium reported may reach a
+// retention decision and this is one. A CONTESTED location is more than
+// one ACTIVE placement, which is more copies rather than fewer, so it is
+// confirmed too.
+//
+// Everything else is a local file, and the confirmation is the same one
+// pruneVerifySafeToDelete makes about a delete candidate: a real, regular,
+// non-symlink directory entry at the path this backup set's root and the
+// artifact's own name compute. Deliberately the same predicate rather than
+// a looser "something is there": FR-20 refuses to treat a symlink at a
+// final path as a positively identified managed artifact, and a symlink
+// cannot be too untrustworthy to delete and trustworthy enough to justify
+// deleting everything else. See
+// TestPruneRefusesEveryDeleteWhenTheLastKnownGoodPathIsASymlink.
+//
+// It stats and reads only, like every other check in this file, so calling
+// it once per plan and again before every delete costs one extra Lstat per
+// deletion and no correctness. PruneApply's own doc says why it is asked
+// that often.
+//
+// # Which half of FR-30 this closes, said plainly
+//
+// FR-30 says at no instant may an artifact have no confirmed readable
+// copy. This closes that for a restore point whose durable copy is a local
+// file, and it leaves it exactly as open as it was for one that has been
+// moved to a medium.
+//
+// The medium branch above returns "confirmed" from an ACTIVE placement row
+// and nothing else. That row is a journal fact, so a bucket lifecycle
+// rule, an out-of-band delete or a bucket somebody else pays for going
+// away leaves the row saying ACTIVE and this guard saying confirmed, which
+// is precisely the "protects a name, not a copy" shape this whole function
+// exists to end on the local side. The difference is not an oversight and
+// is not fixable here: FR-32 forbids anything a medium reported from
+// reaching a retention decision, and this is one. Asking the medium would
+// break that rule outright, and no weaker version of the question exists,
+// because a medium's answer is a medium's answer however it is phrased.
+//
+// So the omission is deliberate and stated rather than implied. What would
+// close it is the same shape FR-16 already uses for a delete: an
+// object-identity check performed one package up, where reading a medium
+// is not a retention decision, whose RESULT reaches a placement row this
+// function then reads exactly as it reads one now. That is a piece of
+// work, not a line, and it belongs to whoever owns the medium half of
+// FR-30 rather than to this guard.
+func pruneLastKnownGoodUnconfirmed(bs config.BackupSet, recByArtifact map[model.ArtifactID]state.Record, lkg LastKnownGoodResult, where ArtifactLocator) string {
+	if !lkg.Protected {
+		return ""
+	}
+
+	rec, ok := recByArtifact[lkg.Artifact]
+	if !ok {
+		// Cannot happen: lkg.Artifact came out of these same records.
+		// Refused rather than waved through, because this branch is
+		// reached only when something about the inputs is already wrong
+		// and the fail-safe direction on a delete path is the one that
+		// costs nothing.
+		return fmt.Sprintf(
+			"this backup set's last known good is %s and no record in this pass describes it, so nothing here can confirm a readable copy of it exists",
+			lkg.Artifact)
+	}
+
+	loc := where(lkg.Artifact)
+	if loc.Status == LocationContested || loc.OnMedium() {
+		return ""
+	}
+
+	path, err := pruneFinalPath(bs, rec.Artifact)
+	if err != nil {
+		return fmt.Sprintf(
+			"this backup set's last known good is %s and nothing here can say where its copy belongs: %v",
+			lkg.Artifact, err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Sprintf(
+			"this backup set's last known good is %s and there is no readable copy of it at %s: %v",
+			lkg.Artifact, path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Sprintf(
+			"this backup set's last known good is %s and %s is a symlink, which FR-20 never treats as a positively identified managed artifact",
+			lkg.Artifact, path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Sprintf(
+			"this backup set's last known good is %s and %s is not a regular file",
+			lkg.Artifact, path)
+	}
+	return ""
+}
+
+// pruneHoldEveryDelete turns every PruneDelete in verdicts into a
+// PruneRefuse naming why, or does nothing at all when why is empty.
+//
+// Every delete, not the ones that look related. The fact that stops a
+// deletion here is about the backup SET (its last known good has no
+// confirmed copy), so it disqualifies the set rather than an artifact, and
+// half a pass carried out is the outcome this whole file is arranged to
+// make impossible: the artifacts a partial run removed are the ones that
+// were still readable.
+//
+// "Every delete in verdicts", though, and PruneApply hands it the tail of
+// its own slice rather than the whole of it: the deletes it has not
+// reached yet. A pass that has already removed something and then finds
+// the last known good gone stops there, and rewriting the verdicts of the
+// artifacts it already unlinked would report a deletion that happened as
+// one that was refused. The hold is about what happens next, which is the
+// only thing still available to decide.
+//
+// REFUSE and never KEEP, for the reason pruneEvaluate gives at its own
+// resolution-failure branch: KEEP asserts a tier selected this artifact,
+// and this asserts that nothing was decided about it safely. Collapsing
+// the two would report a data-loss risk as an ordinary retention outcome.
+func pruneHoldEveryDelete(verdicts []PruneVerdict, why string) {
+	if why == "" {
+		return
+	}
+	for i := range verdicts {
+		if verdicts[i].Action != PruneDelete {
+			continue
+		}
+		verdicts[i].Action = PruneRefuse
+		verdicts[i].HoldReason = why
+		verdicts[i].Reason = fmt.Sprintf(
+			"refusing to delete %s: %s. Deleting anything in this backup set now would remove a copy while the restore point FR-19 reports as protected is not one, "+
+				"so nothing here is deleted until a reconciliation (FR-17) settles what this set actually holds",
+			verdicts[i].Artifact, why)
+	}
 }
 
 // PruneApply computes PruneDecide's own verdicts and deletes the local
@@ -854,6 +1084,27 @@ func PruneDecide(now time.Time, cfg config.Retention, bs config.BackupSet, recor
 // lifecycle/commit.go's own "honest accounting" section for the same kind
 // of limit acknowledged rather than hidden).
 //
+// Exactly the same argument, and at exactly the same frequency, applies
+// to FR-19's own confirmation: immediately before every delete, this
+// function re-derives pruneLastKnownGoodUnconfirmed against the disk as it
+// is at that moment, and holds that delete and every one still to come
+// when the restore point FR-19 reports as protected has no copy anything
+// could read. PruneDecide already asked, and the answer is about a file
+// another process can take away in between (issue #602).
+//
+// Per delete rather than once for the pass, which is what it used to be.
+// A pass removing a thousand artifacts is not an instant, and a
+// confirmation taken before the loop says nothing about the second half of
+// it: the deletes that would follow the loss are precisely the copies that
+// were still readable when it happened. The cost of asking every time is
+// one Lstat per delete against one unlink per delete, which is nothing,
+// and pruneLastKnownGoodUnconfirmed stats and reads only, so asking again
+// can change no state and reach no medium. See
+// TestPruneHoldsTheRestOfThePassWhenTheLastKnownGoodGoesPartwayThrough and
+// TestPruneReconfirmsTheLastKnownGoodAfterThePlanBeforeItDeletes, which
+// are the two deadlines this placement is about: after the plan, and
+// between one delete and the next.
+//
 // # The object half
 //
 // A verdict whose Medium is not local is not a local file, and it is
@@ -875,8 +1126,32 @@ func PruneApply(ctx context.Context, now time.Time, cfg config.Retention, bs con
 		recByArtifact[rec.Artifact] = rec
 	}
 
+	// FR-19's protection, re-derived here rather than read off the plan,
+	// so the artifact the confirmation below is about is the one THIS
+	// call's own inputs name. It reads journal rows and a clock and
+	// nothing else, so it is the reviewed decision and not the fresh
+	// evidence: the freshness is the per-delete confirmation in the loop.
+	_, lkg, err := DecideKeep(now, cfg, bs.ID, records)
+	if err != nil {
+		return nil, fmt.Errorf("retention: prune apply: %w", err)
+	}
+
 	for i := range verdicts {
 		if verdicts[i].Action != PruneDelete {
+			continue
+		}
+
+		// FR-30's own re-check, immediately before this delete, for the
+		// reason the second pruneVerifySafeToDelete call below exists:
+		// the last thing that asked was either PruneDecide, a moment
+		// before this pass began, or this same line before the previous
+		// delete, and the answer is about a file another process can take
+		// away in between. The decision is the reviewed one; the evidence
+		// is fresh. Holding verdicts[i:] rather than all of them stops
+		// the pass here instead of rewriting deletes it has already
+		// carried out. See pruneLastKnownGoodUnconfirmed (issue #602).
+		if why := pruneLastKnownGoodUnconfirmed(bs, recByArtifact, lkg, where); why != "" {
+			pruneHoldEveryDelete(verdicts[i:], why)
 			continue
 		}
 

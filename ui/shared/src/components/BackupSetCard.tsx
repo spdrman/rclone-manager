@@ -112,7 +112,7 @@ export function BackupSetCard({
               a button reading "Enable" is equally consistent with "this
               set is off" and with "this button turns sets on". */}
           {set.enabled ? null : (
-            <StatusBadge tone="neutral" glyph={"\u25cb"}>Disabled</StatusBadge>
+            <StatusBadge tone="neutral" icon="status-idle">Disabled</StatusBadge>
           )}
         </div>
       </div>

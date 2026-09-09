@@ -232,12 +232,18 @@ func TestSettingsWriteIsVisibleToASubsequentCLIRead(t *testing.T) {
 }
 
 // TestConfigFileEditIsVisibleThroughTheSettingsEndpoint is the same case
-// in the other direction. A config-file edit is what the CLI side of this
-// product actually is for retention: `backup-manager retention`'s own
-// override flags are preview-only and never persisted (that command's own
-// doc), so "an operator changed the policy outside the UI" means they
-// edited the YAML file and restarted, which is FR-5's documented model.
-// service.Open here is that restart.
+// in the other direction: a policy this endpoint did not write, showing up
+// through it anyway.
+//
+// A hand edit is one way that happens and is the one this test drives,
+// because it is the only one that needs a restart to be seen, which is
+// FR-5's documented model and is what service.Open here stands in for.
+// It is no longer the only way. `backup-manager retention`'s override
+// flags are still preview-only and never persisted (that command's own
+// doc), but `settings patch --policy-file` writes the deployment's whole
+// chain and `backup-set retention` writes one set's, both through the
+// same core/service methods this endpoint uses, so neither needs a
+// restart to become visible (#595, #333).
 func TestConfigFileEditIsVisibleThroughTheSettingsEndpoint(t *testing.T) {
 	configPath := writeBoundaryConfig(t)
 
@@ -293,9 +299,15 @@ func TestConfigFileEditIsVisibleThroughTheSettingsEndpoint(t *testing.T) {
 	if got.Retention.ProtectLastKnownGood {
 		t.Error("protect_last_known_good = true, but the file says false")
 	}
+	// Both tiers name the local hard drive by its reserved id, which is
+	// what a tier that named no destination reports since #622: above
+	// core/service every tier names where its backups live, so a caller
+	// never has to interpret an absent field. The file itself still
+	// carries no medium: key for either of them, which is the round trip
+	// core/service's own cases pin.
 	wantTiers := []retentionTierBody{
-		{Name: "hourly_ish", Granularity: "days", PeriodDays: 1, Keep: 30},
-		{Name: "annual", Granularity: "year", Keep: 7},
+		{Name: "hourly_ish", Granularity: "days", PeriodDays: 1, Keep: 30, Medium: "local"},
+		{Name: "annual", Granularity: "year", Keep: 7, Medium: "local"},
 	}
 	if len(got.Retention.Tiers) != len(wantTiers) {
 		t.Fatalf("tiers = %+v, want %+v", got.Retention.Tiers, wantTiers)

@@ -39,6 +39,17 @@
 .btn--destructive-confirm { border-color: var(--danger); background: var(--danger); color: var(--surface); font-weight: 600; }
 .btn--sm { height: 29px; padding: 0 11px; font-size: var(--text-sm); }
 
+/* The floor for native controls (#618). One element selector, so every
+   class rule and every inline style still wins: this only catches a
+   control nobody gave a colour to, which would otherwise fall back to the
+   user agent's black and be unreadable on a dark surface. `font: inherit`
+   is here for the same reason, since an unstyled control also drops to the
+   UA's own font. */
+input, select, textarea, button {
+  color: var(--text);
+  font-family: inherit;
+}
+
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field__label { font-size: var(--text-sm); font-weight: 500; color: var(--text-2); }
 .input, .select {
@@ -98,11 +109,43 @@
   display: flex; gap: var(--space-3);
   padding: 15px var(--space-4);
   border: 1px solid; border-radius: var(--radius-lg);
+  /* The containing block for the close control below. Without it that
+     control positions against the page and lands in the corner of the
+     viewport instead of the corner of its banner. */
+  position: relative;
 }
 .banner--warn { background: var(--warn-quiet); border-color: var(--warn); }
 .banner--danger { background: var(--danger-quiet); border-color: var(--danger); }
 .banner--info { background: var(--surface-3); border-color: var(--border); }
 .banner--ok { background: var(--ok-quiet); border-color: var(--ok); }
+
+/* The close control (issue #620). The behaviour lives in
+   components/Banner.tsx; this is only where it sits.
+
+   Positioned rather than laid out, and that is the decision worth the
+   comment. .banner is a flex row, but plenty of them are switched to a
+   column by an inline style, and one is a list row: as a flex ITEM the
+   control would land at the end of whatever axis that particular banner
+   happens to use, which is the bottom of a column-direction banner. Out
+   of flow, it is at the top right of all four tones and every layout,
+   which is what #620 asked for.
+
+   Only .banner--dismissible pads for it. Taking it out of flow means
+   nothing else stops a long sentence running underneath, and a banner
+   that opted out has nothing to run under, so it keeps the symmetric
+   padding it always had. The extra 24px covers the control's 22px box,
+   which leaves the copy clear of it by the same 9px the control is inset
+   from the edge. */
+.banner--dismissible { padding-right: calc(var(--space-4) + 24px); }
+.banner__close {
+  position: absolute; top: 9px; right: 9px;
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-3);
+  font: inherit; font-size: 15px; line-height: 1; cursor: pointer;
+}
+.banner__close:hover { background: var(--surface-3); color: var(--text); }
 
 .dialog-scrim {
   position: fixed; inset: 0; z-index: 50;

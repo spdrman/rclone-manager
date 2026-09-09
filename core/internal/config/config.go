@@ -58,6 +58,38 @@ type Config struct {
 	// gate rather than an intention.
 	StorageMediums []StorageMedium `yaml:"storage_mediums,omitempty"`
 
+	// DefaultStorageMedium is the destination a NEWLY CREATED retention
+	// tier starts on (H2.2, issue #622).
+	//
+	// It governs that and nothing else, which is the whole of what
+	// "default" means here and is worth stating in the schema rather than
+	// only in a UI. It never moves a backup that is already somewhere: a
+	// tier that names a destination goes on naming it when this key
+	// changes, and an existing tier that names none goes on meaning the
+	// local backup root. Moving the default is a decision about the NEXT
+	// tier somebody adds, so it is a write with no consequence for a
+	// single artifact already on disk, which is exactly why it is safe to
+	// put behind one click.
+	//
+	// EMPTY MEANS LOCAL, and empty is the ONLY spelling of local, which is
+	// RetentionTier.Medium's rule applied to the same fact for the same
+	// reason. "default_storage_medium: local" is refused rather than
+	// accepted as a synonym (validateDefaultStorageMedium), so a
+	// deployment that has never chosen a destination cannot acquire this
+	// key by having its configuration re-marshaled: core/service rewrites
+	// the whole Config on every settings save, and a key injected into a
+	// file that never asked for it is refused outright by an older binary
+	// under Load's KnownFields(true). FR-35 makes that a gate rather than
+	// an intention, and omitempty below is what keeps it true.
+	//
+	// A value that no storage_mediums entry declares is a validation
+	// error, not a fall-back to local. Silently starting a new tier
+	// somewhere other than where the operator wrote is the wrong
+	// direction on the one decision this field exists to make, and it is
+	// the same rule validateTierMediumReferences already applies one
+	// level down.
+	DefaultStorageMedium string `yaml:"default_storage_medium,omitempty"`
+
 	// MaxMovesPerCycle bounds how many artifacts one retention cycle
 	// relocates between mediums (EPIC E, FR-30). It sits beside
 	// StorageMediums rather than inside Retention for the same reason
@@ -517,6 +549,46 @@ type BackupSet struct {
 	// either way -- so it is only ever set by an explicit yaml key, never
 	// derived.
 	ReadOnly bool `yaml:"-"`
+
+	// ConnectionUnverified records that this backup set was written
+	// without its SSH connection ever having been proven: issue #624's
+	// mark, and the durable half of `--no-verify` on a create or a
+	// connection-changing edit.
+	//
+	// It exists because --no-verify has a legitimate use, building
+	// configuration offline against a host this machine cannot currently
+	// reach, and the result of using it must not look identical to a set
+	// that was checked against a real server. The sentence the command
+	// prints is read once, by whoever typed it; this is what is still
+	// there tomorrow for the operator who did not.
+	//
+	// Absent is NOT "unverified", and that asymmetry is deliberate. Every
+	// configuration written before this field existed says nothing here,
+	// and a build that read silence as a mark would, on the first upgrade,
+	// declare every backup set on every deployment unproven, which is a
+	// warning nobody can act on and therefore one everybody learns to
+	// ignore. The mark is only ever written by core/service itself, when
+	// a create or an edit was told to skip the check it runs in front of
+	// the write (SkipConnectionCheck on the request, `skip_connection_check`
+	// on the API), exactly as ReadOnlyConfig is only ever written by an
+	// operator who said something. It is never taken from a request: a
+	// mark a caller could set is a mark a caller could omit, and an
+	// earlier shape of the create request that carried it as the caller's
+	// own claim let any client write an unproven set with nothing to say
+	// so (PR #628 review).
+	//
+	// It is cleared, not merely reported: a connection test that PASSES
+	// against this set removes the key (core/service's
+	// clearConnectionUnverified). That is what makes it a state rather
+	// than a scar on a set that happened to be created offline. A test
+	// that fails leaves it exactly where it was, because "somebody pressed
+	// the button" is not the same claim as "this connection works".
+	//
+	// omitempty, like every other key this schema has gained, so a
+	// deployment that never uses --no-verify never writes a file an older
+	// build cannot parse (Load's KnownFields(true); see RetentionConfig's
+	// own note on that one-way door).
+	ConnectionUnverified bool `yaml:"connection_unverified,omitempty"`
 
 	Validation   Validation   `yaml:"validation"`
 	Revalidation Revalidation `yaml:"revalidation"`
@@ -1109,11 +1181,22 @@ type RetentionTier struct {
 	// The medium is only expressible in this, the tiers spelling. The
 	// three legacy daily_days/weekly_months/monthly_months scalars cannot
 	// name one and do not need to: adopting mediums means adopting the
-	// chain. The CLI's own -tier override cannot name one either (its
-	// syntax is name:granularity:keep[:window_unit]), so an override
-	// replaces the file's chain with an all-local one. That is inert
-	// while nothing reads this field, and it is #239's to answer when
-	// retention starts planning on it.
+	// chain.
+	//
+	// The CLI's -tier override could not name one either, which this doc
+	// used to record as inert and defer to #239 "when retention starts
+	// planning on it". #239 landed and it stopped being inert: an
+	// override replaced the file's chain with an all-local one, so
+	// `backup-manager retention --tier` previewed placement against local
+	// beside a deployment sending monthly to S3, and printed it no less
+	// confidently. `--tier-medium NAME=MEDIUM_ID` answers it (issue #595,
+	// retention_flags.go): a repeatable flag rather than a fifth
+	// colon-separated position, refused when no -tier of that name was
+	// given, and handing the id here unparsed so a medium nothing declares
+	// is refused in the identical words below. A supplied chain that names
+	// no destination beside a file's chain that does is still an all-local
+	// preview, deliberately (the override replaces rather than merges),
+	// and cmdRetention says so on stderr before printing the plan.
 	//
 	// omitempty, for the round-trip reason above.
 	Medium string `yaml:"medium,omitempty"`
@@ -1244,6 +1327,23 @@ func (r Retention) EffectiveTiers() []RetentionTier {
 // artifactstore to say so (this package sits under everything and imports
 // nothing of the sort), so the agreement is pinned by a test instead.
 const MediumLocal = "local"
+
+// EffectiveDefaultStorageMedium is the destination a newly created
+// retention tier starts on: the id DefaultStorageMedium names, or
+// MediumLocal when it names none (issue #622).
+//
+// An accessor rather than a default Validate writes back into the struct,
+// which is RetentionTier.EffectiveMedium's own argument applied to the
+// same fact: a resolved value written into the struct would be
+// re-marshaled into the operator's own config file by the next settings
+// save, freezing a key into a file that never chose it (issue #294) and
+// breaking FR-35's "no new key in a medium-free config" rule outright.
+func (c *Config) EffectiveDefaultStorageMedium() string {
+	if c == nil || c.DefaultStorageMedium == "" {
+		return MediumLocal
+	}
+	return c.DefaultStorageMedium
+}
 
 // DefaultMaxMovesPerCycle is what Config.MaxMovesPerCycle resolves to in
 // a deployment that declares a medium and says nothing about the bound.
@@ -1494,6 +1594,45 @@ type StorageMedium struct {
 	// Credentials names where this medium's credentials come from. Exactly
 	// one of its three sources must be set.
 	Credentials MediumCredentials `yaml:"credentials"`
+
+	// ConnectionUnverified records that this destination was written
+	// without ever having been proven: issue #636's mark, and the durable
+	// half of `medium add --no-verify` on a create or a
+	// destination-changing edit.
+	//
+	// It is BackupSet.ConnectionUnverified's twin, field for field and
+	// word for word, because the two halves of #623's invariant ("neither
+	// connection type should be relied on until it has been proven") are
+	// one rule about two nouns. The source side got the mark first (#624,
+	// #628); the destination side had --no-verify and nothing that
+	// outlived the line it printed, which is what #636 calls a hole rather
+	// than an escape hatch.
+	//
+	// Absent is NOT "unverified", for the reason the backup set's own doc
+	// gives at length: every configuration written before this field
+	// existed says nothing here, and a build that read silence as a mark
+	// would declare every destination on every deployment unproven at the
+	// first upgrade, which is a warning nobody can act on and therefore
+	// one everybody learns to ignore.
+	//
+	// It is only ever written by core/service, from
+	// StorageMediumSpec.SkipConnectionCheck and from nothing else. It is
+	// never taken from a request: a mark a caller could set is a mark a
+	// caller could omit, which is the review finding PR #628 landed on the
+	// source side, applied here before it could happen a second time.
+	//
+	// It is cleared, not merely reported. A `test connection` that PASSES
+	// against this destination removes the key (core/service's
+	// clearStorageMediumUnverified), and one that fails leaves it exactly
+	// where it was, because "somebody pressed the button" is not the same
+	// claim as "this bucket works". That asymmetry is what makes it a
+	// state rather than a scar on a destination that happened to be
+	// declared offline.
+	//
+	// omitempty, like every other key this schema has gained, so a
+	// deployment that never uses --no-verify never writes a file an older
+	// build cannot parse (Load's KnownFields(true)).
+	ConnectionUnverified bool `yaml:"connection_unverified,omitempty"`
 }
 
 // EffectiveMaxMovesPerCycle is the per-cycle move bound this deployment

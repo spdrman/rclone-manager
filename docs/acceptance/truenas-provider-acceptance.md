@@ -36,7 +36,7 @@ reach.
 
 ### 0.1 Make the canonical image resolvable
 
-`ghcr.io/spdrman/backup-manager:0.3.2` is cut but not pushed yet:
+`ghcr.io/spdrman/backup-manager:0.3.3` is cut but not pushed yet:
 `distribution/packaging/canonical.json` records `image.published: false`, and
 `container/release-manifest.json` carries a `registry_digest` of `null` per
 architecture. So the reference does not resolve from the registry today, and the

@@ -80,6 +80,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # apps/common already reads the contract from its own tests, and the day a
 # handler imports it that stage would fail the same way.
 COPY core/apicontract/ ./apicontract/
+# core/cliecho is the same shape one package along (issue #599):
+# core/service imports it to record what an API action was equivalent to,
+# so a tree without it fails the build below with exactly the message the
+# comment above describes, and only the image build says so.
+COPY core/cliecho/ ./cliecho/
 COPY core/cmd/ ./cmd/
 COPY core/internal/ ./internal/
 COPY core/service/ ./service/
@@ -159,12 +164,33 @@ COPY apps/ ./apps/
 # then serves the right bridge from the identical binary, which is what
 # section 3.7 requires.
 #
-# Five, not seven. `generic` is compiled into the binary already and
-# duplicating it here would buy nothing; `ugos` is EPIC D's, and its UPK
-# carries its own. Seven at roughly 347 KB each would be about 2.4 MB
-# against a gated 5% image budget of about 2.15 MB, so "ship them all" was
-# never available; five is 1.74 MB, which is inside it with room, and
-# docs/perf/ records the measurement rather than the estimate.
+# Five, not seven, and the reason is duplication rather than a budget.
+# `generic` is compiled into the binary already, so a sixth directory for
+# it would be bytes nobody serves; `ugos` is EPIC D's, and its UPK carries
+# its own. Those two have a carrier, so the image is not theirs to be.
+# That argument holds whatever the image weighs.
+#
+# It is written this way round because the argument that used to be here
+# has stopped working, and #635 caught it still being repeated. #180 chose
+# five by arithmetic: seven bundles at roughly 347 KB each was about
+# 2.4 MB against a gated 5% budget of about 2.15 MB, and the five came to
+# 1,802,482. That reasoning was sound while the recorded baseline was an
+# image with NO bundles in it, so a bundle had to be paid for out of the
+# headroom. It is not sound now. The baseline was re-captured at 69,704,266
+# WITH these five inside it, so the 5% is headroom for whatever comes next
+# and the bundles cannot be charged to it twice.
+#
+# Re-derived on today's measurements the old sum points both ways at once,
+# which is how you can tell it has stopped deciding anything. 5% of
+# 69,704,266 is 3,485,213. The five bundles measure 3,503,996 (about
+# 700,799 each, twice #180's figure: #632 put 139,744 bytes of woff2 in
+# every one and EPIC F, G and H grew the JS chunk), so charging them to the
+# budget puts FIVE over it by 18,783 bytes. Not charging them, which is
+# correct, leaves 3,485,213 of headroom against 1,401,598 for the two
+# missing bundles, so SEVEN would fit with 2,083,615 to spare.
+#
+# So take the count from the paragraph above and the size of the image from
+# docs/perf/. Neither of those numbers is an argument for the other.
 RUN cd ui/shared && npm run build:bundles truenas unraid openmediavault proxmox synology
 
 # LAST, and the order is load-bearing. `build:bundles` runs `npm run
@@ -203,6 +229,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cd apps/generic && go mod download
 
 COPY core/apicontract/ ./core/apicontract/
+COPY core/cliecho/ ./core/cliecho/
 COPY core/cmd/ ./core/cmd/
 COPY core/internal/ ./core/internal/
 COPY core/service/ ./core/service/

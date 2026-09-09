@@ -122,6 +122,15 @@ func destructiveGatePassed(gate DestructiveGate) bool {
 // use, so the two call sites can never drift into reporting the same
 // denial with different codes or text.
 func writeDestructiveGateDenied(w http.ResponseWriter) {
-	writeError(w, http.StatusForbidden, "DESTRUCTIVE_OPERATIONS_DISABLED",
-		"destructive operations are disabled until the trusted-proxy authentication gate (issue #92) has been verified for this deployment")
+	writeError(w, http.StatusForbidden, "DESTRUCTIVE_OPERATIONS_DISABLED", destructiveGateRefusal)
 }
+
+// destructiveGateRefusal is the one sentence this deployment gives for a
+// shut gate, whether it travels as a typed error envelope (above) or as
+// a field on an otherwise successful response (createBackupSet's
+// RunError, issue #597).
+//
+// One string rather than two, because the two surfaces describe the same
+// refusal and an operator who saw both worded differently would
+// reasonably think they were different problems.
+const destructiveGateRefusal = "destructive operations are disabled until the trusted-proxy authentication gate (issue #92) has been verified for this deployment"

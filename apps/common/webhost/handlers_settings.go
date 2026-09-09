@@ -222,17 +222,92 @@ type settingsResponse struct {
 // config.MediumCredentials is not reachable from this shape at all, so
 // there is nothing for a future edit to accidentally start copying
 // across.
+// Endpoint, Prefix and UploadVerification joined it with G2.2 (#594),
+// which made a destination something a form can EDIT rather than only
+// read. That is the reason they are here and not a convenience: an edit
+// replaces the whole record, so a field this shape cannot report is a
+// field an edit form cannot pre-fill and therefore a field the next save
+// silently clears.
+//
+// There is still no field naming the credential, not even its KIND, and
+// that stayed a deliberate refusal rather than an oversight. A
+// "file"/"env"/"command" word here would let an edit form pre-select a
+// radio button, and it would also put where this deployment keeps its
+// secrets onto a surface an operator can export and paste into a support
+// thread. The edit form does not need it, because a write that names no
+// credential keeps the one already configured.
 type storageMediumBody struct {
 	ID           string `json:"id"`
 	Type         string `json:"type"`
 	Bucket       string `json:"bucket"`
 	Region       string `json:"region,omitempty"`
+	Endpoint     string `json:"endpoint,omitempty"`
+	Prefix       string `json:"prefix,omitempty"`
 	StorageClass string `json:"storage_class"`
+	// UploadVerification is how an upload is proven before the local copy
+	// is deleted, already resolved, so a client never has to know what an
+	// unset value defaults to.
+	UploadVerification string `json:"upload_verification"`
 	// ReadsRequireRestore says this medium's class cannot be read on
 	// demand. It is computed by the engine rather than derived by a
 	// client from storage_class, so one product decides what archive
 	// means.
 	ReadsRequireRestore bool `json:"reads_require_restore"`
+
+	// Path, IsLocal and IsDefault are H2.2's three (issue #622), and the
+	// first two are here because this shape now describes a destination
+	// that is not a bucket.
+	//
+	// The list always carries the drive this deployment's backups land
+	// on. It is not declared anywhere, it is what every retention tier
+	// that names no destination means, and leaving it out was #622's own
+	// complaint: the settings list omitted the one destination every
+	// deployment has. Path is the drive it writes to, resolved exactly as
+	// capacitySettingsBody.BackupRoot is so one deployment cannot report
+	// two mounts, and empty for a bucket because a bucket has no path on
+	// this host.
+	//
+	// IsDefault marks the destination a NEWLY created retention tier
+	// starts on, and exactly one entry in a list carries it. It says
+	// nothing about where anything currently is.
+	Path      string `json:"path,omitempty"`
+	IsLocal   bool   `json:"is_local"`
+	IsDefault bool   `json:"is_default"`
+
+	// ConnectionUnverified is issue #636's mark: this destination was
+	// declared without ever having been proven. Omitted when false, which
+	// is the ordinary case and is also how an engine built before this
+	// field answers, so a client reads absence as "nothing here says this
+	// was skipped" rather than as a claim either way.
+	//
+	// It is here so a surface can DRAW the difference. A destination
+	// nobody proved and one checked against a real bucket were the same
+	// row on every screen, which is what made --no-verify a hole rather
+	// than an escape hatch.
+	ConnectionUnverified bool `json:"connection_unverified,omitempty"`
+}
+
+// toStorageMediumBody is the one projection of a declared destination
+// onto this API, shared by the settings read and by every route in
+// handlers_mediums.go. One function rather than two identical literals:
+// the field this shape must never grow is a credential, and a second
+// projection is a second place somebody could add one.
+func toStorageMediumBody(m service.StorageMediumSummary) storageMediumBody {
+	return storageMediumBody{
+		ID:                   m.ID,
+		Type:                 m.Type,
+		Bucket:               m.Bucket,
+		Region:               m.Region,
+		Endpoint:             m.Endpoint,
+		Prefix:               m.Prefix,
+		StorageClass:         m.StorageClass,
+		UploadVerification:   m.UploadVerification,
+		ReadsRequireRestore:  m.ReadsRequireRestore,
+		Path:                 m.Path,
+		IsLocal:              m.IsLocal,
+		IsDefault:            m.IsDefault,
+		ConnectionUnverified: m.ConnectionUnverified,
+	}
 }
 
 // capacitySettingsBody is FR-21's block as it is actually deciding.
@@ -327,7 +402,7 @@ func (h *handlers) getSettings(w http.ResponseWriter, r *http.Request) {
 		// classified vocabulary to map, so an unclassified error could
 		// carry filesystem-internal text (the same default every other
 		// handler in this package applies).
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to read settings")
+		h.internalError(w, r, "INTERNAL", "failed to read settings", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toSettingsResponse(settings))
@@ -383,7 +458,7 @@ func (h *handlers) updateSettings(w http.ResponseWriter, r *http.Request) {
 
 	settings, err := h.backend.UpdateSettings(r.Context(), req)
 	if err != nil {
-		writeSettingsError(w, err)
+		h.writeSettingsError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toSettingsResponse(settings))
@@ -461,14 +536,7 @@ func toSettingsResponse(s service.Settings) settingsResponse {
 	}
 	mediums := make([]storageMediumBody, 0, len(s.Mediums))
 	for _, m := range s.Mediums {
-		mediums = append(mediums, storageMediumBody{
-			ID:                  m.ID,
-			Type:                m.Type,
-			Bucket:              m.Bucket,
-			Region:              m.Region,
-			StorageClass:        m.StorageClass,
-			ReadsRequireRestore: m.ReadsRequireRestore,
-		})
+		mediums = append(mediums, toStorageMediumBody(m))
 	}
 	return settingsResponse{
 		Mediums:   mediums,
@@ -558,7 +626,7 @@ func writeSettingsDecodeError(w http.ResponseWriter, err error) {
 
 // writeSettingsError maps core/service's settings-write error vocabulary
 // onto this package's one error envelope.
-func writeSettingsError(w http.ResponseWriter, err error) {
+func (h *handlers) writeSettingsError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, service.ErrMediumDisclosureRequired):
 		// Its own code, at the same status as a malformed body, because
@@ -582,8 +650,8 @@ func writeSettingsError(w http.ResponseWriter, err error) {
 		// a state or rclone internal.
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, service.ErrConfigNotFileBacked):
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "this deployment has no configuration file to persist to")
+		h.internalError(w, r, "INTERNAL", "this deployment has no configuration file to persist to", err)
 	default:
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to update settings")
+		h.internalError(w, r, "INTERNAL", "failed to update settings", err)
 	}
 }

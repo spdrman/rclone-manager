@@ -123,15 +123,19 @@ describe("QuarantinePage: Reinstate is offered, and never as a fourth ordinary b
   it("offers Reinstate alongside the three existing actions, in last position", () => {
     renderPage(createMockApi(), vi.fn());
 
+    // Four words and no fifth. The caution mark on Reinstate used to be
+    // part of this list, as the character "▲" glued to the front of the
+    // label; #621 made it artwork, and an SVG contributes no text, which
+    // is what an aria-hidden decoration should always have done.
     expect(rowActions().map((b) => b.textContent)).toEqual([
       "Inspect",
       "Revalidate",
       "Retry ingestion",
-      "▲Reinstate…"
+      "Reinstate…"
     ]);
   });
 
-  it("marks Reinstate as the one action that opens a confirmation and carries a caution glyph", () => {
+  it("marks Reinstate as the one action that opens a confirmation and carries a caution icon", () => {
     renderPage(createMockApi(), vi.fn());
 
     const reinstate = screen.getByRole("button", { name: "Reinstate…" });
@@ -141,11 +145,14 @@ describe("QuarantinePage: Reinstate is offered, and never as a fourth ordinary b
     const withEllipsis = rowActions().filter((b) => /…$/.test(b.textContent ?? ""));
     expect(withEllipsis).toEqual([reinstate]);
 
-    // A glyph and the caution tier, so it cannot be mistaken for another
+    // An icon and the caution tier, so it cannot be mistaken for another
     // Retry ingestion at a glance. Decorative only: the accessible name
-    // stays "Reinstate…".
+    // stays "Reinstate…", which is asserted by the getByRole above and is
+    // the half that must survive the artwork changing under it (#621).
     expect(reinstate.className).toContain("btn--caution");
-    expect(within(reinstate).getByText("▲")).toHaveAttribute("aria-hidden", "true");
+    const caution = reinstate.querySelector("svg");
+    expect(caution).not.toBeNull();
+    expect(caution).toHaveAttribute("aria-hidden", "true");
     const decorated = rowActions().filter((b) => b.querySelector("[aria-hidden='true']") !== null);
     expect(decorated).toEqual([reinstate]);
   });

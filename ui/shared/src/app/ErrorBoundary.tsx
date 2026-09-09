@@ -1,5 +1,6 @@
 import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
+import { Banner } from "@shared/components/Banner";
 
 interface Props {
   children: ReactNode;
@@ -47,9 +48,14 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.error) {
       return (
         <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
-          <div
-            className="banner banner--danger"
+          {/* Not dismissible (#620). This is not a notice over a page,
+              it IS the page: the tree below it failed to render, so
+              putting this away would leave a blank screen and take the
+              Reload button, the only way out of the crash, with it. */}
+          <Banner
+            tone="danger"
             role="alert"
+            dismissible={false}
             style={{ maxWidth: "56ch", flexDirection: "column" }}
           >
             <div style={{ fontWeight: 600, fontSize: 15 }}>Backup Manager hit an unexpected error</div>
@@ -65,7 +71,7 @@ export class ErrorBoundary extends Component<Props, State> {
             >
               Reload
             </button>
-          </div>
+          </Banner>
         </div>
       );
     }

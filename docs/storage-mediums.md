@@ -27,7 +27,10 @@ an archive class is not a place a tier can deliver to.
 | Artifacts actually MOVE between mediums when a tier says so | Landed, including a chain with two medium tiers |
 | Retention plans, previews and prune understand mediums | Landed, including across the HTTP boundary: the preview carries every move with both mediums, and every deletion with the medium it happens on (#430) |
 | The API and the UI show placements, access states and the disclosure | Landed |
-| A medium can be proved to work before a cycle carries a real backup to it | Landed (#443): `backup-manager medium preflight`, and a button on the settings form |
+| A tier's destination is reachable from `backup-manager`, not only the browser | Landed (#595): `retention --tier-medium NAME=MEDIUM_ID` previews a supplied chain against the destinations it names, `settings patch --policy-file` replaces the deployment's whole chain, and `backup-set retention --policy-file` already did one set's |
+| A medium can be proved to work before a cycle carries a real backup to it | Landed (#443): `backup-manager medium test-connection` (`preflight` still works, see below), and a button on the settings form |
+| A medium can be DECLARED without hand-editing config.yaml, and proved before it is | Landed (#594): a wizard on the settings page, and `backup-manager medium list/show/import-credentials/add/edit/remove` |
+| The drive backups already land on is a destination like any other, a tier picks one without leaving the tier, and one destination is the default | Landed (#622): a picker under every tier in both editors, a `local` entry in the destinations list, `backup-manager medium default` and `settings patch --tier-medium` |
 | Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
 
 One limit is worth knowing before you write a chain, and it is the manager
@@ -109,6 +112,42 @@ retention:
 | `upload_verification` | `readback` (the default) or `attested`. Read the verification ladder below before changing it. |
 | `credentials` | Exactly one of `file`, `env` or `command`. There is no field for a literal key. |
 
+### `default_storage_medium`, and what "default" governs
+
+A top-level key, and it decides one thing: **the destination a newly created
+retention tier starts on**.
+
+```yaml
+default_storage_medium: offsite_s3
+```
+
+It never moves a backup. A tier that already names a destination goes on naming
+it when this changes, and a tier that names none goes on meaning the drive on
+this machine. Moving it is a decision about the NEXT tier somebody adds, which
+is why it is one click in the browser, one command on the terminal, and carries
+no disclosure of its own: the disclosure stands in front of the save that
+actually sends a tier's backups off this machine, and a second acknowledgment in
+front of a write with no consequence would train an operator to click through
+the one that matters.
+
+Local is spelled by leaving the key out, exactly as it is on a tier, so a
+deployment that has never chosen a destination has no such key and a settings
+save will not inject one. `default_storage_medium: local` is refused in so many
+words: two spellings of one fact is how a read and a write end up disagreeing.
+
+Three rules hold the list of destinations together, and all three are enforced
+by the engine rather than only by the form:
+
+- the destination marked default cannot be removed. Move the mark first.
+- there is never zero destinations. The drive backups land on is always one of
+  them, and it cannot be un-declared because it was never declared.
+- a removal that leaves exactly one destination leaves that one as the default.
+
+`MEDIUM_IS_DEFAULT` is the API refusal for the first, and it is a different code
+from `MEDIUM_IN_USE` on purpose: in-use means copies are there and the next step
+is to look at them, default means nothing is necessarily there and the next step
+is to move one setting.
+
 ### Which medium an artifact lives on
 
 The **first tier in chain order that currently selects the artifact** names its
@@ -141,6 +180,29 @@ key**: writing `access_key_id:` or `secret_access_key:` in the config is an
 unknown field, and the config loader refuses the whole file before validation
 even runs. That refusal is deliberate and is not going to be softened.
 
+There is a fourth way to arrive at one of the three, for an operator who has
+just been handed an access key by their provider and has none of them yet
+(#594). It does not add a schema field and does not soften the refusal above:
+
+```
+backup-manager medium import-credentials --stdin
+```
+
+reads AWS shared-credentials text from standard input, writes it to a 0600 file
+in an `s3_credentials` directory beside `config.yaml`, and prints an opaque id.
+`medium add --credentials-id ID` then resolves that id, server-side, back to the
+file's path, and what lands in the configuration is an ordinary
+`credentials.file`. `POST /api/v1/storage-credentials` is the same door for the
+wizard.
+
+Two things about that command are deliberate and worth knowing. It takes the
+material on **stdin** and there is no `--access-key-id` or `--secret-access-key`
+flag anywhere on this surface, because a secret on a command line is in `ps`
+output for every user on the box and in shell history. And it prints the id and
+the fact that a file was written, and never the material: there is no read side
+for it at all, so the only way to get a stored credential back is to be root on
+the host, which is what the file's 0600 already assumes.
+
 Credential files belong under private state (`/var/lib/backup-manager`), never
 under the backup root. Nothing that leaves this process carries key material:
 not a log line at any level, not an error message, not an API response, not the
@@ -153,16 +215,129 @@ Nothing in this product touched a bucket until a cycle carrying a real backup
 did, which meant the first thing to discover a wrong region, a bucket that is
 not there, a credentials file the daemon cannot read, or a policy that denies
 `PutObject` was a move, in the middle of a cycle, after an artifact had already
-been chosen to leave local disk. There is a preflight now:
+been chosen to leave local disk. There is a test now:
 
 ```
-backup-manager medium preflight offsite_s3
+backup-manager medium test-connection offsite_s3
 ```
 
-and the same check sits behind a button on the settings form, offered at the
-moment you point a tier at a medium and before the save that starts sending
-backups there. It exits non-zero when any check fails, so it composes into a
-deployment script.
+and the same check sits behind a button on the settings form and under every
+retention tier's destination picker, offered at the moment you point a tier at a
+destination and before the save that starts sending backups there. It exits
+non-zero when any check fails, so it composes into a deployment script.
+
+The verb used to be `preflight` and still is: the same entry in the same
+dispatch table, kept as an alias so anything scripted against it goes on
+working. What changed in #622 is which name the product says first. The same
+idea was called "Verify" in the browser, `preflight` on the command line and
+"Test connection" on the source side of this same product, and one operator
+learning three words for one button is two words too many.
+
+It answers for the drive on this machine too, which used to have nothing to
+test on the reasoning that no network was involved:
+
+```
+backup-manager medium test-connection local
+```
+
+A local destination fails in the shapes a remote one does, minus the credential,
+and the report tells the three apart because they have three different fixes.
+The path can be gone, which on a NAS is almost always a volume that did not
+mount and looks like a working deployment right up to the first write: that
+fails the `reach` step, classified `not_found`. It can be there and unwritable
+by the user this service runs as, which in a container is usually the
+bind-mount's owner: that fails `write`, classified `permission_denied`, and it
+is a real probe write rather than a comparison of file modes, because ACLs,
+group membership, read-only mounts and user namespaces all make a mode
+comparison a guess. And the filesystem can be full, which is the one failure
+that arrives while everything is configured perfectly: that fails a `space`
+step, weighed against your own `capacity.safety_margin_bytes` and
+`capacity.critical_free_bytes` rather than against a figure this product
+invented, because a transfer already refuses to start into less than the margin.
+
+Since #594 the same eight checks also run against a destination that is **not
+declared yet**, which is what lets a destination be proved before it is written
+down rather than after:
+
+```
+backup-manager medium test-connection --candidate offsite_s3 --bucket nas-backups \
+        --region us-east-1 --prefix monthly --credentials-id 9b41c7e2
+```
+
+It writes no configuration whatever the report says. `medium add` runs exactly
+this check before it writes and refuses to write when it fails, which is the
+non-interactive equivalent of the wizard's Save button staying disabled;
+`--no-verify` skips it and says in its own output that nothing was proven.
+
+### A destination nobody ever proved says so, until somebody proves it
+
+Until #636 that paragraph described only the first-party clients. The check
+lived in `medium add` and in the wizard, so `POST /storage-mediums` accepted a
+destination nobody had verified and answered 201, and there was no mark either:
+a destination written unproven and one checked against a real bucket were the
+same destination in every list, on every screen and in every command's output,
+forever. That is the state #624 calls a hole rather than an escape hatch, on the
+source side of the same product, and #628 had already closed it there.
+
+So the check is the engine's now. `CreateStorageMedium` and
+`UpdateStorageMedium` run the eight steps themselves and refuse with
+`MEDIUM_CONNECTION_NOT_PROVEN`, whoever the caller is, and an edit is checked
+when it changes anything about the destination: the endpoint, the region, the
+bucket, the prefix, the credential reference, the storage class or the
+verification class. Re-saving a destination unchanged runs no check, so an edit
+form can press Save on a destination that is currently unreachable.
+
+`--no-verify` is still there and still means what it meant, plus one thing:
+
+```
+connection_unverified: true
+```
+
+goes into that destination's entry in `config.yaml`, and stays there until a
+test connection PASSES against it. `medium show` prints a `connection: not
+verified` line for it, the destinations card draws a `never proven` badge and a
+sentence under the row, and `GET /storage-mediums` carries
+`connection_unverified`. A check that FAILS leaves the mark exactly where it
+was, because "somebody pressed the button" is not the same claim as "this
+bucket works".
+
+Absence is not "unverified". Every configuration written before this field
+existed says nothing, so a build that read silence as a mark would declare every
+destination on every deployment unproven at the first upgrade, which is a
+warning nobody can act on and therefore one everybody learns to ignore.
+
+One consequence is worth knowing before you meet it. Clearing the mark is a
+configuration write, so `medium test-connection <id>` now goes through the door
+the other configuration writes go through: beside an engine serving this
+deployment it is carried out there, and it is refused when nothing has said how
+to reach that engine (`BACKUP_MANAGER_API_URL`). It used to answer from this
+host's own file. `medium list` and `medium show` are unchanged and still read
+locally, so looking at your own destinations works on a stock install.
+
+The drive on this machine is out of it entirely. It is not declared, it cannot
+be created, and there is no bucket behind it to prove, so it never carries the
+mark.
+
+### When a check fails on a medium your backups are already on
+
+A preflight that fails on a medium nothing references yet costs you the next
+move that would have used it, and nothing else. A preflight that fails on one
+your backups are already on is a different situation, and this product treats it
+as a REPORT and never as a state change (FR-30).
+
+Nothing is deleted and nothing is marked lost. The copies on that medium read as
+**unreachable**, which means this deployment currently has no way to ask about
+them, and is a different sentence from "the copy is gone". No prune runs against
+them, and no source copy anywhere is reclaimed on the strength of a placement
+that could not be confirmed. `backup-manager medium show <id>` lists what is
+there, per backup set, with a count of how many of those are the only confirmed
+copy of their backup anywhere.
+
+Editing the medium is allowed while it is failing, deliberately: a credential
+that expired is exactly the thing you need to be able to fix. Removing it is
+refused while any copy names it, and the refusal names the backup sets. Removing
+the declaration would not delete those copies; it would leave this deployment
+with no bucket, no endpoint and no credential to reach them with.
 
 It writes. That is the point, and it is worth knowing before you run it against
 production: a reachability ping is answered perfectly well by a wrong region, by
@@ -381,6 +556,6 @@ which parts of the EPIC are checked that way today and which are not, and
 the two limits at the top of this page are in it as rows that are
 deliberately not green.
 
-A settings save will not write a `storage_mediums:` or `medium:` key into a
-config that never had one. Downgrading to an older binary after the schema has
+A settings save will not write a `storage_mediums:`, `medium:` or
+`default_storage_medium:` key into a config that never had one. Downgrading to an older binary after the schema has
 moved forward fails closed, exactly as it always has.

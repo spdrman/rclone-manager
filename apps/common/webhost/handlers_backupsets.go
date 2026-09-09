@@ -86,6 +86,18 @@ type backupSetSpec struct {
 	// before this issue already meant: FR-15's delete step runs
 	// unchanged.
 	ReadOnly bool `json:"read_only"`
+	// SkipConnectionCheck writes this set without proving its connection
+	// first (issue #624). The service runs the same six-step check POST
+	// /api/v1/backup-sets/test-connection answers, in front of the write,
+	// and refuses with BACKUP_SET_CONNECTION_NOT_PROVEN when it fails;
+	// this is the deliberate opt-out, and a set written under it is
+	// marked connection_unverified until a test passes. The mark is the
+	// service's own record of the skip, never a field a caller sets: an
+	// earlier shape of this body carried connection_unverified as a claim
+	// about what the caller had done, which any client other than this
+	// repository's own could simply omit (PR #628 review). Omitted or
+	// false checks, which is what every create should do.
+	SkipConnectionCheck bool `json:"skip_connection_check"`
 }
 
 // backupSetRequest is POST /api/v1/backup-sets' request body: the spec
@@ -159,7 +171,19 @@ type backupSetResponse struct {
 	// service.SSHKeyRef.KeyFile for the same rule applied to imported
 	// keys).
 	ValidatorID string `json:"validator_id"`
-	Disabled    bool   `json:"disabled"`
+	// SSHKeyID is the key-store id this set's key resolves to (#592), the
+	// same value ImportSSHKey returned and GET /api/v1/ssh-keys lists.
+	// The id only: what it resolves to is a server-side path, and this
+	// package never puts one on the wire (service.SSHKeyRef.KeyFile).
+	//
+	// Never omitted, and EMPTY IS A REAL ANSWER: it means this set uses a
+	// key this deployment does not manage, which is every set pointing at
+	// a mounted or hand-provisioned key file. It is here because
+	// UpdateBackupSetRequest has always been able to WRITE ssh_key_id and
+	// nothing could read it back, so a surface offering to replace a
+	// set's key could not name the key being replaced.
+	SSHKeyID string `json:"ssh_key_id"`
+	Disabled bool   `json:"disabled"`
 	// ReadOnly is the fully-resolved answer (service.BackupSet.ReadOnly):
 	// see backupSetSpec.ReadOnly's own doc for what setting it means.
 	// Never omitted, the same discipline Disabled above already follows:
@@ -194,6 +218,17 @@ type backupSetResponse struct {
 	// deployment did not write. See service.trustedHostKeysFor for why a
 	// hand-maintained file's timestamp answers a different question.
 	TrustedHostKeyRecordedAt string `json:"trusted_host_key_recorded_at,omitempty"`
+	// ConnectionUnverified is issue #624's mark: this set was written
+	// without its connection ever having been proven. Omitted when false,
+	// which is the ordinary case and is also how an engine built before
+	// this field answers, so a client reads absence as "nothing here says
+	// this was skipped" rather than as a claim either way.
+	//
+	// It is here so a surface can DRAW the difference. A set nobody proved
+	// and a set checked against a real server were the same set on every
+	// screen, which is what made --no-verify a hole rather than an escape
+	// hatch.
+	ConnectionUnverified bool `json:"connection_unverified,omitempty"`
 }
 
 // trustedHostKeyResponse is one pinned host key on the wire: the algorithm
@@ -227,12 +262,14 @@ func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
 		StableForSeconds:    int(bs.StableFor / time.Second),
 		StaleAfterSeconds:   int(bs.StaleAfter / time.Second),
 		ValidatorID:         string(bs.ValidatorID),
+		SSHKeyID:            bs.SSHKeyID,
 		Disabled:            bs.Disabled,
 		ReadOnly:            bs.ReadOnly,
 		RetentionIsOverride: bs.RetentionIsOverride,
 
 		TrustedHostKeys:          trusted,
 		TrustedHostKeyRecordedAt: recordedAt,
+		ConnectionUnverified:     bs.ConnectionUnverified,
 	}
 }
 
@@ -283,6 +320,24 @@ type listBackupSetsResponse struct {
 // destructiveGateExemptRoutes' own justification
 // (router_test.go) for why this route is structurally exempt from
 // requireDestructiveGate in the first place.
+//
+// # The gate refuses the RUN, not the CREATE (issue #597)
+//
+// It used to refuse the whole call with a 403 and persist nothing, and
+// that cost an operator their entire wizard submission for a reason that
+// has nothing to do with creating a backup set. Creating one touches no
+// backup data, which is why this route is exempt from the middleware at
+// all; refusing the create because the RUN could not happen refused a
+// non-destructive action for a destructive one's reason, and the wizard
+// reported it as "Could not save this backup set", which was not what
+// happened. Retrying then hit config.Validate's duplicate-id rejection
+// with no way to tell "already exists because your last attempt worked"
+// from "your request was wrong from the start" — M6's own argument,
+// below, applied to the case M3 created.
+//
+// So the set is persisted, RunImmediately is cleared before the backend
+// is called, and the 201 carries RunError with the gate's own sentence.
+// That is the shape M6 built and nothing in production could reach.
 func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxCreateBackupSetBodyBytes)
 
@@ -292,31 +347,38 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if body.RunImmediately && !destructiveGatePassed(h.gate) {
-		writeDestructiveGateDenied(w)
-		return
+	// The gate decides whether the RUN happens, not whether the CREATE
+	// does. With it shut the set is still persisted and the response says
+	// the run did not start; see this handler's own doc, and the test that
+	// pins both halves.
+	runRefusal := ""
+	runImmediately := body.RunImmediately
+	if runImmediately && !destructiveGatePassed(h.gate) {
+		runImmediately = false
+		runRefusal = destructiveGateRefusal
 	}
 
 	req := service.CreateBackupSetRequest{
-		SourceName:         body.SourceName,
-		Name:               body.Name,
-		Host:               body.Host,
-		Port:               body.Port,
-		User:               body.User,
-		SSHKeyID:           body.SSHKeyID,
-		KnownHostsLine:     body.KnownHostsLine,
-		RemotePath:         body.RemotePath,
-		LocalPath:          body.LocalPath,
-		Include:            body.Include,
-		CompletionStrategy: body.CompletionStrategy,
-		ValidatorID:        service.ValidatorID(body.ValidatorID),
-		StableFor:          secondsToDuration(body.StableForSeconds),
-		StaleAfter:         secondsToDuration(body.StaleAfterSeconds),
-		Disabled:           body.Disabled,
-		ReadOnly:           body.ReadOnly,
-		RunImmediately:     body.RunImmediately,
-		AcknowledgeRepoint: body.AcknowledgeRepoint,
-		Actor:              actorFromContext(r.Context()),
+		SourceName:          body.SourceName,
+		Name:                body.Name,
+		Host:                body.Host,
+		Port:                body.Port,
+		User:                body.User,
+		SSHKeyID:            body.SSHKeyID,
+		KnownHostsLine:      body.KnownHostsLine,
+		RemotePath:          body.RemotePath,
+		LocalPath:           body.LocalPath,
+		Include:             body.Include,
+		CompletionStrategy:  body.CompletionStrategy,
+		ValidatorID:         service.ValidatorID(body.ValidatorID),
+		StableFor:           secondsToDuration(body.StableForSeconds),
+		StaleAfter:          secondsToDuration(body.StaleAfterSeconds),
+		Disabled:            body.Disabled,
+		ReadOnly:            body.ReadOnly,
+		SkipConnectionCheck: body.SkipConnectionCheck,
+		RunImmediately:      runImmediately,
+		AcknowledgeRepoint:  body.AcknowledgeRepoint,
+		Actor:               actorFromContext(r.Context()),
 	}
 
 	result, err := h.backend.CreateBackupSet(r.Context(), req)
@@ -325,7 +387,7 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 			// Creation itself never happened — nothing was persisted, so
 			// the ordinary error mapping (400, 409 or 500, per the
 			// failure kind) is the whole story.
-			writeBackupSetError(w, err)
+			h.writeBackupSetError(w, r, err)
 			return
 		}
 		// Mandatory review finding M6 (PR #155): the backup set IS
@@ -347,7 +409,14 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := createBackupSetResponse{backupSetResponse: toBackupSetResponse(result.Set)}
+	resp := createBackupSetResponse{
+		backupSetResponse: toBackupSetResponse(result.Set),
+		// Empty unless the gate refused the run above, in which case it
+		// carries the gate's own sentence. At most one of RunError and
+		// Operation is ever set: nothing was asked to run, so there is no
+		// operation for the client to poll.
+		RunError: runRefusal,
+	}
 	if result.Operation != nil {
 		op := toOperationResponse(*result.Operation)
 		resp.Operation = &op
@@ -380,7 +449,7 @@ func runStartErrorMessage(err error) string {
 func (h *handlers) listBackupSets(w http.ResponseWriter, r *http.Request) {
 	sets, err := h.backend.ListBackupSets(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list backup sets")
+		h.internalError(w, r, "INTERNAL", "failed to list backup sets", err)
 		return
 	}
 	resp := listBackupSetsResponse{BackupSets: make([]backupSetResponse, 0, len(sets))}
@@ -404,7 +473,7 @@ func (h *handlers) getBackupSet(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to load backup set")
+		h.internalError(w, r, "INTERNAL", "failed to load backup set", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetResponse(set))
@@ -414,7 +483,7 @@ func (h *handlers) getBackupSet(w http.ResponseWriter, r *http.Request) {
 // any other backupsets.go method) error to the HTTP status/code this
 // package's other handlers already establish the vocabulary for
 // (handlers_operations.go's identical switch is the direct precedent).
-func writeBackupSetError(w http.ResponseWriter, err error) {
+func (h *handlers) writeBackupSetError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidRequest):
 		// Safe to echo: every ErrInvalidRequest this package returns is
@@ -442,6 +511,20 @@ func writeBackupSetError(w http.ResponseWriter, err error) {
 		// this message from its own text plus two fingerprints and the
 		// caller's own address.
 		writeError(w, http.StatusConflict, "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", err.Error())
+	case errors.Is(err, service.ErrConnectionNotProven):
+		// 409 and its own code, beside the three refusals above rather
+		// than folded into any of them: this one is not about a decision
+		// the operator has to confirm, it is about the world not being
+		// the way the edit assumes, and what it offers is "fix the source
+		// and save again" or "save it unproven" rather than "do it
+		// anyway". A client that read it as INVALID_REQUEST would tell an
+		// operator their form was wrong when their form was right and
+		// their server was down.
+		//
+		// Safe to echo: core/service builds this message from
+		// internal/sourcecheck's own sentences and the caller's own
+		// values, never from a transport error's text (issue #624).
+		writeError(w, http.StatusConflict, "BACKUP_SET_CONNECTION_NOT_PROVEN", err.Error())
 	case errors.Is(err, service.ErrRepointNotAcknowledged):
 		// 409 rather than 400, because this is not a malformed request:
 		// it is a well-formed one whose consequences the caller has to
@@ -456,7 +539,7 @@ func writeBackupSetError(w http.ResponseWriter, err error) {
 		// rclone internal.
 		writeError(w, http.StatusConflict, "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", err.Error())
 	case errors.Is(err, service.ErrConfigNotFileBacked):
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "this deployment has no configuration file to persist to")
+		h.internalError(w, r, "INTERNAL", "this deployment has no configuration file to persist to", err)
 	default:
 		// Deliberately not err.Error(): an unclassified error could carry
 		// filesystem or rclone-internal text (see handlers_operations.go's
@@ -466,7 +549,7 @@ func writeBackupSetError(w http.ResponseWriter, err error) {
 		// path too (issue #350), and telling an operator whose edit
 		// failed that a creation failed sends them looking for a set
 		// that was never being created.
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to write backup set")
+		h.internalError(w, r, "INTERNAL", "failed to write backup set", err)
 	}
 }
 
@@ -533,7 +616,7 @@ func (h *handlers) setBackupSetEnabled(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeBackupSetError(w, err)
+		h.writeBackupSetError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))
@@ -577,7 +660,7 @@ func (h *handlers) setBackupSetReadOnly(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeBackupSetError(w, err)
+		h.writeBackupSetError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))
@@ -609,7 +692,7 @@ func (h *handlers) removeBackupSet(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeBackupSetError(w, err)
+		h.writeBackupSetError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -666,6 +749,16 @@ type updateBackupSetRequest struct {
 	// same host. Two flags rather than one, for the reason
 	// core/service/backupsethostkey.go gives.
 	AcknowledgeHostKeyChange bool `json:"acknowledge_host_key_change"`
+
+	// SkipConnectionCheck writes this edit without proving the connection
+	// first (issue #624). An edit that changes host, port, user,
+	// ssh_key_id, known_hosts_line or remote_path is checked against the
+	// source before it is written and refused with
+	// BACKUP_SET_CONNECTION_NOT_PROVEN when the check fails; this is the
+	// deliberate opt-out, and a set written under it is marked
+	// connection_unverified until a test passes. Not a pointer, for the
+	// reason the two acknowledgements above are not.
+	SkipConnectionCheck bool `json:"skip_connection_check"`
 }
 
 // updateBackupSet is PATCH /api/v1/backup-sets/{source}/{set} (issue
@@ -716,6 +809,7 @@ func (h *handlers) updateBackupSet(w http.ResponseWriter, r *http.Request) {
 
 		AcknowledgeRepoint:       body.AcknowledgeRepoint,
 		AcknowledgeHostKeyChange: body.AcknowledgeHostKeyChange,
+		SkipConnectionCheck:      body.SkipConnectionCheck,
 	}
 	if body.ValidatorID != nil {
 		id := service.ValidatorID(*body.ValidatorID)
@@ -729,7 +823,7 @@ func (h *handlers) updateBackupSet(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
-		writeBackupSetError(w, err)
+		h.writeBackupSetError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))

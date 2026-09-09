@@ -23,13 +23,16 @@ import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import type { AsyncState } from "@shared/hooks/useAsync";
 import { useCausl } from "@shared/state/graph";
-import { operationsNode, versionNode } from "@shared/state/appNodes";
+import { operationsNode } from "@shared/state/appNodes";
 import { progressPercent } from "@shared/types/operation";
 import type { BackupSet } from "@shared/types/backup";
+import { Banner } from "@shared/components/Banner";
 import { PageHeader } from "@shared/components/PageHeader";
 import { BackupSetCard } from "@shared/components/BackupSetCard";
 import { RemoveBackupSetDialog } from "@shared/components/RemoveBackupSetDialog";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
+import { RunControlNotice } from "@shared/components/RunControlNotice";
+import { useRunControls } from "@shared/hooks/useRunControls";
 import { isNotConfigured } from "@shared/api/failure";
 import { backupSetPath } from "@shared/utilities/routes";
 
@@ -46,11 +49,16 @@ export function BackupSetsPage({
   // page ran its own independent listOperations() poll, so the two could
   // disagree about what was currently running for a given set.
   const operations = useCausl(operationsNode);
-  // The configuration revision the screen is CURRENTLY showing, not one
-  // read fresh at submit time: a run submitted against a revision this
-  // page has not seen is exactly what CONFIG_REVISION_STALE exists to
-  // refuse (see BackupManagerApi.runCycle's own doc).
-  const version = useCausl(versionNode);
+  // Issue #597. The submission, its idempotency key, the guard on the
+  // configuration revision having actually loaded, and the rendering of
+  // whatever came back all live in one place now, so this page and the
+  // dashboard cannot disagree about what a press did.
+  //
+  // The revision itself is read there rather than here: it is the
+  // revision the screen is CURRENTLY showing, not one read fresh at
+  // submit time, which is exactly what CONFIG_REVISION_STALE exists to
+  // refuse, and this page and the hook read the same node.
+  const run = useRunControls();
 
   // ---------------------------------------------------------- per-row
   //
@@ -177,11 +185,11 @@ export function BackupSetsPage({
                 reaches. */}
             <button
               className="btn"
-              disabled={readOnly}
+              disabled={readOnly || run.busy}
               title="Runs one pass over every enabled backup set, not only this one."
-              onClick={() => api.runCycle(version.data?.configRevision ?? "").then(sets.reload)}
+              onClick={run.runAll}
             >
-              Run all due sets
+              Run all enabled sets
             </button>
             <button className="btn btn--primary" disabled={readOnly} onClick={() => navigate("/sets/new")}>
               Add backup set
@@ -189,6 +197,10 @@ export function BackupSetsPage({
           </>
         }
       />
+
+      {/* What the run button last answered, refusals included. Every one
+          of them used to be an unhandled promise rejection here. */}
+      <RunControlNotice notice={run.notice} />
 
       {/* operations.data is null until the first fetch resolves — that is
           "not known yet", not "nothing running for any set", so it must
@@ -198,10 +210,14 @@ export function BackupSetsPage({
           operations is secondary to sets on this page (sets.error owns
           that treatment via the early return above). */}
       {operations.error ? (
-        <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+        <Banner
+          tone="danger"
+          style={{ fontSize: "var(--text-sm)" }}
+          dismissKey={operations.error.message}
+        >
           Live operation status is unavailable ({operations.error.message}) — current-operation
           badges below may be stale.
-        </div>
+        </Banner>
       ) : null}
 
       <div

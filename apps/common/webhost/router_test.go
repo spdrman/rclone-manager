@@ -112,6 +112,7 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"POST /api/v1/backup-sets":                 true,
 	"POST /api/v1/backup-sets/test-connection": true,
 	"POST /api/v1/ssh-keys":                    true,
+	"POST /api/v1/ssh-keys/from-candidate":     true,
 	"POST /api/v1/ssh/host-key-probe":          true,
 
 	// Issue #419: the operator route out of FAILED. Same tier as the
@@ -141,6 +142,64 @@ var destructiveGateExemptRoutes = map[string]bool{
 	// (TestProbeKey_LivesUnderASegmentNoArtifactCanReach, and the happy
 	// path asserts exactly one upload and one delete).
 	"POST /api/v1/storage-mediums/{id}/preflight": true,
+
+	// G2.2 (issue #594): the storage-destination write surface, and the
+	// candidate probe in front of it. Five routes, exempt for three
+	// separate reasons, so they are listed with the reason rather than as
+	// one block.
+	//
+	// POST /storage-credentials creates ONE new file at a name this
+	// deployment generated, under a directory it owns, and overwrites
+	// nothing. That is POST /ssh-keys' tier exactly, and it is on this
+	// list beside it.
+	//
+	// POST and PUT /storage-mediums write configuration, which is §50's
+	// "state-changing but non-destructive" bucket alongside "create/edit
+	// backup set". Declaring a destination MOVES NOTHING on its own:
+	// artifacts arrive on a medium only once a retention TIER names it,
+	// and that write is PATCH /settings, which is on this list for the
+	// same reason and whose own dangerous case (protect_last_known_good)
+	// is settled the same way, by gating the later apply rather than the
+	// edit.
+	//
+	// POST /storage-mediums/preflight is the by-id preflight above with
+	// an unsaved destination instead of a saved one, and every sentence
+	// of that entry applies to it unchanged: the only object it can write
+	// is one at a random key under a reserved segment no configured
+	// artifact can produce, and the only object it can delete is that
+	// same one.
+	//
+	// DELETE /storage-mediums/{id} is the one worth arguing, because
+	// "delete" is the word the gate exists for. It deletes no backup
+	// datum: it removes a DECLARATION from config.yaml and nothing else,
+	// and it is refused outright while any copy names the medium (FR-30,
+	// service.ErrStorageMediumInUse), so the case where it could be
+	// dangerous is the case where it does not happen. The gate stands in
+	// front of operations that can destroy backup data, and the copies on
+	// a removed medium stay exactly where they are; what changes is that
+	// this deployment can no longer confirm them, which is why it is
+	// refused rather than gated. DELETE /backup-sets/{source}/{set} is on
+	// this list on the identical argument.
+	"POST /api/v1/storage-credentials":       true,
+	"POST /api/v1/storage-mediums":           true,
+	"POST /api/v1/storage-mediums/preflight": true,
+	"PUT /api/v1/storage-mediums/{id}":       true,
+	"DELETE /api/v1/storage-mediums/{id}":    true,
+
+	// H2.2 (issue #622): moving the destination a NEWLY CREATED retention
+	// tier starts on. It is the quietest write on this list and is
+	// exempt for a reason narrower than any of the five above.
+	//
+	// It changes one configuration key and nothing else. Every tier that
+	// already names a destination goes on naming it, no journal row
+	// moves, and no object is written, read or deleted anywhere: what
+	// changes is where the NEXT tier somebody adds begins. The gate
+	// stands in front of operations that can destroy backup data, and
+	// this one cannot reach a backup at all, not even to move it. The
+	// write that CAN send a tier's backups off local disk is PATCH
+	// /settings, which is on this list too and whose own dangerous case
+	// is settled by the FR-27 disclosure rather than by the gate.
+	"PUT /api/v1/storage-mediums/{id}/default": true,
 
 	// Issue #140 (B3.7): editing server-side configuration is §50's
 	// "state-changing but non-destructive" bucket, alongside "create/edit

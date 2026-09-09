@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/apicontract"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
@@ -46,7 +47,7 @@ import (
 // asked for it, which is exactly what that table was built to hold. What
 // it is NOT is a variant of run_cycle. Nothing about it runs in this
 // process, so nothing about it is cancelled by this process stopping.
-const ActionRestore = "restore_placement"
+const ActionRestore = apicontract.ActionRestorePlacement
 
 // The window a restored copy stays readable for, in days.
 //

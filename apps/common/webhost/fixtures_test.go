@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -145,6 +146,24 @@ type syncFakeBackend struct {
 	// rather than only that a 202 came back.
 	errOnRestore error
 	lastRestore  service.RestorePlacementRequest
+
+	// The G2.2 storage-destination surface's own state (#594): what has
+	// been declared, what the next write should refuse with, and what the
+	// last candidate probe and the last import were handed.
+	//
+	// lastImportedAccessKeyID and lastImportedSecret exist for the canary
+	// test and nothing else. They are the proof that the material really
+	// did cross the handler boundary, which is what makes "and it is not
+	// in the response" a claim about a code path rather than about a
+	// request that never carried anything.
+	mediums                       []service.StorageMediumSummary
+	mediumUsage                   service.StorageMediumUsage
+	lastMediumSpec                service.StorageMediumSpec
+	lastCandidate                 service.StorageMediumSpec
+	lastImportedAccessKeyID       string
+	lastImportedSecret            string
+	errOnMediumWrite              error
+	errOnImportStorageCredentials error
 
 	// plans holds every plan PreviewRetention has issued and
 	// ApplyRetentionPlan has not yet consumed, mirroring core/service's
@@ -356,6 +375,42 @@ func (f *syncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycle
 	return op, nil
 }
 
+// SubmitRunBackupSet mirrors the real service's refusal ORDER, which is
+// the part a handler test can get wrong: the real one checks the
+// configuration revision before it resolves the id, so a caller on a
+// stale screen naming a set that has since been removed is told the
+// screen moved rather than sent hunting a set they can still see.
+func (f *syncFakeBackend) SubmitRunBackupSet(_ context.Context, req service.RunBackupSetRequest) (service.Operation, error) {
+	if f.errOnSubmit != nil {
+		return service.Operation{}, f.errOnSubmit
+	}
+	if req.ConfigRevision != "" && req.ConfigRevision != f.ConfigRevision() {
+		return service.Operation{}, fmt.Errorf("%w: request names %q", service.ErrConfigRevisionStale, req.ConfigRevision)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, op := range f.ops {
+		if op.IdempotencyKey == req.IdempotencyKey {
+			return op, nil
+		}
+	}
+	f.nextID++
+	op := service.Operation{
+		ID:             "op_test_" + strconv.Itoa(f.nextID),
+		IdempotencyKey: req.IdempotencyKey,
+		Actor:          req.Actor,
+		BackupSetID:    req.BackupSetID,
+		ConfigRevision: req.ConfigRevision,
+		Action:         service.ActionRunBackupSet,
+		Status:         "completed",
+		CreatedAt:      time.Now().UTC(),
+		FinishedAt:     time.Now().UTC(),
+		Result:         `{"backup_sets_processed":1,"artifacts_walked":0,"artifacts_through":0}`,
+	}
+	f.ops[op.ID] = op
+	return op, nil
+}
+
 // SubmitRestorePlacement mirrors the real service's refusal ORDER, not
 // just its refusals.
 //
@@ -451,6 +506,18 @@ func (f *syncFakeBackend) UpdateBackupSet(context.Context, string, service.Updat
 
 func (f *syncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
 	return service.SSHKeyRef{}, errors.New("syncFakeBackend: ImportSSHKey not implemented")
+}
+
+func (f *syncFakeBackend) ListSSHKeys(context.Context) ([]service.SSHKeyListing, error) {
+	return nil, errors.New("syncFakeBackend: ListSSHKeys not implemented")
+}
+
+func (f *syncFakeBackend) DiscoverSSHKeyCandidates(context.Context) (service.SSHKeyDiscovery, error) {
+	return service.SSHKeyDiscovery{}, errors.New("syncFakeBackend: DiscoverSSHKeyCandidates not implemented")
+}
+
+func (f *syncFakeBackend) ImportSSHKeyCandidate(context.Context, string) (service.SSHKeyRef, error) {
+	return service.SSHKeyRef{}, errors.New("syncFakeBackend: ImportSSHKeyCandidate not implemented")
 }
 
 func (f *syncFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
@@ -697,6 +764,152 @@ func (f *syncFakeBackend) PreflightStorageMedium(_ context.Context, id string) (
 	return f.mediumPreflight, nil
 }
 
+// The G2.2 storage-destination write surface (#594). The fake keeps a
+// list rather than a single value, because the interesting handler tests
+// are about what a create leaves behind for a later read, and because the
+// candidate probe has to be provably able to run against a destination
+// that is NOT in that list.
+func (f *syncFakeBackend) ImportStorageCredentials(_ context.Context, accessKeyID, secretAccessKey, _ string) (service.MediumCredentialRef, error) {
+	if f.errOnImportStorageCredentials != nil {
+		return service.MediumCredentialRef{}, f.errOnImportStorageCredentials
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Recorded so a canary test can prove the material reached the
+	// backend and still never appears in the response.
+	f.lastImportedAccessKeyID = accessKeyID
+	f.lastImportedSecret = secretAccessKey
+	return service.MediumCredentialRef{ID: "fake-credential-id", File: "/srv/config/s3_credentials/fake-credential-id"}, nil
+}
+
+func (f *syncFakeBackend) ListStorageMediums(context.Context) ([]service.StorageMediumSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]service.StorageMediumSummary(nil), f.mediums...), nil
+}
+
+func (f *syncFakeBackend) GetStorageMedium(_ context.Context, id string) (service.StorageMediumSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.mediums {
+		if m.ID == id {
+			return m, nil
+		}
+	}
+	return service.StorageMediumSummary{}, fmt.Errorf("%w: %s", service.ErrMediumNotFound, id)
+}
+
+func (f *syncFakeBackend) StorageMediumUsage(_ context.Context, id string) (service.StorageMediumUsage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	usage := f.mediumUsage
+	usage.Medium = id
+	return usage, nil
+}
+
+func (f *syncFakeBackend) PreflightStorageMediumCandidate(_ context.Context, spec service.StorageMediumSpec) (service.MediumPreflight, error) {
+	if f.errOnMediumPreflight != nil {
+		return service.MediumPreflight{}, f.errOnMediumPreflight
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastCandidate = spec
+	report := f.mediumPreflight
+	report.Medium = spec.ID
+	return report, nil
+}
+
+func (f *syncFakeBackend) CreateStorageMedium(_ context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	if f.errOnMediumWrite != nil {
+		return service.StorageMediumSummary{}, f.errOnMediumWrite
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastMediumSpec = spec
+	summary := summaryOfSpec(spec)
+	f.mediums = append(f.mediums, summary)
+	return summary, nil
+}
+
+func (f *syncFakeBackend) UpdateStorageMedium(_ context.Context, spec service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	if f.errOnMediumWrite != nil {
+		return service.StorageMediumSummary{}, f.errOnMediumWrite
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastMediumSpec = spec
+	summary := summaryOfSpec(spec)
+	for i := range f.mediums {
+		if f.mediums[i].ID == spec.ID {
+			f.mediums[i] = summary
+			return summary, nil
+		}
+	}
+	return service.StorageMediumSummary{}, fmt.Errorf("%w: %s", service.ErrMediumNotFound, spec.ID)
+}
+
+func (f *syncFakeBackend) RemoveStorageMedium(_ context.Context, id string) error {
+	if f.errOnMediumWrite != nil {
+		return f.errOnMediumWrite
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.mediums {
+		if f.mediums[i].ID == id {
+			f.mediums = append(f.mediums[:i], f.mediums[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s", service.ErrMediumNotFound, id)
+}
+
+// SetDefaultStorageMedium moves the destination a newly created retention
+// tier starts on (#622), and marks exactly one entry.
+//
+// The exactly-one part is the fake's whole job here. The real service
+// derives IsDefault from one config key on every read, so it cannot get
+// two, and a fake that just set a flag without clearing the others would
+// let a handler test pass against a list no real deployment can produce.
+func (f *syncFakeBackend) SetDefaultStorageMedium(_ context.Context, id string) (service.StorageMediumSummary, error) {
+	if f.errOnMediumWrite != nil {
+		return service.StorageMediumSummary{}, f.errOnMediumWrite
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	found := -1
+	for i := range f.mediums {
+		f.mediums[i].IsDefault = false
+		if f.mediums[i].ID == id {
+			found = i
+		}
+	}
+	if found < 0 {
+		return service.StorageMediumSummary{}, fmt.Errorf("%w: %s", service.ErrMediumNotFound, id)
+	}
+	f.mediums[found].IsDefault = true
+	return f.mediums[found], nil
+}
+
+// summaryOfSpec is the fake's own projection, and it deliberately drops
+// the credential exactly as the real one does: there is no field on
+// service.StorageMediumSummary a credential reference could land in, so a
+// fake that leaked one would not compile.
+func summaryOfSpec(spec service.StorageMediumSpec) service.StorageMediumSummary {
+	class := spec.StorageClass
+	if class == "" {
+		class = "STANDARD"
+	}
+	verification := spec.UploadVerification
+	if verification == "" {
+		verification = "readback"
+	}
+	return service.StorageMediumSummary{
+		ID: spec.ID, Type: spec.Type, Bucket: spec.Bucket, Region: spec.Region,
+		Endpoint: spec.Endpoint, Prefix: spec.Prefix, StorageClass: class,
+		UploadVerification: verification,
+	}
+}
+
 func (f *syncFakeBackend) ReinstateArtifact(_ context.Context, id, _ string) (service.ArtifactReinstatement, error) {
 	if f.errOnReinstate != nil {
 		return service.ArtifactReinstatement{}, f.errOnReinstate
@@ -828,6 +1041,13 @@ func (f *asyncFakeBackend) SubmitRestorePlacement(context.Context, service.Resto
 	return service.RestoreSubmission{}, service.ErrRestoreUnavailable
 }
 
+// SubmitRunBackupSet refuses, deliberately. This fake exists to exercise
+// a client disconnecting mid-cycle, and a per-set run is not that case;
+// a canned success here would let a test believe one set ran.
+func (f *asyncFakeBackend) SubmitRunBackupSet(context.Context, service.RunBackupSetRequest) (service.Operation, error) {
+	return service.Operation{}, service.ErrBackupSetNotFound
+}
+
 func (f *asyncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycleRequest) (service.Operation, error) {
 	f.mu.Lock()
 	op := service.Operation{
@@ -922,6 +1142,18 @@ func (f *asyncFakeBackend) ImportSSHKey(context.Context, []byte, string) (servic
 	return service.SSHKeyRef{}, errors.New("asyncFakeBackend: ImportSSHKey not implemented")
 }
 
+func (f *asyncFakeBackend) ListSSHKeys(context.Context) ([]service.SSHKeyListing, error) {
+	return nil, errors.New("asyncFakeBackend: ListSSHKeys not implemented")
+}
+
+func (f *asyncFakeBackend) DiscoverSSHKeyCandidates(context.Context) (service.SSHKeyDiscovery, error) {
+	return service.SSHKeyDiscovery{}, errors.New("asyncFakeBackend: DiscoverSSHKeyCandidates not implemented")
+}
+
+func (f *asyncFakeBackend) ImportSSHKeyCandidate(context.Context, string) (service.SSHKeyRef, error) {
+	return service.SSHKeyRef{}, errors.New("asyncFakeBackend: ImportSSHKeyCandidate not implemented")
+}
+
 func (f *asyncFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
 	return service.HostKeyProbe{}, errors.New("asyncFakeBackend: ProbeHostKey not implemented")
 }
@@ -994,6 +1226,40 @@ func (f *asyncFakeBackend) RetryFailedArtifact(context.Context, string, string) 
 
 func (f *asyncFakeBackend) PreflightStorageMedium(context.Context, string) (service.MediumPreflight, error) {
 	return service.MediumPreflight{}, nil
+}
+
+func (f *asyncFakeBackend) ImportStorageCredentials(context.Context, string, string, string) (service.MediumCredentialRef, error) {
+	return service.MediumCredentialRef{}, nil
+}
+
+func (f *asyncFakeBackend) ListStorageMediums(context.Context) ([]service.StorageMediumSummary, error) {
+	return nil, nil
+}
+
+func (f *asyncFakeBackend) GetStorageMedium(context.Context, string) (service.StorageMediumSummary, error) {
+	return service.StorageMediumSummary{}, nil
+}
+
+func (f *asyncFakeBackend) StorageMediumUsage(context.Context, string) (service.StorageMediumUsage, error) {
+	return service.StorageMediumUsage{}, nil
+}
+
+func (f *asyncFakeBackend) PreflightStorageMediumCandidate(context.Context, service.StorageMediumSpec) (service.MediumPreflight, error) {
+	return service.MediumPreflight{}, nil
+}
+
+func (f *asyncFakeBackend) CreateStorageMedium(context.Context, service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	return service.StorageMediumSummary{}, nil
+}
+
+func (f *asyncFakeBackend) UpdateStorageMedium(context.Context, service.StorageMediumSpec) (service.StorageMediumSummary, error) {
+	return service.StorageMediumSummary{}, nil
+}
+
+func (f *asyncFakeBackend) RemoveStorageMedium(context.Context, string) error { return nil }
+
+func (f *asyncFakeBackend) SetDefaultStorageMedium(_ context.Context, id string) (service.StorageMediumSummary, error) {
+	return service.StorageMediumSummary{ID: id, IsDefault: true}, nil
 }
 
 func (f *asyncFakeBackend) ReinstateArtifact(context.Context, string, string) (service.ArtifactReinstatement, error) {
@@ -1088,10 +1354,14 @@ type backupSetFakeBackend struct {
 
 func newBackupSetFakeBackend() *backupSetFakeBackend {
 	return &backupSetFakeBackend{
-		syncFakeBackend:  newSyncFakeBackend(),
-		sets:             map[string]service.BackupSet{},
-		keys:             map[string]service.SSHKeyRef{},
-		connectionResult: service.ConnectionTestResult{OK: true},
+		syncFakeBackend: newSyncFakeBackend(),
+		sets:            map[string]service.BackupSet{},
+		keys:            map[string]service.SSHKeyRef{},
+		// A passing verification, with the four stages a real one always
+		// carries (#592). Four rather than none, because a fake that
+		// answered with a bare boolean would let a handler that dropped
+		// the breakdown pass every case here.
+		connectionResult: service.ConnectionTestResult{OK: true, Checks: passingConnectionChecks()},
 	}
 }
 
@@ -1280,6 +1550,86 @@ func (f *backupSetFakeBackend) ImportSSHKey(_ context.Context, raw []byte, passp
 	return ref, nil
 }
 
+// ListSSHKeys serves whatever this fake's store holds, with one key
+// always present so a listing case is never asserting about an empty
+// list. UsedBy is filled from the sets this fake is holding, because the
+// column that turns a wall of uuids into a decision is worth exercising.
+func (f *backupSetFakeBackend) ListSSHKeys(context.Context) ([]service.SSHKeyListing, error) {
+	if f.errOnImport != nil {
+		return nil, f.errOnImport
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	keys := map[string]service.SSHKeyRef{"key_test_1": {
+		ID: "key_test_1", KeyFile: "/fake/ssh_keys/key_test_1",
+		Algorithm: "ssh-ed25519", Fingerprint: "SHA256:faketestfingerprint",
+	}}
+	for id, ref := range f.keys {
+		keys[id] = ref
+	}
+	usage := map[string][]string{}
+	for id, set := range f.sets {
+		if set.SSHKeyID != "" {
+			usage[set.SSHKeyID] = append(usage[set.SSHKeyID], id)
+		}
+	}
+	var out []service.SSHKeyListing
+	for id, ref := range keys {
+		sort.Strings(usage[id])
+		out = append(out, service.SSHKeyListing{
+			ID:          ref.ID,
+			Algorithm:   ref.Algorithm,
+			Fingerprint: ref.Fingerprint,
+			PublicKey:   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeTestPublicHalf fake-test-fixture",
+			ImportedAt:  time.Date(2026, 3, 11, 9, 0, 0, 0, time.UTC),
+			UsedBy:      usage[id],
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// DiscoverSSHKeyCandidates answers the way a packaged install does: the
+// installer's own mounted key, and every location reported whether or not
+// it held anything. The absent ones are the point of the fixture, since
+// "I looked here and found nothing" is what a real deployment mostly
+// returns.
+func (f *backupSetFakeBackend) DiscoverSSHKeyCandidates(context.Context) (service.SSHKeyDiscovery, error) {
+	if f.errOnImport != nil {
+		return service.SSHKeyDiscovery{}, f.errOnImport
+	}
+	return service.SSHKeyDiscovery{
+		Locations: []service.SSHKeyDiscoveryLocation{
+			{Path: "/etc/backup-manager", Kind: "mount", Found: 1},
+			{Path: "/home/fake/.ssh", Kind: "home", Problem: "this location is not present in this deployment"},
+		},
+		Candidates: []service.SSHKeyCandidate{{
+			ID:          "cand_test_1",
+			Path:        "/etc/backup-manager/id_ed25519",
+			Location:    "/etc/backup-manager",
+			Algorithm:   "ssh-ed25519",
+			Fingerprint: "SHA256:fakecandidatefingerprint",
+			PublicKey:   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeCandidate fake-test-fixture",
+			Mode:        "0600",
+			Selectable:  true,
+		}},
+	}, nil
+}
+
+func (f *backupSetFakeBackend) ImportSSHKeyCandidate(_ context.Context, id string) (service.SSHKeyRef, error) {
+	if f.errOnImport != nil {
+		return service.SSHKeyRef{}, f.errOnImport
+	}
+	if id != "cand_test_1" {
+		return service.SSHKeyRef{}, service.ErrSSHKeyCandidateNotFound
+	}
+	ref := service.SSHKeyRef{ID: "key_test_2", KeyFile: "/fake/ssh_keys/key_test_2", Algorithm: "ssh-ed25519", Fingerprint: "SHA256:fakecandidatefingerprint"}
+	f.mu.Lock()
+	f.keys[ref.ID] = ref
+	f.mu.Unlock()
+	return ref, nil
+}
+
 func (f *backupSetFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
 	if f.errOnProbe != nil {
 		return service.HostKeyProbe{}, f.errOnProbe
@@ -1292,6 +1642,24 @@ func (f *backupSetFakeBackend) ProbeHostKey(context.Context, string, int) (servi
 		}, nil
 	}
 	return f.probeResult, nil
+}
+
+// passingConnectionChecks is what core reports when all six steps hold:
+// the same steps, in the same order, with plausible timings.
+//
+// The last two carry NO DurationMs, which is the fixture's whole point
+// beyond being green: authenticate and list come out of one call, so a
+// fixture that gave them a number would make a handler that emits "0 ms"
+// beside a green row look correct here and wrong in production.
+func passingConnectionChecks() []service.ConnectionCheck {
+	return []service.ConnectionCheck{
+		{Step: "credentials", Outcome: "passed", Detail: "the key you selected is where the configuration says. Its public half is SHA256:faketestclientfingerprint", DurationMs: 3},
+		{Step: "resolve", Outcome: "passed", Detail: "prod-db-01.internal is 203.0.113.24 (A)", DurationMs: 12},
+		{Step: "connect", Outcome: "passed", Detail: "TCP to prod-db-01.internal:22 in 210ms · SSH-2.0-OpenSSH_9.6p1", DurationMs: 210},
+		{Step: "host_key", Outcome: "passed", Detail: "the server offered ssh-ed25519 SHA256:faketesthostfingerprint, and this backup set's known_hosts trusts it for this host on line 1", DurationMs: 18},
+		{Step: "authenticate", Outcome: "passed", Detail: "the server accepted publickey for backup-agent"},
+		{Step: "list", Outcome: "passed", Detail: "/backups listed, 41 entries"},
+	}
 }
 
 func (f *backupSetFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {

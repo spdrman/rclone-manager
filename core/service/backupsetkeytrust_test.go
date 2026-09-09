@@ -14,6 +14,15 @@
 // with a made-up base64 body cannot be fingerprinted, and a refusal that
 // names two fingerprints is the whole point of the feature, so a fixture
 // that could not produce one would be a fixture that could not fail.
+//
+// Every edit here carries SkipConnectionCheck, and that is a statement
+// about scope rather than a workaround. Issue #624 made UpdateBackupSet
+// prove the connection in front of an edit that changes one, and every
+// case in this file changes one: the fixtures point at example.internal,
+// which is not a machine, so without the skip each case would drive #624's
+// refusal instead of the trust decision it is about. The refusal has its
+// own cases, in backupsetverified_test.go and in the CLI's own
+// backupsetverify_test.go.
 package service
 
 import (
@@ -108,7 +117,8 @@ func TestUpdateBackupSet_RotatesTheSSHKey(t *testing.T) {
 	}
 
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		SSHKeyID: strPtr(replacement.ID),
+		SkipConnectionCheck: true,
+		SSHKeyID:            strPtr(replacement.ID),
 	}); err != nil {
 		t.Fatalf("UpdateBackupSet: %v", err)
 	}
@@ -141,7 +151,8 @@ func TestUpdateBackupSet_UnknownSSHKeyIDIsRefused(t *testing.T) {
 	before := readFileOrFail(t, configPath)
 
 	_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		SSHKeyID: strPtr("no-such-key"),
+		SkipConnectionCheck: true,
+		SSHKeyID:            strPtr("no-such-key"),
 	})
 	if !errors.Is(err, ErrSSHKeyNotFound) {
 		t.Fatalf("UpdateBackupSet error = %v, want ErrSSHKeyNotFound", err)
@@ -165,6 +176,7 @@ func TestUpdateBackupSet_RetrustsTheHostKey(t *testing.T) {
 	}
 
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		SkipConnectionCheck:      true,
 		KnownHostsLine:           strPtr(newLine),
 		AcknowledgeHostKeyChange: true,
 	}); err != nil {
@@ -194,7 +206,8 @@ func TestUpdateBackupSet_ChangedHostKeyWithoutAcknowledgementIsRefused(t *testin
 
 	newLine, _ := newHostKey(t, "example.internal", 22)
 	_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		KnownHostsLine: strPtr(newLine),
+		SkipConnectionCheck: true,
+		KnownHostsLine:      strPtr(newLine),
 	})
 	if !errors.Is(err, ErrHostKeyChangeNotAcknowledged) {
 		t.Fatalf("UpdateBackupSet error = %v, want ErrHostKeyChangeNotAcknowledged", err)
@@ -217,7 +230,8 @@ func TestUpdateBackupSet_HostKeyRefusalNamesBothFingerprints(t *testing.T) {
 
 	newLine, newFingerprint := newHostKey(t, "example.internal", 22)
 	_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		KnownHostsLine: strPtr(newLine),
+		SkipConnectionCheck: true,
+		KnownHostsLine:      strPtr(newLine),
 	})
 	if err == nil {
 		t.Fatal("UpdateBackupSet accepted a changed host key with no acknowledgement")
@@ -240,7 +254,8 @@ func TestUpdateBackupSet_SameHostKeyNeedsNoAcknowledgement(t *testing.T) {
 	id, _, line, _ := createSFTPSet(t, svc, "same-key")
 
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		KnownHostsLine: strPtr(line),
+		SkipConnectionCheck: true,
+		KnownHostsLine:      strPtr(line),
 	}); err != nil {
 		t.Fatalf("UpdateBackupSet re-sending the trusted line: %v", err)
 	}
@@ -255,6 +270,7 @@ func TestUpdateBackupSet_MalformedKnownHostsLineIsRefused(t *testing.T) {
 	id, _, _, _ := createSFTPSet(t, svc, "malformed")
 
 	_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		SkipConnectionCheck:      true,
 		KnownHostsLine:           strPtr("example.internal ssh-ed25519 not-really-base64"),
 		AcknowledgeHostKeyChange: true,
 	})
@@ -286,6 +302,7 @@ func TestUpdateBackupSet_KeyAndTrustRefusedOnALocalRemote(t *testing.T) {
 	line, _ := newHostKey(t, "example.internal", 22)
 
 	_, err := svc.UpdateBackupSet(context.Background(), fixtureSetID, UpdateBackupSetRequest{
+		SkipConnectionCheck:      true,
 		KnownHostsLine:           strPtr(line),
 		AcknowledgeHostKeyChange: true,
 	})
@@ -306,8 +323,9 @@ func TestUpdateBackupSet_TrustingAKeyForANewHostIsNotAHostKeyChange(t *testing.T
 
 	newLine, newFingerprint := newHostKey(t, "replacement.internal", 22)
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		Host:           strPtr("replacement.internal"),
-		KnownHostsLine: strPtr(newLine),
+		SkipConnectionCheck: true,
+		Host:                strPtr("replacement.internal"),
+		KnownHostsLine:      strPtr(newLine),
 	}); err != nil {
 		t.Fatalf("UpdateBackupSet: %v", err)
 	}
@@ -335,7 +353,8 @@ func TestUpdateBackupSet_UnreadableTrustOnRecordIsRefused(t *testing.T) {
 
 	newLine, _ := newHostKey(t, "example.internal", 22)
 	_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		KnownHostsLine: strPtr(newLine),
+		SkipConnectionCheck: true,
+		KnownHostsLine:      strPtr(newLine),
 	})
 	if !errors.Is(err, ErrHostKeyChangeNotAcknowledged) {
 		t.Fatalf("UpdateBackupSet error = %v, want ErrHostKeyChangeNotAcknowledged", err)
@@ -352,6 +371,7 @@ func TestUpdateBackupSet_UnreadableTrustOnRecordIsRefused(t *testing.T) {
 	// The control, because a refusal with no way past it would be a
 	// refusal rather than an acknowledgement: saying so out loud works.
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		SkipConnectionCheck:      true,
 		KnownHostsLine:           strPtr(newLine),
 		AcknowledgeHostKeyChange: true,
 	}); err != nil {
@@ -459,8 +479,9 @@ func TestUpdateBackupSet_APortChangeIsStillAHostKeyChange(t *testing.T) {
 
 	somebodyElse := newHostPublicKey(t)
 	_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		Port:           intPtr(2222),
-		KnownHostsLine: strPtr(knownhosts.Line([]string{"[example.internal]:2222"}, somebodyElse)),
+		SkipConnectionCheck: true,
+		Port:                intPtr(2222),
+		KnownHostsLine:      strPtr(knownhosts.Line([]string{"[example.internal]:2222"}, somebodyElse)),
 	})
 	if !errors.Is(err, ErrHostKeyChangeNotAcknowledged) {
 		t.Fatalf("UpdateBackupSet error = %v, want ErrHostKeyChangeNotAcknowledged", err)
@@ -494,8 +515,9 @@ func TestUpdateBackupSet_APortChangeKeepingTheTrustedKeyAsksNothing(t *testing.T
 		t.Fatalf("ParseKnownHosts: %v", err)
 	}
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		Port:           intPtr(2222),
-		KnownHostsLine: strPtr(knownhosts.Line([]string{"[example.internal]:2222"}, trusted)),
+		SkipConnectionCheck: true,
+		Port:                intPtr(2222),
+		KnownHostsLine:      strPtr(knownhosts.Line([]string{"[example.internal]:2222"}, trusted)),
 	}); err != nil {
 		t.Fatalf("UpdateBackupSet moving the same key to a new port: %v", err)
 	}
@@ -522,7 +544,8 @@ func TestUpdateBackupSet_ACertAuthorityLineIsRefused(t *testing.T) {
 	caLine := "@cert-authority " + knownhosts.Line([]string{"example.internal:22"}, newHostPublicKey(t))
 
 	_, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		KnownHostsLine: strPtr(caLine),
+		SkipConnectionCheck: true,
+		KnownHostsLine:      strPtr(caLine),
 	})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("UpdateBackupSet error = %v, want ErrInvalidRequest", err)
@@ -535,6 +558,7 @@ func TestUpdateBackupSet_ACertAuthorityLineIsRefused(t *testing.T) {
 	// you sure this is your host" question with a yes on the end; it is a
 	// different trust model arriving through a field that means one key.
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		SkipConnectionCheck:      true,
 		KnownHostsLine:           strPtr(caLine),
 		AcknowledgeHostKeyChange: true,
 	}); !errors.Is(err, ErrInvalidRequest) {
@@ -589,7 +613,8 @@ func TestUpdateBackupSet_ALineNamingAnotherHostIsRefused(t *testing.T) {
 		t.Fatalf("ParseKnownHosts: %v", err)
 	}
 	_, err = svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		KnownHostsLine: strPtr(knownhosts.Line([]string{"somewhere-else.invalid:22"}, trusted)),
+		SkipConnectionCheck: true,
+		KnownHostsLine:      strPtr(knownhosts.Line([]string{"somewhere-else.invalid:22"}, trusted)),
 	})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("UpdateBackupSet error = %v, want ErrInvalidRequest", err)
@@ -644,7 +669,8 @@ func TestUpdateBackupSet_DroppingAnotherPinnedKeyIsRefused(t *testing.T) {
 	}
 
 	_, err = svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		KnownHostsLine: strPtr(line),
+		SkipConnectionCheck: true,
+		KnownHostsLine:      strPtr(line),
 	})
 	if !errors.Is(err, ErrHostKeyChangeNotAcknowledged) {
 		t.Fatalf("UpdateBackupSet error = %v, want ErrHostKeyChangeNotAcknowledged", err)
@@ -659,6 +685,7 @@ func TestUpdateBackupSet_DroppingAnotherPinnedKeyIsRefused(t *testing.T) {
 	// The way through, because narrowing a set to one key is a legitimate
 	// thing to mean and a refusal with no answer would be a dead end.
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		SkipConnectionCheck:      true,
 		KnownHostsLine:           strPtr(line),
 		AcknowledgeHostKeyChange: true,
 	}); err != nil {
@@ -696,7 +723,8 @@ func TestUpdateBackupSet_ARefusedTrustChangeStagesNothing(t *testing.T) {
 	dir := filepath.Dir(path)
 	before := trustDirListing(t, dir)
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
-		KnownHostsLine: strPtr(line),
+		SkipConnectionCheck: true,
+		KnownHostsLine:      strPtr(line),
 	}); !errors.Is(err, ErrHostKeyChangeNotAcknowledged) {
 		t.Fatalf("UpdateBackupSet error = %v, want ErrHostKeyChangeNotAcknowledged", err)
 	}
@@ -757,6 +785,7 @@ func TestUpdateBackupSet_DoesNotRewriteAnotherSetsTrustAnchor(t *testing.T) {
 	// The re-trust that used to land on the neighbour's anchor.
 	rebuilt, _ := newHostKey(t, "example.internal", 22)
 	if _, err := svc.UpdateBackupSet(context.Background(), collidingSet.Set.ID, UpdateBackupSetRequest{
+		SkipConnectionCheck:      true,
 		KnownHostsLine:           strPtr(rebuilt),
 		AcknowledgeHostKeyChange: true,
 	}); err != nil {
@@ -805,6 +834,7 @@ func TestUpdateBackupSet_TrustIsInPlaceBeforeTheConfigurationNamesIt(t *testing.
 	// this set trusts, and an unreadable anchor is refused on its own.
 	rebuilt, rebuiltFingerprint := newHostKey(t, "example.internal", 22)
 	updated, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		SkipConnectionCheck:      true,
 		User:                     strPtr("rotated-user"),
 		KnownHostsLine:           strPtr(rebuilt),
 		AcknowledgeHostKeyChange: true,
@@ -844,6 +874,7 @@ func TestUpdateBackupSet_LeavesThePreviousTrustFileAlone(t *testing.T) {
 
 	rebuilt, _ := newHostKey(t, "example.internal", 22)
 	if _, err := svc.UpdateBackupSet(context.Background(), id, UpdateBackupSetRequest{
+		SkipConnectionCheck:      true,
 		KnownHostsLine:           strPtr(rebuilt),
 		AcknowledgeHostKeyChange: true,
 	}); err != nil {

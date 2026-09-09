@@ -79,6 +79,7 @@
           "BACKUP_SET_NOT_FOUND",
           "OPERATION_NOT_FOUND",
           "OPERATION_ALREADY_RUNNING",
+          "BACKUP_SET_HELD_FOR_EDITING",
           "IDEMPOTENCY_KEY_CONFLICT",
           "CONFIG_REVISION_STALE",
           "SSH_KEY_NOT_FOUND",
@@ -99,7 +100,14 @@
           "RESTORE_UNAVAILABLE",
           "COPY_NOT_FOUND",
           "MEDIUM_NOT_FOUND",
-          "ARTIFACT_NOT_FAILED"
+          "ARTIFACT_NOT_FAILED",
+          "MEDIUM_IN_USE",
+          "MEDIUM_IS_DEFAULT",
+          "MEDIUM_EXISTS",
+          "STORAGE_CREDENTIAL_NOT_FOUND",
+          "SSH_KEY_CANDIDATE_NOT_FOUND",
+          "BACKUP_SET_CONNECTION_NOT_PROVEN",
+          "MEDIUM_CONNECTION_NOT_PROVEN"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -126,6 +134,7 @@
           "BACKUP_SET_NOT_FOUND": "wire",
           "OPERATION_NOT_FOUND": "wire",
           "OPERATION_ALREADY_RUNNING": "wire",
+          "BACKUP_SET_HELD_FOR_EDITING": "wire",
           "IDEMPOTENCY_KEY_CONFLICT": "wire",
           "CONFIG_REVISION_STALE": "wire",
           "SSH_KEY_NOT_FOUND": "wire",
@@ -146,7 +155,14 @@
           "RESTORE_UNAVAILABLE": "wire",
           "COPY_NOT_FOUND": "wire",
           "MEDIUM_NOT_FOUND": "wire",
-          "ARTIFACT_NOT_FAILED": "wire"
+          "ARTIFACT_NOT_FAILED": "wire",
+          "MEDIUM_IN_USE": "wire",
+          "MEDIUM_IS_DEFAULT": "wire",
+          "MEDIUM_EXISTS": "wire",
+          "STORAGE_CREDENTIAL_NOT_FOUND": "wire",
+          "SSH_KEY_CANDIDATE_NOT_FOUND": "wire",
+          "BACKUP_SET_CONNECTION_NOT_PROVEN": "wire",
+          "MEDIUM_CONNECTION_NOT_PROVEN": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -169,6 +185,7 @@
             "RETENTION_PLAN_STALE",
             "RETENTION_APPLY_BUSY",
             "OPERATION_ALREADY_RUNNING",
+            "BACKUP_SET_HELD_FOR_EDITING",
             "IDEMPOTENCY_KEY_CONFLICT",
             "CONFIG_REVISION_STALE",
             "ALREADY_CONFIGURED",
@@ -178,7 +195,10 @@
             "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
             "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
             "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
-            "ARTIFACT_NOT_FAILED"
+            "ARTIFACT_NOT_FAILED",
+            "BACKUP_SET_CONNECTION_NOT_PROVEN",
+            "MEDIUM_IS_DEFAULT",
+            "MEDIUM_CONNECTION_NOT_PROVEN"
           ],
           "not-found": [
             "BACKUP_SET_NOT_FOUND",
@@ -198,6 +218,54 @@
             "NOT_CONFIGURED"
           ]
         }
+      },
+      "ConnectionCheck": {
+        "type": "object",
+        "description": "One step of a connection test. `outcome` is passed, failed or skipped, and skipped is a first-class answer rather than a quiet pass: a surface that renders a skipped authentication as anything but \"this was never tried\" has told an operator their credentials are fine on the strength of a step that never ran. `category` is the machine-readable half a surface branches on; `detail` is a sentence the engine composed and never an underlying transport error's text. This is MediumPreflightCheck's shape asked about a SOURCE instead of a destination, deliberately, so a preflight table and a connection-test table are two renderings of one idea rather than two contracts.",
+        "additionalProperties": false,
+        "properties": {
+          "step": {
+            "type": "string",
+            "enum": [
+              "credentials",
+              "resolve",
+              "connect",
+              "host_key",
+              "authenticate",
+              "list"
+            ],
+            "description": "What this step proves. `credentials` is whether the key this backup set names can be resolved and used on THIS host at all: the reference resolves to a key this deployment holds, and the file's own mode and its whole containing directory chain are still what a real transfer demands. Nothing about the far side, and nothing that opens the private half. `resolve` is whether the hostname resolves, and to what, because \"it resolves\" and \"it resolves to the machine you think\" are different claims and only an operator can settle the second. `connect` is whether TCP to host:port answered, and what identification string came back, which is how you know you reached sshd and not a load balancer. `host_key` is which key the server offered and whether the known_hosts this set verifies against actually trusts it for this host: the comparison is knownhosts' own, the same one the transport will make, never a second opinion that could be wrong in the permissive direction. `authenticate` is whether the server accepted that key for that user, and it is skipped when the host key did not match, because offering a credential to a server whose identity has not been established is the thing FR-6 exists to prevent. `list` is the configured remote path listed over the real transport, and how many entries came back; it is the only step that proves the path in the configuration is a path on that machine."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed",
+              "skipped"
+            ],
+            "description": "`skipped` is a real answer and not a quiet pass: it means an earlier step failed in a way that makes this one meaningless, and `detail` says which. A surface that renders a skipped authenticate as anything but \"this was never tried\" has told an operator their key is authorised on the strength of a step that never ran."
+          },
+          "category": {
+            "type": "string",
+            "description": "The category a failure classified as, absent when the step passed or was skipped. It is the machine-readable half: a client branches on this and never on `detail`.",
+            "x-go-omitempty": true
+          },
+          "detail": {
+            "type": "string",
+            "description": "What this step found, in words, for a person to act on. Always present, including on a skipped step, where it is the reason nothing was tried."
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long this step took on its own, in milliseconds. Present only on the steps that are measured separately: credentials, resolve, connect and host_key. Absent on authenticate and list, which are decided from ONE call and have no timing of their own, and absent rather than zero, because a 0 ms beside a green step reads as \"instant\" when what it means is \"never measured\".",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "step",
+          "outcome",
+          "detail"
+        ]
       },
       "TrustedHostKey": {
         "type": "object",
@@ -561,7 +629,7 @@
       },
       "SubmitOperationRequest": {
         "type": "object",
-        "description": "POST /operations. The idempotency key is a header, not a body field: it is a property of the retry, not of the operation. action selects which of the parameter objects below is read; restore_placement reads restore, and run_cycle reads none.",
+        "description": "POST /operations. The idempotency key is a header, not a body field: it is a property of the retry, not of the operation. action selects which of the parameter objects below is read; restore_placement reads restore, run_backup_set reads backup_set_id, and run_cycle reads neither.",
         "additionalProperties": false,
         "properties": {
           "action": {
@@ -571,6 +639,11 @@
           "config_revision": {
             "type": "string",
             "description": "Optimistic concurrency: the revision the caller believes is current. A stale value is refused with CONFIG_REVISION_STALE and nothing runs."
+          },
+          "backup_set_id": {
+            "type": "string",
+            "description": "The one backup set a run_backup_set acts on, as the source/backup-set id every surface in this product prints. Absent for run_cycle, which is deployment-wide, and refused when a run_cycle carries one: a body naming another action's parameters is a request that has confused two operations.",
+            "x-go-omitempty": true
           },
           "restore": {
             "$ref": "#/components/schemas/RestoreOperationRequest",
@@ -1017,6 +1090,15 @@
             "format": "date-time",
             "description": "When THIS deployment last wrote the trust anchor above. Absent when the backup set points at a known_hosts file this deployment did not write: a file an operator maintains by hand is usually shared with other sets, so its timestamp is about whatever was last added to it rather than about this set's host, and reporting it would answer \"when was this host key trusted\" with something else.",
             "x-go-omitempty": true
+          },
+          "ssh_key_id": {
+            "type": "string",
+            "description": "The key-store id this set's key resolves to, the same value POST /ssh-keys returned and GET /ssh-keys lists. The id only: what it resolves to is a server-side path and this API never publishes one. Never omitted, and EMPTY IS A REAL ANSWER, meaning this set uses a key this deployment does not manage, which is every set pointing at a mounted or hand-provisioned key file. It is here because BackupSetPatch has always been able to WRITE ssh_key_id and nothing could read it back, so a surface offering to replace a set's key could not name the key being replaced."
+          },
+          "connection_unverified": {
+            "type": "boolean",
+            "description": "Whether this backup set was written without its SSH connection ever having been proven (issue #624). True means a surface deliberately skipped a check it could have run, which is `backup-set create --no-verify` and nothing else; a connection test that PASSES against the set clears it, and one that fails leaves it alone. ABSENT is not \"unverified\": every configuration written before this field existed says nothing, an engine built before it answers nothing, and a client that read silence as a mark would declare every backup set on every deployment unproven on the first upgrade. Read absence as \"nothing here says this was skipped\".",
+            "x-go-omitempty": true
           }
         },
         "required": [
@@ -1035,7 +1117,8 @@
           "read_only",
           "stable_for_seconds",
           "stale_after_seconds",
-          "retention_is_override"
+          "retention_is_override",
+          "ssh_key_id"
         ]
       },
       "CreateBackupSetResponse": {
@@ -1082,9 +1165,23 @@
           "backup_sets"
         ]
       },
+      "ImportSSHKeyFromCandidateRequest": {
+        "type": "object",
+        "description": "POST /ssh-keys/from-candidate. Selecting a key this host already found is a different act from pasting one this host has never seen, and it carries a different body: an opaque handle and no key material at all. It is a separate operation rather than a second mode of POST /ssh-keys because a shared body with two optional halves would have had to stop requiring private_key_pem, and this contract does not withdraw a requirement it has already made.",
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "type": "string",
+            "description": "Select a key GET /ssh/key-candidates already listed. This is the mode a brand new operator uses, because a default install already put a key on the machine and there is nothing for them to paste. The private half is read once, server-side, through the same validation a paste goes through, and the original is left where it is. It is an opaque handle, never a path, and it resolves only against a fresh scan of the same closed set of locations, so a path, a traversal and an id for a file outside those locations all fail the same way."
+          }
+        },
+        "required": [
+          "candidate_id"
+        ]
+      },
       "ImportSSHKeyRequest": {
         "type": "object",
-        "description": "POST /ssh-keys. Sent once; the caller discards its own copy immediately.",
+        "description": "POST /ssh-keys. Sent once; the caller discards its own copy immediately. Pasted material only: selecting a key this host already holds is POST /ssh-keys/from-candidate, which takes a handle instead.",
         "additionalProperties": false,
         "properties": {
           "private_key_pem": {
@@ -1195,7 +1292,7 @@
       },
       "TestConnectionResponse": {
         "type": "object",
-        "description": "The outcome of a pre-save connection test.",
+        "description": "The outcome of a connection test, as a verdict and as the six steps that produced it. `ok` and `message` mean exactly what they have always meant, so a client reading only those keeps working; `checks` is what the test actually DID, one entry per step and always all of them, in the order they run. Both modes of this endpoint answer the same six steps: a caller no longer has to remember which request it sent to know what shape comes back.",
         "additionalProperties": false,
         "properties": {
           "ok": {
@@ -1203,6 +1300,14 @@
           },
           "message": {
             "type": "string",
+            "x-go-omitempty": true
+          },
+          "checks": {
+            "type": "array",
+            "description": "One entry per step, always all of them, in the order they run: credentials, resolve, connect, host_key, authenticate, list. Both the persisted mode (`backup_set_id`) and the candidate mode (host, user and key) populate it, so there is one breakdown here and not one per mode.",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionCheck"
+            },
             "x-go-omitempty": true
           }
         },
@@ -1704,6 +1809,10 @@
           "read_only": {
             "type": "boolean",
             "description": "Declares this backup set's remote source read-only from creation (issue #282): pull backups from here, but never delete the remote original. Omitted or false means exactly what every request meant before this field existed."
+          },
+          "skip_connection_check": {
+            "type": "boolean",
+            "description": "Writes this set without proving its connection first (issue #624). The service runs the same six-step check POST /backup-sets/test-connection answers, in front of the write, and refuses with BACKUP_SET_CONNECTION_NOT_PROVEN when it fails; this is the deliberate opt-out, and a set written under it is marked connection_unverified until a test passes. The mark is the service's own record of the skip and is never taken from the request. Omitted or false checks, which is what every create should do."
           }
         },
         "required": [
@@ -2390,6 +2499,10 @@
           "acknowledge_host_key_change": {
             "type": "boolean",
             "description": "Confirms that this edit is meant to change what host keys this backup set trusts for its own address (issue #572). Required when known_hosts_line pins a different key from the one on record, and equally when it would stop pinning one that IS on record; without it the edit is refused with BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED, naming the fingerprint on record and the one being offered, and nothing is written. Changing remote.port does not exempt an edit from this: a port is how you reach the same machine, so a set that pins a key for host:22 is still having its trust changed by a line that pins something else for host:2222. Separate from acknowledge_repoint on purpose: that one answers \"this is the same data at a new address\" and this one answers \"this is the same host with a new key\", and one flag for both would let an operator who meant one of them quietly grant the other."
+          },
+          "skip_connection_check": {
+            "type": "boolean",
+            "description": "Writes this edit without proving the connection first (issue #624). An edit that changes host, port, user, ssh_key_id, known_hosts_line or remote_path is checked against the source before it is written, and refused with BACKUP_SET_CONNECTION_NOT_PROVEN when the check fails; this is the deliberate opt-out, and a set written under it is marked connection_unverified until a test passes. The check is made here rather than by the caller because a sparse edit plus a set whose trust anchor this API never publishes is not something a caller can assemble a candidate out of. Omitted or false checks, which is what every edit that changes a connection field should do."
           }
         }
       },
@@ -2620,7 +2733,7 @@
       },
       "StorageMediumSummary": {
         "type": "object",
-        "description": "One configured storage medium, as the settings surface reports it: what it is called, what kind of place it is, which bucket and region, and which storage class artifacts are written with. There is deliberately no field here for key material of any kind, and there never will be (FR-33). A credential reaches this product only as a reference to a file, an environment variable or a command, and none of those three has a spelling on this boundary at all.",
+        "description": "One configured storage medium, as the settings surface reports it: what it is called, what kind of place it is, which bucket and region, and which storage class artifacts are written with. There is deliberately no field here for key material of any kind, and there never will be (FR-33). A credential reaches this product only as a reference to a file, an environment variable or a command, and none of those three has a spelling on this boundary at all. That absence now covers the WRITE direction too (POST/PUT below), and it extends to the credential's KIND: there is no field saying whether a medium reads a file, a variable or a command, because where a credential comes from is a fact about the manager's host that an API caller has no use for. An edit therefore does not have to resupply the credential; omitting it keeps the one already configured.",
         "additionalProperties": false,
         "properties": {
           "id": {
@@ -2630,8 +2743,10 @@
           "type": {
             "type": "string",
             "enum": [
-              "s3"
-            ]
+              "s3",
+              "local"
+            ],
+            "description": "What kind of place this is. `s3` is a bucket an operator declared in storage_mediums. `local` is the drive this deployment's backups land on, which is not declared anywhere: it is synthesised from the configuration, it is what every retention tier that names no destination means, and it is always in this list (#622). Branch on is_local rather than on this word: the set grows by architecture decision, and a second local-ish backend added here one day must not silently make an entry undeletable."
           },
           "bucket": {
             "type": "string"
@@ -2647,6 +2762,42 @@
           "reads_require_restore": {
             "type": "boolean",
             "description": "True when this medium's storage class cannot be read on demand: anything already here, and anything a tier sends here, needs an explicit restore taking hours before it can be read at all. Computed from the storage class by the engine rather than restated by a client, so one product decides what archive means."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "The endpoint override, for an S3-compatible service. Empty means the provider's own endpoint for the region.",
+            "x-go-omitempty": true
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The key namespace inside the bucket. Empty puts the key layout at the root.",
+            "x-go-omitempty": true
+          },
+          "upload_verification": {
+            "type": "string",
+            "enum": [
+              "readback",
+              "attested"
+            ],
+            "description": "How an upload is proven before the local copy is deleted, already resolved, so a client never has to know what an unset value defaults to. readback re-downloads and re-hashes; attested asks the endpoint for its own whole-object digest, which no s3 backend can currently serve."
+          },
+          "path": {
+            "type": "string",
+            "description": "The drive the LOCAL destination writes to, resolved exactly as the capacity section resolves its backup root so one deployment cannot report two mounts. Empty for a declared medium, because a bucket has no path on the manager's host, and empty for a local entry this configuration cannot place yet (no backup set configured, or sets on genuinely different volumes), which a surface renders as \"not known yet\" rather than as a blank path.",
+            "x-go-omitempty": true
+          },
+          "is_local": {
+            "type": "boolean",
+            "description": "True for the one entry that is the drive this deployment's backups land on (#622). It is not declared in the configuration and cannot be edited or removed, so a surface reads this rather than comparing an id against a reserved string it would have to hold its own copy of."
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "True for the destination a NEWLY CREATED retention tier starts on. Exactly one entry in a list carries it. It says nothing about where anything currently is: moving it moves no backup and rewrites no tier, which is why it is one click and carries no disclosure (#622)."
+          },
+          "connection_unverified": {
+            "type": "boolean",
+            "description": "Whether this storage destination was declared without ever having been proven (issue #636). True means a caller deliberately skipped a check it could have run, which is `medium add --no-verify` and `skip_connection_check` and nothing else; a test connection that PASSES against it clears the mark, and one that fails leaves it alone. ABSENT is not \"unverified\": every configuration written before this field existed says nothing, an engine built before it answers nothing, and a client that read silence as a mark would declare every destination on every deployment unproven on the first upgrade. Read absence as \"nothing here says this was skipped\". Always absent for the local hard drive, which is not declared and has no bucket to prove.",
+            "x-go-omitempty": true
           }
         },
         "required": [
@@ -2654,7 +2805,10 @@
           "type",
           "bucket",
           "storage_class",
-          "reads_require_restore"
+          "upload_verification",
+          "reads_require_restore",
+          "is_local",
+          "is_default"
         ]
       },
       "VerificationClassInfo": {
@@ -2859,6 +3013,7 @@
               "credentials",
               "reach",
               "deliverable",
+              "space",
               "write",
               "read_back",
               "storage_class",
@@ -2948,6 +3103,83 @@
           "value"
         ]
       },
+      "LiveActivityAction": {
+        "type": "object",
+        "description": "One action that started and has not reported an outcome. It is what makes \"this announced itself and went quiet\" something a surface can say, rather than something an operator would have to notice by reading every line and remembering which starts they had seen. An action still legitimately running appears here too, and that is correct rather than a false alarm: the honest sentence is \"started four minutes ago and has not reported an outcome\", and whether four minutes is long is a judgement the person reading it is far better placed to make than this service is.",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "The action's stable name, as its two lines carry it."
+          },
+          "action_id": {
+            "type": "string",
+            "description": "What the start and its missing completion would be paired by."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the start line was emitted, which is the only thing anything can work out how long it has been quiet from."
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The start line's own sequence, so a client can find the line this is about in the tail it already holds."
+          }
+        },
+        "required": [
+          "action",
+          "action_id",
+          "started_at",
+          "sequence"
+        ]
+      },
+      "LiveActivityDeployment": {
+        "type": "object",
+        "description": "The log that belongs to no single backup set, served in its own right rather than copied onto every set's feed. A cycle starting covers every set and a capacity check is about a filesystem, so neither belongs on one set's strip; until this bucket existed the only alternatives were dropping those lines (which hides them) or reporting them on every strip, and the second is what shipped, so on a real deployment every set's strip showed the same log and the shared lines crowded out each set's own. It is absent when the caller narrowed the reading to one backup set, because a caller that named a set asked about that set. It is present, and is the whole answer, for a deployment with no configured backup sets at all, which is exactly when a new operator is pressing buttons in a wizard and has nothing else to read.",
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivityEvent"
+            }
+          },
+          "unfinished_actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivityAction"
+            },
+            "description": "Every action belonging to no single backup set whose start is still held with no completion behind it, oldest first. It is deliberately NOT filtered by the cursor: a cursor asks what is new, and an action that has been quiet for ten minutes is not new, so a client polling all along would otherwise be told about it once and never again. It is derived from the tail this process is still holding rather than tracked in a structure of its own, so an action whose start has scrolled out of the bounded buffer is forgotten along with every other line from that far back."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether the limit cut this reading short and the rest is still held. Always present rather than omitted when false: a client reading an absent key as \"nothing is missing\" reads a server that stopped sending it the same way, and silence about a gap is what this feed must never do."
+          },
+          "dropped": {
+            "type": "boolean",
+            "description": "Whether lines this caller's cursor had not reached yet fell out of the bounded buffer before this read did. They are gone, and the tail above is not continuous with whatever the caller already holds."
+          },
+          "oldest_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The oldest sequence still held in this bucket, which is a bound on the buffer and not on the slice above."
+          },
+          "latest_sequence": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The newest sequence still held in this bucket."
+          }
+        },
+        "required": [
+          "events",
+          "unfinished_actions",
+          "truncated",
+          "dropped",
+          "oldest_sequence",
+          "latest_sequence"
+        ]
+      },
       "LiveActivityEvent": {
         "type": "object",
         "description": "One line of the live feed. It carries the engine's own event name, the engine's own severity and the event's own fields, because what a moment is worth calling is presentation and belongs to whichever client is presenting: a severity invented on the way to the wire would freeze one screen's display decision for every other client. The level is not such a decision, it is what the emitter chose when it decided a line was a warning rather than a note, so it is carried through rather than re-derived.",
@@ -2972,6 +3204,27 @@
             ],
             "description": "The severity the engine emitted this event at, carried through unchanged."
           },
+          "result": {
+            "type": "string",
+            "enum": [
+              "success",
+              "warn",
+              "error",
+              "info"
+            ],
+            "description": "How the operation this line reports WENT, stated by the engine rather than re-derived by whoever draws the line. It is not a second spelling of level and it is carried for the same reason level is: the emitter said it. There is no success severity and there cannot be one, because a level is an ordering every reader treats as a threshold, so before this field existed a completion that went well arrived at info and was indistinguishable from a note, and every client wanting to draw one as good news re-derived it from event names and lifecycle state values with anything it did not recognise silently staying neutral. It is called result and not outcome on purpose: connection_test carries a field of its own called outcome, and LiveActivitySet.outcome in this same response is a different vocabulary again, so a client reading set.outcome beside set.events[i].result is told those are different questions. Absent is a real answer rather than a default: a start has not gone any way yet, and an ordinary progress note reports no operation at all.",
+            "x-go-omitempty": true
+          },
+          "action": {
+            "type": "string",
+            "description": "The stable name of the operator-visible action this line opens or closes (cycle, connection_test). Absent on every line that is neither half of a pair.",
+            "x-go-omitempty": true
+          },
+          "action_id": {
+            "type": "string",
+            "description": "What an action's start and its completion are paired by, structurally rather than by the habit of spelling one event cycle_start and the other cycle_end. A line carrying this and no outcome is a start; one carrying both is that start's completion. It is what lets a reader notice an action that announced itself and then went quiet, which is the state an operator most needs named and the one nothing could see.",
+            "x-go-omitempty": true
+          },
           "event": {
             "type": "string",
             "description": "The engine's own event name (discovery, lifecycle_transition, transfer_stats, retention, cycle_end and the rest). It is deliberately not an enum: the catalog grows, and a client that meets a name it has no special rendering for prints the message and the fields, which is a worse line rather than a broken one."
@@ -2982,7 +3235,7 @@
               "deployment",
               "set"
             ],
-            "description": "Whether this event belongs to the backup set carrying it or to the deployment. Most events name their own set, or an artifact that names one. A few genuinely do not: a cycle starting covers every set. Those reach every set's feed marked deployment, rather than being dropped (which would hide them) or pinned to one set (which would put them on the wrong screen)."
+            "description": "Whether this event belongs to the backup set carrying it or to the deployment. Most events name their own set, or an artifact that names one. A few genuinely do not: a cycle starting covers every set. Those are carried in the response's deployment bucket rather than on any set's feed, so a set's feed answers what that set is doing and the deployment's answers what the whole system is doing. The sequence numbers are one counter across both, so a client holding both can interleave them exactly where they happened."
           },
           "message": {
             "type": "string"
@@ -3102,6 +3355,13 @@
             },
             "description": "The tail, oldest first, filtered by whatever cursor the caller sent. Empty is an empty array, never an absent key."
           },
+          "unfinished_actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveActivityAction"
+            },
+            "description": "Every action inside this backup set whose start is still held with no completion behind it, oldest first. It is deliberately NOT filtered by the cursor: a cursor asks what is new, and an action that has been quiet for ten minutes is not new, so a client polling all along would otherwise be told about it once and never again. It is derived from the tail this process is still holding rather than tracked in a structure of its own, so an action whose start has scrolled out of the bounded buffer is forgotten along with every other line from that far back."
+          },
           "truncated": {
             "type": "boolean",
             "description": "Whether limit cut this reading short. The events above are the OLDEST held that are newer than the cursor, never the newest, because a cursor a client advances past a gap is a client that never sees the middle of a burst again. True means the rest is still held: ask again with the sequence this reading ends at."
@@ -3127,6 +3387,7 @@
           "progress_basis",
           "failures",
           "events",
+          "unfinished_actions",
           "truncated",
           "dropped",
           "oldest_sequence",
@@ -3155,6 +3416,12 @@
             "items": {
               "$ref": "#/components/schemas/LiveActivitySet"
             }
+          },
+          "deployment": {
+            "$ref": "#/components/schemas/LiveActivityDeployment",
+            "x-go-omitempty": true,
+            "x-go-pointer": true,
+            "description": "The deployment-wide log: the events that name no single backup set. Absent when the reading was narrowed to one backup set."
           }
         },
         "required": [
@@ -3162,6 +3429,379 @@
           "epoch",
           "poll_after_ms",
           "sets"
+        ]
+      },
+      "SSHKey": {
+        "type": "object",
+        "description": "One key in this deployment's own key store. It carries no server-side path: SSHKeyRef.KeyFile is kept off the wire so a caller never learns this process's filesystem layout, and an inventory is not an exception to that. What travels instead is the id, the public half's algorithm and SHA256 fingerprint, the authorized_keys line, and which backup sets point at it.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The store id. This is the value POST /ssh-keys returned when the key was imported, the value BackupSetSpec.ssh_key_id takes, and the value `backup-manager backup-set patch --ssh-key-id` takes."
+          },
+          "algorithm": {
+            "type": "string",
+            "description": "The public half's algorithm, or empty when the key could not be described (see problem)."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "The SHA256 fingerprint, in the form `ssh-keygen -lf` prints, or empty when the key could not be described."
+          },
+          "public_key": {
+            "type": "string",
+            "description": "The authorized_keys line for this key. Public material by definition, and the one string here an operator has to be able to copy: a verification that reaches the host, matches its key and then fails to authenticate is fixed by pasting exactly this into the remote account's authorized_keys."
+          },
+          "imported_at": {
+            "type": "string",
+            "description": "RFC 3339, or empty when this deployment cannot report it. Never omitted, so a caller can tell an unknown time from a build that does not report one."
+          },
+          "passphrase_protected": {
+            "type": "boolean",
+            "description": "This key needs a passphrase to be usable, so it is listed and cannot be verified until that passphrase resolves."
+          },
+          "problem": {
+            "type": "string",
+            "description": "Why this row could not be described. Never names a path.",
+            "x-go-omitempty": true
+          },
+          "used_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every backup set id pointing at this key, sorted. Never omitted: \"used by nothing\" is a real answer, and it is the column that turns a wall of ids into a decision."
+          }
+        },
+        "required": [
+          "id",
+          "algorithm",
+          "fingerprint",
+          "public_key",
+          "imported_at",
+          "passphrase_protected",
+          "used_by"
+        ]
+      },
+      "ListSSHKeysResponse": {
+        "type": "object",
+        "description": "GET /ssh-keys. The read this API never had: an imported key's id used to cross the wire exactly once, in the response to the POST that created it, so ssh_key_id took a value nothing in the product would tell anybody.",
+        "additionalProperties": false,
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SSHKey"
+            }
+          }
+        },
+        "required": [
+          "keys"
+        ]
+      },
+      "SSHKeyCandidate": {
+        "type": "object",
+        "description": "One private key file this engine can actually see. Unlike SSHKey, this DOES carry a path, because a candidate's path is its identity to an operator and there is no other way to say which of several files is meant. What makes that safe is that the locations searched are a closed, constant set decided server-side, never caller-supplied and never walked recursively. The handle travelling back is the opaque id, never the path.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The opaque handle ImportSSHKeyFromCandidateRequest.candidate_id takes. Derived from the path, so it needs no server-side state, and not a path, so no request can name a file for this process to read."
+          },
+          "path": {
+            "type": "string",
+            "description": "Where the file was found."
+          },
+          "location": {
+            "type": "string",
+            "description": "The SSHKeyDiscoveryLocation.path this came from."
+          },
+          "algorithm": {
+            "type": "string",
+            "description": "Read from the .pub beside the private key, and empty when there is none. Never derived by reading the private key."
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "Read from the .pub beside the private key, and empty when there is none. A candidate with no fingerprint is listed and is not selectable, because deriving one would mean reading a private key in order to describe it in a list."
+          },
+          "public_key": {
+            "type": "string",
+            "description": "The .pub's own line, or empty when there is none."
+          },
+          "mode": {
+            "type": "string",
+            "description": "The private file's permission bits as an operator would write them, for example \"0600\"."
+          },
+          "in_store": {
+            "type": "boolean",
+            "description": "A key with this fingerprint is already in the key store, so selecting it here would make a second copy of something already on the other list."
+          },
+          "in_store_id": {
+            "type": "string",
+            "description": "That key's store id when in_store is true, so a client can offer the existing key instead of a duplicate import.",
+            "x-go-omitempty": true
+          },
+          "selectable": {
+            "type": "boolean",
+            "description": "Whether this candidate can be chosen. See reason when it cannot."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this candidate is not selectable. A row an operator cannot pick and cannot explain is worse than no row.",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "id",
+          "path",
+          "location",
+          "algorithm",
+          "fingerprint",
+          "public_key",
+          "mode",
+          "in_store",
+          "selectable"
+        ]
+      },
+      "SSHKeyDiscoveryLocation": {
+        "type": "object",
+        "description": "One place the scan looked, reported whether or not anything was found there. Every location is always reported, including the absent ones: an empty candidate list has two readings, \"you have no keys\" and \"I could not look where your keys are\", and on a packaged install the engine is a distroless container with five mounts and no home directory, so the second is the true one.",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Why this location is in the set at all, so a client can render \"the key file your configuration names\" differently from \"a directory that is not mounted in this container\". One of configured-key-file, mount, home, discovery-dir."
+          },
+          "found": {
+            "type": "integer",
+            "description": "How many candidates came from here."
+          },
+          "problem": {
+            "type": "string",
+            "description": "Why nothing could be read from here. Empty when the location was read.",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "path",
+          "kind",
+          "found"
+        ]
+      },
+      "ListSSHKeyCandidatesResponse": {
+        "type": "object",
+        "description": "GET /ssh/key-candidates. The locations travel beside the candidates, in one response, so a client cannot render one without the other.",
+        "additionalProperties": false,
+        "properties": {
+          "locations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SSHKeyDiscoveryLocation"
+            }
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SSHKeyCandidate"
+            }
+          }
+        },
+        "required": [
+          "locations",
+          "candidates"
+        ]
+      },
+      "StorageMediumCredentialsReference": {
+        "type": "object",
+        "description": "Where one storage medium's credentials come from. Exactly one of the four must be set, and none of them is credential MATERIAL: this is a reference in all four spellings. credentials_id is the one a browser uses, because it is the only one that names nothing about the manager's host.",
+        "additionalProperties": false,
+        "properties": {
+          "credentials_id": {
+            "type": "string",
+            "description": "An id an earlier POST /storage-credentials returned. It resolves, server-side, to the 0600 file that import wrote beside the configuration, and that file's path is what the configuration ends up naming. This is the spelling to use from a browser: it is opaque, it names no path and no variable on the manager's host, and it is therefore safe on a request body, in an echoed command line and in an exported terminal transcript."
+          },
+          "file": {
+            "type": "string",
+            "description": "A path to an AWS shared-credentials file on the manager's host. The preferred source when an operator already has one, because rclone opens the file itself and the secret never enters the manager's process at all."
+          },
+          "env": {
+            "type": "string",
+            "description": "The NAME of an environment variable the credentials are read from at connection time. Never a value."
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "An argv array whose stdout is the credentials, run directly and never through a shell. This is how a secrets manager is adopted without this product depending on one."
+          }
+        }
+      },
+      "StorageMediumRequest": {
+        "type": "object",
+        "description": "One storage destination as a caller describes it: for POST /storage-mediums (declare it), PUT /storage-mediums/{id} (replace its description) and POST /storage-mediums/preflight (prove it before either). The same shape for all three deliberately, so what is proven and what is saved cannot be different destinations. There is no field here for credential material, and there never will be (FR-33): the credentials block names a reference.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "lower_snake_case, unique, and not `local`, which is reserved. This is the name a retention tier will use."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "s3"
+            ]
+          },
+          "region": {
+            "type": "string",
+            "description": "The provider region, passed to the backend unexamined. This product deliberately holds no list of legal regions: it would be a second, staler copy that refuses a region that works."
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "An endpoint override for an S3-compatible service. Empty means the provider's own endpoint for the region. A wizard's provider preset only fills this field in."
+          },
+          "bucket": {
+            "type": "string",
+            "description": "The bucket artifacts are written into. A name carrying a `/` is refused: that is a bucket and a prefix written into one field."
+          },
+          "prefix": {
+            "type": "string",
+            "description": "The key namespace inside the bucket, so one bucket can hold more than this product's artifacts. Empty puts the key layout at the root."
+          },
+          "storage_class": {
+            "type": "string",
+            "description": "The S3 storage class objects are written with. Empty means STANDARD. An archive class cannot take delivery of an artifact and is refused when a tier sends one here."
+          },
+          "upload_verification": {
+            "type": "string",
+            "enum": [
+              "readback",
+              "attested"
+            ],
+            "description": "How an upload is proven before the local copy is deleted. Empty means readback, which is the expensive one on purpose: a medium that said nothing must never be the one that gets believed on its own word."
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/StorageMediumCredentialsReference",
+            "description": "Where the credentials come from. Required on a create and on a candidate preflight. Optional on PUT, where omitting it keeps the credential already configured, which it has to: this contract never reports a medium's credential, not even its kind, so a caller cannot resubmit what it never received."
+          },
+          "skip_connection_check": {
+            "type": "boolean",
+            "description": "Writes this destination without proving it first (issue #636). The service runs the same eight-step check POST /storage-mediums/preflight answers, in front of the write, and refuses with MEDIUM_CONNECTION_NOT_PROVEN when it fails; this is the deliberate opt-out, and a destination written under it is marked connection_unverified until a check passes. The mark is the service's own record of the skip and is never taken from the request. It means nothing on POST /storage-mediums/preflight, which IS the check. Omitted or false checks, which is what every create should do."
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "bucket"
+        ]
+      },
+      "ImportStorageCredentialsRequest": {
+        "type": "object",
+        "description": "POST /storage-credentials. Sent once; the caller discards its own copy the moment an id comes back. This is the ONLY place in this contract where S3 credential material appears, in either direction, and it is write-only: no operation anywhere echoes it, returns it or derives anything displayable from it.",
+        "additionalProperties": false,
+        "properties": {
+          "access_key_id": {
+            "type": "string",
+            "description": "The access key id. Write-only. It is treated as secret alongside the secret access key rather than as a public identifier, because FR-33 forbids a credential reaching a log in whole or in part.",
+            "writeOnly": true
+          },
+          "secret_access_key": {
+            "type": "string",
+            "description": "The secret access key. Write-only.",
+            "writeOnly": true
+          },
+          "session_token": {
+            "type": "string",
+            "description": "A session token, for a temporary credential. Optional and empty for the ordinary long-lived key a provider console hands out. Write-only.",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "access_key_id",
+          "secret_access_key"
+        ]
+      },
+      "ImportStorageCredentialsResponse": {
+        "type": "object",
+        "description": "The reference an import returns, and nothing else. There is deliberately no fingerprint, no masked key and no last-four here, unlike ImportSSHKeyResponse's algorithm and fingerprint: an SSH public key's fingerprint is a safe thing to show a person, and nothing derived from an S3 credential is.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The opaque reference to carry as credentials.credentials_id on a later medium create or candidate preflight. It names nothing about the manager's host, so it is safe on a request body, in a URL and in a terminal transcript."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "StorageMediumUsageBySet": {
+        "type": "object",
+        "description": "One backup set's copies on a storage medium.",
+        "additionalProperties": false,
+        "properties": {
+          "set": {
+            "type": "string",
+            "description": "The source/set id."
+          },
+          "placements": {
+            "type": "integer",
+            "description": "How many of that set's copies are on this medium."
+          },
+          "only_copy_here": {
+            "type": "integer",
+            "description": "How many of those are the only confirmed copy of their artifact anywhere. This is the population FR-30's invariant is about, and it is reported separately because it calls for a different sentence: `52 copies live here` is information, and `52 artifacts have their only confirmed copy here` is the reason nothing may be deleted on the strength of a check that failed."
+          }
+        },
+        "required": [
+          "set",
+          "placements",
+          "only_copy_here"
+        ]
+      },
+      "StorageMediumUsageResponse": {
+        "type": "object",
+        "description": "What the journal says is currently on one storage medium, listed rather than only counted. It asks the medium nothing: this is what the deployment RECORDED, and whether the endpoint answers right now is the preflight's question, asked separately. A count with no list is not something an operator can act on, which is why the backup sets are here.",
+        "additionalProperties": false,
+        "properties": {
+          "medium": {
+            "type": "string"
+          },
+          "placements": {
+            "type": "integer",
+            "description": "How many copies name this medium and have not been recorded as gone. A copy pending deletion is counted with the active ones: it is still a copy on that medium, and removing the declaration under it strands the delete as surely as it strands the read."
+          },
+          "backup_sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StorageMediumUsageBySet"
+            },
+            "description": "One entry per backup set with copies here, sorted by id."
+          }
+        },
+        "required": [
+          "medium",
+          "placements",
+          "backup_sets"
+        ]
+      },
+      "ListStorageMediumsResponse": {
+        "type": "object",
+        "description": "Every declared storage destination, in declaration order. An object rather than a bare array, matching every other list in this contract: a top-level array has nowhere to grow a field, and the day this needs a count or a cursor it would be a breaking change.",
+        "additionalProperties": false,
+        "properties": {
+          "mediums": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StorageMediumSummary"
+            }
+          }
+        },
+        "required": [
+          "mediums"
         ]
       }
     },
@@ -3329,7 +3969,7 @@
     "/operations": {
       "post": {
         "operationId": "submitOperation",
-        "summary": "Submit a durable operation: a run cycle, or a restore of one archived copy.",
+        "summary": "Submit a durable operation: a run cycle, one backup set's run, or a restore of one archived copy.",
         "tags": [
           "operations"
         ],
@@ -3408,7 +4048,7 @@
             ]
           },
           "404": {
-            "description": "Refused: ARTIFACT_NOT_FOUND, COPY_NOT_FOUND.",
+            "description": "Refused: BACKUP_SET_NOT_FOUND, ARTIFACT_NOT_FOUND, COPY_NOT_FOUND.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3417,12 +4057,13 @@
               }
             },
             "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND",
               "ARTIFACT_NOT_FOUND",
               "COPY_NOT_FOUND"
             ]
           },
           "409": {
-            "description": "Refused: CONFIG_REVISION_STALE, IDEMPOTENCY_KEY_CONFLICT, OPERATION_ALREADY_RUNNING, RESTORE_REFUSED. The body is one of two shapes and the code decides which: CONFIG_REVISION_STALE carries the structured config_revision a client retries against, the others are the plain error envelope. oneOf rather than one schema with an optional config_revision, so a client reading .config_revision after a CONFIG_REVISION_STALE still gets a field the type system guarantees is there.",
+            "description": "Refused: CONFIG_REVISION_STALE, IDEMPOTENCY_KEY_CONFLICT, OPERATION_ALREADY_RUNNING, BACKUP_SET_HELD_FOR_EDITING, RESTORE_REFUSED. The body is one of two shapes and the code decides which: CONFIG_REVISION_STALE carries the structured config_revision a client retries against, the others are the plain error envelope. oneOf rather than one schema with an optional config_revision, so a client reading .config_revision after a CONFIG_REVISION_STALE still gets a field the type system guarantees is there.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3441,6 +4082,7 @@
               "CONFIG_REVISION_STALE",
               "IDEMPOTENCY_KEY_CONFLICT",
               "OPERATION_ALREADY_RUNNING",
+              "BACKUP_SET_HELD_FOR_EDITING",
               "RESTORE_REFUSED"
             ]
           },
@@ -4042,7 +4684,7 @@
             ]
           },
           "409": {
-            "description": "Refused: BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED. This id already has artifacts on record and the set would be created somewhere other than where they came from; re-send with acknowledge_repoint once the message has been read.",
+            "description": "Refused: BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED, BACKUP_SET_CONNECTION_NOT_PROVEN. This id already has artifacts on record and the set would be created somewhere other than where they came from, re-sent with acknowledge_repoint once the message has been read; or the connection this set declares could not be proven, re-sent with skip_connection_check once the operator has decided to write it unproven.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4051,7 +4693,8 @@
               }
             },
             "x-error-codes": [
-              "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
+              "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
+              "BACKUP_SET_CONNECTION_NOT_PROVEN"
             ]
           },
           "500": {
@@ -4243,6 +4886,61 @@
       }
     },
     "/ssh-keys": {
+      "get": {
+        "operationId": "listSSHKeys",
+        "summary": "List this deployment's own key store: ids, fingerprints and which backup sets use each key, never a path.",
+        "tags": [
+          "ssh"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSSHKeysResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
       "post": {
         "operationId": "importSSHKey",
         "summary": "Import a private key and get back a reference to it.",
@@ -4288,6 +4986,103 @@
             },
             "x-error-codes": [
               "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/ssh-keys/from-candidate": {
+      "post": {
+        "operationId": "importSSHKeyFromCandidate",
+        "summary": "Import a key this host already holds, named by the handle the candidate scan gave it, and get back the same reference a paste does.",
+        "tags": [
+          "ssh"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportSSHKeyFromCandidateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportSSHKeyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST, SSH_KEY_CANDIDATE_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST",
+              "SSH_KEY_CANDIDATE_NOT_FOUND"
             ]
           },
           "401": {
@@ -4432,6 +5227,63 @@
         "x-idempotency-key": "none",
         "x-optimistic-concurrency": null,
         "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/ssh/key-candidates": {
+      "get": {
+        "operationId": "listSSHKeyCandidates",
+        "summary": "Scan a fixed set of locations for private keys this engine can see, and report every location it looked in.",
+        "tags": [
+          "ssh"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSSHKeyCandidatesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
         "x-authenticated": true
       }
     },
@@ -5122,7 +5974,7 @@
             ]
           },
           "409": {
-            "description": "Refused: ALREADY_CONFIGURED. A configuration already exists, so this operation is no longer available: change a configured deployment through the ordinary settings and backup-set operations.",
+            "description": "Refused: ALREADY_CONFIGURED, BACKUP_SET_CONNECTION_NOT_PROVEN. A configuration already exists, so this operation is no longer available: change a configured deployment through the ordinary settings and backup-set operations. Or the connection this first set declares could not be proven, and nothing was written; re-send with skip_connection_check once the operator has decided to write it unproven.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5131,7 +5983,8 @@
               }
             },
             "x-error-codes": [
-              "ALREADY_CONFIGURED"
+              "ALREADY_CONFIGURED",
+              "BACKUP_SET_CONNECTION_NOT_PROVEN"
             ]
           },
           "500": {
@@ -6240,7 +7093,7 @@
             ]
           },
           "409": {
-            "description": "Refused: BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED, BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED. Either the edit would move this set to different data while artifacts are already on record for it, or it would trust a different host key for the same host; re-send with the acknowledgement the message names, once the message has been read.",
+            "description": "Refused: BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED, BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED, BACKUP_SET_CONNECTION_NOT_PROVEN. The edit would move this set to different data while artifacts are already on record for it, or it would trust a different host key for the same host, or it changes the connection and that connection could not be proven. The first two are re-sent with the acknowledgement the message names; the third is re-sent with skip_connection_check once the operator has decided to write it unproven.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6250,7 +7103,8 @@
             },
             "x-error-codes": [
               "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
-              "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED"
+              "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
+              "BACKUP_SET_CONNECTION_NOT_PROVEN"
             ]
           },
           "500": {
@@ -7596,6 +8450,18 @@
               "format": "int32"
             },
             "description": "How many events to return per backup set. Omitted or non-positive means the server's default; anything above its maximum is clamped rather than refused, exactly as GET /activity already does. It pages rather than truncates: the events returned are the OLDEST above the cursor and the response says whether it was cut short, so a caller that asks again from where the last one ended sees every line rather than skipping the middle of a burst."
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "deployment"
+              ]
+            },
+            "description": "Narrow the reading to the deployment-wide bucket and no backup set at all, which is what a terminal following the deployment's own log wants. It is the half of the set/deployment distinction that backup_set cannot express, since naming no set already means every set. Sent together with backup_set the narrower question wins and the reading is about that set alone, with no deployment bucket: naming a set is a narrower question than naming the deployment, and answering a caller who sent both with neither is the empty reading this feed exists to prevent. Any other value is ignored rather than refused, exactly as an unparseable limit is: a panel an operator went to look at should not be blanked over a query string."
           }
         ],
         "responses": {
@@ -7659,6 +8525,895 @@
             },
             "x-error-codes": [
               "NOT_CONFIGURED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/storage-credentials": {
+      "post": {
+        "operationId": "importStorageCredentials",
+        "summary": "Import S3 credentials and get back a reference to them. The one place in this contract credential material appears, and it is one-way.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportStorageCredentialsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Imported. The material is written 0600 into a private directory beside the manager's configuration and is never returned by anything.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportStorageCredentialsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST. The refusal reports the SHAPE of the problem (empty, whitespace inside a value, not credentials text at all) and never quotes what was sent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums": {
+      "get": {
+        "operationId": "listStorageMediums",
+        "summary": "Every declared storage destination, in declaration order.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListStorageMediumsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
+      "post": {
+        "operationId": "createStorageMedium",
+        "summary": "Declare a storage destination, so one can be added without hand-editing the configuration file.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageMediumRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Declared. Declaring a destination moves nothing on its own: artifacts arrive only once a retention tier names it, which is a separate write with a disclosure of its own.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST. The whole configuration is validated as a hand-edited file would be, so a value is refused here for exactly the reason the same value in the file would be.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "404": {
+            "description": "Refused: STORAGE_CREDENTIAL_NOT_FOUND. The credentials_id names no credential this deployment issued; import one first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "STORAGE_CREDENTIAL_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: MEDIUM_EXISTS, MEDIUM_CONNECTION_NOT_PROVEN. Either that id is already declared, or the destination this request describes could not be proven; the second is re-sent with skip_connection_check once the operator has decided to declare it unproven. Nothing was written either way.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_EXISTS",
+              "MEDIUM_CONNECTION_NOT_PROVEN"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums/preflight": {
+      "post": {
+        "operationId": "preflightStorageMediumCandidate",
+        "summary": "Prove a storage destination that has NOT been saved, before saving it. Writes nothing whatever the report says.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageMediumRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The candidate may or may not have passed: read `ok`. Every one of the eight checks is present, in order, including the ones that were skipped.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediumPreflightResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST. The candidate could not be resolved into a destination to check at all.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "404": {
+            "description": "Refused: STORAGE_CREDENTIAL_NOT_FOUND. The credentials_id names no credential this deployment issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "STORAGE_CREDENTIAL_NOT_FOUND"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums/{id}": {
+      "get": {
+        "operationId": "getStorageMedium",
+        "summary": "One declared storage destination.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND. This configuration declares no storage medium with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
+      "put": {
+        "operationId": "updateStorageMedium",
+        "summary": "Replace one storage destination's description. Allowed on a destination artifacts already live on, deliberately: a credential that expired is exactly what an operator needs to be able to fix.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageMediumRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replaced. A request that names no credentials block keeps the credential already configured.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND, STORAGE_CREDENTIAL_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND",
+              "STORAGE_CREDENTIAL_NOT_FOUND"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "409": {
+            "description": "Refused: MEDIUM_CONNECTION_NOT_PROVEN. This edit changes what the destination IS, and the destination it would become could not be proven. Nothing was written; re-send with skip_connection_check once the operator has decided to write it unproven.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_CONNECTION_NOT_PROVEN"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      },
+      "delete": {
+        "operationId": "removeStorageMedium",
+        "summary": "Un-declare a storage destination. Refused while any copy names it (FR-30).",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed. Nothing was on it, so there is no resource left to return and no body."
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: MEDIUM_IN_USE or MEDIUM_IS_DEFAULT. MEDIUM_IN_USE means copies still name this medium: removing the declaration would not delete them, it would leave this deployment with no bucket, no endpoint and no credential to reach them with, so they would read as unreachable and no prune could ever run against them, and GET /storage-mediums/{id}/usage lists what is there. MEDIUM_IS_DEFAULT means this is the destination a newly created retention tier starts on, or is the drive this deployment's backups land on, which is not declared and cannot be un-declared (#622); nothing is necessarily stored on it, so the fix is to move the default rather than to look for affected backup sets.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_IN_USE",
+              "MEDIUM_IS_DEFAULT"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums/{id}/default": {
+      "put": {
+        "operationId": "setDefaultStorageMedium",
+        "summary": "Make this the destination a newly created retention tier starts on (#622). It moves that and nothing else: no existing tier is rewritten and no backup is relocated, so this is deliberately a write with no disclosure in front of it. The consent gate stands in front of the settings save that actually sends a tier's backups off this machine, and a second acknowledgment here would train an operator to click through the one that matters. The local hard drive is a legal target and is what a deployment that has chosen nothing already has.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The destination to make the default: a declared storage medium id, or `local` for the drive this deployment's backups land on."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The destination that is now the default.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST. The whole configuration is validated as a hand-edited file would be, so a value is refused here for exactly the reason the same value in the file would be.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND. This deployment has no destination with that id, so nothing would start on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/storage-mediums/{id}/usage": {
+      "get": {
+        "operationId": "getStorageMediumUsage",
+        "summary": "What the journal says is currently on one storage destination, per backup set. This is the FR-30 report a failed re-verification renders beside its checks, and the reason a removal is refused.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Answered for an id the configuration no longer declares too: a removed medium is precisely the case where an operator needs to know what was left on it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumUsageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
             ]
           }
         },

@@ -27,7 +27,8 @@ import { useNavigate } from "react-router-dom";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import { useApi } from "@shared/api/ApiContext";
 import { BackupManagerError } from "@shared/api/contracts";
-import type { ValidatorCatalogEntry } from "@shared/api/contracts";
+import type { ConnectionTestOutcome, SSHKeyListing, ValidatorCatalogEntry } from "@shared/api/contracts";
+import { describeFailure } from "@shared/api/failure";
 import { PageHeader } from "@shared/components/PageHeader";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
@@ -122,6 +123,13 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   // material itself, which never lives in this component's state at
   // all past the one importSSHKey call below.
   const [importedKeyId, setImportedKeyId] = useState<string | null>(null);
+  // Issue #592: the keys this deployment already holds, which is what
+  // finally puts something behind the "Use managed key" radio. null is
+  // "not read yet" and [] is "read, and there are none", and those are
+  // rendered differently: a wizard that showed an empty list before it
+  // had asked would be telling a brand new operator they have no keys.
+  const [managedKeys, setManagedKeys] = useState<SSHKeyListing[] | null>(null);
+  const [managedKeysError, setManagedKeysError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
 
@@ -162,6 +170,23 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   // subsequent connection is checked against, not merely display text
   // (issue #146).
   const [trustedKnownHostsLine, setTrustedKnownHostsLine] = useState<string | null>(null);
+
+  // Issue #624: the connection test, and what it was run for.
+  //
+  // Two pieces of state rather than one, on exactly the reasoning host
+  // trust above already follows: what matters is not that a check passed
+  // once, it is that it passed for the values this form is about to save.
+  // A result that outlived the host it was about would be a green tick
+  // standing for a connection nobody ever made, which is the same defect
+  // as a "trusted" badge under an edited hostname.
+  //
+  // Local state, not a graph node. Nothing outside this component reads
+  // it while the wizard is open, which is the bar state/wizardNodes.ts
+  // holds every other wizard answer to.
+  const [testing, setTesting] = useState(false);
+  const [connectionResult, setConnectionResult] = useState<ConnectionTestOutcome | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [connectionTestedFor, setConnectionTestedFor] = useState<string | null>(null);
 
   // Real host-key probe (issue #146), replacing #98's hardcoded
   // fingerprint constants: probedFor is the "host:port" the CURRENT
@@ -216,6 +241,31 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
     };
   }, [api]);
 
+  // Issue #592: the key store, read once when the wizard opens so the
+  // "Use managed key" radio has something behind it. A failure is
+  // reported rather than turned into an empty list, because "you have no
+  // keys" and "I could not read the store" are different sentences and
+  // only one of them is ever true.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listSSHKeys()
+      .then((keys) => {
+        if (!cancelled) setManagedKeys(keys);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setManagedKeys([]);
+          setManagedKeysError(
+            describeFailure(e, "The keys this deployment already holds could not be read.").message
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+
   const selectedValidator = (validatorCatalog ?? []).find((v) => v.id === validatorId);
 
   const [hasResetOnMount, setHasResetOnMount] = useState(false);
@@ -246,12 +296,81 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   // trustedKnownHostsLine: a read-only set still needs a real, trusted
   // connection to pull backups FROM — declaring it read-only only takes
   // away the one thing there would otherwise be to acknowledge deleting.
+  // Issue #624: the values a connection test is about, as one string.
+  //
+  // Everything the six steps actually prove and nothing else: who is
+  // dialling what, with which key, trusting which line, to read which
+  // folder. A change to any of them makes an earlier result an answer
+  // about a different connection, so comparing this against
+  // connectionTestedFor is what expires it. The local path, the
+  // completion method and the validator are deliberately absent: no
+  // connection test has an opinion about any of them, and expiring a
+  // proven connection because somebody fixed a typo in a local directory
+  // would train an operator to press the button without reading it.
+  const connectionSubject = [
+    source.host,
+    source.port,
+    source.username,
+    importedKeyId ?? "",
+    trustedKnownHostsLine ?? "",
+    remoteFolder
+  ].join("\u0000");
+  const connectionProven =
+    connectionResult !== null && connectionResult.ok && connectionTestedFor === connectionSubject;
+
   const saveDisabled =
     !canSave ||
     (!acknowledged && !readOnlySource) ||
-    keySource !== "import" ||
+    keySource === "generate" ||
     !importedKeyId ||
-    !trustedKnownHostsLine;
+    !trustedKnownHostsLine ||
+    // Issue #624: a source is not relied on until it has been proven.
+    // The destination side has worked this way since #594, where the S3
+    // wizard's Save stays disabled until its candidate check comes back
+    // ok; before this, a backup set could be saved, relied on, and only
+    // THEN tested, which is the order that issue turns around. A trusted
+    // host key settles that the machine answering is the one whose
+    // fingerprint somebody compared, and settles nothing about whether
+    // the key authenticates or whether the account can read the folder.
+    !connectionProven;
+
+  // Runs the six-step check against the values on this form, through the
+  // same route `backup-set create` runs before it writes (issue #624).
+  //
+  // The candidate mode, not the by-id one: there is no set yet, which is
+  // the whole point. Nothing is persisted by this call and no trust
+  // decision is made or revised; the known_hosts line travels as the one
+  // the operator already trusted on step 3.
+  async function runConnectionTest() {
+    const subject = connectionSubject;
+    setTesting(true);
+    setConnectionError(null);
+    // Cleared up front rather than overwritten on success, so a check in
+    // flight for edited values cannot leave the PREVIOUS result standing
+    // behind an enabled Save button while it runs.
+    setConnectionResult(null);
+    setConnectionTestedFor(null);
+    try {
+      const outcome = await api.testCandidateConnection({
+        host: source.host,
+        port: Number(source.port) || 22,
+        user: source.username,
+        sshKeyId: importedKeyId ?? "",
+        knownHostsLine: trustedKnownHostsLine ?? "",
+        remotePath: remoteFolder
+      });
+      setConnectionResult(outcome);
+      // Recorded as the subject the check was RUN for, captured before
+      // the request rather than read again after it: an operator who
+      // edits the host while the request is in flight must not have the
+      // answer land against the new value.
+      setConnectionTestedFor(subject);
+    } catch (e) {
+      setConnectionError(errorMessage(e, "Could not test this connection."));
+    } finally {
+      setTesting(false);
+    }
+  }
 
   const trustHost = () => {
     setHostTrusted(true);
@@ -353,16 +472,25 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   // resource.ts's fetchResource, exactly as that module's own doc
   // describes for a mutation elsewhere).
   async function handleSave(disabled: boolean, runImmediately: boolean, acknowledgeRepoint = false) {
-    if (keySource !== "import" || !importedKeyId) {
+    if (keySource === "generate" || !importedKeyId) {
       setSaveError(
         keySource === "generate"
-          ? "Generating a key on save isn't available yet — import a key on the Authentication step instead."
-          : "Reusing a managed key on save isn't available yet — import a key on the Authentication step instead."
+          ? "Generating a key on save isn't available yet — pick a key this deployment already holds, or import one, on the Authentication step."
+          : "Pick a key on the Authentication step before saving."
       );
       return;
     }
     if (!trustedKnownHostsLine) {
       setSaveError("Trust the host's fingerprint on the Verify server step before saving.");
+      return;
+    }
+    // Issue #624. The button is already structurally disabled without
+    // this; the guard is here for the same reason the two above it are,
+    // which is that a handler reachable by any other route (a keyboard
+    // path, a future caller, a test) must not be able to save a set
+    // whose connection nothing proved.
+    if (!connectionProven) {
+      setSaveError("Test connection on the Review step before saving.");
       return;
     }
 
@@ -442,17 +570,40 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   let saveHint = "";
   if (hostKeyChanged) {
     saveHint = "The host key changed since it was trusted — resolve that on the Verify server step before saving.";
-  } else if (keySource !== "import" || !importedKeyId) {
+  } else if (keySource === "generate" || !importedKeyId) {
     saveHint =
       keySource === "generate"
-        ? "Generating a key on save isn't available yet — import a key on the Authentication step instead."
+        ? "Generating a key on save isn't available yet — pick a key this deployment already holds, or import one, on the Authentication step."
         : keySource === "managed"
-          ? "Reusing a managed key on save isn't available yet — import a key on the Authentication step instead."
+          ? "Pick one of the keys this deployment already holds before saving."
           : "Import an SSH key on the Authentication step before saving.";
   } else if (!trustedKnownHostsLine) {
     saveHint = "Trust the host's fingerprint on the Verify server step before saving.";
-  } else if (saveDisabled && !readOnly) {
+  } else if (!acknowledged && !readOnlySource && !readOnly) {
+    // The acknowledgement comes before the connection test, and the
+    // condition is now that precondition rather than the catch-all
+    // saveDisabled it used to be. Both matter.
+    //
+    // The order is about what an operator is looking at: the
+    // acknowledgement is a box on this screen with an empty tick in it,
+    // and the connection test is a button they have not pressed yet, so
+    // naming the box first is naming the thing they can see is unfinished.
+    //
+    // The condition had to become explicit the moment there was a fourth
+    // precondition after it. saveDisabled is true for any of them, so a
+    // catch-all here would have gone on saying "acknowledge" to somebody
+    // who had already acknowledged and had not tested, which is the
+    // stated-reason-is-not-the-real-reason shape M7 removed from every
+    // other branch in this chain.
     saveHint = "Acknowledge remote-source handling to enable saving.";
+  } else if (!connectionProven) {
+    // Its own hint, on the same rule: a disabled button whose stated
+    // reason is not the reason it is disabled is worse than one with no
+    // reason at all.
+    saveHint =
+      connectionResult !== null && !connectionResult.ok
+        ? "The connection test did not pass. Fix what it reports and test connection again before saving."
+        : "Test connection before saving. Trusting the host key proves which machine answers, not that this key works or that the folder can be read. To build configuration for a source that cannot be reached yet, use backup-manager backup-set create --no-verify.";
   } else if (saveError) {
     saveHint = saveError;
   }
@@ -587,18 +738,72 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                 </div>
               ) : null}
 
-              {/* Issue #299: "Use managed key" used to show a picklist of
+              {/* Issue #299 stripped this radio's picklist, which showed
                   two hardcoded key names and a fabricated "Already
-                  installed on 2 other backup sets" count — there is no
-                  managed-key store behind either. Same treatment as
-                  "Generate" above. */}
+                  installed on 2 other backup sets" count. That was the
+                  right call and it left an honest control that could not
+                  do anything, for exactly one reason: nothing could list
+                  the key store.
+
+                  #592 built that listing, so the picklist is real now.
+                  The names are ids the server returned, the fingerprints
+                  are the public halves it read, and "used by" is counted
+                  from the sets that actually reference each key rather
+                  than invented. */}
               {keySource === "managed" ? (
-                <div className="banner banner--info" style={{ marginTop: 18, fontSize: "var(--text-sm)" }}>
-                  <span aria-hidden="true">i</span>
-                  <span>
-                    Reusing a managed key on save isn&rsquo;t available yet — import a key on the
-                    Authentication step instead.
-                  </span>
+                <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 8 }}>
+                  {managedKeys === null ? (
+                    <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                      Reading the key store&hellip;
+                    </span>
+                  ) : managedKeysError ? (
+                    <div className="banner banner--warn" style={{ fontSize: "var(--text-sm)" }}>
+                      <span aria-hidden="true">!</span>
+                      <span>{managedKeysError}</span>
+                    </div>
+                  ) : managedKeys.length === 0 ? (
+                    <div className="banner banner--info" style={{ fontSize: "var(--text-sm)" }}>
+                      <span aria-hidden="true">i</span>
+                      <span>
+                        This deployment holds no imported keys yet. Import one below and it
+                        will be here for the next backup set.
+                      </span>
+                    </div>
+                  ) : (
+                    managedKeys.map((k) => (
+                      <button
+                        key={k.id}
+                        type="button"
+                        className="btn"
+                        aria-pressed={importedKeyId === k.id}
+                        disabled={k.passphraseProtected || k.fingerprint === ""}
+                        style={{
+                          textAlign: "left",
+                          height: "auto",
+                          padding: "10px 14px",
+                          borderColor: importedKeyId === k.id ? "var(--accent)" : undefined
+                        }}
+                        onClick={() => {
+                          setImportedKeyId(k.id);
+                          setImportedFingerprint(k.fingerprint);
+                        }}
+                      >
+                        <span style={{ display: "block", fontWeight: 600, fontSize: "var(--text-base)" }}>
+                          {(k.algorithm || "key") + (k.importedAt ? ", imported " + k.importedAt.slice(0, 10) : "")}
+                        </span>
+                        <span className="mono" style={{ display: "block", marginTop: 3, fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
+                          {k.fingerprint === "" ? "no fingerprint available" : k.fingerprint}
+                        </span>
+                        <span style={{ display: "block", marginTop: 3, fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                          {k.passphraseProtected
+                            ? "Needs its passphrase to be resolvable before it can be used."
+                            : k.usedBy.length === 0
+                              ? "Not used by any backup set"
+                              : "Used by " + k.usedBy.join(", ")}
+                        </span>
+                      </button>
+                    ))
+                  )}
                 </div>
               ) : null}
 
@@ -962,6 +1167,109 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                   label="Host trust"
                   lines={[hostKeyChanged ? "Host key changed — blocked" : hostTrusted ? "Trusted" : "Not yet trusted"]}
                 />
+              </div>
+
+              {/* Issue #624: the connection, proven before it is relied
+                  on. It sits here rather than beside "Verify server"
+                  because this is the first point at which everything the
+                  six steps need has been answered: the host and the user
+                  from step 1, the key from step 2, the trusted line from
+                  step 3, and the remote folder from step 4. It is also
+                  where the destination side puts its own check, one step
+                  in front of Save.
+
+                  Six rows, never a single verdict. DNS, the connect, the
+                  host key, the key material, the authentication and the
+                  listing used to be one boolean, so a typo'd hostname, an
+                  unauthorised key, a rotated host key and a folder that is
+                  not there read identically, and those are four different
+                  afternoons (#596). A skipped step is drawn as skipped and
+                  never as a pass, for the reason that issue's own report
+                  gives. */}
+              <div style={{ border: "1px solid var(--border-strong)", borderRadius: 9, overflow: "hidden", marginTop: 18 }}>
+                <div
+                  style={{
+                    padding: "12px 16px", background: "var(--surface-2)",
+                    borderBottom: "1px solid var(--border)", display: "flex",
+                    alignItems: "center", gap: 9, flexWrap: "wrap"
+                  }}
+                >
+                  <span className="eyebrow" style={{ fontSize: "var(--text-xs)", color: "var(--text)", fontWeight: 600, flex: 1 }}>
+                    Connection
+                  </span>
+                  <button
+                    className="btn btn--primary btn--sm"
+                    type="button"
+                    disabled={testing || !importedKeyId || !trustedKnownHostsLine}
+                    onClick={() => void runConnectionTest()}
+                  >
+                    {testing ? "Testing…" : "Test connection"}
+                  </button>
+                </div>
+                <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+                  {connectionError ? (
+                    <WarningBanner tone="danger" eyebrow="The test could not be run">
+                      {connectionError}
+                    </WarningBanner>
+                  ) : null}
+
+                  {connectionResult === null ? (
+                    <p style={{ margin: 0, fontSize: 13.5, maxWidth: "78ch", color: "var(--text-2)" }}>
+                      Nothing has been proven yet. Trusting the host key settles which machine
+                      answers; this settles whether the key authenticates and whether this account
+                      can read the folder the backups are in.
+                    </p>
+                  ) : (
+                    <>
+                      <ol style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 7 }}>
+                        {connectionResult.checks.map((c) => (
+                          <li key={c.step} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 13 }}>
+                            <span
+                              aria-hidden="true"
+                              style={{
+                                color:
+                                  c.outcome === "passed"
+                                    ? "var(--ok)"
+                                    : c.outcome === "failed"
+                                      ? "var(--danger)"
+                                      : "var(--text-3)"
+                              }}
+                            >
+                              {c.outcome === "passed" ? "✓" : c.outcome === "failed" ? "!" : "–"}
+                            </span>
+                            <span className="mono" style={{ minWidth: 108, fontSize: "var(--text-xs)", color: "var(--text-2)" }}>
+                              {c.step}
+                            </span>
+                            <span style={{ flex: 1 }}>
+                              {/* The outcome word is printed as well as
+                                  drawn, because "skipped" and "passed"
+                                  must not be told apart by colour alone. */}
+                              <strong style={{ fontWeight: 600 }}>{c.outcome}</strong>
+                              {c.detail ? " · " + c.detail : ""}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                      {connectionResult.checks.length === 0 ? (
+                        <p style={{ margin: 0, fontSize: 13.5, color: "var(--text-2)" }}>
+                          This deployment reported a verdict and no breakdown of it.
+                        </p>
+                      ) : null}
+                      {connectionResult.ok ? (
+                        <p style={{ margin: 0, fontSize: 13.5, color: "var(--text-2)" }}>
+                          {connectionProven
+                            ? "This source has been proven. Saving is enabled."
+                            : "This result was for different values. Test connection again for the ones on the form now."}
+                        </p>
+                      ) : (
+                        <WarningBanner tone="danger" eyebrow="This source could not be reached">
+                          {connectionResult.message ??
+                            "One of the steps above failed. Saving stays disabled until a test passes."}
+                        </WarningBanner>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
 
               <div style={{ border: "1.5px solid var(--warn)", borderRadius: 9, overflow: "hidden", marginTop: 18 }}>

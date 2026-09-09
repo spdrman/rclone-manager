@@ -70,6 +70,7 @@ var commands = map[string]func([]string) int{
 	"status":       cmdStatus,
 	"sources":      cmdSources,
 	"backup-set":   cmdBackupSet,
+	"activity":     cmdActivity,
 	"artifacts":    cmdArtifacts,
 	"fetch":        cmdFetch,
 	"retention":    cmdRetention,
@@ -122,6 +123,7 @@ commands:
                     --ssh-key-file K|--ssh-key-id ID --known-hosts-line L|--trust-host-key
                     --completion-strategy rename|marker|stable [--include A,B] [--stable-for D]
                     [--stale-after D] [--validator-id V] [--disabled] [--read-only] [--run]
+                    [--no-verify]
                                                   create a backup set. Beside a serving engine this command has a
                                                   route to, that is POST /api/v1/backup-sets against the engine
                                                   (#543); with nothing serving, it is the same service layer that
@@ -129,21 +131,39 @@ commands:
                                                   yet this writes the first one instead (#176), and --state-database
                                                   names the journal it points at; that create has no route, so it is
                                                   refused while something serves that deployment (#536)
+                                                  The connection is proven before anything is written, and the create is
+                                                  refused when it cannot be: --no-verify writes it anyway, says in so many
+                                                  words that nothing was proven, and leaves the set marked as unverified
+                                                  until a connection test passes (#624)
   backup-set patch <source/backup-set> [--host H] [--port N] [--user U] [--remote-path P] [--local-path P]
                     [--include "A,B"] [--completion-strategy S] [--stable-for D] [--stale-after D] [--validator-id ID]
                     [--ssh-key-file K|--ssh-key-id ID] [--known-hosts-line L|--trust-host-key]
                     [--acknowledge-repoint] [--acknowledge-host-key-change]
+                    [--no-verify]
                                                   change one configured backup set in place; only the flags you pass are
                                                   changed. Beside a serving engine this command has a route to, that is
                                                   PATCH /api/v1/backup-sets/{source}/{set} against the engine and takes
                                                   effect with no restart; with no route it is refused and the file is
                                                   left untouched (#350, #536, #543)
+                                                  An edit that changes the host, port, user, key, trusted host key or
+                                                  remote path is proven before it is written and refused when it cannot
+                                                  be; --no-verify writes it anyway and marks the set unverified (#624)
   backup-set remove <source/backup-set>          take one backup set out of the configuration: DELETE
                                                   /api/v1/backup-sets/{source}/{set} against a serving engine this
                                                   command has a route to, and the same service layer that route is
                                                   built on when nothing is serving. Configuration only: the backups it
                                                   collected stay on storage and stay listed by artifacts, and creating
                                                   the set again with the same source and name takes them back (#391)
+  backup-set test-connection <source/backup-set>
+                                                  prove one configured backup set's source: resolve the host, connect,
+                                                  check its host key against what this set trusts, offer the configured
+                                                  key, authenticate, and list the remote folder. Six named outcomes, and
+                                                  a non-zero exit when any of them fails. Beside a serving engine this
+                                                  command has a route to, the check is made BY that engine, so its steps
+                                                  reach the live feed rather than only this terminal; with nothing
+                                                  serving it is made here. A check that passes clears the unverified mark
+                                                  a --no-verify create or patch left on the set. "preflight" is the same
+                                                  verb under the name the storage-destination side spells it (#596, #624)
   artifacts [--source S] [--backup-set B]        list journal artifacts
                                                   --backup-set takes the source/backup-set id sources, status and
                                                   retention name a backup set by, and a plain set name where one
@@ -154,21 +174,52 @@ commands:
                                                   of them (#569)
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
+  activity [--backup-set S] [--severity warn|error] [--limit N] [--json]
+                                                  list recorded lifecycle events, newest first: the same durable
+                                                  transition log the Web UI's Activity page draws. Beside a serving
+                                                  engine this reads GET /api/v1/activity from it; with nothing
+                                                  serving it reads this host's own journal (#598). --limit counts
+                                                  MATCHING events, so a filter that narrows still fills it. --json
+                                                  emits the wire objects unchanged, so a script parses the contract
+                                                  rather than this table
+  activity --follow [--backup-set S | --scope deployment] [--severity warn|error] [--limit N] [--json]
+                                                  stream the LIVE feed instead, until interrupted: the serving
+                                                  process's own event stream, which is what the Web UI's docked
+                                                  terminal shows. A different feed from the one above rather than a
+                                                  mode of it, so it needs a route to that process and refuses
+                                                  without one instead of quietly reading the journal. The feed
+                                                  starts again, and says so, if that process restarts (#573, #598).
+                                                  --scope deployment narrows it to the log that names no backup
+                                                  set (a cycle starting, a capacity check, what somebody just
+                                                  clicked), which is the whole feed on a deployment with nothing
+                                                  configured yet (#593)
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
                                                   --backup-set takes the source/backup-set id here too, and names
                                                   the source itself when it carries one, so --source is only
                                                   needed for the plain set name (#569)
   retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
+            [--tier NAME:GRANULARITY:KEEP[:WINDOW_UNIT]] [--tier-medium NAME=MEDIUM_ID]
                                                   preview GFS/last-known-good retention decisions. It deletes nothing in
                                                   either mode, so --dry-run is accepted and inert here; FR-20 deletion runs
                                                   through the API's retention preview/apply pair, against a reviewed plan_id.
                                                   Each retention flag overrides the loaded config's own resolved value for
-                                                  this preview only
+                                                  this preview only.
+                                                  --tier is repeatable and replaces the whole chain; --tier-medium says
+                                                  where one of those tiers' copies go, so a supplied chain is previewed
+                                                  against the destinations it names rather than silently against the local
+                                                  backup root. A supplied chain that names none, beside a deployment whose
+                                                  own chain does, says so before the plan (#595)
   retention <source/backup-set> [--dry-run] [the same retention override flags]
                                                   preview that one backup set's decisions instead of every configured
                                                   set's. An id that names no configured backup set is refused and
                                                   nothing is printed, rather than answered about a set nobody asked
                                                   about (#568)
+  retention apply <source/backup-set> --acknowledge
+                                                  delete the local copy of every backup in that set no retention
+                                                  tier keeps, against the plan it prints first. FR-19's last known
+                                                  good is never among them, and a set whose inventory or
+                                                  configuration moved between the two is refused with nothing
+                                                  deleted. --acknowledge is required (#602)
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
   validate <source/backup-set/artifact> [--content]
@@ -189,6 +240,38 @@ commands:
                                                   clear the .partial residue a removal stranded mid-transfer, and end
                                                   the journal rows nothing will ever advance. It never touches a
                                                   retained backup; without --acknowledge it only prints what it would do
+  medium list [--json]                           list every storage destination this deployment declares, in
+                                                  declaration order. No credential is reported, not even which of
+                                                  the three sources a destination reads (#594)
+  medium show <medium-id> [--json]               one destination, plus what the journal says is currently on it:
+                                                  how many copies, which backup sets they belong to, and how many
+                                                  of them are the only confirmed copy of their artifact anywhere
+  medium import-credentials --stdin              read AWS shared-credentials text from standard input, write it
+                                                  0600 beside this deployment's configuration, and print an id to
+                                                  name it with. This is the only command here that ever holds a
+                                                  secret and it takes it on stdin: there is deliberately no
+                                                  --access-key-id and no --secret-access-key flag anywhere on this
+                                                  surface, because a secret on a command line is in ps output for
+                                                  every user on the box and in shell history
+  medium add <medium-id> --bucket B [--type s3] [--region R] [--endpoint URL] [--prefix P]
+             [--storage-class C] [--upload-verification readback|attested] [--no-verify]
+             (--credentials-id ID | --credentials-file PATH | --credentials-env VAR | --credentials-command 'prog arg ...')
+                                                  declare a storage destination without editing config.yaml. It
+                                                  VERIFIES FIRST and writes nothing when verification fails, which
+                                                  is what makes it scriptable across a fleet; --no-verify skips
+                                                  that and says in its own output that nothing was proven. Every
+                                                  credential flag names a REFERENCE and never material
+                                                  a --no-verify destination is MARKED unverified in config.yaml and
+                                                  stays marked until a test connection passes, so an operator who did
+                                                  not type the command can still tell it apart from a proven one (#636)
+  medium edit <medium-id> [the same flags]       replace a destination's description. A flag left off keeps what
+                                                  the destination already says, and leaving the credential flags
+                                                  off keeps the credential already configured, which it has to:
+                                                  nothing here ever reports one back to be resubmitted
+  medium remove <medium-id>                      un-declare a destination. Refused while any copy names it, and
+                                                  the refusal lists the backup sets: removing the declaration would
+                                                  not delete those copies, it would leave this deployment with no
+                                                  bucket, no endpoint and no credential to reach them with (FR-30)
   medium preflight <medium-id>                   prove one declared storage medium actually works before a cycle
                                                   carrying a real backup does: it writes a probe object with the
                                                   medium's own storage class, reads it back byte for byte, checks
@@ -196,6 +279,31 @@ commands:
                                                   asks whether the medium's declared upload_verification can
                                                   actually be achieved there, and deletes the probe. Exits non-zero
                                                   when any check fails (#443)
+                                                  a check that PASSES clears a --no-verify destination's unverified
+                                                  mark, which is a configuration write, so this verb goes where the
+                                                  writes go: beside a serving engine it is carried out there, and is
+                                                  refused when nothing says how to reach it. A failing check leaves
+                                                  the mark alone (#636)
+  medium preflight --candidate <medium-id> [the add flags]
+                                                  the same eight checks against a destination that is NOT declared,
+                                                  so a setup flow proves one before it is written down. It writes
+                                                  nothing whatever the report says
+  medium test-connection <medium-id>             the same check as medium preflight, under the name the rest of this
+                                                  product uses for it. One check, two verbs, one implementation:
+                                                  preflight is kept as an alias so anything scripted against it goes on
+                                                  working, and this is the name the web UI's button and the command it
+                                                  echoes now carry. It also answers for "local", the drive this
+                                                  deployment's backups land on, reporting a missing path, a directory
+                                                  the service user cannot write to, and a full filesystem as three
+                                                  different failures rather than being unavailable because no network
+                                                  is involved (#622)
+  medium default <medium-id>                     make this the destination a NEWLY CREATED retention tier starts on.
+                                                  It moves that and nothing else: every tier that already names a
+                                                  destination goes on naming it and no backup is relocated. "local" is
+                                                  a legal id here and is what a deployment that has chosen nothing
+                                                  already has, so moving the default to a bucket is reversible. The
+                                                  destination that is the default cannot be removed, and removing down
+                                                  to one destination makes that one the default (#622)
   retry <source/backup-set/artifact> [--note T]   put one FAILED backup back into the pipeline so it is attempted
                                                   again. FAILED means an attempt did not finish, which is not the
                                                   same thing as quarantine, so this is its own command and not a
@@ -209,18 +317,45 @@ commands:
                                                   defaults to 7 and is bounded to 1..30. artifacts <id> lists
                                                   which medium each copy is on
   settings [patch [--timezone T] [--week-starts-on D] [--protect-last-known-good=BOOL]
+                   [--policy-file F] [--acknowledge-medium-disclosure]
                    [--cap-bytes N] [--warning-free-bytes N] [--critical-free-bytes N] [--safety-margin-bytes N]]
-                                                  report the live retention/capacity settings, or change one in place;
-                                                  a full retention tier-chain replacement is still a config-file edit
+                                                  report the live retention/capacity settings, or change one in place.
+                                                  --policy-file replaces the deployment's whole retention chain from a
+                                                  file holding the contents of a config.yaml "retention:" block, with "-"
+                                                  reading standard input, spelled the way backup-set retention spells it.
+                                                  A chain that sends a tier somewhere new needs
+                                                  --acknowledge-medium-disclosure, and without it the refusal carries the
+                                                  disclosure (#595)
+  settings patch --tier-medium NAME=MEDIUM_ID [--acknowledge-medium-disclosure]
+                                                  point one retention tier at a storage destination and leave the rest of
+                                                  the chain exactly as it is. Repeatable, at most once per tier, and
+                                                  refused when the chain has no tier of that name rather than inventing
+                                                  one. MEDIUM_ID is a declared destination, or "local" for the drive
+                                                  this deployment's backups already land on, which moves a tier back.
+                                                  Sending a tier somewhere other than local for the first time needs
+                                                  --acknowledge-medium-disclosure. This is the command the picker under a
+                                                  tier in the web UI echoes (#622)
+  backup-set edit-hold <source/backup-set> [--release]
+                                                  report whether a backup set is held for editing, what taking the
+                                                  hold stopped, and when the lease expires; --release gives it back
+                                                  so the scheduler may run the set again rather than waiting for it
+                                                  to lapse. A hold lives in the memory of the process serving this
+                                                  deployment and does not survive it, so this needs a route to that
+                                                  process and refuses without one. There is no verb that TAKES a
+                                                  hold: a hold protects an editing session and a CLI edit is one
+                                                  backup-set patch that either runs or does not (#350, #600)
   backup-set retention <source/backup-set> [--inherit] [--policy-file F]
                        [--timezone T] [--week-starts-on D]
                        [--daily-days N] [--weekly-months N] [--monthly-months N]
-                       [--protect-last-known-good=BOOL]
+                       [--protect-last-known-good=BOOL] [--acknowledge-medium-disclosure]
                                                   report which retention policy this backup set is retained under and
                                                   where it came from; with a policy flag, give the set a whole policy of
                                                   its own; with --inherit, remove that policy so it is retained under the
                                                   deployment's again. An override replaces the deployment's whole chain
-                                                  and is never merged with it, so it has to name a whole one
+                                                  and is never merged with it, so it has to name a whole one.
+                                                  --acknowledge-medium-disclosure is needed when the policy sends one of
+                                                  this set's tiers somewhere new, and without it the refusal carries the
+                                                  disclosure. The show form prints each tier's destination
   version                                        report version information
 
 every command except version accepts --config (default /etc/backup-manager/config/config.yaml;
@@ -228,10 +363,12 @@ a directory resolves to config.yaml inside it, which is what packaging mounts)
 
 a configuration write goes one of three ways, and says which on a "mode:" line. With nothing
 serving this deployment it is written here, and an engine started afterwards reads it when it
-starts. With something serving and a route to it, backup-set create, patch and remove and
-settings patch hand the change to that process over its API, so it takes effect at once and
-there is nothing to restart. With something serving and no route, the write is refused and
-nothing is written: there is still no config watcher and no SIGHUP reload in this build, so a
+starts. With something serving and a route to it, backup-set create, patch and remove,
+settings patch and medium import-credentials, add, edit and remove hand the change to that
+process over its API, so it takes effect at once and there is nothing to restart. medium
+preflight --candidate goes the same way, because it is the check medium add runs before it
+writes and has to happen where the write will. With something serving and no route, the
+write is refused and nothing is written: there is still no config watcher and no SIGHUP reload in this build, so a
 change left in the file is one the serving process would never read. Two writes have no route
 at all and are refused beside a serving engine either way: a backup-set retention that sets
 or clears a policy, and the first config.yaml a create writes on an instance that has none

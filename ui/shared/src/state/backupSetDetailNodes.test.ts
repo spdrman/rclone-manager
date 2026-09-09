@@ -20,6 +20,7 @@ import type { BackupSet } from "@shared/types/backup";
 import type { ActivityEvent } from "@shared/types/operation";
 
 const SET_V1: BackupSet = {
+  connectionUnverified: false,
   id: "set_test", source: "production", set: "postgres-primary",
   name: "Production PostgreSQL",
   host: "prod-db-01.internal", port: 22, username: "backup-agent",
@@ -35,7 +36,8 @@ const SET_V1: BackupSet = {
   lastValidation: "passed", expectedIntervalHours: 24,
   retainedCount: 32, retainedBytes: 421,
   trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM" }],
-  trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00"
+  trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00",
+  sshKeyId: "key_a1b2c3"
 };
 
 /** Someone else's commit, landed after the form opened against SET_V1 —

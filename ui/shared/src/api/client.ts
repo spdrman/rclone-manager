@@ -30,7 +30,7 @@
  * service saying something this build has never heard of should draw
  * nothing, not draw the wrong thing confidently.
  */
-import { BackupManagerError, toApiErrorCode } from "./contracts";
+import { BackupManagerError, RequestFailure, toApiErrorCode } from "./contracts";
 // The wire shapes below are GENERATED from api/v1/openapi.json, not
 // declared here. Before issue #166 this file carried its own hand-written
 // copy of every snake_case response body, transcribed from the Go
@@ -61,18 +61,27 @@ import type {
   WireListActivityResponse,
   WireLiveActivityResponse,
   WireLiveActivitySet,
+  WireLiveActivityAction,
   WireLiveActivityEvent,
   WireListArtifactsResponse,
   WireListBackupSetsResponse,
   WireListOperationsResponse,
+  WireListSSHKeyCandidatesResponse,
+  WireListSSHKeysResponse,
   WireListStorageStatusResponse,
   WireManagerStorage,
+  WireImportStorageCredentialsResponse,
+  WireListStorageMediumsResponse,
   WireMediumPreflightResponse,
+  WireStorageMediumSummary,
+  WireStorageMediumUsageResponse,
   WireOperation,
   WirePlacement,
   WireRetentionOverride,
   WireRetentionPlan,
   WireRetentionSettings,
+  WireSSHKey,
+  WireTestConnectionResponse,
   WireRetentionTier,
   WireRunningWork,
   WireSettingsResponse,
@@ -88,6 +97,8 @@ import type {
   CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
+  StorageMedium,
+  StorageMediumSpec,
   ConnectionTestParams,
   CreateBackupSetRequest,
   CreatedBackupSet,
@@ -98,6 +109,7 @@ import type {
   RetentionTierSetting,
   RunningWork,
   SSHKeyImportResult,
+  SSHKeyListing,
   UpdateSettingsRequest
 } from "./contracts";
 import type {
@@ -121,7 +133,7 @@ import type {
   TransferProgress,
   VersionInfo
 } from "@shared/types/operation";
-import type { LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
+import type { LiveActivity, SetActivity, SetActivityEvent, UnfinishedAction } from "@shared/types/activity";
 
 const BASE = "/api/v1";
 
@@ -187,16 +199,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (bootstrapToken) headers[BOOTSTRAP_TOKEN_HEADER] = bootstrapToken;
   }
 
-  const res = await fetch(BASE + path, {
-    credentials: "same-origin",
-    ...init,
-    // headers last: spreading ...init after a merged `headers` object
-    // would otherwise silently replace it with init.headers alone
-    // whenever a caller passes its own headers (none do today, but the
-    // ordering bug is easy to reintroduce without noticing — see
-    // client.test.ts's own coverage for this).
-    headers
-  });
+  // Issue #598. Everything from here down is the one place that can tell
+  // this API's three failures apart, so it is the one place that labels
+  // them. A `fetch` that rejects and a 2xx body that will not parse used
+  // to escape as whatever the browser threw, and the callers above could
+  // then only say something generic about them.
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, {
+      credentials: "same-origin",
+      ...init,
+      // headers last: spreading ...init after a merged `headers` object
+      // would otherwise silently replace it with init.headers alone
+      // whenever a caller passes its own headers (none do today, but the
+      // ordering bug is easy to reintroduce without noticing — see
+      // client.test.ts's own coverage for this).
+      headers
+    });
+  } catch (cause) {
+    // No response at all, so no status, no content type and no id. It
+    // deliberately does NOT claim nothing was changed: a request that got
+    // no reply may still have been carried out with only the response
+    // lost.
+    throw new RequestFailure({ kind: "no-response", path, cause });
+  }
 
   if (!res.ok) {
     // The service always returns a typed error envelope, but not always
@@ -221,30 +247,101 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         api = {
           code: toApiErrorCode(err.code),
           message: err.message as string,
-          correlationId: headerCorrelationId ?? "unavailable"
+          correlationId: headerCorrelationId
         };
       } else {
         api = {
           code: toApiErrorCode(body.code),
           message: body.message as string,
-          correlationId: (body.correlationId as string) ?? headerCorrelationId ?? "unavailable"
+          correlationId: (body.correlationId as string) ?? headerCorrelationId
         };
       }
     } catch {
       api = {
         code: "unknown",
         message: "The backup service returned an unexpected response.",
-        correlationId: res.headers.get("x-correlation-id") ?? "unavailable"
+        correlationId: res.headers.get("x-correlation-id") ?? undefined
       };
     }
     throw new BackupManagerError(api);
   }
 
-  return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
+  if (res.status === 204) return undefined as T;
+  try {
+    return (await res.json()) as T;
+  } catch (cause) {
+    // The response arrived and this build could not read it. The status
+    // and the content type are what separate a proxy's HTML error page
+    // from a body that was cut off mid-transfer, and the correlation id is
+    // read here on the SUCCESS path as well as on a refusal (#598) so a
+    // body that fails to parse can still name the response it came from.
+    throw new RequestFailure({
+      kind: "unreadable-body",
+      path,
+      status: res.status,
+      contentType: res.headers.get("content-type") ?? undefined,
+      correlationId: res.headers.get("x-correlation-id") ?? undefined,
+      cause
+    });
+  }
 }
 
-const post = (path: string, body?: unknown) =>
-  request<void>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+/**
+ * `headers` is the third parameter rather than a fourth call shape,
+ * because without it this helper could not send an Idempotency-Key and
+ * nothing did.
+ *
+ * That was issue #597's third layer: both generated contracts declare the
+ * header required on POST /operations and the handler refuses without it,
+ * but every state-changing call in this file went through a helper with
+ * no way to set one. The refusal was a 400 that nothing rendered, so it
+ * looked exactly like the dashboard's unwired button. contract.
+ * conformance.test.ts now asserts the header on every operation whose
+ * contract row says it is required, which is what stops the class coming
+ * back rather than this one fix.
+ */
+const post = (path: string, body?: unknown, headers?: Record<string, string>) =>
+  request<void>(path, {
+    method: "POST",
+    body: body ? JSON.stringify(body) : undefined,
+    headers
+  });
+
+/**
+ * The header name POST /operations requires, spelled once.
+ *
+ * Its uniqueness namespace is the whole deployment rather than one route
+ * (apps/common/webhost's package doc spells out why that is easy to get
+ * wrong), and it describes the RETRY rather than the operation, which is
+ * why it travels as a header and not as a body field.
+ */
+export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+
+/**
+ * A fresh idempotency key for one LOGICAL submission.
+ *
+ * Called once per thing an operator asked for, and the SAME key is then
+ * reused on every retry of it, which is the entire point of the header: a
+ * client that minted a new key per attempt would turn a dropped response
+ * into a second backup run, and the service would have no way to know the
+ * two requests were the same intent. See useRunControls, which owns that
+ * lifetime, rather than this file, which cannot know what a retry is.
+ *
+ * randomUUID where the browser has it, and a random fallback where it
+ * does not: crypto.randomUUID is unavailable on a plain-HTTP origin in
+ * some browsers, which is exactly how a NAS on a local network is
+ * reached, so a hard dependency on it would break the header on the
+ * deployments this product is for.
+ */
+export function newIdempotencyKey(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  if (c && typeof c.getRandomValues === "function") {
+    const bytes = c.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return "k-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+}
 
 /**
  * apps/common/auth/local's routes use camelCase JSON (matching Go's
@@ -439,6 +536,11 @@ function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): Bac
       : "Health details are not yet reported by the server for this backup set.",
     enabled: !bs.disabled,
     readOnly: bs.read_only,
+    // Issue #624. Omitted on the wire when false, and an engine built
+    // before this field omits it always, so ?? false is the right
+    // default: absence means "nothing here says this set's connection was
+    // skipped", never "this set was proven".
+    connectionUnverified: bs.connection_unverified ?? false,
     // 0, not undefined, when health could not be read for this set — the
     // same "old placeholder rather than a guess" choice this mapper's own
     // doc above makes for state/stateNote, applied to a count instead of
@@ -482,7 +584,74 @@ function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): Bac
       algorithm: k.algorithm,
       fingerprint: k.fingerprint
     })),
-    trustedHostKeyRecordedAt: bs.trusted_host_key_recorded_at ?? null
+    trustedHostKeyRecordedAt: bs.trusted_host_key_recorded_at ?? null,
+    // Issue #592: which key in the store this set uses. "" is a real
+    // answer meaning "a key this deployment does not manage", which is
+    // every set pointing at a mounted or hand-provisioned key file, and
+    // the `?? ""` covers a server that predates the field. Both arrive
+    // here as "", and the render site says so rather than showing a blank
+    // where an id goes.
+    sshKeyId: bs.ssh_key_id ?? ""
+  };
+}
+
+/**
+ * Issue #592: one stored key, described without a path because the server
+ * sends none. Every optional field is defaulted here rather than left
+ * undefined, so a render site never has to distinguish "the server did
+ * not say" from "there is nothing to say": both mean the row shows what
+ * it can and says why it cannot show the rest.
+ */
+function fromWireSSHKey(k: WireSSHKey): SSHKeyListing {
+  return {
+    id: k.id,
+    algorithm: k.algorithm,
+    fingerprint: k.fingerprint,
+    publicKey: k.public_key,
+    importedAt: k.imported_at,
+    passphraseProtected: k.passphrase_protected,
+    // Spread rather than `problem: undefined`, the same discipline
+    // fromWireBackupSet uses for haltReason: a key that is present and
+    // undefined still reads as the mapper having an opinion.
+    ...(k.problem ? { problem: k.problem } : {}),
+    usedBy: k.used_by ?? []
+  };
+}
+
+/**
+ * Issues #592 and #596: the six steps a connection test ran, whichever
+ * mode asked for it.
+ *
+ * ONE mapper on both `testConnection` and `testCandidateConnection`,
+ * because there is one array on the wire. Two mappers would be two
+ * shapes again, and the caller would be back to remembering which
+ * request it sent to know what it is holding.
+ *
+ * `checks` defaults to [] rather than to six fabricated failures. A
+ * deployment that predates the field reports nothing, and a surface says
+ * "this engine does not report a breakdown" instead of drawing six reds
+ * for steps that were never run.
+ *
+ * Every step comes across, skipped ones included. Filtering to the
+ * interesting ones here is how a surface ends up drawing five steps and
+ * letting a reader assume the sixth passed.
+ *
+ * `durationMs` is spread rather than defaulted to 0: absent means this
+ * step was not measured on its own (authenticate and list come out of
+ * one call), and a 0 there renders as "instantly" when it means "nobody
+ * looked".
+ */
+function fromWireConnectionTestOutcome(r: WireTestConnectionResponse): ConnectionTestOutcome {
+  return {
+    ok: r.ok,
+    ...(r.message ? { message: r.message } : {}),
+    checks: (r.checks ?? []).map((c) => ({
+      step: c.step,
+      outcome: c.outcome,
+      ...(c.category ? { category: c.category } : {}),
+      detail: c.detail ?? "",
+      ...(c.duration_ms === undefined ? {} : { durationMs: c.duration_ms })
+    }))
   };
 }
 
@@ -632,6 +801,92 @@ function wireTier(t: RetentionTierSetting): WireRetentionTier {
   };
 }
 
+// The one projection of a declared storage destination onto this UI's
+// shape, shared by GET /settings, the destinations list and every write's
+// own response (G2.2, #594). One function rather than four literals: the
+// field this shape must never grow is a credential, and four copies is
+// four places somebody could add one.
+function fromWireStorageMedium(m: WireStorageMediumSummary): StorageMedium {
+  return {
+    id: m.id,
+    type: m.type,
+    bucket: m.bucket,
+    region: m.region,
+    endpoint: m.endpoint,
+    prefix: m.prefix,
+    storageClass: m.storage_class,
+    uploadVerification: m.upload_verification,
+    readsRequireRestore: m.reads_require_restore,
+    // H2.2's three (#622). is_local and is_default are required on the
+    // wire and defaulted anyway, because this mapping also runs against
+    // an engine older than the fields: a list that came back with no
+    // default marked would render every row as "not the default", which
+    // is a list no deployment can be in, and reading undefined as false
+    // is the honest version of that rather than a guess at which row it
+    // would have been.
+    path: m.path,
+    isLocal: m.is_local ?? false,
+    isDefault: m.is_default ?? false,
+    // Issue #636. Omitted on the wire when false, and an engine built
+    // before this field omits it always, so ?? false is the right
+    // default: absence means "nothing here says this destination's check
+    // was skipped", never "this destination was proven".
+    connectionUnverified: m.connection_unverified ?? false
+  };
+}
+
+// toWireStorageMedium is the write direction, and the omissions are the
+// interesting part. An absent credentials block is sent as an absent
+// credentials block, never as an empty object: on an edit the backend
+// reads "no credential named" as "keep the one already configured", and
+// an empty object would be indistinguishable from a caller that meant to
+// send one and lost it.
+function toWireStorageMedium(spec: StorageMediumSpec): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    id: spec.id,
+    type: spec.type,
+    bucket: spec.bucket
+  };
+  if (spec.region) body.region = spec.region;
+  if (spec.endpoint) body.endpoint = spec.endpoint;
+  if (spec.prefix) body.prefix = spec.prefix;
+  if (spec.storageClass) body.storage_class = spec.storageClass;
+  if (spec.uploadVerification) body.upload_verification = spec.uploadVerification;
+  // Sent only when it is asked for, so an ordinary save is byte for byte
+  // the body it was before #636 and an engine older than the field is
+  // never handed one it would reject. This UI never asks for it: the
+  // wizard cannot save until its own check has passed.
+  if (spec.skipConnectionCheck) body.skip_connection_check = true;
+  const c = spec.credentials;
+  if (c && (c.credentialsId || c.file || c.env || (c.command && c.command.length > 0))) {
+    body.credentials = {
+      ...(c.credentialsId ? { credentials_id: c.credentialsId } : {}),
+      ...(c.file ? { file: c.file } : {}),
+      ...(c.env ? { env: c.env } : {}),
+      ...(c.command && c.command.length > 0 ? { command: c.command } : {})
+    };
+  }
+  return body;
+}
+
+// fromWireMediumPreflight is shared by the by-id preflight and the
+// candidate one, so the two cannot render the same report differently.
+// Every check is carried through, skipped ones included: a surface that
+// dropped them would show a shorter list on a failure than on a success,
+// which is the one moment the full list matters most.
+function fromWireMediumPreflight(r: WireMediumPreflightResponse): MediumPreflight {
+  return {
+    medium: r.medium,
+    ok: r.ok,
+    checks: r.checks.map((c) => ({
+      step: c.step,
+      outcome: c.outcome,
+      category: c.category ?? "",
+      detail: c.detail
+    }))
+  };
+}
+
 function fromWireCapacitySettings(c: WireCapacitySettings): CapacitySettings {
   return {
     capBytes: c.cap_bytes,
@@ -652,14 +907,7 @@ function fromWireSettingsResponse(body: WireSettingsResponse): AppSettings {
       protectLastKnownGood: body.retention.protect_last_known_good
     },
     capacity: fromWireCapacitySettings(body.capacity),
-    mediums: (body.mediums ?? []).map((m) => ({
-      id: m.id,
-      type: m.type,
-      bucket: m.bucket,
-      region: m.region,
-      storageClass: m.storage_class,
-      readsRequireRestore: m.reads_require_restore
-    })),
+    mediums: (body.mediums ?? []).map(fromWireStorageMedium),
     schema: {
       storage: {
         // `class` is a reserved word in the wire shape's own spelling, so
@@ -1129,11 +1377,28 @@ function fromWireLiveActivityEvent(e: WireLiveActivityEvent): SetActivityEvent {
     sequence: e.sequence,
     at: e.at,
     level: e.level,
+    // Absent stays absent rather than becoming a null or an empty
+    // string. A line that states no result has reported no operation,
+    // which is what a start and every progress note do, and rendering
+    // that as a value would make the field the thing nobody trusts.
+    result: e.result,
+    action: e.action,
+    actionId: e.action_id,
     event: e.event,
     scope: e.scope,
     message: e.message,
     fields
   };
+}
+
+/** The actions a bucket says are still open (issue #625). */
+function fromWireUnfinishedActions(actions: WireLiveActivityAction[]): UnfinishedAction[] {
+  return actions.map((a) => ({
+    action: a.action,
+    actionId: a.action_id,
+    startedAt: a.started_at,
+    sequence: a.sequence
+  }));
 }
 
 function fromWireLiveActivitySet(s: WireLiveActivitySet): SetActivity {
@@ -1153,6 +1418,7 @@ function fromWireLiveActivitySet(s: WireLiveActivitySet): SetActivity {
     startedAt: s.started_at ?? null,
     finishedAt: s.finished_at ?? null,
     events: s.events.map(fromWireLiveActivityEvent),
+    unfinishedActions: fromWireUnfinishedActions(s.unfinished_actions ?? []),
     truncated: s.truncated,
     dropped: s.dropped,
     oldestSequence: s.oldest_sequence,
@@ -1165,7 +1431,21 @@ function fromWireLiveActivity(r: WireLiveActivityResponse): LiveActivity {
     observedAt: r.observed_at,
     epoch: r.epoch,
     pollAfterMs: r.poll_after_ms,
-    sets: r.sets.map(fromWireLiveActivitySet)
+    sets: r.sets.map(fromWireLiveActivitySet),
+    // Absent means the reading was narrowed to one set, or came from a
+    // service too old to have a deployment bucket at all. Null rather
+    // than an empty bucket in both cases: an empty one is a claim that
+    // the deployment has said nothing, and neither of those is that.
+    deployment: r.deployment
+      ? {
+          events: r.deployment.events.map(fromWireLiveActivityEvent),
+          unfinishedActions: fromWireUnfinishedActions(r.deployment.unfinished_actions ?? []),
+          truncated: r.deployment.truncated,
+          dropped: r.deployment.dropped,
+          oldestSequence: r.deployment.oldest_sequence,
+          latestSequence: r.deployment.latest_sequence
+        }
+      : null
   };
 }
 
@@ -1483,8 +1763,28 @@ export const httpApi: BackupManagerApi = {
   // config_revision is what makes the submission optimistically
   // concurrent: a stale value is refused server-side rather than running
   // against a configuration the caller has not seen.
-  runCycle: (configRevision) =>
-    post("/operations", { action: "run_cycle", config_revision: configRevision }),
+  runCycle: (configRevision, idempotencyKey) =>
+    post(
+      "/operations",
+      { action: "run_cycle", config_revision: configRevision },
+      { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey }
+    ),
+  // The second run action on the same route (issue #597). Same route,
+  // same gate, same tier: /operations is where durable, idempotency-keyed,
+  // revision-checked long work is started, and the durable row has always
+  // had a backup set id column that run_cycle correctly leaves empty.
+  //
+  // The engine half is not new either. `backup-manager fetch
+  // --backup-set` has called internal/app.Service.Fetch since FR-1; what
+  // was missing was a way to reach it in the SERVING process, so the work
+  // takes the engine's single-flight lock and shows up in its feeds
+  // instead of running in a second process against the same journal.
+  runBackupSet: (backupSetId, configRevision, idempotencyKey) =>
+    post(
+      "/operations",
+      { action: "run_backup_set", config_revision: configRevision, backup_set_id: backupSetId },
+      { [IDEMPOTENCY_KEY_HEADER]: idempotencyKey }
+    ),
   // The same route as runCycle above, with a different action and its own
   // parameter object. Not a route of its own, deliberately: a restore is
   // a durable, idempotency-keyed, configuration-revision-checked
@@ -1498,6 +1798,11 @@ export const httpApi: BackupManagerApi = {
   restoreCopy: async (req) => {
     const r = await request<WireOperation>("/operations", {
       method: "POST",
+      // The same required header the two run actions send. It was missing
+      // here for the same reason and with the same result: this route
+      // refuses without it, so every restore this client asked for was
+      // answered 400 before it reached the service's own logic.
+      headers: { [IDEMPOTENCY_KEY_HEADER]: req.idempotencyKey },
       body: JSON.stringify({
         action: "restore_placement",
         config_revision: req.configRevision,
@@ -1522,10 +1827,10 @@ export const httpApi: BackupManagerApi = {
   // echo back the key reference and trusted host line the set is
   // configured with.
   testConnection: (id) =>
-    request<ConnectionTestOutcome>("/backup-sets/test-connection", {
+    request<WireTestConnectionResponse>("/backup-sets/test-connection", {
       method: "POST",
       body: JSON.stringify({ backup_set_id: id })
-    }),
+    }).then(fromWireConnectionTestOutcome),
   setEnabled: (source, set, enabled) => post(backupSetPath(source, set) + "/enabled", { enabled }),
   setReadOnly: (source, set, readOnly) =>
     post(backupSetPath(source, set) + "/read-only", { read_only: readOnly }),
@@ -1584,16 +1889,57 @@ export const httpApi: BackupManagerApi = {
       method: "POST",
       body: JSON.stringify({ private_key_pem: privateKeyPem })
     }),
+  // Issue #592's two reads. The listing carries no path by construction
+  // (the server does not send one), so there is nothing to strip here;
+  // the candidate scan does, and its paths are rendered as what they are,
+  // a description of the operator's own machine.
+  listSSHKeys: () =>
+    request<WireListSSHKeysResponse>("/ssh-keys").then((r) => (r.keys ?? []).map(fromWireSSHKey)),
+  listSSHKeyCandidates: () =>
+    request<WireListSSHKeyCandidatesResponse>("/ssh/key-candidates").then((r) => ({
+      // Both halves, always, and `?? []` on each: a deployment that
+      // reports neither must render as "nothing was scanned", which the
+      // wizard says out loud, rather than as "no keys found".
+      locations: (r.locations ?? []).map((l) => ({
+        path: l.path,
+        kind: l.kind,
+        found: l.found,
+        ...(l.problem ? { problem: l.problem } : {})
+      })),
+      candidates: (r.candidates ?? []).map((c) => ({
+        id: c.id,
+        path: c.path,
+        location: c.location,
+        algorithm: c.algorithm,
+        fingerprint: c.fingerprint,
+        publicKey: c.public_key,
+        mode: c.mode,
+        inStore: c.in_store,
+        selectable: c.selectable,
+        ...(c.in_store_id ? { inStoreId: c.in_store_id } : {}),
+        ...(c.reason ? { reason: c.reason } : {})
+      }))
+    })),
+  // The other import, on its own route. It sends an id and nothing else:
+  // the key material stays on the machine that already holds it, and the
+  // server reads it once through the same validation a pasted key goes
+  // through. Same result type as importSSHKey above, so a caller that
+  // offers both ways in has one success path rather than two.
+  importSSHKeyCandidate: (candidateId) =>
+    request<SSHKeyImportResult>("/ssh-keys/from-candidate", {
+      method: "POST",
+      body: JSON.stringify({ candidate_id: candidateId })
+    }),
   probeHostKey: (host, port) =>
     request<{ algorithm: string; fingerprint: string; known_hosts_line: string }>("/ssh/host-key-probe", {
       method: "POST",
       body: JSON.stringify({ host, port })
     }).then((r) => ({ algorithm: r.algorithm, fingerprint: r.fingerprint, knownHostsLine: r.known_hosts_line })),
   testCandidateConnection: (params) =>
-    request<ConnectionTestOutcome>("/backup-sets/test-connection", {
+    request<WireTestConnectionResponse>("/backup-sets/test-connection", {
       method: "POST",
       body: JSON.stringify(wireConnectionTestParams(params))
-    }),
+    }).then(fromWireConnectionTestOutcome),
 
   listArtifacts: (setId) =>
     request<WireListArtifactsResponse>(
@@ -1693,16 +2039,80 @@ export const httpApi: BackupManagerApi = {
     request<WireMediumPreflightResponse>(
       "/storage-mediums/" + encodeURIComponent(mediumId) + "/preflight",
       { method: "POST" }
+    ).then(fromWireMediumPreflight),
+
+  // G2.2 (issue #594). The import is the one call in this file that ever
+  // carries an S3 secret, and it carries it in one direction: what comes
+  // back is an id, and this method deliberately returns only that, so a
+  // caller cannot accidentally hold on to anything else.
+  importStorageCredentials: (accessKeyId, secretAccessKey, sessionToken) =>
+    request<WireImportStorageCredentialsResponse>("/storage-credentials", {
+      method: "POST",
+      body: JSON.stringify({
+        access_key_id: accessKeyId,
+        secret_access_key: secretAccessKey,
+        ...(sessionToken ? { session_token: sessionToken } : {})
+      })
+    }).then((r) => r.id),
+
+  listStorageMediums: () =>
+    request<WireListStorageMediumsResponse>("/storage-mediums").then((r) =>
+      (r.mediums ?? []).map(fromWireStorageMedium)
+    ),
+
+  getStorageMedium: (mediumId) =>
+    request<WireStorageMediumSummary>(
+      "/storage-mediums/" + encodeURIComponent(mediumId)
+    ).then(fromWireStorageMedium),
+
+  getStorageMediumUsage: (mediumId) =>
+    request<WireStorageMediumUsageResponse>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/usage"
     ).then((r) => ({
       medium: r.medium,
-      ok: r.ok,
-      checks: r.checks.map((c) => ({
-        step: c.step as MediumPreflight["checks"][number]["step"],
-        outcome: c.outcome as MediumPreflight["checks"][number]["outcome"],
-        category: c.category ?? "",
-        detail: c.detail
+      placements: r.placements,
+      backupSets: (r.backup_sets ?? []).map((s) => ({
+        set: s.set,
+        placements: s.placements,
+        onlyCopyHere: s.only_copy_here
       }))
     })),
+
+  // Verify before save. It writes nothing whatever the report says, and
+  // it resolves rather than rejects on a destination that does not work,
+  // for the reason preflightStorageMedium does: a bucket that is not
+  // there is what an operator did, not what broke.
+  preflightStorageMediumCandidate: (spec) =>
+    request<WireMediumPreflightResponse>("/storage-mediums/preflight", {
+      method: "POST",
+      body: JSON.stringify(toWireStorageMedium(spec))
+    }).then(fromWireMediumPreflight),
+
+  createStorageMedium: (spec) =>
+    request<WireStorageMediumSummary>("/storage-mediums", {
+      method: "POST",
+      body: JSON.stringify(toWireStorageMedium(spec))
+    }).then(fromWireStorageMedium),
+
+  updateStorageMedium: (mediumId, spec) =>
+    request<WireStorageMediumSummary>(
+      "/storage-mediums/" + encodeURIComponent(mediumId),
+      { method: "PUT", body: JSON.stringify(toWireStorageMedium(spec)) }
+    ).then(fromWireStorageMedium),
+
+  removeStorageMedium: (mediumId) =>
+    request<void>("/storage-mediums/" + encodeURIComponent(mediumId), {
+      method: "DELETE"
+    }).then(() => undefined),
+
+  // No body. The whole content of the request is which destination, and
+  // that is in the path, so a body would be a second place for one fact
+  // and a second thing for the engine to reconcile against the path.
+  setDefaultStorageMedium: (mediumId) =>
+    request<WireStorageMediumSummary>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/default",
+      { method: "PUT" }
+    ).then(fromWireStorageMedium),
 
   // Issue #286. Reads GET /system/storage's `manager` object only: the
   // per-backup-set list beside it answers a different question (see

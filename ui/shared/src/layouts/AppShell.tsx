@@ -1,6 +1,20 @@
 /**
- * The frame every signed-in page renders inside: header, section nav, and
- * the content column.
+ * The frame every signed-in page renders inside: header, section nav, the
+ * content column, and the terminal docked under all of it.
+ *
+ * The dock is here rather than on a page for a structural reason (issue
+ * #599). React Router swaps what is inside <main>, so a panel in there
+ * unmounts on every navigation and starts its buffer, its cursor and its
+ * scroll position again. A sibling of the nav/main row never unmounts, so
+ * all of that survives the whole session.
+ *
+ * It is fixed to the browser window (#617), so it no longer takes space
+ * out of the row and the content column no longer shrinks around it.
+ * <main> reserves the height the dock publishes instead. That padding is
+ * load-bearing rather than cosmetic: without it the last row of a long
+ * table sits behind the terminal permanently, which is the objection the
+ * in-flow arrangement was built around and the reason this reserves
+ * rather than simply letting the panel cover things.
  *
  * The shell is deliberately thin on decisions and carries only two. The
  * titlebar strip appears for embedded providers alone, because drawing
@@ -15,9 +29,12 @@
  */
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
+import { ActivityDock, DOCK_BAR_HEIGHT } from "@shared/components/ActivityDock";
 import { Logo, Wordmark } from "@shared/components/Logo";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
 import { StatusBadge } from "@shared/components/StatusBadge";
+import { Icon } from "@shared/design-system/icons";
+import type { IconName } from "@shared/design-system/icons";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import type { SystemHealth, VersionInfo } from "@shared/types/operation";
 
@@ -27,13 +44,25 @@ export interface NavCounts {
   quarantine?: number;
 }
 
-const NAV = [
-  { to: "/", label: "Dashboard", glyph: "\u25c7", end: true },
-  { to: "/sets", label: "Backup sets", glyph: "\u25a4", count: "sets" as const },
-  { to: "/backups", label: "Backups", glyph: "\u25a5", count: "backups" as const },
-  { to: "/activity", label: "Activity", glyph: "\u2261" },
-  { to: "/quarantine", label: "Quarantine", glyph: "\u2298", count: "quarantine" as const, alert: true },
-  { to: "/settings", label: "Settings", glyph: "\u2699" }
+/** The six section rows. Every one of these was a geometric character
+ *  until #621, and this nav is where that hurt most: the dashboard was a
+ *  hollow diamond, and backup sets and backups were a square hatched
+ *  horizontally and a square hatched vertically, which at 13px is one
+ *  shape twice. */
+const NAV: {
+  to: string;
+  label: string;
+  icon: IconName;
+  end?: boolean;
+  count?: keyof NavCounts;
+  alert?: boolean;
+}[] = [
+  { to: "/", label: "Dashboard", icon: "dashboard", end: true },
+  { to: "/sets", label: "Backup sets", icon: "backup-sets", count: "sets" },
+  { to: "/backups", label: "Backups", icon: "backups", count: "backups" },
+  { to: "/activity", label: "Activity", icon: "activity" },
+  { to: "/quarantine", label: "Quarantine", icon: "quarantine", count: "quarantine", alert: true },
+  { to: "/settings", label: "Settings", icon: "settings" }
 ];
 
 export function AppShell({
@@ -85,7 +114,7 @@ export function AppShell({
         </div>
 
         {health ? (
-          <StatusBadge tone={health.serviceRunning ? "ok" : "danger"} glyph={health.serviceRunning ? "\u25cf" : "\u2715"}>
+          <StatusBadge tone={health.serviceRunning ? "ok" : "danger"} icon={health.serviceRunning ? "status-active" : "failure"}>
             {(health.serviceRunning ? "Service running" : "Service stopped") +
               (version ? " \u00b7 v" + version.service : "")}
           </StatusBadge>
@@ -127,10 +156,14 @@ export function AppShell({
               >
                 <span
                   aria-hidden="true"
-                  className="mono"
-                  style={{ fontSize: "var(--text-xs)", width: 13, opacity: 0.7 }}
+                  style={{ width: 15, display: "inline-flex", justifyContent: "center", opacity: 0.7 }}
                 >
-                  {item.glyph}
+                  {/* Sized off the row rather than off the text, because
+                      these are the six icons that have to be told apart
+                      from each other rather than read alongside a word.
+                      13px is where the two hatched squares they replace
+                      became the same shape. */}
+                  <Icon name={item.icon} size={14} />
                 </span>
                 <span style={{ flex: 1 }}>{item.label}</span>
                 {count ? (
@@ -157,7 +190,12 @@ export function AppShell({
           </div>
         </nav>
 
-        <main style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
+        <main
+          style={{
+            flex: 1, minWidth: 0, overflow: "auto",
+            paddingBottom: `var(--dock-height, ${DOCK_BAR_HEIGHT}px)`
+          }}
+        >
           <div
             style={{
               maxWidth: 1240, margin: "0 auto", padding: "24px 28px 64px",
@@ -168,6 +206,8 @@ export function AppShell({
           </div>
         </main>
       </div>
+
+      <ActivityDock />
     </div>
   );
 }

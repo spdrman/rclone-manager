@@ -113,11 +113,94 @@ type StorageMediumSummary struct {
 	Region       string
 	StorageClass string
 
+	// Endpoint, Prefix and UploadVerification complete the description a
+	// destinations page has to be able to EDIT (G2.2, issue #594).
+	//
+	// They are here rather than on a second, fuller type because of what
+	// leaving them out would mean for an edit. UpdateStorageMedium
+	// replaces the whole record, so a field this summary cannot report is
+	// a field an edit form cannot pre-fill and therefore a field the next
+	// save silently clears. That is RetentionTier.Medium's own lesson
+	// (its doc: "a lossy boundary between the file and the form is a
+	// configuration change nobody asked for, made by the act of changing
+	// something else"), and it applies here for the same reason.
+	//
+	// UploadVerification is the RESOLVED value, like StorageClass beside
+	// it, so a surface reads the class actually in force rather than the
+	// operator's omission.
+	Endpoint           string
+	Prefix             string
+	UploadVerification string
+
+	// There is deliberately no field naming the credential SOURCE, not
+	// even its kind. The obvious next field here is a "file" / "env" /
+	// "command" word so an edit form can pre-select a radio button, and
+	// it is not worth what it costs: this projection's own test refuses
+	// the word "credential" anywhere in the rendered response, on the
+	// grounds that where a credential comes from is a fact about this
+	// machine an API caller has no use for. The edit form does not need
+	// it either, because UpdateStorageMedium leaves the credential alone
+	// when a spec names none (see its doc): the one field that cannot be
+	// read back is the one field an edit does not have to resupply.
+	//
 	// ReadsRequireRestore is true when this medium's storage class cannot
 	// be read on demand. It is computed here, from the same predicate the
 	// engine's own access states use, so a surface never has to hold its
 	// own list of which classes are archive.
 	ReadsRequireRestore bool
+
+	// Path, IsLocal and IsDefault are H2.2's three additions (issue
+	// #622), and the first two exist because this type now describes a
+	// destination that is not a bucket.
+	//
+	// Path is the drive the LOCAL destination writes to, resolved exactly
+	// as CapacitySettings.BackupRoot resolves it so one deployment cannot
+	// report two mounts, and empty for every declared medium because a
+	// bucket has no path on this machine. It is the answer to the
+	// question #622 says the settings list could not answer at all: the
+	// list omitted the drive backups actually land on, and a local entry
+	// that did not name the drive would only half fix that.
+	//
+	// IsLocal separates the one synthesised entry from the declared ones,
+	// so a surface decides what to offer (no Edit, no Remove) on a fact
+	// rather than by comparing an id against a reserved string it would
+	// have to hold its own copy of. Type carries the same information and
+	// is the wrong field to branch on: it is a vocabulary that grows by
+	// architecture decision, and a second local-ish backend added there
+	// one day must not silently make an entry undeletable.
+	//
+	// IsDefault is the destination a NEWLY CREATED retention tier starts
+	// on. Exactly one entry in a list carries it. It says nothing about
+	// where anything currently is: an existing tier goes on naming
+	// whatever it named when this moves. See
+	// BackupService.SetDefaultStorageMedium.
+	Path      string
+	IsLocal   bool
+	IsDefault bool
+
+	// ConnectionUnverified reports that this destination was declared
+	// without ever having been proven (issue #636,
+	// config.StorageMedium.ConnectionUnverified).
+	//
+	// True means the caller told the service to skip the check it runs in
+	// front of every create and every destination-changing edit
+	// (SkipConnectionCheck on the spec, `--no-verify` on the CLI,
+	// `skip_connection_check` on the API), and nothing else writes it: the
+	// mark is the service's own record of what it did not do, never a
+	// caller's claim about what it did. False is every other destination,
+	// including every one declared before the mark existed, which is why
+	// absence is not read as "unverified".
+	//
+	// It is reported so a surface can DRAW the difference. A destination
+	// nobody ever proved and one checked against a real bucket used to be
+	// indistinguishable in every list, on every screen and in every
+	// command's output, which is what made --no-verify a hole rather than
+	// an escape hatch.
+	//
+	// Always false for the local hard drive: it is synthesised rather than
+	// declared, it has no create to skip and no bucket to prove, and #636
+	// puts it out of scope in so many words.
+	ConnectionUnverified bool
 }
 
 // VerificationClassInfo is one rung of FR-31's ladder, with the engine's
@@ -313,10 +396,26 @@ func toServicePlacement(p state.Placement, idx mediumIndex) Placement {
 	return out
 }
 
-// toStorageMediumSummaries projects the configured mediums onto the
-// settings boundary, in declaration order.
+// toStorageMediumSummaries projects the destinations this deployment has
+// onto the settings boundary: the local hard drive first, then the
+// declared mediums in declaration order.
+//
+// The local entry leads and is not optional (H2.2, issue #622). It is
+// where backups actually land and what every tier that names no medium
+// means, and a list that omitted it was a list of the places a backup
+// could go that left out the one every deployment uses. It also makes
+// #622's second invariant, "there is never zero destinations", true by
+// construction here rather than by a check somewhere else: this function
+// cannot return an empty slice.
+//
+// Declaration order is preserved for the declared ones, unchanged, so a
+// settings page still shows the operator's own file back to them in the
+// order they wrote it.
 func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
-	out := make([]StorageMediumSummary, 0, len(cfg.StorageMediums))
+	out := make([]StorageMediumSummary, 0, len(cfg.StorageMediums)+1)
+	out = append(out, localStorageMediumSummary(cfg))
+
+	defaultID := cfg.EffectiveDefaultStorageMedium()
 	for _, m := range cfg.StorageMediums {
 		class := m.EffectiveStorageClass()
 		out = append(out, StorageMediumSummary{
@@ -325,7 +424,16 @@ func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
 			Bucket:              m.Bucket,
 			Region:              m.Region,
 			StorageClass:        class,
+			Endpoint:            m.Endpoint,
+			Prefix:              m.Prefix,
+			UploadVerification:  m.EffectiveUploadVerification(),
 			ReadsRequireRestore: archive.IsArchive(class),
+			IsDefault:           m.ID == defaultID,
+			// Read straight off the configuration rather than derived from
+			// anything: whether a destination was ever proven is not
+			// something its own history can answer, so it is only ever
+			// what somebody wrote (issue #636).
+			ConnectionUnverified: m.ConnectionUnverified,
 		})
 	}
 	return out

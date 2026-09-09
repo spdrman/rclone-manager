@@ -20,7 +20,7 @@
  * alone cannot say "the server rejects this combination".
  */
 import { API_ERROR_CODES as GENERATED_API_ERROR_CODES } from "./generated/contract";
-import type { ApiErrorCode } from "./generated/contract";
+import type { ApiErrorCode, WireConnectionCheck, WireMediumPreflightCheck } from "./generated/contract";
 import type { BackupArtifact, BackupSet, CompletionMethod, RetentionPlan } from "@shared/types/backup";
 import type {
   ActivityEvent,
@@ -92,7 +92,21 @@ export interface ApiError {
   message: string;
   /** What to do next, if anything. */
   remediation?: string;
-  correlationId: string;
+  /** The id the failing RESPONSE carried, and ABSENT when it carried
+   *  none. It used to be required, which meant every caller that had no id
+   *  had to write one down, and the one they all wrote was the literal
+   *  `"unavailable"` (#598). That is worse than nothing: ErrorState only
+   *  offers its Advanced details disclosure when a failure carried an id,
+   *  so a literal one buys an operator a panel to open with a string in it
+   *  that appears in no log anywhere. Optional so "no id" is expressible. */
+  correlationId?: string;
+  /** The technical facts behind this failure, for the Advanced details
+   *  panel and the copy button beside it: an exception's own name and
+   *  message, the request path, the response status and content type where
+   *  there was a response. Never a stack trace and never a source path
+   *  (§37). Absent when the service named its own reason, which is already
+   *  in `message` and says more than a class name would. */
+  detail?: string;
 }
 
 /** The typed envelope, thrown. It extends Error so an unprepared caller
@@ -103,6 +117,76 @@ export class BackupManagerError extends Error {
     super(api.message);
     this.name = "BackupManagerError";
   }
+}
+
+/**
+ * The two failures a request can produce that are NOT refusals, labelled
+ * at the one place that can tell them apart (#598).
+ *
+ * `request()` used to type only the third case, a response the service
+ * refused with, and let the other two escape as whatever the browser
+ * happened to throw. So every caller above caught an untyped exception and
+ * had nothing to say about it but a sentence of its own invention, and
+ * "the service never answered" and "the service answered and this build
+ * could not read the answer" arrived on screen as the same eleven words.
+ * They are completely different problems for whoever is fixing them.
+ *
+ * Only `request()` constructs one, and that is what makes the label worth
+ * anything: an exception reaching a caller WITHOUT this wrapper did not
+ * come out of the request at all, it came out of whatever the caller
+ * chained onto it, which is a third thing again.
+ */
+export type RequestFailureKind =
+  /** `fetch` itself rejected: nothing came back, so there is no status, no
+   *  content type and no correlation id. Whether the request was carried
+   *  out is unknown, and this deliberately does not claim otherwise. */
+  | "no-response"
+  /** A response arrived and its body could not be read as JSON. The status
+   *  and content type are the two facts that separate a proxy's HTML error
+   *  page from a truncated body, and the correlation id is present
+   *  whenever the response carried the header. */
+  | "unreadable-body";
+
+export class RequestFailure extends Error {
+  readonly kind: RequestFailureKind;
+  /** The API path asked for, WITHOUT the base prefix, exactly as the
+   *  caller named it ("/activity"). */
+  readonly path: string;
+  readonly status?: number;
+  readonly contentType?: string;
+  readonly correlationId?: string;
+  /** The exception this wraps. `Error.cause` is not used for it because
+   *  the field has to survive being read by code compiled for older
+   *  targets, and because a named field is what a test asserts on. */
+  readonly cause: unknown;
+
+  constructor(init: {
+    kind: RequestFailureKind;
+    path: string;
+    status?: number;
+    contentType?: string;
+    correlationId?: string;
+    cause: unknown;
+  }) {
+    super(init.kind === "no-response" ? "the request got no reply" : "the response body could not be read");
+    this.name = "RequestFailure";
+    this.kind = init.kind;
+    this.path = init.path;
+    this.status = init.status;
+    this.contentType = init.contentType;
+    this.correlationId = init.correlationId;
+    this.cause = init.cause;
+  }
+}
+
+/** How an exception says what it is, for the Advanced details panel.
+ *  `name: message` rather than String(e), which renders a bare Error as
+ *  "Error: boom" and a plain thrown string as itself; both are worth
+ *  showing and neither is worth a special case at every call site. */
+export function describeException(e: unknown): string {
+  if (e instanceof Error) return e.name + ": " + e.message;
+  if (typeof e === "string") return e;
+  return String(e);
 }
 
 /** What a read-only catalog scan found, before anything is written. The
@@ -325,6 +409,11 @@ export interface RestoreCopyRequest {
   acknowledged: boolean;
   /** The configuration revision the caller is displaying. */
   configRevision: string;
+  /** One key per LOGICAL restore, reused on every retry of it. POST
+   *  /operations declares the header required and refuses without one;
+   *  see BackupManagerApi.runCycle for why the key belongs to the
+   *  submission rather than to the attempt. */
+  idempotencyKey: string;
 }
 
 /** What a restore looks like the instant it has been accepted.
@@ -394,6 +483,95 @@ export interface SSHKeyImportResult {
   fingerprint: string;
 }
 
+/**
+ * Issue #592: one key in this deployment's own store, as GET /ssh-keys
+ * describes it.
+ *
+ * There is no path here and there will not be one. `SSHKeyRef.KeyFile` is
+ * kept off the wire so a caller never learns the server's filesystem
+ * layout, and an inventory is exactly the shape where a path column looks
+ * helpful and is not: the file it would name lives inside a container the
+ * operator has no shell in.
+ *
+ * `publicKey` is the exception and it has to be. It is public material by
+ * definition, and it is the one string that turns a red "could not
+ * authenticate" into something an operator can act on: paste it into the
+ * remote account's authorized_keys.
+ */
+export interface SSHKeyListing {
+  id: string;
+  algorithm: string;
+  fingerprint: string;
+  /** The authorized_keys line. Public material, never the private half. */
+  publicKey: string;
+  /** RFC 3339, or "" when the deployment cannot report it. "" is a real
+   *  answer and must not be rendered as a date. */
+  importedAt: string;
+  /** Listed, and not offerable for verification until its passphrase
+   *  resolves, which is the same rule the import path already applies. */
+  passphraseProtected: boolean;
+  /** Why this row could not be described. Never names a path. */
+  problem?: string;
+  /** Every backup set id pointing at this key, sorted. An EMPTY list is a
+   *  real and useful answer, and it is the column that turns a wall of
+   *  ids into a decision: a key four sets depend on and a key nothing
+   *  references are very different things to point a fifth set at. */
+  usedBy: string[];
+}
+
+/**
+ * One private key file the engine can actually see (GET
+ * /ssh/key-candidates).
+ *
+ * Unlike SSHKeyListing this DOES carry a path, because a candidate's path
+ * is its identity to an operator and there is no other way to say which
+ * of several files is meant. What makes that safe is server-side: the
+ * locations scanned are a closed, constant set, never caller-supplied and
+ * never walked recursively. The handle that travels back is `id`, which
+ * is opaque, so nothing this UI sends can name a file for the server to
+ * read.
+ *
+ * `fingerprint` comes from the .pub beside the key and is "" when there
+ * is none. A candidate with no fingerprint is shown, marked, and not
+ * selectable: deriving one would mean the server read a private key in
+ * order to put it in a list.
+ */
+export interface SSHKeyCandidate {
+  id: string;
+  path: string;
+  location: string;
+  algorithm: string;
+  fingerprint: string;
+  publicKey: string;
+  /** Permission bits as an operator writes them, e.g. "0600". */
+  mode: string;
+  inStore: boolean;
+  inStoreId?: string;
+  selectable: boolean;
+  /** Why it is not selectable. A row nobody can pick and nobody can
+   *  explain is worse than no row. */
+  reason?: string;
+}
+
+/** One place the scan looked, reported whether or not it held anything.
+ *  Rendering these is not optional: an empty candidate list on a packaged
+ *  install means the engine is a distroless container that cannot see the
+ *  operator's home directory, not that they have no keys. */
+export interface SSHKeyDiscoveryLocation {
+  path: string;
+  /** "configured-key-file" | "mount" | "home" | "discovery-dir". */
+  kind: string;
+  found: number;
+  problem?: string;
+}
+
+/** One scan: what was found, and everywhere that was looked. Never one
+ *  without the other. */
+export interface SSHKeyDiscovery {
+  locations: SSHKeyDiscoveryLocation[];
+  candidates: SSHKeyCandidate[];
+}
+
 /** What a host presented, before anyone has decided to trust it. The
  *  fingerprint is for a human to compare against something they already
  *  know; the known-hosts line is what trust would actually be anchored to,
@@ -411,6 +589,56 @@ export interface HostKeyProbeResult {
 export interface ConnectionTestOutcome {
   ok: boolean;
   message?: string;
+  /**
+   * What the test actually DID, one entry per step and always all of
+   * them, in the order they run (issues #592 and #596).
+   *
+   * `ok` and `message` mean exactly what they always meant, so this is
+   * additive in both directions: an older client reading only those two
+   * keeps working, and a newer one against an older engine gets an empty
+   * list rather than a wrong one. Empty is "this engine reports no
+   * breakdown", which a render site has to draw as that and never as six
+   * failures.
+   *
+   * ONE array for both modes. The persisted mode reads the key, the
+   * known_hosts and the remote path off the set and the candidate mode
+   * off the request, and they answer the same six questions, so nothing
+   * here depends on which request was sent.
+   */
+  checks: ConnectionCheck[];
+}
+
+/**
+ * One step of a connection test.
+ *
+ * `skipped` is a first-class outcome and never a quiet pass: a surface
+ * that renders a skipped authentication as anything but "this was never
+ * tried" has told an operator their credentials are fine on the strength
+ * of a step that never ran. `category` is the machine-readable half a
+ * surface branches on; `detail` is a sentence the engine composed and
+ * never an underlying transport error's text.
+ */
+export interface ConnectionCheck {
+  /** Both taken from the generated contract rather than restated (issue
+   *  #633). The same interface's medium-preflight twin had already gone
+   *  stale as a hand-written copy, and there is nothing about this pair
+   *  that made it less likely to: a step added to a connection test would
+   *  arrive here as a value this UI's types say cannot exist. */
+  step: WireConnectionCheck["step"];
+  outcome: WireConnectionCheck["outcome"];
+  category?: string;
+  detail: string;
+  /**
+   * How long this step took on its own, in milliseconds.
+   *
+   * OPTIONAL, and absent is not zero. Only credentials, resolve, connect
+   * and host_key are measured separately; authenticate and list are
+   * decided from a single call and have no timing of their own. A
+   * surface that defaulted this to 0 would print "0 ms" next to a green
+   * "Authenticated" on every successful run, which says the server
+   * answered instantly when what happened is that nobody measured.
+   */
+  durationMs?: number;
 }
 
 /** The subset of CreateBackupSetRequest's SSH-facing fields a pre-save
@@ -444,15 +672,21 @@ export interface RetentionTierSetting {
   periodDays?: number;
   keep: number;
   windowUnit?: string;
-  /** The storage medium this tier's backups live on, by id; undefined
-   *  means the local backup root, which is what every tier of every
-   *  configuration written before storage mediums existed means.
+  /** The storage destination this tier's backups live on, by id.
    *
    *  It is on the shape that is both READ and WRITTEN because a settings
    *  write replaces the whole chain: a field this UI could read but not
    *  send back is a field that editing one tier's keep would silently
    *  delete from another tier, moving somebody's backups back onto local
-   *  disk without saying so. */
+   *  disk without saying so.
+   *
+   *  Since #622 the backend always names one, LOCAL_DESTINATION_ID
+   *  included, so nothing on this side has to know that an absent value
+   *  used to mean the local backup root. It stays optional in the TYPE
+   *  because this is also the WRITE shape and an older caller that omits
+   *  it is still understood, and because the settings schema's default
+   *  chain is the same type; a reader should use the value it gets and
+   *  fall back to LOCAL_DESTINATION_ID rather than to "". */
   medium?: string;
 }
 
@@ -468,15 +702,170 @@ export interface RetentionTierSetting {
  */
 export interface StorageMedium {
   id: string;
+  /** What kind of place this is. `s3` is a bucket an operator declared;
+   *  `local` is the drive this deployment's backups land on. Branch on
+   *  `isLocal` rather than on this word: the set grows by architecture
+   *  decision, and a second local-ish backend added one day must not
+   *  silently make an entry undeletable. */
   type: string;
   bucket: string;
   region?: string;
+  /** An endpoint override for an S3-compatible service; absent means the
+   *  provider's own endpoint for the region. */
+  endpoint?: string;
+  /** The key namespace inside the bucket; absent puts the key layout at
+   *  the root. */
+  prefix?: string;
   storageClass: string;
+  /** How an upload is proven before the local copy is deleted, already
+   *  resolved, so this UI never has to know what an unset value defaults
+   *  to. */
+  uploadVerification: string;
   /** True when this medium's class cannot be read on demand: a backup here
    *  needs an explicit restore, taking hours, before anything can read it.
    *  Computed by the backend, so this UI holds no list of its own of which
    *  classes count as archive. */
   readsRequireRestore: boolean;
+
+  /** The drive the LOCAL destination writes to, resolved by the backend
+   *  exactly as the capacity section resolves its backup root, so one
+   *  deployment cannot show two mounts. Absent for a declared medium,
+   *  because a bucket has no path on the manager's host, and absent for a
+   *  local entry the configuration cannot place yet (no backup set, or
+   *  sets on different volumes), which reads as "not known yet" rather
+   *  than as a blank path. */
+  path?: string;
+
+  /** True for the one entry that is the drive this deployment's backups
+   *  land on (#622). It is not declared in the configuration, so it has
+   *  no Edit and no Remove, and a surface decides that from this rather
+   *  than by comparing an id against a reserved string of its own. */
+  isLocal: boolean;
+
+  /** True for the destination a NEWLY CREATED retention tier starts on.
+   *  Exactly one entry in a list carries it. It says nothing about where
+   *  anything currently is: moving it moves no backup and rewrites no
+   *  tier, which is why it needs no confirmation. */
+  isDefault: boolean;
+
+  /**
+   * Issue #636: this destination was declared without ever having been
+   * proven.
+   *
+   * True means the engine was told to skip the check it runs in front of
+   * every create and every destination-changing edit (`--no-verify` on
+   * the CLI, `skip_connection_check` on the API), and it is the engine's
+   * own record of that: nothing a client sends sets the mark directly,
+   * and the S3 wizard never skips, because it cannot save until its own
+   * check has passed. A test connection that PASSES against it clears
+   * the mark, and one that fails leaves it alone.
+   *
+   * False is not a claim that the destination works today, only that
+   * nothing here says it was never proven. An engine built before this
+   * field answers false, and so does every destination declared before
+   * the mark existed, which is why a surface says "never proven" for true
+   * and says nothing at all for false rather than drawing a green tick.
+   *
+   * Always false for the local hard drive, which is not declared and has
+   * no bucket to prove.
+   */
+  connectionUnverified: boolean;
+}
+
+/**
+ * The id of the drive this deployment's backups land on (#622).
+ *
+ * It is a constant rather than a literal at each call site because it is
+ * the one string in this product that has to mean the same thing in a
+ * placement record, in a retention tier, in an API response and in a
+ * picker. The backend reserves it: no declared destination may claim it,
+ * and a configuration file spells this destination by absence, which the
+ * server translates in one place so nothing here has to.
+ */
+export const LOCAL_DESTINATION_ID = "local";
+
+/**
+ * Where one storage medium's credentials come from, in the four spellings
+ * the backend accepts. Exactly one must be set, and none of them is
+ * credential MATERIAL: this is a reference in all four.
+ *
+ * `credentialsId` is the one this UI uses, and the reason it exists at
+ * all. It is opaque, minted by the backend, and names nothing about the
+ * manager's host, so it is the only spelling that is safe to put on a
+ * request body, into an echoed command line, and into a terminal
+ * transcript an operator can export and paste into a support thread. The
+ * other three are here because an operator who already has a credential
+ * on the host, or in a secrets manager, should not have to hand this
+ * product a secret to use it.
+ */
+export interface StorageMediumCredentialsReference {
+  credentialsId?: string;
+  file?: string;
+  env?: string;
+  command?: string[];
+}
+
+/**
+ * One storage destination as this UI describes it, for declaring it,
+ * replacing it, or having it checked before either.
+ *
+ * The same shape for all three deliberately. What is proven and what is
+ * saved must be the same destination, and the interesting bug in a
+ * destination wizard is one that verifies green and then saves as
+ * something slightly different.
+ *
+ * `credentials` is optional only on an EDIT, where omitting it keeps the
+ * credential already configured. It has to be optional there, because
+ * StorageMedium above deliberately reports nothing about the credential,
+ * not even its kind, so a form cannot resubmit what it never received.
+ */
+export interface StorageMediumSpec {
+  id: string;
+  type: string;
+  region?: string;
+  endpoint?: string;
+  bucket: string;
+  prefix?: string;
+  storageClass?: string;
+  uploadVerification?: string;
+  credentials?: StorageMediumCredentialsReference;
+
+  /**
+   * Declare this destination without proving it first (issue #636).
+   *
+   * The engine runs the same eight-step check `preflightStorageMediumCandidate`
+   * answers, in front of the write, and rejects with
+   * MEDIUM_CONNECTION_NOT_PROVEN when it fails; this is the deliberate
+   * opt-out, and a destination written under it is marked
+   * `connectionUnverified` until a check passes.
+   *
+   * This UI does not send it. The wizard keeps Save disabled until its
+   * own check has come back green, so there is never a moment where it
+   * would have anything to skip; the field is here because the shape it
+   * lives on is the API's shape, and a client that could not express the
+   * flag could not be told what the refusal it might meet is about.
+   */
+  skipConnectionCheck?: boolean;
+}
+
+/**
+ * What the journal says is currently on one storage destination, per
+ * backup set (FR-30).
+ *
+ * The list is the point. "148 copies affected" with nothing named is a
+ * number an operator cannot act on, which is why this carries the sets
+ * and not only the total, and why `onlyCopyHere` is separate: "52 copies
+ * live here" and "52 backups have their only confirmed copy here" are
+ * different sentences and call for different colours.
+ */
+export interface StorageMediumUsage {
+  medium: string;
+  placements: number;
+  backupSets: Array<{
+    set: string;
+    placements: number;
+    onlyCopyHere: number;
+  }>;
 }
 
 /**
@@ -489,24 +878,35 @@ export interface StorageMedium {
  * manager's log instead.
  */
 export interface MediumPreflightCheck {
-  /** What this step proves. `credentials` is whether the credential the
-   *  medium declares can be obtained at all, which is a question for the
-   *  host; `reach` is whether the endpoint answers and holds the bucket
-   *  with that credential, which is a question for the provider. */
-  step:
-    | "credentials"
-    | "reach"
-    | "deliverable"
-    | "write"
-    | "read_back"
-    | "storage_class"
-    | "verification"
-    | "delete";
+  /**
+   * What this step proves. `credentials` is whether the credential the
+   * medium declares can be obtained at all, which is a question for the
+   * host; `reach` is whether the endpoint answers and holds the bucket
+   * with that credential, which is a question for the provider.
+   *
+   * Taken from the generated contract rather than spelled out again here
+   * (issue #633, found while fixing the mock's candidate check). It was
+   * spelled out again, and it had already gone stale: #622 gave the drive
+   * on this machine a report of its own with a ninth step, `space`, which
+   * the engine emits (mediumcheck.LocalSteps) and the contract carries,
+   * and this copy never got it. So the one report shape this UI could not
+   * describe was the one every deployment has, and the renderer's own doc
+   * saying it draws "however many the engine sent" was making a promise
+   * the types here could not keep. Consuming the wire union is the same
+   * argument the error-code registry above makes, and
+   * contract.conformance.test.ts holds both ends of it.
+   */
+  step: WireMediumPreflightCheck["step"];
   /** `skipped` is a real answer and not a quiet pass: an earlier step
    *  failed in a way that makes this one meaningless. Rendering a skipped
    *  write as anything but "this was never tried" tells an operator their
-   *  bucket is writable on the strength of a credential nobody obtained. */
-  outcome: "passed" | "failed" | "skipped";
+   *  bucket is writable on the strength of a credential nobody obtained.
+   *
+   *  From the contract for the same reason `step` above is: it sat five
+   *  lines under the union that had already drifted, restated the same
+   *  way, and the only thing keeping it honest was that nobody had added
+   *  an outcome yet. */
+  outcome: WireMediumPreflightCheck["outcome"];
   /** The transport category a failure classified as, absent when the step
    *  did not fail. Branch on this, never on `detail`. */
   category?: string;
@@ -945,11 +1345,14 @@ export interface BackupManagerApi {
   /**
    * Submits a run cycle: one pass over every enabled backup set.
    *
-   * It takes no backup set id, because there is no such operation. A run
-   * cycle is deployment-wide in core (internal/app's RunCycle walks every
-   * enabled set), which is why the durable operation record it produces
-   * carries no backup set id either. The shared UI used to call
-   * `POST /backup-sets/{id}/run`, which no runtime has ever served.
+   * It takes no backup set id, because a run cycle is deployment-wide in
+   * core (internal/app's RunCycle walks every enabled set), which is why
+   * the durable operation record it produces carries none either. That
+   * used to read "because there is no such operation", which was true of
+   * the HTTP surface and never of the engine: runBackupSet below is the
+   * operation, on this same route with its own action. The shared UI also
+   * used to call `POST /backup-sets/{id}/run`, which no runtime has ever
+   * served.
    *
    * configRevision is the revision the CALLER is currently displaying,
    * not one read fresh at submit time. That is the whole point of the
@@ -957,7 +1360,40 @@ export interface BackupManagerApi {
    * configuration is refused (CONFIG_REVISION_STALE) instead of running
    * against a setup nobody looking at it has seen.
    */
-  runCycle(configRevision: string): Promise<void>;
+  /**
+   * `idempotencyKey` is one key per LOGICAL submission, reused on every
+   * retry of that submission and never regenerated per attempt.
+   *
+   * That is the entire point of the header, and getting it backwards is
+   * worse than omitting it: a client that minted a fresh key per attempt
+   * would turn one dropped response into two backup runs, and the service
+   * would have no way to know the two requests were the same intent. The
+   * key belongs to whoever knows what a retry is, which is the caller,
+   * not this client (useRunControls owns that lifetime today).
+   *
+   * It is a required parameter rather than a defaulted one because the
+   * route refuses without it: for every build this project has shipped,
+   * `post` had no way to send a header at all, so every run submitted
+   * from a browser was answered 400 by a handler that never saw the
+   * body (issue #597).
+   */
+  runCycle(configRevision: string, idempotencyKey: string): Promise<void>;
+  /**
+   * Submits a run of exactly ONE backup set: the same reconcile, discover
+   * and walk `runCycle` performs for every enabled set, narrowed to this
+   * one (issue #597, EPIC G's G1.4).
+   *
+   * `backupSetId` is the full "source/backup-set" id, which is the id
+   * every surface in this product prints and the one `backup-manager
+   * fetch --backup-set` has taken since #569.
+   *
+   * It shares runCycle's route, gate and single-flight lock, so a per-set
+   * run and a deployment-wide one cannot overlap and the loser is refused
+   * with OPERATION_ALREADY_RUNNING rather than queued. Backing up
+   * whatever is on disk now is not made more correct by having been asked
+   * for twice.
+   */
+  runBackupSet(backupSetId: string, configRevision: string, idempotencyKey: string): Promise<void>;
   /**
    * Asks for one archived copy of one backup to be made readable again
    * (EPIC E, FR-34).
@@ -1079,6 +1515,22 @@ export interface BackupManagerApi {
    *  caller discards its own copy of privateKeyPem the instant this
    *  resolves, per that step's own on-screen copy. */
   importSSHKey(privateKeyPem: string): Promise<SSHKeyImportResult>;
+  /** Issue #592: every key in this deployment's store. The read that
+   *  makes `sshKeyId` a value an operator can actually choose, instead of
+   *  one they had to write down at import time months ago. */
+  listSSHKeys(): Promise<SSHKeyListing[]>;
+  /** Issue #592: private keys the engine can see, and every location it
+   *  looked in. Both halves, always: the locations are what make an empty
+   *  list mean something. */
+  listSSHKeyCandidates(): Promise<SSHKeyDiscovery>;
+  /** Issue #592: import a key this machine already holds, by the opaque
+   *  id `listSSHKeyCandidates` gave it. No key material crosses the
+   *  network in either direction, and the original file is left alone.
+   *  Its own operation rather than a mode of `importSSHKey`, because
+   *  pasting material this host has never seen and choosing a key it
+   *  already found are different acts; both answer with the same
+   *  `SSHKeyImportResult`. */
+  importSSHKeyCandidate(candidateId: string): Promise<SSHKeyImportResult>;
   /** The wizard's "Verify server" step (#98 step 3): fetches a real
    *  fingerprint for host:port, trusting nothing yet. */
   probeHostKey(host: string, port: number): Promise<HostKeyProbeResult>;
@@ -1240,6 +1692,48 @@ export interface BackupManagerApi {
    * configuration does not declare.
    */
   preflightStorageMedium(mediumId: string): Promise<MediumPreflight>;
+
+  /**
+   * G2.2 (issue #594): the storage-destination surface a wizard drives.
+   *
+   * importStorageCredentials is the only call in this whole client that
+   * ever holds an S3 secret. It sends the material once and answers with
+   * an opaque id; nothing here reads it back, and the caller discards its
+   * own copy the moment the id arrives.
+   *
+   * preflightStorageMediumCandidate is why that id exists in this shape.
+   * preflightStorageMedium above can only check a destination already
+   * written into the operator's configuration, so without this the only
+   * way to find out whether a destination works is to save it first. The
+   * candidate carries `credentialsId`, which names no path and no
+   * variable on the manager's host, so the check is possible with nothing
+   * host-shaped on a request body. It writes nothing whatever the report
+   * says, and resolves rather than rejects when the destination does not
+   * work, exactly as the by-id preflight does.
+   *
+   * removeStorageMedium rejects with MEDIUM_IN_USE while any copy names
+   * the destination (FR-30). That is not a nicety: un-declaring it would
+   * leave this deployment with no bucket, no endpoint and no credential
+   * to reach those copies with, so they would read as unreachable and no
+   * prune could run against them. getStorageMediumUsage is what a caller
+   * renders instead of the bare refusal.
+   */
+  importStorageCredentials(accessKeyId: string, secretAccessKey: string, sessionToken?: string): Promise<string>;
+  listStorageMediums(): Promise<StorageMedium[]>;
+  getStorageMedium(mediumId: string): Promise<StorageMedium>;
+  getStorageMediumUsage(mediumId: string): Promise<StorageMediumUsage>;
+  preflightStorageMediumCandidate(spec: StorageMediumSpec): Promise<MediumPreflight>;
+  createStorageMedium(spec: StorageMediumSpec): Promise<StorageMedium>;
+  updateStorageMedium(mediumId: string, spec: StorageMediumSpec): Promise<StorageMedium>;
+  removeStorageMedium(mediumId: string): Promise<void>;
+
+  /** Make this the destination a NEWLY CREATED retention tier starts on
+   *  (#622). It moves that and nothing else: no existing tier is
+   *  rewritten and no backup is relocated, which is why it needs no
+   *  acknowledgment in front of it. It answers with the destination that
+   *  is now the default, so a caller re-renders from the answer rather
+   *  than from its own optimistic guess. */
+  setDefaultStorageMedium(mediumId: string): Promise<StorageMedium>;
 
   /** Issue #286: the one manager-wide storage reading. Deliberately not
    *  derived from anything else this client already fetches — see

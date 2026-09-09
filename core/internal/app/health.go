@@ -159,6 +159,9 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 				// is the honest empty rather than a claim that this set is
 				// reachable.
 				HaltReason: haltReasons[bs.ID],
+				// FR-30's own question, asked of every set on every report
+				// (issue #602). See retentionHoldReason.
+				RetentionHoldReason: retentionHoldReason(now, bs, records),
 			}
 			if stat, statErr := capacity.StatPath(bs.LocalPath); statErr == nil {
 				free := stat.AvailableBytes
@@ -169,6 +172,41 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 		}
 	}
 	return health.NewReport(process, sets, now), nil
+}
+
+// retentionHoldReason is FR-30's question asked of one backup set for the
+// health report: is there a readable copy of the restore point FR-19
+// protects, or is retention for this set refusing to delete anything until
+// somebody reconciles it (issue #602)?
+//
+// It is the one condition in this report that says an operator has to DO
+// something. A held set prunes nothing, ever again, on its own; the
+// backups stay exactly as good as they were and local copies pile up
+// behind them until FR-21 starts refusing transfers for a reason that
+// names neither this set nor this cause. Before this, the only way to find
+// out was to ask for a retention plan and read the refusals in it, which
+// is not a thing a dashboard does.
+//
+// # Why an unanswerable question is reported rather than raised
+//
+// Unlike placementEvidence next door, this runs for every backup set,
+// including every deployment that predates EPIC E, so it must not become a
+// new way for `backup-manager status` to fail: that promise is exactly
+// what placementEvidence's gate is for. LastKnownGoodUnconfirmed can only
+// fail one way, by the retention chain refusing to resolve, and a
+// deployment in that state has a real condition worth reporting anyway. So
+// the failure becomes the condition's own text instead of the report's
+// error, which is honest (it says what could not be established) and
+// leaves the rest of the report readable.
+//
+// It stats one path per backup set and reads no medium (FR-32).
+func retentionHoldReason(now time.Time, bs config.BackupSet, records []state.Record) string {
+	hold, err := retention.LastKnownGoodUnconfirmed(now, bs.Retention, bs, records, ActiveMediumFromRecords(records))
+	if err != nil {
+		return fmt.Sprintf(
+			"this set's retention policy will not resolve, so nothing here could confirm a readable copy of the restore point FR-19 protects: %v", err)
+	}
+	return hold
 }
 
 // moveReader is the half of the move journal a health pass needs: the

@@ -172,7 +172,14 @@ func TestUpdateBackupSet_WritesOnlyTheFieldsTheRequestNames(t *testing.T) {
 		want func(config.BackupSet) config.BackupSet
 	}{
 		{
-			"remote_path", UpdateBackupSetRequest{RemotePath: strPtr(newRemote)},
+			// SkipConnectionCheck, because the remote path is one of the
+			// six things a connection test proves (#624) and this
+			// fixture's host is a name that answers nothing. This case is
+			// about field isolation, not about the check, and the skip
+			// leaves the mark exactly as the fixture set it, so the
+			// whole-struct comparison still says the mark did not move.
+			"remote_path",
+			UpdateBackupSetRequest{RemotePath: strPtr(newRemote), SkipConnectionCheck: true},
 			func(bs config.BackupSet) config.BackupSet { bs.RemotePath = newRemote; return bs },
 		},
 		{
@@ -566,6 +573,13 @@ func writeRichTestConfigFile(t *testing.T) string {
 		"          delete_safety_delay: 30s\n" +
 		"        stale_after: 24h\n" +
 		"        read_only: true\n" +
+		// Issue #624's mark, set so the whole-struct comparison in
+		// TestUpdateBackupSet_WritesOnlyTheFieldsTheRequestNames means
+		// something about it: a field left at its zero value on both
+		// sides is compared equal whatever the applier does to it, which
+		// is the exact hollowing this fixture's own control exists to
+		// catch.
+		"        connection_unverified: true\n" +
 		"        validation:\n          hash: sha256\n          validator_id: trailer-marker\n" +
 		"        retention:\n" +
 		"          daily_days: 90\n" +

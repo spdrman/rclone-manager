@@ -36,6 +36,11 @@ export function ActivityPage() {
 
   const [setId, setSetId] = useState("");
   const [minSeverity, setMinSeverity] = useState("");
+  // Issue #598: kept here rather than inside ErrorState, because that
+  // component unmounts for as long as the retry is in flight (the page
+  // renders its normal body while `error` is cleared), so a counter living
+  // in it would be reset by the very act it is meant to record.
+  const [retriedAt, setRetriedAt] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const rank: Record<Severity, number> = { info: 0, ok: 0, warn: 1, error: 2 };
@@ -59,7 +64,20 @@ export function ActivityPage() {
       </>
     );
 
-  if (events.error) return <ErrorState {...events.error} onRetry={events.reload} />;
+  if (events.error)
+    return (
+      <>
+        <PageHeader title="Activity" subtitle="Operational timeline across all backup sets" />
+        <ErrorState
+          {...events.error}
+          retriedAt={retriedAt ?? undefined}
+          onRetry={() => {
+            setRetriedAt(new Date().toLocaleTimeString());
+            events.reload();
+          }}
+        />
+      </>
+    );
 
   return (
     <>

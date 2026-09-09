@@ -1,4 +1,5 @@
 import type { SystemHealth } from "@shared/types/operation";
+import { Icon } from "@shared/design-system/icons";
 import { HEALTH_PRESENTATION, StatusBadge } from "./StatusBadge";
 import { bytes, relativeAge } from "@shared/utilities/format";
 
@@ -20,7 +21,9 @@ export function HealthSummary({ health }: { health: SystemHealth }) {
       >
         <div style={{ flex: 1, minWidth: 300, display: "flex", flexDirection: "column", gap: 9 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span aria-hidden="true" style={{ color, fontSize: 15 }}>{p.glyph}</span>
+            <span aria-hidden="true" style={{ color, fontSize: 15, display: "inline-flex" }}>
+              <Icon name={p.icon} />
+            </span>
             <span
               style={{
                 fontFamily: "var(--font-mono)", fontSize: 17, fontWeight: 600,
@@ -37,23 +40,23 @@ export function HealthSummary({ health }: { health: SystemHealth }) {
             {/* "Service running" and nothing more. The service answered
                 this request, which is the whole claim; it used to carry an
                 uptime figure that no endpoint has ever reported (#211). */}
-            <StatusBadge tone={health.serviceRunning ? "ok" : "danger"} glyph={health.serviceRunning ? "\u25cf" : "\u2715"}>
+            <StatusBadge tone={health.serviceRunning ? "ok" : "danger"} icon={health.serviceRunning ? "status-active" : "failure"}>
               {health.serviceRunning ? "Service running" : "Service stopped"}
             </StatusBadge>
             <StatusBadge
               tone={health.storageState === "nominal" ? "ok" : health.storageState === "warning" ? "warn" : "danger"}
-              glyph={health.storageState === "nominal" ? "\u25cf" : "\u25b2"}
+              icon={health.storageState === "nominal" ? "status-active" : "warning"}
             >
               {"Storage " + health.storageState}
             </StatusBadge>
             {health.setsStale > 0 ? (
-              <StatusBadge tone="warn" glyph={"\u25b2"}>{health.setsStale + " set stale"}</StatusBadge>
+              <StatusBadge tone="warn" icon="warning">{health.setsStale + " set stale"}</StatusBadge>
             ) : null}
             {health.setsDegraded > 0 ? (
-              <StatusBadge tone="warn" glyph={"\u25b2"}>{health.setsDegraded + " set degraded"}</StatusBadge>
+              <StatusBadge tone="warn" icon="warning">{health.setsDegraded + " set degraded"}</StatusBadge>
             ) : null}
             {health.setsFailing > 0 ? (
-              <StatusBadge tone="danger" glyph={"\u2715"}>{health.setsFailing + " set halted"}</StatusBadge>
+              <StatusBadge tone="danger" icon="failure">{health.setsFailing + " set halted"}</StatusBadge>
             ) : null}
             {/* Issue #282/#316: shown only when it is not zero, the same
                 "a permanently-resting figure is a line an operator stops
@@ -64,7 +67,7 @@ export function HealthSummary({ health }: { health: SystemHealth }) {
                 because a growing count here is this manager doing
                 exactly what a read-only source was declared for. */}
             {health.readOnlyRetainedCount > 0 ? (
-              <StatusBadge tone="ok" glyph={"\u25cf"}>
+              <StatusBadge tone="ok" icon="status-active">
                 {health.readOnlyRetainedCount + " retained (read-only source)"}
               </StatusBadge>
             ) : null}

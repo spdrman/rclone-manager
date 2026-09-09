@@ -1244,6 +1244,37 @@ class TestWhatCountsAsInstalled(unittest.TestCase):
         self.assertFalse(self.verdict("running healthy", 502, (200, "")))
 
 
+class TestTheFirstRunEpilogIsOnlyForAFirstRun(unittest.TestCase):
+    """Issue #588. The three sentences after "Installed." tell an operator
+    that no configuration was written and to go through the setup flow,
+    which is true of a fresh install and false of an upgrade.
+
+    Upgrading a real NAS printed them over a deployment that had just kept
+    its config.yaml, both backup sets and its administrator record.
+    Following them means hunting the engine log for an enrolment link for
+    an account that already exists, and reasonably concluding the upgrade
+    lost the configuration."""
+
+    def test_nothing_is_said_about_first_run_when_a_configuration_is_already_there(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        args.config_dir.mkdir(parents=True, exist_ok=True)
+        (args.config_dir / "config.yaml").write_text("sources: []\n", encoding="utf-8")
+        lines = installer.first_run_epilog(args)
+        self.assertEqual(lines, [],
+                         "an upgrade that kept its configuration must not be told to go and create one")
+
+    def test_the_first_run_flow_is_still_explained_when_there_is_no_configuration(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        args.config_dir.mkdir(parents=True, exist_ok=True)
+        lines = installer.first_run_epilog(args)
+        self.assertTrue(lines, "a fresh install still needs to be pointed at the setup flow")
+        joined = "\n".join(lines)
+        self.assertIn("No config.yaml was written", joined)
+        self.assertIn("enroll", joined)
+
+
 class TestVersionOrdering(unittest.TestCase):
     """The installer could not previously tell an upgrade from a
     downgrade from a reinstall, because it never read what was running.
@@ -1258,7 +1289,25 @@ class TestVersionOrdering(unittest.TestCase):
     def test_a_registry_port_is_not_mistaken_for_a_tag(self):
         """A colon in a reference is not always a tag separator."""
         self.assertEqual(installer.image_tag("localhost:5000/backup-manager"), "")
-        self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.3.2"), "0.3.2")
+        self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.3.3"), "0.3.3")
+
+    def test_the_carried_version_is_described_relative_to_what_is_installed(self):
+        """Issue #588. compare_versions answers where the INSTALLED version
+        sits, and this sentence puts the answer in brackets after the
+        version the INSTALLER carries, so the two have to be asked in that
+        order or the sentence says the opposite of what is true.
+
+        Upgrading a real NAS from 0.3.1 to 0.3.3 printed "This installer
+        carries 0.3.3 (older)", which is the one sentence that makes
+        somebody stop a correct upgrade."""
+        line = installer.describe_what_is_here(2, 2, "0.3.1", "the rclone-manager container", "0.3.3")
+        self.assertIn("0.3.3 (newer)", line)
+        self.assertNotIn("0.3.3 (older)", line)
+        # And the other direction, which is a real downgrade.
+        self.assertIn("0.3.1 (older)",
+                      installer.describe_what_is_here(2, 2, "0.3.3", "", "0.3.1"))
+        self.assertIn("0.3.3 (same)",
+                      installer.describe_what_is_here(1, 1, "0.3.3", "", "0.3.3"))
 
     def test_ordering_is_numeric_and_not_lexical(self):
         self.assertEqual(installer.compare_versions("0.9.0", "0.10.0"), "older")
@@ -4081,11 +4130,44 @@ class TestTheCarriedReleasePinIsTheRecordedOne(unittest.TestCase):
             f"distribution/packaging/canonical.json.")
 
     def test_the_carried_digest_is_the_recorded_index_digest(self):
+        # Two assertions, and the first one is the one that would go
+        # missing if you only read the second.
+        #
+        # The key must be PRESENT. #644 made the hash recorder write
+        # "index_digest": null for a release that is cut and not yet
+        # pushed, which is what its own doc had always promised and what
+        # this file had always assumed. Nothing else in the repository
+        # checks that it kept doing so: distribution/packaging reads the
+        # field as *string, so an absent key decodes to nil, and
+        # release_manifest_test.go only complains about a nil digest when
+        # canonical.json says image.published is true, which for a cut and
+        # unpushed release it is not. So this line is the only automated
+        # detector that the recorder still emits the field at all, and
+        # #635 nearly deleted it: switching the read below to .get without
+        # this made a recorder that dropped the key again a silent pass.
+        self.assertIn(
+            "index_digest", self.manifest(),
+            f"{self.WHERE} has no index_digest key at all. scripts/release/record-release-hashes.sh writes it as null "
+            f"for a release that is cut and not yet pushed (#644), and nothing else in this repository notices when it "
+            f"stops: the Go side reads the field as *string and treats absent as nil, and the published-only arm of "
+            f"release_manifest_test.go never fires for an unpushed release.")
+
+        # And it must agree with what the installer carries. .get rather
+        # than [] now that presence is asserted above: a release that is
+        # cut and not yet pushed records null here and carries None there,
+        # which is a state install_docker_host.py handles deliberately and
+        # says out loud ("... is cut and not pushed, so
+        # container/release-manifest.json records no identity for it").
+        # They agree at None exactly as much as they agree at a digest, and
+        # the failure worth catching is one present and the other not.
         self.assertEqual(
-            installer.CARRIED_RELEASE_DIGEST, self.manifest()["index_digest"],
+            installer.CARRIED_RELEASE_DIGEST, self.manifest().get("index_digest"),
             f"CARRIED_RELEASE_DIGEST is not the index_digest {self.WHERE} records.\n\n"
             f"This is the value the installer HEADs the registry for and refuses on. A stale one "
-            f"turns a proof into a false alarm on every install.")
+            f"turns a proof into a false alarm on every install.\n\n"
+            f"Both being absent is a pass, and means the release is cut and not yet pushed. One "
+            f"present and the other not is the failure this catches: an installer carrying a digest "
+            f"the manifest does not record, or a pushed release the installer cannot prove.")
 
     def test_the_default_reference_is_the_carried_release(self):
         """The --image default and the carried digest are two halves of
@@ -4347,7 +4429,7 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
     to the identity container/release-manifest.json recorded (issue #484).
 
     A tag is a mutable pointer, which this project's own release tooling
-    says in as many words, so "install 0.3.2" is a claim about a name
+    says in as many words, so "install 0.3.3" is a claim about a name
     until something compares the name to a recorded identity. One
     anonymous HEAD does that, and it is the reason a previous release can
     be named at all: an installer that floated onto a future tag could

@@ -27,6 +27,7 @@ import type { BackupSet } from "@shared/types/backup";
 import type { LiveActivity, SetActivity } from "@shared/types/activity";
 
 const BASE_SET: BackupSet = {
+  connectionUnverified: false,
   id: "production/postgres-primary",
   source: "production",
   set: "postgres-primary",
@@ -54,7 +55,8 @@ const BASE_SET: BackupSet = {
   retainedCount: 32,
   retainedBytes: 421 * 1024 ** 3,
   trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:test-fingerprint" }],
-  trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00"
+  trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00",
+  sshKeyId: "key_a1b2c3"
 };
 
 const SECOND_SET: BackupSet = {
@@ -93,7 +95,7 @@ function activityFor(setId: string, over: Partial<SetActivity> = {}): SetActivit
 /** One epoch throughout, because everything in this file is one process.
  *  A restart is its own case and lives in dashboard-activity-restart.tsx. */
 function feed(sets: SetActivity[], pollAfterMs = 10_000): LiveActivity {
-  return { observedAt: "2026-08-29T02:01:20+02:00", epoch: "one-process", pollAfterMs, sets };
+  return { observedAt: "2026-08-29T02:01:20+02:00", epoch: "one-process", pollAfterMs, sets, deployment: null };
 }
 
 function renderStrips(api: BackupManagerApi, sets: BackupSet[] | null = [BASE_SET, SECOND_SET]) {

@@ -1,0 +1,139 @@
+# The bundled icon artwork, and the licence it is under
+
+Backup Manager draws its icons as inline SVG paths compiled into the web
+bundle. Those paths are Font Awesome Free artwork, which is CC BY 4.0, and
+this file is the attribution that licence asks for. Issue #621 is the
+change that put them there.
+
+## The attribution
+
+- **Creator**: Fonticons, Inc. (https://fontawesome.com)
+- **Copyright**: Copyright 2024 Fonticons, Inc.
+- **Material**: Font Awesome Free 6.7.2, the fourteen icons listed below
+- **Licence**: CC BY 4.0, SPDX `CC-BY-4.0`, Creative Commons Attribution 4.0
+  International
+- **Licence text**: https://creativecommons.org/licenses/by/4.0/
+- **Modified?** No. Each icon is the `d` attribute of the `<path>` in the
+  SVG that release ships, reproduced verbatim and unmodified. Nothing has
+  been redrawn, recoloured in the artwork itself, or edited.
+
+## Where the attribution travels
+
+Three places, because the readers are three different people.
+
+This file is the full record, for somebody who has the repository. The
+built page carries a shorter version of the same thing in an HTML comment
+in the web UI's index.html, which is what reaches somebody holding only
+the artifact: CC BY 4.0 section 3(a) is about that reader, and a
+JavaScript comment cannot serve them, because minification removes
+comments and an exported constant nothing imports is dropped by the
+bundler. And Font Awesome's own embedded notice sits beside the path data
+in the icon module, because the licence asks in as many words that those
+comments not be actively removed from files.
+
+Font Awesome Free is three licences at once and only one of them applies
+here. The icons are CC BY 4.0; the webfonts are SIL OFL 1.1 and the code
+is MIT, and neither of those ships in this product, because no Font
+Awesome font file and no Font Awesome code is used. The artwork is drawn
+by this project's own component, `ui/shared/src/design-system/icons.tsx`,
+which is where the paths live and where Font Awesome's own embedded
+attribution comment is reproduced.
+
+## Why the artwork is vendored rather than depended on
+
+Three constraints, and together they pick the shape.
+
+The product runs on a NAS. Not "usually has internet": an appliance on a
+LAN that may have no route off itself, which is a deployment this project
+supports on purpose. A CDN link, a webfont or a sprite sheet is an empty
+box there, and it fails silently.
+
+There is a bundle budget, and the release image size is gated at 1.05x its
+baseline. The Font Awesome React packages would spend a slice of that on
+an icon registry, a tree-shaking story and a runtime, in order to draw
+fourteen shapes. The shapes themselves are about 4.7 KB of path data.
+
+And a dependency would not have made the licensing simpler. Font Awesome
+Free's package declares `(CC-BY-4.0 AND OFL-1.1 AND MIT)`, which is a
+licence expression rather than a decided licence, and
+`distribution/packaging`'s policy check refuses exactly that: a component
+whose terms nobody has read is not evidence of a permissive one. Adding it
+would have needed the acceptance written down by hand anyway, which is
+what this file is.
+
+## The icons this product ships
+
+Fourteen, each named by the Font Awesome style and name it came from, then
+by the role this product draws it in.
+
+- `solid/triangle-exclamation` drawn as `warning`: warnings, everywhere one is stated
+- `solid/circle-xmark` drawn as `failure`: a failure, a halted set, a quarantined backup
+- `solid/circle-check` drawn as `success`: a verified backup, a passed preflight step, a saved setting
+- `solid/circle` drawn as `status-active`: a service that is running, a copy that is readable now
+- `regular/circle` drawn as `status-idle`: a disabled backup set, a transfer stage not started
+- `solid/circle-info` drawn as `info`: the info tone of a banner and of an activity line
+- `solid/gauge-high` drawn as `dashboard`: the Dashboard nav row
+- `solid/layer-group` drawn as `backup-sets`: the Backup sets nav row
+- `solid/box-archive` drawn as `backups`: the Backups nav row
+- `solid/clock-rotate-left` drawn as `activity`: the Activity nav row
+- `solid/ban` drawn as `quarantine`: the Quarantine nav row
+- `solid/gear` drawn as `settings`: the Settings nav row
+- `solid/arrow-left` drawn as `arrow-left`: the way back, in every page header that has one
+- `solid/arrow-right` drawn as `arrow-right`: the cancel-edit ledger's "becomes"
+
+`ui/shared/src/test/icon-artwork.test.tsx` compares that list against the
+registry in both directions and fails on a difference either way, so this
+file cannot go on naming artwork that was dropped or miss artwork that was
+added.
+
+## How NOTICE knows about this
+
+`NOTICE` is the file Apache-2.0 section 4(d) refers to and it is where a
+recipient of a built artifact looks for third-party attribution. It could
+not carry this at first, and the reason was structural rather than an
+oversight: `NOTICE` is generated byte for byte by
+`distribution/packaging` from two inputs, the Go module graph as
+`go list -deps` reports it and the production entries of
+`ui/shared/package-lock.json`. Vendored artwork is in neither, because it
+is not a module and not a package. It is source this repository carries.
+
+So the generator grew a third channel. `distribution/packaging/compliance.json`
+carries a `vendoredAssets` register with the fields above in it,
+`buildNotice` renders a section from it, and `VendoredAssetComplaints`
+checks it against the tree in three directions rather than believing it:
+
+- a declaration that is not an attribution at all (no creator, no licence
+  URI, no modification statement) is refused;
+- every file the register says the material is vendored INTO is read for a
+  marker naming the exact release, so upgrading the artwork and leaving the
+  register behind is a failed build;
+- every artifact the register says the attribution is recorded IN is read
+  for the creator, the copyright, the licence, the address of its text and
+  the modification statement, so a record that quietly stops saying one of
+  them is a failed build too;
+- and the sweep runs the other way, over the UI's source and the page it is
+  served in, refusing any file that carries somebody else's licence and that
+  no entry claims. That is the direction which cannot be satisfied by
+  declaring less, and it is what stops the next vendored thing arriving with
+  no paperwork.
+
+`NOTICE`'s own header changed with it. It used to call
+`provenance/third-party-licenses.json` "the complete inventory" of
+third-party software, which stopped being true the moment this shipped, and
+pointing a reader at a file that does not have what they came for is worse
+than pointing them nowhere.
+
+## What is still not recorded, and where it should end up
+
+`provenance/sbom.spdx.json` does not carry this artwork. The SBOM is built
+from the inventory, and the inventory is deliberately left derived: its one
+claim about itself is that every row is re-derived from the tree on every
+run and compared, so a hand-written row would have to be exempted from that
+comparison, and an inventory a reader has to know the exception to is one
+they cannot take at face value.
+
+That is a real gap and not a settled question. Closing it means an SPDX
+package for vendored source, which wants a download location, a supplier
+and a file-level checksum that this register does not carry yet. Inventing
+three fields to make one entry appear would be the same mistake in the
+other direction, so it is separate work rather than a line here.

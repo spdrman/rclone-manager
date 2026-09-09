@@ -52,7 +52,8 @@ the way its predecessor did.
 | `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, in this process rather than by calling that route, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
 | `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set`. `--backup-set` takes the `source/backup-set` id `sources`, `status` and `retention` name a backup set by, and a plain set name where one source configures it. Not this list's own first column, which is the whole artifact id and a field longer; a name two sources share is refused with both ids rather than answered for one of them (issue #569) |
 | `fetch` | run one backup set's cycle on demand |
-| `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
+| `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides
+| `activity` | read the durable lifecycle log, newest first, filtered by `--backup-set` and `--severity`. `--follow` streams the live feed from the process serving this deployment instead, until interrupted, so a terminal beside a running cycle shows what it is doing rather than what it did (issues #598, #599) | |
 | `reconcile` | run FR-17 reconciliation for every backup set |
 | `validate` | re-check one artifact's durable copy, wherever it is. A copy on a storage medium is checked at the strongest verification class that costs nothing; `--content` downloads it and re-hashes it, which costs egress, so FR-31 makes that something an operator asks for (issue #435) |
 | `catalog` | `catalog rebuild` reconstructs a lost or corrupted state database from the sidecar recovery manifests |
@@ -514,15 +515,28 @@ down, where the first configuration is written from the command line.
 (or remove the key, or set it `false`) in `config.yaml` and confirm it with `sources`, which
 prints `status=enabled` or `status=disabled` for exactly this field.
 
-**Testing a connection is `fetch --dry-run`, and it is a good one.** `POST
-/backup-sets/test-connection` authenticates, verifies the host key and lists the remote.
-`fetch --config ./config.yaml --source S --backup-set B --dry-run` does the same real
-authenticate-and-list, against the exact transport code path a real cycle would use, and
-prints every object it finds with its size, which is strictly more than the API route
-returns. It only works for a backup set already in `config.yaml`; to check a *candidate*
-before committing to it, add it to the file (nothing is destructive about an entry that is
-merely present) and run `check` then `fetch --dry-run` against it, removing or fixing the
-entry if it does not check out.
+**Testing a connection is `backup-set test-connection`, and it is no longer a
+work-around.** This entry used to send an operator to `fetch --dry-run`, because `POST
+/backup-sets/test-connection` had no verb at all: the six-step check that route answers with
+(#596) could only be reached from a browser. Issue #624 gave it one. `backup-manager
+backup-set test-connection <source/backup-set>` resolves the host, connects, checks its host
+key against what the set trusts, offers the configured key, authenticates and lists the
+remote folder, and prints all six outcomes with a non-zero exit when any of them fails.
+`preflight` is the same verb under the name the storage-destination side spells it.
+
+Beside a serving engine this command has a route to, the check is made BY that engine, so
+its steps land on the live feed the web UI and `activity --follow` are both reading rather
+than only in this terminal; with nothing serving, it is made here against the same
+`config.yaml` this process would write. A check that passes clears the unverified mark a
+`--no-verify` create or patch left on the set, which is why it goes through the write door
+rather than the read one.
+
+`fetch --config ./config.yaml --source S --backup-set B --dry-run` is still worth knowing:
+it does the same real authenticate-and-list against the exact transport code path a cycle
+uses, and prints every object it finds with its size, which is more detail than either the
+route or the verb returns. A *candidate* that is not in `config.yaml` yet needs neither,
+because `backup-set create` proves the connection before it writes anything and refuses when
+it cannot.
 
 **Provisioning an SSH key and capturing a host key are already fully documented, in
 `docs/ssh-setup.md`, and this is the missing cross-reference.** `POST /ssh-keys` exists so a
@@ -544,7 +558,10 @@ retry` and `quarantine reinstate`. `backup-manager settings` reports the live, r
 FR-18/FR-19 retention policy and FR-21 capacity settings (the [CLI-COMMANDS](#status-what-actually-runs-today)
 table above has both), and `backup-manager settings patch [flags]` changes one in place,
 hot-reloaded the same way `PATCH /api/v1/settings` already is. A full retention tier-chain
-replacement of the *deployment's* policy stays a config-file edit; every other retention and
+replacement of the *deployment's* policy used to stay a config-file edit; since G2.3 (#595)
+it is `settings patch --policy-file`, spelled exactly the way `backup-set retention` spells
+it, because a chain now names where the copies go and "edit the file" is not an equal-power
+route beside a serving process, which refuses a file write outright. Every retention and
 capacity field is reachable through `settings patch` without a restart.
 
 **A backup set's own retention policy is not a config-file edit either (issue #333).**
@@ -624,7 +641,7 @@ The image is published, which is the other thing this section used to deny, and 
 version this tree declares is not the published one. EPIC F cut v0.1.0 and then v0.2.0 to
 `ghcr.io/spdrman/backup-manager`, v0.3.0 followed them there, all three are still
 keyless-signed with the SBOM attested beside them, and `0.3.0`'s image index is
-`sha256:95e0bd37`. `0.3.2` is cut and not pushed, which is what a release looks like
+`sha256:95e0bd37`. `0.3.3` is cut and not pushed, which is what a release looks like
 between the cut and the push: `distribution/packaging/canonical.json` records
 `published: false` and `container/release-manifest.json` is back to a null `index_digest`
 and a null `registry_digest` per architecture. That flag and those digests move together,
@@ -1431,6 +1448,15 @@ policies without editing config; and
 `GET /api/v1/backup-sets/{source}/{set}/retention/preview` in the web UI, whose apply
 counterpart refuses a plan that has gone stale rather than silently recomputing a wider one.
 
+And one way to make it happen from a terminal: `backup-manager retention apply
+<source/backup-set> --acknowledge` (issue #602). It prints the plan it is about to apply,
+applies exactly that plan through the same preview/apply pair the API uses, and refuses
+with nothing deleted if the set's inventory, configuration or civil date moved in between.
+`--acknowledge` is required; the refusal without it says what it consents to rather than
+only naming the flag. FR-19's last known good is never in the delete set, and since #602 a
+last known good whose own copy cannot be confirmed stops the whole pass rather than
+authorising it.
+
 Since #430 a preview carries the moves it would make and the medium each deletion happens
 on, both surfaces alike. The medium is spelled by ABSENCE when it is local, which is what
 keeps a deployment that declares no medium seeing exactly the response it saw before the
@@ -1661,6 +1687,18 @@ against the one the configuration claims, the declared verification class asked 
 the probe object confirmed deleted. An archive class is refused at `deliverable` with
 nothing written at all, because an object there is billed for a minimum duration measured
 in months and that is not a thing to discover empirically.
+
+`medium add` has verified by default since #443 and the wizard's Save button has been
+gated on the same check, and until #636 that was the whole of it: the check lived in two
+first-party clients, so `POST /api/v1/storage-mediums` accepted a destination nobody had
+verified and answered 201, and nothing afterwards could tell that destination from one
+proven against a real bucket. The engine runs the check itself now, in front of every
+create and every edit that changes what the destination IS, and refuses with
+`MEDIUM_CONNECTION_NOT_PROVEN`. `--no-verify` and `skip_connection_check` are the way past
+it, and a destination written under either is marked `connection_unverified` in
+`config.yaml` until a check passes, so the sentence the command printed is not the only
+thing standing between an unproven destination and an operator who did not type it. That is
+the shape #628 landed on the source side, on the other half of the same invariant.
 
 No report it produces ever carries key material, and that is structural rather than
 careful: every sentence in a report is one of the package's own strings, composed only out
@@ -2282,6 +2320,7 @@ core/internal/
   recovery/      the non-secret sidecar manifest written beside every committed artifact
   reconcile/     startup reconciliation against the journal, filesystem and remote
   retention/     GFS classification, last-known-good protection, home-medium planning, and the local prune
+  sourcecheck/   proves a backup set's SSH source can be reached, verified and listed, step by step, before a cycle needs it
   revalidate/    scheduled re-verification of artifacts that already passed
   state/         the SQLite journal: durable, idempotent transition recording
   testenv/       the environment a test has to be in before it may conclude anything from file permissions

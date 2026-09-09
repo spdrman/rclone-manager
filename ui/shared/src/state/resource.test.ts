@@ -140,3 +140,45 @@ describe("useResource return-value identity", () => {
     expect(result.current).toBe(afterResolve);
   });
 });
+
+/**
+ * Issue #598. This file carried a byte-identical copy of `useAsync`'s
+ * fallback, so the graph-backed half of the app threw the exception away
+ * exactly as the component-state half did, and minted the same literal
+ * correlation id while doing it.
+ */
+describe("a failed fetch keeps what the exception said", () => {
+  afterEach(() => {
+    resetGraphForTests();
+  });
+
+  it("never writes the literal correlation id 'unavailable' onto the node", async () => {
+    const node = createResourceNode<string>("test.resource.failure-1");
+    const failed = deferred<string>();
+
+    fetchResource(node, () => failed.promise);
+    failed.reject(new SyntaxError("Unexpected end of JSON input"));
+    await failed.promise.catch(() => {});
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const state = graph.read(node);
+    expect(state.error).not.toBeNull();
+    expect(state.error?.correlationId).toBeUndefined();
+  });
+
+  it("carries the exception's own words through as detail", async () => {
+    const node = createResourceNode<string>("test.resource.failure-2");
+    const failed = deferred<string>();
+
+    fetchResource(node, () => failed.promise);
+    failed.reject(new SyntaxError("Unexpected end of JSON input"));
+    await failed.promise.catch(() => {});
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const state = graph.read(node);
+    expect(state.error?.detail).toContain("SyntaxError");
+    expect(state.error?.detail).toContain("Unexpected end of JSON input");
+  });
+});

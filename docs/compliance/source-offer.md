@@ -48,6 +48,33 @@ licence text in:
   inventory;
 - `provenance/sbom.spdx.json`, an SPDX 2.3 SBOM of the same set.
 
+Those three cover the Go module graph and the npm packages, which is
+everything this product DEPENDS on. What it also SHIPS is in none of them,
+because it is neither a module nor a package: material vendored into this
+repository's own tree.
+
+The icon artwork compiled into the web bundle is Font Awesome Free,
+carried as SVG path data rather than pulled in as a package (#621), and it
+is CC BY 4.0. The typeface the web UI renders in is IBM Plex Sans and IBM
+Plex Mono, carried as woff2 files served out of the image rather than
+fetched from a font service (#631), and it is SIL OFL 1.1. Both are
+attribution licences. `docs/compliance/bundled-icon-artwork.md` and
+`docs/compliance/bundled-webfonts.md` are the full records: the creator,
+the release, the licence and its text, and a statement about modification.
+
+`NOTICE` carries all of it too, in its own section, and through one
+channel rather than one per asset. `compliance.json` declares the
+material, `buildNotice` renders it, and `VendoredAssetComplaints` reads
+the files the declaration names rather than taking its word for any of it.
+The two kinds are held to different evidence, because they have to be: the
+artwork lives inside a component this project maintains and is held to a
+marker string that file has to keep carrying, while the font files are
+IBM's own bytes redistributed and are held to a SHA-256 each, since
+OFL-1.1 reserves the font name for the copyright holder's own builds and
+"unmodified" is the permission rather than a nicety. The fonts also ship
+the licence text itself at `ui/shared/public/fonts/LICENSE.txt`, which
+OFL-1.1 section 2 asks for in every copy and CC BY 4.0 does not.
+
 ## The MPL-2.0 components, and how to get their source
 
 Two of the components linked into both shipped binaries are under the **Mozilla

@@ -106,10 +106,14 @@ type PrunePlan struct {
 // actually wires this package to FR-20's positively-identified,
 // symlink-and-traversal-safe local deletion, via internal/retention/
 // prune.go's PruneDecide/PruneApply (issue #21). cmd/backup-manager's
-// `retention` command still only calls RetentionPreviewAll today, not this
-// method — see that command's own note for the CLI-side gap this leaves,
-// tracked separately from this issue (#96/B3.1), which only needed an
-// API-facing preview/apply, not a CLI one.
+// bare `retention` command still only calls RetentionPreviewAll, which is
+// why a preview taken there and one taken through the API can disagree
+// about a pruned artifact: this one stats the path and reports REFUSE,
+// that one reads classification and goes on reporting DELETE. Its
+// `retention apply` verb (issue #602) goes through core/service's
+// envelope rather than through either of these methods directly, so the
+// CLI-side gap #96/B3.1 left is closed without a second authorisation
+// path being opened beside the plan_id one.
 func (s *Service) PrunePreview(ctx context.Context, set model.BackupSetID) (PrunePlan, error) {
 	return s.PrunePreviewAt(ctx, set, s.now())
 }
@@ -196,8 +200,43 @@ func (s *Service) PruneApplySnapshot(ctx context.Context, set model.BackupSetID,
 	if err != nil {
 		return PrunePlan{}, fmt.Errorf("app: prune apply: %s: %w", set, err)
 	}
+	s.reportRetentionHold(ctx, set, verdicts)
 	s.recordRetentionRun(set)
 	return PrunePlan{Set: set, Verdicts: verdicts, Records: records, RetentionIsOverride: bs.RetentionIsOverride(), Retention: bs.Retention, HomePlan: homePlan}, nil
+}
+
+// reportRetentionHold logs FR-30's hold once, at warn, when a pass this
+// package just applied refused every deletion in a backup set because the
+// restore point FR-19 protects has no confirmed readable copy (issue
+// #602).
+//
+// It is the one refusal internal/retention produces that means
+// "reconciliation is needed" rather than "retention decided not to delete
+// this", and until this existed it reached nothing at all: no log line, no
+// event, no alert, only a REFUSE inside a verdict list somebody had to ask
+// for. A backup set can sit in it indefinitely, with local copies
+// accumulating and every other reading looking normal, until FR-21's
+// capacity refusal starts refusing transfers for a reason that names
+// neither this set nor this cause.
+//
+// Once per pass, not once per verdict: the hold is a fact about the SET,
+// and every held verdict carries the identical sentence. A pass over a
+// thousand artifacts writing a thousand identical warnings is a pass
+// nobody reads.
+//
+// From the apply and never from the preview (PrunePreviewAt deliberately
+// does not call this), for the reason obs.Logger.RetentionHold's own doc
+// gives: the condition lasts until somebody fixes it, so a preview surface
+// that emitted it would write one per dashboard poll for as long as the
+// set stayed broken.
+func (s *Service) reportRetentionHold(ctx context.Context, set model.BackupSetID, verdicts []retention.PruneVerdict) {
+	for _, v := range verdicts {
+		if v.HoldReason == "" {
+			continue
+		}
+		s.logger().RetentionHold(ctx, set.String(), v.HoldReason)
+		return
+	}
 }
 
 // homePlanFor is FR-27's home-medium pass over one backup set, computed

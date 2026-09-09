@@ -1,0 +1,308 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cancel and exit edit mode</title>
+<style>
+:root{
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;
+  --radius-sm:4px;--radius-md:6px;--radius-lg:8px;--radius-xl:10px;--radius-pill:999px;
+  --bg:#f2f2f0;--surface:#fff;--surface-2:#fafaf9;--surface-3:#f0f0ed;
+  --border:#e0dfdc;--border-strong:#c8c7c3;
+  --text:#191a19;--text-2:#5b5d5b;--text-3:#8b8d8a;
+  --accent:oklch(0.52 0.09 255);--accent-quiet:oklch(0.95 0.02 255);
+  --ok:oklch(0.52 0.10 155);--ok-quiet:oklch(0.955 0.025 155);
+  --warn:oklch(0.56 0.11 70);--warn-quiet:oklch(0.96 0.035 75);
+  --danger:oklch(0.52 0.15 25);--danger-quiet:oklch(0.955 0.03 25);
+  --shadow:0 1px 2px rgba(20,20,18,.05),0 1px 1px rgba(20,20,18,.04);
+  --shadow-lift:0 8px 28px rgba(20,20,18,.14),0 2px 6px rgba(20,20,18,.08);
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:var(--space-6)}
+.wrap{max-width:1040px;margin:0 auto;display:flex;flex-direction:column;gap:var(--space-6)}
+h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01em}
+.sub{color:var(--text-2);font-size:13px;margin:0}
+.pane{display:flex;flex-direction:column;gap:var(--space-3)}
+.panehead{display:flex;align-items:baseline;gap:var(--space-3)}
+.panenum{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--accent);
+  background:var(--accent-quiet);border-radius:var(--radius-sm);padding:2px 7px;letter-spacing:.04em}
+.panetitle{font-size:13.5px;font-weight:600}
+.panenote{color:var(--text-3);font-size:12.5px;margin:0}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);
+  box-shadow:var(--shadow);overflow:hidden}
+.card__header{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-4);
+  padding:var(--space-4) var(--space-5);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.setname{font-weight:600;font-size:15px;display:flex;align-items:center;gap:9px}
+.setmeta{color:var(--text-3);font-size:12px;font-family:var(--font-mono);margin-top:3px}
+.actions{display:flex;gap:var(--space-2);flex-wrap:wrap}
+.card__body{padding:var(--space-5)}
+
+.pill{display:inline-flex;align-items:center;gap:6px;height:21px;padding:0 9px;
+  border-radius:var(--radius-pill);font-size:11px;font-weight:600;letter-spacing:.02em}
+.pill--ok{background:var(--ok-quiet);color:var(--ok)}
+.pill--edit{background:var(--warn-quiet);color:var(--warn)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+.btn{height:30px;padding:0 12px;border:1px solid var(--border-strong);border-radius:var(--radius-md);
+  background:var(--surface);color:var(--text);font:inherit;font-size:12.5px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{background:var(--surface-3)}
+.btn--primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn--caution{border-color:oklch(0.75 0.09 70);color:var(--warn)}
+.btn--sm{height:26px;padding:0 10px;font-size:12px}
+.btn--ghost{border-color:transparent;background:transparent;color:var(--text-2)}
+.btn[disabled]{opacity:.45;cursor:default}
+.btn--new{position:relative}
+.btn--new::after{content:"NEW";position:absolute;top:-8px;right:-8px;background:var(--accent);color:#fff;
+  font-size:8.5px;font-weight:700;letter-spacing:.06em;border-radius:var(--radius-pill);padding:1px 5px}
+
+.eyebrow{font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--text-3);margin:0}
+.section__head{padding:var(--space-3) var(--space-5);border-bottom:1px solid var(--border);
+  background:var(--surface-2)}
+
+.field{display:flex;gap:9px;align-items:flex-end;margin-bottom:var(--space-4)}
+.field:last-child{margin-bottom:0}
+.field__main{flex:1;min-width:0}
+.label{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;margin-bottom:5px}
+.input{width:100%;height:32px;padding:0 10px;border:1px solid var(--border-strong);
+  border-radius:var(--radius-md);background:var(--surface);font:inherit;font-size:13px;color:var(--text)}
+.input--mono{font-family:var(--font-mono);font-size:12px}
+.input--dirty{border-color:var(--accent);box-shadow:0 0 0 2.5px var(--accent-quiet)}
+.input--placeholder{color:var(--text-3)}
+.tag{font-size:10px;font-weight:700;letter-spacing:.05em;border-radius:var(--radius-sm);padding:1px 6px}
+.tag--dirty{background:var(--accent-quiet);color:var(--accent)}
+.tag--saved{background:var(--ok-quiet);color:var(--ok)}
+.hint{margin:5px 0 0;font-size:11.5px;color:var(--text-3)}
+
+.banner{display:flex;gap:11px;align-items:flex-start;border-radius:var(--radius-lg);
+  padding:var(--space-3) var(--space-4);font-size:12.5px;border:1px solid}
+.banner--warn{background:var(--warn-quiet);border-color:oklch(0.83 0.07 75);color:#4a3a17}
+.banner--info{background:var(--accent-quiet);border-color:oklch(0.86 0.04 255);color:#22304a}
+.banner--ok{background:var(--ok-quiet);border-color:oklch(0.85 0.06 155);color:#1c3a2b}
+.banner__glyph{font-weight:700;line-height:1.35}
+.banner__body{flex:1;min-width:0}
+.banner__title{font-weight:600;font-size:13px;display:block;margin-bottom:3px}
+.banner__acts{display:flex;gap:var(--space-2);margin-top:var(--space-3)}
+.fp{font-family:var(--font-mono);font-size:11.5px;word-break:break-all}
+
+.scrim{background:rgba(24,25,23,.42);border-radius:var(--radius-xl);padding:var(--space-6);
+  display:flex;justify-content:center}
+.dialog{background:var(--surface);border-radius:var(--radius-xl);box-shadow:var(--shadow-lift);
+  width:min(520px,100%);overflow:hidden;border:1px solid var(--border)}
+.dialog__head{padding:var(--space-5) var(--space-5) var(--space-3)}
+.dialog__eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--warn);margin:0 0 6px}
+.dialog__title{font-size:16px;font-weight:600;margin:0;letter-spacing:-.01em}
+.dialog__body{padding:0 var(--space-5) var(--space-4);font-size:13px;color:var(--text-2);
+  display:flex;flex-direction:column;gap:var(--space-3)}
+.dialog__foot{padding:var(--space-3) var(--space-5);border-top:1px solid var(--border);
+  background:var(--surface-2);display:flex;justify-content:flex-end;gap:var(--space-2)}
+.ledger{border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+.ledger__group{border-bottom:1px solid var(--border)}
+.ledger__group:last-child{border-bottom:0}
+.ledger__head{padding:7px var(--space-3);background:var(--surface-2);font-size:10.5px;font-weight:700;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);display:flex;align-items:center;gap:7px}
+.ledger__row{display:flex;align-items:baseline;gap:9px;padding:7px var(--space-3);font-size:12.5px;
+  border-top:1px solid var(--border)}
+.ledger__row:first-of-type{border-top:0}
+.ledger__k{color:var(--text-2);min-width:124px}
+.ledger__v{font-family:var(--font-mono);font-size:11.5px;color:var(--text);flex:1;min-width:0}
+.strike{text-decoration:line-through;color:var(--text-3)}
+.glyph-ok{color:var(--ok);font-weight:700}
+.glyph-drop{color:var(--warn);font-weight:700}
+
+.term{background:#14150f;color:#d7d9d2;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;
+  padding:var(--space-3) var(--space-5);border-radius:var(--radius-lg);overflow:hidden}
+.term .t{color:#6f736a}
+.term .i{color:#9aa39b}
+.term .w{color:oklch(0.78 0.12 75)}
+.term .g{color:oklch(0.72 0.11 155)}
+.termcap{font-size:11.5px;color:var(--text-3);margin:0}
+</style>
+<div class="wrap">
+  <div>
+    <h1>Cancel and exit edit mode</h1>
+    <p class="sub">The backup set detail page at <span class="fp">/sets/&lt;source&gt;/&lt;set&gt;</span>. Edit is a mode,
+      each box saves itself, and today the only way out is <strong>SAVE ALL &amp; EXIT EDIT</strong>. This adds the
+      other way out and is precise about what it can and cannot take back.</p>
+  </div>
+
+  <!-- PANE 1 ------------------------------------------------------------ -->
+  <section class="pane">
+    <div class="panehead">
+      <span class="panenum">1</span>
+      <span class="panetitle">Edit mode, mid-session</span>
+    </div>
+    <p class="panenote">Host was saved a minute ago by its own Save. User and SSH key are typed and unsaved.
+      The new button sits beside SAVE ALL, in the caution tier, and it is enabled only because something is dirty.</p>
+    <div class="card">
+      <div class="card__header">
+        <div>
+          <div class="setname">var-backups <span class="pill pill--edit"><span class="dot"></span>EDITING</span></div>
+          <div class="setmeta">api-server:1209 · /var/backups</div>
+        </div>
+        <div class="actions">
+          <button class="btn">Run all due sets</button>
+          <button class="btn">Test connection</button>
+          <button class="btn btn--primary">SAVE ALL &amp; EXIT EDIT</button>
+          <button class="btn btn--caution btn--new">CANCEL &amp; EXIT EDIT MODE</button>
+        </div>
+      </div>
+      <div class="section__head"><p class="eyebrow">Edit this backup set</p></div>
+      <div class="card__body">
+        <div class="field">
+          <div class="field__main">
+            <div class="label">Host <span class="tag tag--saved">SAVED</span></div>
+            <input class="input" value="api-server.internal" readonly>
+            <p class="hint">Saved at 14:12. Cancel does not take this back.</p>
+          </div>
+          <button class="btn btn--sm" disabled>Save</button>
+        </div>
+        <div class="field">
+          <div class="field__main">
+            <div class="label">User <span class="tag tag--dirty">UNSAVED</span></div>
+            <input class="input input--dirty" value="backup-agent" readonly>
+            <p class="hint">Was <span class="fp">rclone</span> when edit mode opened.</p>
+          </div>
+          <button class="btn btn--sm">Save</button>
+        </div>
+        <div class="field">
+          <div class="field__main">
+            <div class="label">Remote folder</div>
+            <input class="input" value="/var/backups" readonly>
+          </div>
+          <button class="btn btn--sm" disabled>Save</button>
+        </div>
+        <div class="field">
+          <div class="field__main">
+            <div class="label">SSH key <span class="tag tag--dirty">UNSAVED</span></div>
+            <input class="input input--mono input--dirty" value="8c31f0be-2b74-4f0a-9d51-6a3b7c0e14aa" readonly>
+            <p class="hint">Write-only box. Empty means keep the key this set already uses.</p>
+          </div>
+          <button class="btn btn--sm">Save</button>
+        </div>
+        <div class="field">
+          <div class="field__main">
+            <div class="label">Trusted host key</div>
+            <input class="input input--mono input--placeholder" value="paste a known_hosts line to change what this set trusts" readonly>
+          </div>
+          <button class="btn btn--sm" disabled>Save</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PANE 2 ------------------------------------------------------------ -->
+  <section class="pane">
+    <div class="panehead">
+      <span class="panenum">2</span>
+      <span class="panetitle">The confirmation, and the ledger that makes it honest</span>
+    </div>
+    <p class="panenote">The dialog names every box by name and puts it on one of two sides. It never claims to
+      undo a save, because this page has no undo: the per-box Save already wrote to config.yaml and the engine
+      already hot-reloaded it.</p>
+    <div class="scrim">
+      <div class="dialog">
+        <div class="dialog__head">
+          <p class="dialog__eyebrow">2 unsaved changes</p>
+          <h2 class="dialog__title">Leave edit mode and discard them?</h2>
+        </div>
+        <div class="dialog__body">
+          <div class="ledger">
+            <div class="ledger__group">
+              <div class="ledger__head"><span class="glyph-drop">↩</span> Discarded, never sent</div>
+              <div class="ledger__row">
+                <span class="ledger__k">User</span>
+                <span class="ledger__v"><span class="strike">backup-agent</span> → rclone</span>
+              </div>
+              <div class="ledger__row">
+                <span class="ledger__k">SSH key</span>
+                <span class="ledger__v"><span class="strike">8c31f0be-…-6a3b7c0e14aa</span> → unchanged</span>
+              </div>
+            </div>
+            <div class="ledger__group">
+              <div class="ledger__head"><span class="glyph-ok">✓</span> Already saved, and staying saved</div>
+              <div class="ledger__row">
+                <span class="ledger__k">Host</span>
+                <span class="ledger__v">api-server.internal <span style="color:var(--text-3)">· 14:12</span></span>
+              </div>
+            </div>
+          </div>
+          <p style="margin:0">Cancel is not an undo. Each box saved on its own, and Host is in the configuration
+            the engine is running right now. To put it back, edit it again.</p>
+        </div>
+        <div class="dialog__foot">
+          <button class="btn">Keep editing</button>
+          <button class="btn btn--caution">Discard 2 changes and exit</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PANE 3 ------------------------------------------------------------ -->
+  <section class="pane">
+    <div class="panehead">
+      <span class="panenum">3</span>
+      <span class="panetitle">Cancelling out from under a pending refusal</span>
+    </div>
+    <p class="panenote">A save that alters what host keys this set trusts comes back refused, with both
+      fingerprints to compare. Cancel while that banner is up drops the acknowledgement along with the draft, and
+      says so, because a dialog that only counted boxes would be silent about the one thing an operator was
+      part-way through deciding.</p>
+    <div class="card">
+      <div class="card__header">
+        <div>
+          <div class="setname">var-backups <span class="pill pill--edit"><span class="dot"></span>EDITING</span></div>
+          <div class="setmeta">api-server:1209 · /var/backups</div>
+        </div>
+        <div class="actions">
+          <button class="btn btn--primary">SAVE ALL &amp; EXIT EDIT</button>
+          <button class="btn btn--caution btn--new">CANCEL &amp; EXIT EDIT MODE</button>
+        </div>
+      </div>
+      <div class="card__body" style="display:flex;flex-direction:column;gap:var(--space-4)">
+        <div class="banner banner--warn">
+          <span class="banner__glyph">!</span>
+          <div class="banner__body">
+            <span class="banner__title">This change alters what host keys this backup set trusts</span>
+            <div>api-server:1209 is on record as <span class="fp">ssh-ed25519 SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI</span>,
+              and the line offered pins <span class="fp">ssh-ed25519 SHA256:ZDDX9OOpOPffrXnVFL7sB8KFNo0Vma7+zMV8rDgmHL8</span>.
+              Compare it against the host before you answer.</div>
+            <div class="banner__acts">
+              <button class="btn btn--sm btn--primary">Save anyway</button>
+              <button class="btn btn--sm">Leave it as it was</button>
+            </div>
+          </div>
+        </div>
+        <div class="banner banner--info">
+          <span class="banner__glyph">i</span>
+          <div class="banner__body">
+            <span class="banner__title">What CANCEL does from here</span>
+            The refused body is dropped with the draft. No acknowledgement is sent, nothing is written to this
+            set's known_hosts, and the key on record stays the one on record. The set is not halted by cancelling
+            and the edit hold is released, so the schedule resumes.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PANE 4 ------------------------------------------------------------ -->
+  <section class="pane">
+    <div class="panehead">
+      <span class="panenum">4</span>
+      <span class="panetitle">What reaches the terminal</span>
+    </div>
+    <p class="panenote">Leaving edit mode is an event, and a discarded draft is exactly the kind of thing an
+      operator later swears they saved. Both exits report into the global terminal (G1.2).</p>
+    <div class="term">
+      <div><span class="t">14:12:04</span> <span class="i">api-server/var-backups: edit hold taken, schedule paused</span></div>
+      <div><span class="t">14:12:41</span> <span class="g">api-server/var-backups: saved host = api-server.internal</span></div>
+      <div><span class="t">14:14:09</span> <span class="w">api-server/var-backups: save refused, BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED</span></div>
+      <div><span class="t">14:15:22</span> <span class="w">api-server/var-backups: edit mode cancelled, discarded user and ssh_key_id, dropped 1 pending acknowledgement</span></div>
+      <div><span class="t">14:15:22</span> <span class="i">api-server/var-backups: edit hold released, schedule resumed</span></div>
+    </div>
+  </section>
+</div>

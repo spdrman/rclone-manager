@@ -55,6 +55,26 @@ type fakeFirstRun struct {
 
 func (f *fakeFirstRun) Configured() bool { return f.configured }
 
+// The looking half of the setup surface (#592). A first-run instance has
+// no configuration, so nothing can be USING a key, but it does have a
+// store to list and a machine to scan, and scanning is what a brand new
+// operator needs: a default install has exactly one key on it.
+func (f *fakeFirstRun) ListSSHKeys(context.Context) ([]service.SSHKeyListing, error) {
+	return []service.SSHKeyListing{{
+		ID: "key_1", Algorithm: "ssh-ed25519", Fingerprint: "SHA256:test", UsedBy: nil,
+	}}, nil
+}
+
+func (f *fakeFirstRun) DiscoverSSHKeyCandidates(context.Context) (service.SSHKeyDiscovery, error) {
+	return service.SSHKeyDiscovery{
+		Locations: []service.SSHKeyDiscoveryLocation{{Path: "/etc/backup-manager", Kind: "mount"}},
+	}, nil
+}
+
+func (f *fakeFirstRun) ImportSSHKeyCandidate(context.Context, string) (service.SSHKeyRef, error) {
+	return service.SSHKeyRef{}, service.ErrSSHKeyCandidateNotFound
+}
+
 func (f *fakeFirstRun) ImportSSHKey(_ context.Context, raw []byte, _ string) (service.SSHKeyRef, error) {
 	f.imported = raw
 	if f.importErr != nil {
@@ -114,9 +134,14 @@ var firstRunSafeRoutes = map[string]bool{
 
 	// The setup flow itself. Each is either read-only in effect
 	// (host-key-probe, test-connection) or the setup write it exists for
-	// (ssh-keys, first-run), and none of them touches, moves or deletes a
-	// byte of backup data, because there is none yet.
+	// (both imports, first-run), and none of them touches, moves or
+	// deletes a byte of backup data, because there is none yet. The two
+	// imports are one tier and one decision: pasting a key and choosing
+	// one this machine already holds both end with a reference in the
+	// store, and splitting them into two routes did not change what
+	// either is allowed to do before configuration exists.
 	"POST /api/v1/ssh-keys":                    true,
+	"POST /api/v1/ssh-keys/from-candidate":     true,
 	"POST /api/v1/ssh/host-key-probe":          true,
 	"POST /api/v1/backup-sets/test-connection": true,
 	"POST /api/v1/system/first-run":            true,
@@ -485,6 +510,41 @@ func TestCompleteFirstRun_MapsAnInvalidRequestTo400(t *testing.T) {
 	}
 }
 
+// TestCompleteFirstRun_MapsAnUnprovenConnectionTo409 is the same finding
+// on the first-run route (PR #628 review). CreateInitialConfig proves the
+// first set's connection itself now and refuses with
+// ErrConnectionNotProven, and the wizard that walks this flow already
+// runs the candidate check before it submits, so the refusal a browser
+// sees here is rare; the one a client that never checked sees is not, and
+// it has to be a 409 the contract declares for this operation rather than
+// the "failed to write backup set" everything unmapped collapses into.
+func TestCompleteFirstRun_MapsAnUnprovenConnectionTo409(t *testing.T) {
+	fr := &fakeFirstRun{createErr: fmt.Errorf("%w: nothing answered TCP on 127.0.0.1:2222: connection refused", service.ErrConnectionNotProven)}
+	router := unconfiguredRouter(fr)
+
+	rec := postFirstRun(t, router, validCreateBody, true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (%s)", rec.Code, rec.Body.String())
+	}
+	code := errorCodeOf(t, rec)
+	if code != "BACKUP_SET_CONNECTION_NOT_PROVEN" {
+		t.Fatalf("code = %q, want BACKUP_SET_CONNECTION_NOT_PROVEN", code)
+	}
+	declared := contractEndpoints()["completeFirstRun"].ErrorCodes[http.StatusConflict]
+	found := false
+	for _, c := range declared {
+		if string(c) == code {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the handler returned 409 %q, which api/v1/openapi.json does not declare for completeFirstRun at that status (it declares %v)", code, declared)
+	}
+	if fr.activated != 0 {
+		t.Error("activation ran even though the configuration was never written")
+	}
+}
+
 // TestSetupRoutesReachTheFirstRunClientWhileUnconfigured proves the three
 // shared setup routes are wired to the first-run surface, not left
 // pointing at a backend that does not exist.
@@ -667,7 +727,8 @@ const wholeSpecCreateBody = `{
 	"stale_after_seconds": 172800,
 	"validator_id": "postgres-custom-format",
 	"disabled": true,
-	"read_only": true
+	"read_only": true,
+	"skip_connection_check": true
 }`
 
 // firstRunSpecCarriage is every field of backupSetSpec, paired with what
@@ -706,6 +767,7 @@ var firstRunSpecCarriage = []struct {
 	{"ValidatorID", func(r service.CreateBackupSetRequest) any { return r.ValidatorID }, func(s backupSetSpec) any { return service.ValidatorID(s.ValidatorID) }},
 	{"Disabled", func(r service.CreateBackupSetRequest) any { return r.Disabled }, func(s backupSetSpec) any { return s.Disabled }},
 	{"ReadOnly", func(r service.CreateBackupSetRequest) any { return r.ReadOnly }, func(s backupSetSpec) any { return s.ReadOnly }},
+	{"SkipConnectionCheck", func(r service.CreateBackupSetRequest) any { return r.SkipConnectionCheck }, func(s backupSetSpec) any { return s.SkipConnectionCheck }},
 }
 
 // TestCompleteFirstRun_CarriesEveryFieldOfTheSpecItWasGiven is the whole

@@ -1,0 +1,594 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SSH authentication wizard</title>
+<style>
+:root{
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;
+  --radius-sm:4px;--radius-md:6px;--radius-lg:8px;--radius-xl:10px;--radius-pill:999px;
+  --bg:#f2f2f0;--surface:#fff;--surface-2:#fafaf9;--surface-3:#f0f0ed;
+  --border:#e0dfdc;--border-strong:#c8c7c3;
+  --text:#191a19;--text-2:#5b5d5b;--text-3:#8b8d8a;
+  --accent:oklch(0.52 0.09 255);--accent-quiet:oklch(0.95 0.02 255);
+  --ok:oklch(0.52 0.10 155);--ok-quiet:oklch(0.955 0.025 155);
+  --warn:oklch(0.56 0.11 70);--warn-quiet:oklch(0.96 0.035 75);
+  --danger:oklch(0.52 0.15 25);--danger-quiet:oklch(0.955 0.03 25);
+  --shadow:0 1px 2px rgba(20,20,18,.05),0 1px 1px rgba(20,20,18,.04);
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:var(--space-6)}
+.wrap{max-width:1060px;margin:0 auto;display:flex;flex-direction:column;gap:var(--space-6)}
+h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01em}
+.sub{color:var(--text-2);font-size:13px;margin:0}
+.goal{border-left:3px solid var(--accent);padding:var(--space-2) 0 var(--space-2) var(--space-4);
+  margin:var(--space-3) 0 0;font-size:13px;color:var(--text)}
+.pane{display:flex;flex-direction:column;gap:var(--space-3)}
+.panehead{display:flex;align-items:baseline;gap:var(--space-3)}
+.panenum{font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--accent);
+  background:var(--accent-quiet);border-radius:var(--radius-sm);padding:2px 7px;letter-spacing:.04em}
+.panetitle{font-size:13.5px;font-weight:600}
+.panenote{color:var(--text-3);font-size:12.5px;margin:0}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);
+  box-shadow:var(--shadow);overflow:hidden}
+.card__body{padding:var(--space-5)}
+
+/* step rail */
+.rail{display:flex;gap:var(--space-1);padding:var(--space-3) var(--space-5);
+  border-bottom:1px solid var(--border);background:var(--surface-2);flex-wrap:wrap}
+.rail__step{display:inline-flex;align-items:center;gap:7px;padding:4px 11px;border-radius:var(--radius-pill);
+  font-size:12px;color:var(--text-3);white-space:nowrap}
+.rail__n{width:17px;height:17px;border-radius:50%;background:var(--surface-3);color:var(--text-3);
+  font-size:10.5px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex:none}
+.rail__step--done{color:var(--ok)}
+.rail__step--done .rail__n{background:var(--ok-quiet);color:var(--ok)}
+.rail__step--on{background:var(--accent-quiet);color:var(--accent);font-weight:600}
+.rail__step--on .rail__n{background:var(--accent);color:#fff}
+.rail__sep{color:var(--border-strong);align-self:center}
+
+.steptitle{font-size:16px;font-weight:600;margin:0 0 5px;letter-spacing:-.01em}
+.lede{color:var(--text-2);font-size:13px;margin:0 0 var(--space-4)}
+
+/* method list */
+.group{margin-bottom:var(--space-4)}
+.group:last-child{margin-bottom:0}
+.group__head{display:flex;align-items:baseline;gap:9px;margin-bottom:var(--space-2)}
+.eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--text-3);margin:0}
+.group__note{font-size:11.5px;color:var(--text-3)}
+.opts{display:flex;flex-direction:column;gap:var(--space-2)}
+.opt{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--border);
+  border-radius:var(--radius-lg);padding:var(--space-3) var(--space-4);background:var(--surface)}
+.opt--on{border-color:var(--accent);box-shadow:0 0 0 2.5px var(--accent-quiet);background:#fcfdff}
+.opt--off{opacity:.62}
+.radio{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--border-strong);flex:none;margin-top:2px}
+.opt--on .radio{border-color:var(--accent);border-width:4.5px}
+.opt__body{flex:1;min-width:0}
+.opt__title{font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.opt__fp{font-family:var(--font-mono);font-size:11.5px;color:var(--text-2);margin-top:3px;word-break:break-all}
+.opt__meta{font-size:11.5px;color:var(--text-3);margin-top:3px}
+.chip{font-size:9.5px;font-weight:700;letter-spacing:.05em;border-radius:var(--radius-sm);padding:1px 6px}
+.chip--store{background:var(--accent-quiet);color:var(--accent)}
+.chip--host{background:var(--warn-quiet);color:var(--warn)}
+.chip--inuse{background:var(--ok-quiet);color:var(--ok)}
+.chip--resolver{background:var(--surface-3);color:var(--text-2)}
+
+.btn{height:30px;padding:0 12px;border:1px solid var(--border-strong);border-radius:var(--radius-md);
+  background:var(--surface);color:var(--text);font:inherit;font-size:12.5px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{background:var(--surface-3)}
+.btn--primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn--danger{background:var(--danger);border-color:var(--danger);color:#fff}
+.btn--sm{height:25px;padding:0 9px;font-size:11.5px}
+.btn[disabled]{opacity:.45;cursor:default}
+.foot{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-3) var(--space-5);
+  border-top:1px solid var(--border);background:var(--surface-2)}
+.foot .grow{flex:1}
+.foot__hint{font-size:11.5px;color:var(--text-3)}
+
+.banner{display:flex;gap:11px;align-items:flex-start;border-radius:var(--radius-lg);
+  padding:var(--space-3) var(--space-4);font-size:12.5px;border:1px solid}
+.banner--warn{background:var(--warn-quiet);border-color:oklch(0.83 0.07 75);color:#4a3a17}
+.banner--danger{background:var(--danger-quiet);border-color:oklch(0.83 0.09 25);color:#4d1f18}
+.banner--info{background:var(--accent-quiet);border-color:oklch(0.86 0.04 255);color:#22304a}
+.banner--ok{background:var(--ok-quiet);border-color:oklch(0.85 0.06 155);color:#1c3a2b}
+.banner__glyph{font-weight:700;line-height:1.35}
+.banner__body{flex:1;min-width:0}
+.banner__title{font-weight:600;font-size:13px;display:block;margin-bottom:3px}
+.banner__acts{display:flex;gap:var(--space-2);margin-top:var(--space-3);flex-wrap:wrap}
+.fp{font-family:var(--font-mono);font-size:11.5px;word-break:break-all}
+
+/* fingerprint compare */
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)}
+.cmp__box{border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-4)}
+.cmp__box--bad{border-color:oklch(0.83 0.09 25);background:var(--danger-quiet)}
+.cmp__box--good{border-color:oklch(0.85 0.06 155);background:var(--ok-quiet)}
+.cmp__k{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);
+  margin:0 0 5px}
+.cmp__v{font-family:var(--font-mono);font-size:11.5px;word-break:break-all}
+
+/* verification checklist */
+.checks{border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+.check{display:flex;align-items:center;gap:11px;padding:11px var(--space-4);border-top:1px solid var(--border);
+  font-size:13px}
+.check:first-child{border-top:0}
+.check__glyph{width:19px;height:19px;border-radius:50%;flex:none;display:inline-flex;align-items:center;
+  justify-content:center;font-size:11px;font-weight:700}
+.check__glyph--ok{background:var(--ok-quiet);color:var(--ok)}
+.check__glyph--bad{background:var(--danger-quiet);color:var(--danger)}
+.check__glyph--wait{background:var(--surface-3);color:var(--text-3)}
+.check__body{flex:1;min-width:0}
+.check__title{font-weight:600;font-size:12.5px}
+.check__detail{font-size:11.5px;color:var(--text-3);font-family:var(--font-mono);margin-top:2px;word-break:break-all}
+.check__ms{font-family:var(--font-mono);font-size:11px;color:var(--text-3);font-variant-numeric:tabular-nums}
+.spinner{width:12px;height:12px;border:2px solid var(--border-strong);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* review ledger */
+.ledger{border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+.ledger__row{display:flex;gap:11px;padding:9px var(--space-4);border-top:1px solid var(--border);font-size:12.5px}
+.ledger__row:first-child{border-top:0}
+.ledger__k{color:var(--text-2);min-width:168px}
+.ledger__v{font-family:var(--font-mono);font-size:11.5px;flex:1;min-width:0;word-break:break-all}
+.ack{display:flex;gap:10px;align-items:flex-start;border:1px solid oklch(0.83 0.07 75);
+  background:var(--warn-quiet);border-radius:var(--radius-lg);padding:var(--space-3) var(--space-4);font-size:12.5px}
+.box{width:14px;height:14px;border:1.5px solid var(--warn);border-radius:3px;flex:none;margin-top:2px}
+
+/* global terminal */
+.dock{border:1px solid var(--border);border-radius:var(--radius-xl);overflow:hidden;box-shadow:var(--shadow)}
+.dockbar{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2) var(--space-5);
+  background:var(--surface-2);font-size:11.5px;color:var(--text-2);border-bottom:1px solid var(--border)}
+.dockbar .grow{flex:1}
+.term{background:#14150f;color:#d7d9d2;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;
+  padding:var(--space-3) var(--space-5)}
+.term .t{color:#6f736a}
+.term .i{color:#9aa39b}
+.term .w{color:oklch(0.78 0.12 75)}
+.term .e{color:oklch(0.72 0.16 25)}
+.term .g{color:oklch(0.72 0.11 155)}
+.term .cur{display:inline-block;width:7px;height:12px;background:#d7d9d2;vertical-align:-2px}
+</style>
+<div class="wrap">
+  <div>
+    <h1>SSH authentication wizard</h1>
+    <p class="sub">Replaces the two write-only text boxes (&ldquo;SSH key&rdquo;, &ldquo;Trusted host key&rdquo;) that are
+      today the whole of a backup set's SSH editing surface. It offers what is already on the machine, proves it end to
+      end, and only then writes.</p>
+    <p class="goal">&ldquo;Make it very easy for a brand new user to get rclone authenticated with their SSH server.&rdquo;</p>
+  </div>
+
+  <!-- STEP 1 ------------------------------------------------------------ -->
+  <section class="pane">
+    <div class="panehead">
+      <span class="panenum">STEP 1</span>
+      <span class="panetitle">Choose an authentication method that already exists</span>
+    </div>
+    <p class="panenote">Nothing here asks anybody to paste a key first. Pasting is the last option on the list,
+      not the only one. Every row is a candidate the NAS can already reach, described by algorithm, fingerprint
+      and where it came from, and never by its contents.</p>
+    <div class="card">
+      <div class="rail">
+        <span class="rail__step rail__step--on"><span class="rail__n">1</span>Method</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step"><span class="rail__n">2</span>Server identity</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step"><span class="rail__n">3</span>Verify</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step"><span class="rail__n">4</span>Apply</span>
+      </div>
+      <div class="card__body">
+        <h2 class="steptitle">How should this set authenticate to api-server:1209?</h2>
+        <p class="lede">Replacing the method this set uses now. Nothing changes until step 4, and the current
+          method keeps working until then.</p>
+
+        <div class="group">
+          <div class="group__head">
+            <p class="eyebrow">Keys this deployment already holds</p>
+            <span class="group__note">/etc/backup-manager/config/ssh_keys · 3 keys</span>
+          </div>
+          <div class="opts">
+            <div class="opt opt--on">
+              <span class="radio"></span>
+              <div class="opt__body">
+                <div class="opt__title">ed25519 key imported 2026-03-11
+                  <span class="chip chip--store">KEY STORE</span>
+                  <span class="chip chip--inuse">USED BY 4 SETS</span></div>
+                <div class="opt__fp">SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI</div>
+                <div class="opt__meta">Currently used by api-server/var-backups, api-server/pgdump, cicd/var-backups, cicd/registry</div>
+              </div>
+            </div>
+            <div class="opt">
+              <span class="radio"></span>
+              <div class="opt__body">
+                <div class="opt__title">ed25519 key imported 2026-08-02 <span class="chip chip--store">KEY STORE</span></div>
+                <div class="opt__fp">SHA256:3anIqszP1Gm9GDNcq51b5ndeWt5yAF/7t1uS6/0HQbE</div>
+                <div class="opt__meta">Not used by any backup set</div>
+              </div>
+            </div>
+            <div class="opt">
+              <span class="radio"></span>
+              <div class="opt__body">
+                <div class="opt__title">rsa-4096 key imported 2025-11-27
+                  <span class="chip chip--store">KEY STORE</span>
+                  <span class="chip chip--host">PASSPHRASE-PROTECTED</span></div>
+                <div class="opt__fp">SHA256:cDBzeNvm6cSIbi8xmhwQ/SkONr9ZNoVv5NlA1hx8GmE</div>
+                <div class="opt__meta">Needs its passphrase to be resolvable before it can be verified</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="group">
+          <div class="group__head">
+            <p class="eyebrow">Keys found on this machine</p>
+            <span class="group__note">candidates only, listed by name and public fingerprint, never read</span>
+          </div>
+          <div class="banner banner--info" style="margin-bottom:var(--space-2)">
+            <span class="banner__glyph">i</span>
+            <div class="banner__body">
+              Searched the paths this engine can actually see: /etc/backup-manager, the key file the configuration
+              names, and this process's own ~/.ssh. On a packaged install the engine is a distroless container, so
+              the NAS operator's own home directory is not among them unless it is mounted. An empty group says
+              which locations were searched, never just &ldquo;no keys&rdquo;.
+            </div>
+          </div>
+          <div class="opts">
+            <div class="opt">
+              <span class="radio"></span>
+              <div class="opt__body">
+                <div class="opt__title">/etc/backup-manager/id_ed25519
+                  <span class="chip chip--host">ON THIS MACHINE</span>
+                  <span class="chip chip--inuse">INSTALLER-GENERATED</span></div>
+                <div class="opt__fp">SHA256:wjJmbzfYx2FEBhBBqHHnfm7tcyk0SnWVqdWysm/9kho</div>
+                <div class="opt__meta">The keypair the installer made at &lt;prefix&gt;/secrets/id_ed25519 and mounted read-only. Its public half is what the install printed for authorized_keys.</div>
+              </div>
+            </div>
+            <div class="opt">
+              <span class="radio"></span>
+              <div class="opt__body">
+                <div class="opt__title">~/.ssh/id_ed25519 <span class="chip chip--host">ON THIS MACHINE</span></div>
+                <div class="opt__fp">SHA256:KYUPgELVwGZtCeRt+mquN5oOaaM2JFatoitpI9AAtBg</div>
+                <div class="opt__meta">mode 0600 · a matching id_ed25519.pub sits beside it</div>
+              </div>
+            </div>
+            <div class="opt opt--off">
+              <span class="radio"></span>
+              <div class="opt__body">
+                <div class="opt__title">~/.ssh/id_rsa <span class="chip chip--host">ON THIS MACHINE</span></div>
+                <div class="opt__fp">fingerprint unavailable: no id_rsa.pub beside it</div>
+                <div class="opt__meta">Listed and left unselectable. Reading the private key to derive a fingerprint is exactly what this step does not do.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="group">
+          <div class="group__head"><p class="eyebrow">Other methods this product supports</p></div>
+          <div class="opts">
+            <div class="opt">
+              <span class="radio"></span>
+              <div class="opt__body">
+                <div class="opt__title">Resolve the key from a command or an environment variable
+                  <span class="chip chip--resolver">key.command / key.env</span></div>
+                <div class="opt__meta">For a secrets manager (OpenBao, Vault, SOPS, 1Password). Nothing is stored here; the resolver runs at connection time.</div>
+              </div>
+            </div>
+            <div class="opt">
+              <span class="radio"></span>
+              <div class="opt__body">
+                <div class="opt__title">Import a new private key</div>
+                <div class="opt__meta">Pasted once, validated, written 0600 into the key store, and never displayed again.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="foot">
+        <span class="foot__hint">Selected: ed25519 SHA256:OXUN… from the key store. Nothing is written yet.</span>
+        <span class="grow"></span>
+        <button class="btn">Cancel</button>
+        <button class="btn btn--primary">Next: server identity</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 2 ------------------------------------------------------------ -->
+  <section class="pane">
+    <div class="panehead">
+      <span class="panenum">STEP 2</span>
+      <span class="panetitle">Confirm the server's identity, through the trust model that already exists</span>
+    </div>
+    <p class="panenote">The wizard probes the host and compares against what this set's own known_hosts pins.
+      A match moves on with nothing to answer. A mismatch is the same refusal the edit page raises, with both
+      fingerprints, and the wizard cannot get past it without the acknowledgement.</p>
+    <div class="card">
+      <div class="rail">
+        <span class="rail__step rail__step--done"><span class="rail__n">✓</span>Method</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step rail__step--on"><span class="rail__n">2</span>Server identity</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step"><span class="rail__n">3</span>Verify</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step"><span class="rail__n">4</span>Apply</span>
+      </div>
+      <div class="card__body" style="display:flex;flex-direction:column;gap:var(--space-4)">
+        <div>
+          <h2 class="steptitle">api-server:1209 offered a different host key</h2>
+          <p class="lede" style="margin:0">These two strings are the whole of the decision. Check the new one against
+            the server itself (<span class="fp">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</span> on the box) before you answer.</p>
+        </div>
+        <div class="cmp">
+          <div class="cmp__box cmp__box--good">
+            <p class="cmp__k">On record since 2026-03-11</p>
+            <div class="cmp__v">ssh-ed25519<br>SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI</div>
+          </div>
+          <div class="cmp__box cmp__box--bad">
+            <p class="cmp__k">Offered just now</p>
+            <div class="cmp__v">ssh-ed25519<br>SHA256:ZDDX9OOpOPffrXnVFL7sB8KFNo0Vma7+zMV8rDgmHL8</div>
+          </div>
+        </div>
+        <div class="banner banner--danger">
+          <span class="banner__glyph">!</span>
+          <div class="banner__body">
+            <span class="banner__title">A rebuilt server and a machine in the middle look identical from here</span>
+            The wizard will not trust this key on your behalf. Trusting it is the same acknowledged decision the
+            edit page asks for, and it is recorded against this fingerprint, not against &ldquo;whatever answers next&rdquo;.
+            <div class="banner__acts">
+              <button class="btn btn--sm">Keep the key on record</button>
+              <button class="btn btn--sm btn--danger">I compared them: trust SHA256:ZDDX…</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="foot">
+        <span class="foot__hint">Answer this before the wizard can verify anything.</span>
+        <span class="grow"></span>
+        <button class="btn">Back</button>
+        <button class="btn btn--primary" disabled>Next: verify</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 3 ------------------------------------------------------------ -->
+  <section class="pane">
+    <div class="panehead">
+      <span class="panenum">STEP 3</span>
+      <span class="panetitle">Verify the whole path, not just the socket</span>
+    </div>
+    <p class="panenote">Four claims, each reported separately, because &ldquo;it connected&rdquo; is the answer that
+      hides the three failures an operator actually hits. The run uses the selected key and the settled host key,
+      lists the remote folder, and persists nothing.</p>
+    <div class="card">
+      <div class="rail">
+        <span class="rail__step rail__step--done"><span class="rail__n">✓</span>Method</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step rail__step--done"><span class="rail__n">✓</span>Server identity</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step rail__step--on"><span class="rail__n">3</span>Verify</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step"><span class="rail__n">4</span>Apply</span>
+      </div>
+      <div class="card__body" style="display:flex;flex-direction:column;gap:var(--space-4)">
+        <div>
+          <h2 class="steptitle">Verification</h2>
+          <p class="lede" style="margin:0">Nothing is written to the remote and nothing is persisted here.</p>
+        </div>
+        <div class="checks">
+          <div class="check">
+            <span class="check__glyph check__glyph--ok">✓</span>
+            <div class="check__body">
+              <div class="check__title">Reached the server</div>
+              <div class="check__detail">tcp api-server.internal:1209 · SSH-2.0-OpenSSH_9.6p1</div>
+            </div>
+            <span class="check__ms">210 ms</span>
+          </div>
+          <div class="check">
+            <span class="check__glyph check__glyph--ok">✓</span>
+            <div class="check__body">
+              <div class="check__title">Host key matched what this set trusts</div>
+              <div class="check__detail">ssh-ed25519 SHA256:ZDDX9OOpOPffrXnVFL7sB8KFNo0Vma7+zMV8rDgmHL8</div>
+            </div>
+            <span class="check__ms">18 ms</span>
+          </div>
+          <div class="check">
+            <span class="check__glyph check__glyph--ok">✓</span>
+            <div class="check__body">
+              <div class="check__title">Authenticated as backup-agent</div>
+              <div class="check__detail">publickey · ed25519 SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI</div>
+            </div>
+            <span class="check__ms">96 ms</span>
+          </div>
+          <div class="check">
+            <span class="check__glyph check__glyph--wait"><span class="spinner"></span></span>
+            <div class="check__body">
+              <div class="check__title">Listing /var/backups</div>
+              <div class="check__detail">sftp opendir …</div>
+            </div>
+            <span class="check__ms">running</span>
+          </div>
+        </div>
+        <div class="banner banner--info">
+          <span class="banner__glyph">i</span>
+          <div class="banner__body">
+            A green &ldquo;Reached the server&rdquo; on its own proves a socket opened. The line that matters to a backup
+            is the last one: this account can read the folder this set pulls from.
+          </div>
+        </div>
+      </div>
+      <div class="foot">
+        <span class="foot__hint">3 of 4 checks passed · running</span>
+        <span class="grow"></span>
+        <button class="btn">Back</button>
+        <button class="btn btn--primary" disabled>Next: apply</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 3b: failure --------------------------------------------------- -->
+  <section class="pane">
+    <div class="panehead">
+      <span class="panenum">STEP 3b</span>
+      <span class="panetitle">The failure a green socket would have hidden</span>
+    </div>
+    <p class="panenote">The public half of the selected key is not in the remote account's authorized_keys.
+      The wizard says which check failed, what it would take to fix it, and refuses to go on to apply.</p>
+    <div class="card">
+      <div class="card__body" style="display:flex;flex-direction:column;gap:var(--space-4)">
+        <div class="checks">
+          <div class="check">
+            <span class="check__glyph check__glyph--ok">✓</span>
+            <div class="check__body"><div class="check__title">Reached the server</div>
+              <div class="check__detail">tcp api-server.internal:1209 · SSH-2.0-OpenSSH_9.6p1</div></div>
+            <span class="check__ms">204 ms</span>
+          </div>
+          <div class="check">
+            <span class="check__glyph check__glyph--ok">✓</span>
+            <div class="check__body"><div class="check__title">Host key matched what this set trusts</div>
+              <div class="check__detail">ssh-ed25519 SHA256:ZDDX9OOpOPffrXnVFL7sB8KFNo0Vma7+zMV8rDgmHL8</div></div>
+            <span class="check__ms">17 ms</span>
+          </div>
+          <div class="check">
+            <span class="check__glyph check__glyph--bad">✕</span>
+            <div class="check__body"><div class="check__title">Could not authenticate as backup-agent</div>
+              <div class="check__detail">ssh: handshake failed: unable to authenticate, attempted methods [none publickey]</div></div>
+            <span class="check__ms">88 ms</span>
+          </div>
+          <div class="check">
+            <span class="check__glyph check__glyph--wait">–</span>
+            <div class="check__body"><div class="check__title">Listing /var/backups</div>
+              <div class="check__detail">not attempted</div></div>
+            <span class="check__ms">skipped</span>
+          </div>
+        </div>
+        <div class="banner banner--warn">
+          <span class="banner__glyph">!</span>
+          <div class="banner__body">
+            <span class="banner__title">This key's public half is not authorised on api-server</span>
+            Put this line in <span class="fp">/home/backup-agent/.ssh/authorized_keys</span> on api-server, then verify again.
+            <div class="fp" style="margin-top:7px;background:var(--surface);border:1px solid var(--border-strong);
+              border-radius:var(--radius-sm);padding:7px 9px">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI… rclone-manager</div>
+            <div class="banner__acts">
+              <button class="btn btn--sm">Copy public key</button>
+              <button class="btn btn--sm">Choose a different method</button>
+              <button class="btn btn--sm btn--primary">Verify again</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="foot">
+        <span class="foot__hint">Apply stays unavailable until all four checks pass. Nothing was changed.</span>
+        <span class="grow"></span>
+        <button class="btn btn--primary" disabled>Next: apply</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 4 ------------------------------------------------------------ -->
+  <section class="pane">
+    <div class="panehead">
+      <span class="panenum">STEP 4</span>
+      <span class="panetitle">Apply, and say exactly what is being written</span>
+    </div>
+    <p class="panenote">One PATCH, the same one the edit page sends, carrying the key reference, the host-key line
+      and the acknowledgement the operator gave at step 2. The old method is named so nobody has to guess what
+      they are replacing.</p>
+    <div class="card">
+      <div class="rail">
+        <span class="rail__step rail__step--done"><span class="rail__n">✓</span>Method</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step rail__step--done"><span class="rail__n">✓</span>Server identity</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step rail__step--done"><span class="rail__n">✓</span>Verify</span>
+        <span class="rail__sep">›</span>
+        <span class="rail__step rail__step--on"><span class="rail__n">4</span>Apply</span>
+      </div>
+      <div class="card__body" style="display:flex;flex-direction:column;gap:var(--space-4)">
+        <div>
+          <h2 class="steptitle">Replace the authentication on api-server/var-backups</h2>
+          <p class="lede" style="margin:0">All four checks passed 40 seconds ago against exactly these values.</p>
+        </div>
+        <div class="ledger">
+          <div class="ledger__row">
+            <span class="ledger__k">Key it uses now</span>
+            <span class="ledger__v">ed25519 SHA256:wjJmbzfYx2FEBhBBqHHnfm7tcyk0SnWVqdWysm/9kho</span>
+          </div>
+          <div class="ledger__row">
+            <span class="ledger__k">Key it will use</span>
+            <span class="ledger__v">ed25519 SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI</span>
+          </div>
+          <div class="ledger__row">
+            <span class="ledger__k">Host key it trusts now</span>
+            <span class="ledger__v">ssh-ed25519 SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI</span>
+          </div>
+          <div class="ledger__row">
+            <span class="ledger__k">Host key it will trust</span>
+            <span class="ledger__v">ssh-ed25519 SHA256:ZDDX9OOpOPffrXnVFL7sB8KFNo0Vma7+zMV8rDgmHL8</span>
+          </div>
+          <div class="ledger__row">
+            <span class="ledger__k">Everything else</span>
+            <span class="ledger__v">unchanged: host, port, user, folders, retention, validation</span>
+          </div>
+        </div>
+        <div class="ack">
+          <span class="box"></span>
+          <div>
+            <strong>I compared SHA256:ZDDX… against api-server itself and it is the right server.</strong><br>
+            Sent as <span class="fp">acknowledge_host_key_change</span>, for this fingerprint only. Ticking it
+            grants nothing else, and a different key offered later asks again.
+          </div>
+        </div>
+        <div class="banner banner--ok">
+          <span class="banner__glyph">✓</span>
+          <div class="banner__body">
+            The private key never left this NAS and was never displayed. What is written is a reference to it and a
+            public host key line.
+          </div>
+        </div>
+      </div>
+      <div class="foot">
+        <span class="foot__hint">PATCH /api/v1/backup-sets/api-server/var-backups</span>
+        <span class="grow"></span>
+        <button class="btn">Back</button>
+        <button class="btn btn--primary">Apply and close</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- TERMINAL ----------------------------------------------------------- -->
+  <section class="pane">
+    <div class="panehead">
+      <span class="panenum">LOG</span>
+      <span class="panetitle">Every step, in the global terminal</span>
+    </div>
+    <p class="panenote">The wizard owns no log surface of its own. It writes into the terminal docked to the bottom
+      of every page (G1.2), so a refusal that lands after the wizard closes is still somewhere an
+      operator can read it.</p>
+    <div class="dock">
+      <div class="dockbar">
+        <span>Terminal</span>
+        <span style="color:var(--text-3)">· ssh wizard · api-server/var-backups</span>
+        <span class="grow"></span>
+        <button class="btn btn--sm">Copy</button>
+        <button class="btn btn--sm">Save .txt</button>
+      </div>
+      <div class="term">
+        <div><span class="t">15:04:02</span> <span class="i">ssh wizard opened for api-server/var-backups</span></div>
+        <div><span class="t">15:04:02</span> <span class="i">key store: 3 keys under ssh_keys/</span></div>
+        <div><span class="t">15:04:02</span> <span class="i">host scan: 3 candidates in /etc/backup-manager, key.file, ~/.ssh</span></div>
+        <div><span class="t">15:04:02</span> <span class="w">~/.ssh/id_rsa listed without a fingerprint: no id_rsa.pub beside it, and the private key was not read</span></div>
+        <div><span class="t">15:04:31</span> <span class="i">selected ed25519 SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI from the key store</span></div>
+        <div><span class="t">15:04:34</span> <span class="i">probing api-server.internal:1209 for its host key</span></div>
+        <div><span class="t">15:04:34</span> <span class="e">host key differs from the one on record: SHA256:OXUN… on record, SHA256:ZDDX… offered</span></div>
+        <div><span class="t">15:05:58</span> <span class="w">operator acknowledged the change for SHA256:ZDDX9OOpOPffrXnVFL7sB8KFNo0Vma7+zMV8rDgmHL8</span></div>
+        <div><span class="t">15:06:01</span> <span class="g">verify 1/4 reached api-server.internal:1209 (210 ms)</span></div>
+        <div><span class="t">15:06:01</span> <span class="g">verify 2/4 host key matched</span></div>
+        <div><span class="t">15:06:01</span> <span class="g">verify 3/4 authenticated as backup-agent (publickey)</span></div>
+        <div><span class="t">15:06:02</span> <span class="g">verify 4/4 listed /var/backups (41 entries)</span></div>
+        <div><span class="t">15:06:44</span> <span class="i">PATCH /api/v1/backup-sets/api-server/var-backups ssh_key_id, known_hosts_line, acknowledge_host_key_change</span></div>
+        <div><span class="t">15:06:44</span> <span class="g">saved: api-server/var-backups now authenticates with SHA256:OXUN… and trusts SHA256:ZDDX…</span><span class="cur"></span></div>
+      </div>
+    </div>
+  </section>
+</div>

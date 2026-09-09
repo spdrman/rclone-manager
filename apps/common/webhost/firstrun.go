@@ -67,6 +67,9 @@ type FirstRunClient interface {
 	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
 	ProbeHostKey(ctx context.Context, host string, port int) (service.HostKeyProbe, error)
 	TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error)
+	ListSSHKeys(ctx context.Context) ([]service.SSHKeyListing, error)
+	DiscoverSSHKeyCandidates(ctx context.Context) (service.SSHKeyDiscovery, error)
+	ImportSSHKeyCandidate(ctx context.Context, candidateID string) (service.SSHKeyRef, error)
 
 	// CreateInitialConfig writes this deployment's first configuration.
 	// See core/service.FirstRun.CreateInitialConfig for the ordering and
@@ -87,6 +90,15 @@ type SetupClient interface {
 	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
 	ProbeHostKey(ctx context.Context, host string, port int) (service.HostKeyProbe, error)
 	TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error)
+
+	// Looking, as well as doing (#592). These are here rather than only
+	// on the configured backend because the setup wizard is the surface
+	// that needs them most: a brand new install has exactly one key on
+	// the machine, the one our own installer generated and compose
+	// mounted, and setup is the moment somebody is looking for it.
+	ListSSHKeys(ctx context.Context) ([]service.SSHKeyListing, error)
+	DiscoverSSHKeyCandidates(ctx context.Context) (service.SSHKeyDiscovery, error)
+	ImportSSHKeyCandidate(ctx context.Context, candidateID string) (service.SSHKeyRef, error)
 }
 
 // setup returns the SetupClient this deployment currently has: the
@@ -225,23 +237,24 @@ func (h *handlers) completeFirstRun(w http.ResponseWriter, r *http.Request) {
 	// backupSetSpec itself and fails on any field with no row rather than
 	// on the field somebody happened to notice.
 	set, err := h.firstRun.CreateInitialConfig(r.Context(), service.CreateBackupSetRequest{
-		SourceName:         body.SourceName,
-		Name:               body.Name,
-		Host:               body.Host,
-		Port:               body.Port,
-		User:               body.User,
-		SSHKeyID:           body.SSHKeyID,
-		KnownHostsLine:     body.KnownHostsLine,
-		RemotePath:         body.RemotePath,
-		LocalPath:          body.LocalPath,
-		Include:            body.Include,
-		CompletionStrategy: body.CompletionStrategy,
-		ValidatorID:        service.ValidatorID(body.ValidatorID),
-		StableFor:          secondsToDuration(body.StableForSeconds),
-		StaleAfter:         secondsToDuration(body.StaleAfterSeconds),
-		Disabled:           body.Disabled,
-		ReadOnly:           body.ReadOnly,
-		Actor:              actorFromContext(r.Context()),
+		SourceName:          body.SourceName,
+		Name:                body.Name,
+		Host:                body.Host,
+		Port:                body.Port,
+		User:                body.User,
+		SSHKeyID:            body.SSHKeyID,
+		KnownHostsLine:      body.KnownHostsLine,
+		RemotePath:          body.RemotePath,
+		LocalPath:           body.LocalPath,
+		Include:             body.Include,
+		CompletionStrategy:  body.CompletionStrategy,
+		ValidatorID:         service.ValidatorID(body.ValidatorID),
+		StableFor:           secondsToDuration(body.StableForSeconds),
+		StaleAfter:          secondsToDuration(body.StaleAfterSeconds),
+		Disabled:            body.Disabled,
+		ReadOnly:            body.ReadOnly,
+		SkipConnectionCheck: body.SkipConnectionCheck,
+		Actor:               actorFromContext(r.Context()),
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrAlreadyConfigured) {
@@ -274,11 +287,19 @@ func (h *handlers) completeFirstRun(w http.ResponseWriter, r *http.Request) {
 		// never from rclone or state internals, and the path is what makes
 		// the sentence actionable.
 		if errors.Is(err, service.ErrStateDirInvalid) || errors.Is(err, service.ErrNotAnnounced) {
-			writeError(w, http.StatusInternalServerError, "INTERNAL",
+			// The one 500 in this package that writes its own body rather
+			// than going through internalError, because it deliberately
+			// echoes the service's own sentence (see the paragraph above
+			// for why that is safe here and nowhere else). It still logs,
+			// under the id it just minted: the argument for recording a
+			// refusal does not weaken because the client got a better
+			// message this time (#598).
+			id := writeError(w, http.StatusInternalServerError, "INTERNAL",
 				"this deployment cannot be set up yet and nothing was written: "+err.Error()+". Fix that and submit this form again; there is no need to reinstall or restart anything.")
+			h.logRefusal(r, http.StatusInternalServerError, "INTERNAL", id, err)
 			return
 		}
-		writeBackupSetError(w, err)
+		h.writeBackupSetError(w, r, err)
 		return
 	}
 
@@ -358,6 +379,7 @@ func newUnconfiguredRouter(h *handlers, platform capabilities.PlatformAdapter) h
 		// The setup flow itself.
 		r.With(requireCSRF).Post("/system/first-run", h.completeFirstRun)
 		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
+		r.With(requireCSRF).Post("/ssh-keys/from-candidate", h.importSSHKeyFromCandidate)
 		r.With(requireCSRF).Post("/ssh/host-key-probe", h.probeHostKey)
 		r.With(requireCSRF).Post("/backup-sets/test-connection", h.testConnection)
 

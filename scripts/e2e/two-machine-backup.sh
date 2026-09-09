@@ -89,6 +89,39 @@
 #                   count. connlimit counts established connections per
 #                   source address, which is the production rule restated.
 #
+#   activity-diagnostic
+#                   #598, and the only case here whose subject is a
+#                   FAILURE rather than a backup. Three claims, in the
+#                   order they matter.
+#
+#                   First, that the lifecycle feed is readable at all
+#                   against a real deployment: `backup-manager activity`
+#                   with the route configured announces
+#                   `mode: engine-attached`, which means it asked the
+#                   engine over HTTP, and it lists the transitions the
+#                   cycle above actually produced, named and timestamped.
+#                   That is the assertion that would have caught the
+#                   reported bug, and no suite had it: the browser suite
+#                   drives a mock through a dev server, so it proves a
+#                   component renders rather than that the product works.
+#
+#                   Second, that a read which reaches no service says so.
+#                   With the engine container stopped, the same command
+#                   must never claim `engine-attached`, and must name the
+#                   world it answered from instead.
+#
+#                   Third, and this is the whole point of #598's server
+#                   half: a 500 the service cannot explain to its caller
+#                   has to explain itself in its own log. The
+#                   configuration directory is made read-only, a routed
+#                   `settings patch` is refused with an INTERNAL and a
+#                   correlation id, and `docker logs` on the manager
+#                   machine has to carry a line with THAT id and the
+#                   underlying error on it. Before this, thirty 500 sites
+#                   in the web host discarded the error and there was
+#                   nowhere to write it, so the id an operator was handed
+#                   matched nothing anywhere.
+#
 #   lifecycle       #343's two counting criteria, which are written in
 #                   deliberately anti-assertion language. It backs up,
 #                   creates an administrator, counts users, backup sets
@@ -98,6 +131,25 @@
 #                   an enrollment link, which is the only thing that
 #                   proves the administrator record went with the
 #                   database.
+#
+#   retention-apply #602, and the only place in this repository where a
+#                   retention plan is applied against restore points a
+#                   real cycle produced on a real machine. It backs up,
+#                   narrows the chain so today's three artifacts do not
+#                   all survive it, fingerprints the whole backup
+#                   directory, applies the plan through
+#                   `retention apply --acknowledge`, and requires the
+#                   difference between the two fingerprints to be exactly
+#                   the set the plan printed as DELETE.
+#
+#                   The file called unmanaged-by-anything.txt is the
+#                   point. No journal row mentions it, so it has to
+#                   survive, and the comparison is then run twice more
+#                   against deliberately perturbed listings and required
+#                   to complain about each: one where that file went
+#                   missing anyway, and one where a previewed DELETE is
+#                   still there. Without those, an apply that deleted
+#                   nothing at all passes every other assertion here.
 #
 # # Hygiene
 #
@@ -204,14 +256,14 @@ while [ $# -gt 0 ]; do
     -h|--help)
       render_help
       exit 0 ;;
-    *) die "unknown option $1" "Usage: $0 [--case plain|no-arguments|connection-cap|lifecycle|all] [--keep-on-failure]" ;;
+    *) die "unknown option $1" "Usage: $0 [--case plain|no-arguments|connection-cap|activity-diagnostic|lifecycle|retention-apply|all] [--keep-on-failure]" ;;
   esac
 done
 
 case "$cases" in
-  all) case_list="plain no-arguments connection-cap lifecycle" ;;
-  plain|no-arguments|connection-cap|lifecycle) case_list="$cases" ;;
-  *) die "unknown case $cases" "Cases are: plain, no-arguments, connection-cap, lifecycle, all." ;;
+  all) case_list="plain no-arguments connection-cap activity-diagnostic lifecycle retention-apply" ;;
+  plain|no-arguments|connection-cap|activity-diagnostic|lifecycle|retention-apply) case_list="$cases" ;;
+  *) die "unknown case $cases" "Cases are: plain, no-arguments, connection-cap, activity-diagnostic, lifecycle, retention-apply, all." ;;
 esac
 
 # ------------------------------------------------------------ identities
@@ -269,12 +321,16 @@ connection_cap=2
 lifecycle_from="rclone-manager-e2e-lifecycle:0.2.0"
 lifecycle_to="rclone-manager-e2e-lifecycle:0.3.0"
 
-# The administrator the lifecycle case creates, so there is a user for the
-# upgrade to preserve and for the factory reset to destroy. A throwaway
-# password for a container that is deleted minutes later, and it never
-# leaves this script's own process except down a pipe into stdin.
-lifecycle_admin_user="e2e-operator"
-lifecycle_admin_pass="e2e-$run_id-not-a-real-password"
+# The administrator two cases create: the lifecycle case needs a user for
+# the upgrade to preserve and the factory reset to destroy, and the
+# activity-diagnostic case needs credentials for the CLI's route to the
+# engine, which are the Web UI's own. A throwaway password for a container
+# that is deleted minutes later. It leaves this script's process down a
+# pipe into stdin when the account is created, and as an environment
+# variable on the exec'd commands that use the route, which is what the
+# CLI's own documentation prescribes; it is never written to a file.
+admin_user="e2e-operator"
+admin_pass="e2e-$run_id-not-a-real-password"
 
 # ------------------------------------------------------------- teardown
 #
@@ -619,6 +675,164 @@ note "3 artifacts: payload.bin (3 MiB), schema.sql, notes.txt"
 
 # ================================================================= a case
 
+# run_source_verification is issue #624 end to end: an SSH source is
+# proven before this manager relies on it, or it is marked as never having
+# been proven.
+#
+# It runs against the two machines this script already has standing, in the
+# window where the engine is stopped, so every command below takes the
+# direct path. It has to: a configuration write beside a serving engine is
+# refused with exit 3 (#571), and `backup-set test-connection` goes through
+# the same door because a check that PASSES clears the mark, which is a
+# configuration write.
+#
+# The failing source is the real machine under a username its sshd has
+# never heard of, rather than an address nothing answers. Both fail, and
+# only one of them fails the way the issue is about: the host resolves, the
+# TCP connect succeeds, the host key matches what the set trusts, and then
+# the account cannot authenticate. An unreachable address would prove the
+# check runs and would not prove it can tell those apart.
+#
+# The order is load bearing, and it cost a run to learn. OpenSSH penalises
+# a source address for a few seconds after an authentication failure, so
+# the check that has to SUCCEED goes first and every deliberate failure
+# after it. For the same reason nothing here probes for a host key: the
+# anchor the create above established is reused, so this block makes
+# exactly the connections it is asserting about and no others.
+#
+# Everything this creates is removed before it returns, because the rest of
+# the case asserts on artifacts, health and retention for e2e/source alone
+# and a second set left behind would be a second set in every one of those
+# answers.
+run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
+  local mgr="$1" prefix="$2" source_ip="$3" sftp_user="$4"
+
+  # The configuration file, read off the manager machine rather than
+  # through the CLI, because the mark is a durable fact about that file and
+  # a command's own report of it is the thing under test.
+  config_yaml() { docker exec "$mgr" sh -c "cat '$prefix'/config/*.yaml"; }
+
+  # The trust anchor the main create already established, reused rather
+  # than re-probed. Not a shortcut: probing is a real SSH connection, and
+  # OpenSSH penalises a source address for a few seconds after an
+  # authentication failure, so a probe standing between two deliberate
+  # auth failures fails with a bare EOF and this block would be flaky
+  # about something it is not testing. Everything below therefore makes
+  # exactly the connections it is asserting about and no others.
+  #
+  # Globbed rather than named, because the filename is core/service's own
+  # (source and set folded into one token) and encoding that rule here
+  # would be a second copy of it. Exactly one backup set exists at this
+  # point, so exactly one file is there, and the count is asserted rather
+  # than assumed.
+  local trusted lines
+  trusted="$(docker exec "$mgr" sh -c "cat '$prefix'/config/known_hosts.d/*" | grep -v '^$' || true)"
+  lines="$(printf '%s\n' "$trusted" | grep -c . || true)"
+  [ "$lines" = "1" ] \
+    || die "expected exactly one trusted host-key line beside the configuration, found $lines." \
+           "This block reuses the anchor the create above established rather than probing again," \
+           "so it needs to know which line that is."
+
+  local base=(--config /etc/backup-manager/config
+    --host "$source_ip"
+    --ssh-key-file /etc/backup-manager/id_ed25519
+    --known-hosts-line "$trusted"
+    --remote-path /upload
+    --completion-strategy rename
+    --state-database /data/state/state.db)
+
+  # The working source first, and every failing one after it. Order, not
+  # taste: an authentication failure earns the manager's address a short
+  # penalty on the source, and a check that has to SUCCEED must not be
+  # standing behind one.
+  step "  #624: --no-verify writes a set without proving it, and marks it"
+  mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
+    /backup-manager backup-set create e2e/offline "${base[@]}" \
+    --user "$sftp_user" --local-path /data/backups/offline --no-verify \
+    || die "\`backup-set create --no-verify\` failed against a source it was told not to check."
+  config_yaml | grep -q 'connection_unverified: true' \
+    || die "a --no-verify create left no mark, so it is indistinguishable from one that was proven." \
+           "the configuration is: $(config_yaml)"
+  note "written, and the configuration says its connection was never proven"
+
+  step "  #624: a check that passes clears the mark"
+  local out=""
+  out="$(bm_stopped "$mgr" "$prefix" backup-set test-connection e2e/offline --config /etc/backup-manager/config 2>&1)" \
+    || die "\`backup-set test-connection\` against the source this script has been backing up all along failed." \
+           "the command said: $out"
+  for want in credentials resolve connect host_key authenticate list; do
+    case "$out" in
+      *"$want"*) : ;;
+      *) die "the passing check does not report the $want step: $out" ;;
+    esac
+  done
+  if config_yaml | grep -q 'connection_unverified: true'; then
+    die "a passing check left the set marked as never proven." \
+        "the configuration is: $(config_yaml)"
+  fi
+  note "six steps reported, and the mark is gone"
+
+  step "  #624: a create against a source that cannot authenticate is refused"
+  local refused=0
+  out="$(mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
+    /backup-manager backup-set create e2e/nobody "${base[@]}" \
+    --user "nobody-$run_id" --local-path /data/backups/nobody 2>&1)" || refused=$?
+  [ "$refused" = "1" ] \
+    || die "a create against a source that cannot authenticate exited $refused, want 1." \
+           "Before #624 this exited 0 and wrote the set: nothing on the create path ran a check at all." \
+           "the command said: $out"
+  case "$out" in
+    *authenticate*) : ;;
+    *) die "the refusal does not report the authenticate step, so it is a verdict rather than a diagnosis (#596)." \
+           "the command said: $out" ;;
+  esac
+  if config_yaml | grep -q 'id: nobody'; then
+    die "a refused create still wrote the backup set into the configuration."
+  fi
+  note "refused with exit 1, and the configuration does not carry it"
+
+  step "  #624: a check that fails leaves the mark where it was"
+  mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
+    /backup-manager backup-set create e2e/nobody "${base[@]}" \
+    --user "nobody-$run_id" --local-path /data/backups/nobody --no-verify \
+    || die "\`backup-set create --no-verify\` failed for the unreachable set."
+  refused=0
+  out="$(bm_stopped "$mgr" "$prefix" backup-set test-connection e2e/nobody --config /etc/backup-manager/config 2>&1)" || refused=$?
+  [ "$refused" = "1" ] \
+    || die "\`backup-set test-connection\` against a source that cannot authenticate exited $refused, want 1." \
+           "the command said: $out"
+  # Exactly one mark, not "the bad set still has one": the proven set has
+  # to have LOST its mark and the unproven one has to have kept it, and a
+  # build that cleared every mark it could find would pass a check that
+  # only looked at one of them.
+  local marks
+  marks="$(config_yaml | grep -c 'connection_unverified: true' || true)"
+  [ "$marks" = "1" ] \
+    || die "the configuration carries $marks unverified marks, want exactly 1." \
+           "The proven set has to lose its mark and the unproven one has to keep it." \
+           "the configuration is: $(config_yaml)"
+  note "still marked, which is what stops the mark meaning \"somebody pressed the button\""
+
+  # Removed before the engine comes back, so the rest of this case still
+  # asserts about one backup set.
+  local id
+  for id in e2e/nobody e2e/offline; do
+    mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
+      /backup-manager backup-set remove "$id" --config /etc/backup-manager/config >/dev/null \
+      || die "could not remove $id, so the rest of this case would be asserting about three backup sets."
+  done
+}
+
+# bm_stopped runs the CLI while the engine is stopped, which is the world
+# every configuration write in this script performs its writes in. `bm`
+# above uses `compose exec`, which needs a running container; this uses
+# `compose run --rm`, which starts one for the command and takes it away
+# again.
+bm_stopped() {  # bm_stopped <mgr> <prefix> <backup-manager args...>
+  local mgr="$1" prefix="$2"; shift 2
+  mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager /backup-manager "$@"
+}
+
 # run_case is one whole proof, from a machine with nothing on it to a
 # byte-for-byte comparison of what landed.
 #
@@ -914,6 +1128,13 @@ run_case() {
   mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
     /backup-manager "${create_argv[@]}" \
     || die "creating the backup set through the CLI failed."
+  # Issue #624, in the one window where it can be proven: the engine is
+  # stopped, so every configuration write and every check below takes the
+  # direct path, which is the same path the create above just took.
+  if [ "$case_name" = "plain" ]; then
+    run_source_verification "$mgr" "$prefix" "$source_ip" "$sftp_user"
+  fi
+
   mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
   # On the engine answering, not on the file existing: `run --rm` wrote it
   # before this line was reached, so waiting on the file would wait for
@@ -974,6 +1195,13 @@ run_case() {
     run_lifecycle "$mgr" "$prefix" "$want_payload"
   fi
 
+  if [ "$case_name" = "retention-apply" ]; then
+    run_retention_apply "$mgr" "$prefix"
+  fi
+  if [ "$case_name" = "activity-diagnostic" ]; then
+    run_activity_diagnostic "$mgr" "$prefix"
+  fi
+
   step "  case $case_name passed"
 
   # Released here rather than left to the exit trap. Each manager machine
@@ -998,6 +1226,215 @@ release_case() {
   # After the containers, never before: a network with an endpoint on it
   # cannot be removed.
   docker network rm "$net" >/dev/null 2>&1 || true
+}
+
+# ============================= #598: the feed reads, and a 500 says why
+#
+# Everything above this point is about a backup arriving. This is about
+# what an operator is told when something does not, and it is here rather
+# than in a unit test because both halves of #598 are about wiring that
+# only exists in a real deployment.
+#
+# The browser suite over in rclone-manager-tests drives createMockApi
+# through a Vite dev server. That is worth having and it is structurally
+# incapable of catching what was reported: the mock resolved every read
+# cleanly, so every case in it is a claim about a component rendering. The
+# claims below are made against the image built from this tree, running as
+# two containers on a machine that had nothing on it, over the same HTTP
+# route the browser uses.
+#
+# The route is the reason there is an administrator here at all. The CLI
+# reaches the engine through three environment variables (see `usage()`),
+# and the two credential ones are the Web UI's own, so a routed read is
+# an authenticated HTTP request to /api/v1/activity: the same request,
+# through the same middleware, answered by the same handler. That makes
+# the CLI the honest stand-in for the browser on a machine with no
+# browser on it, and it is why the mode line is asserted first. A command
+# that quietly answered from the journal would satisfy every assertion
+# about the rows and prove nothing about the route.
+run_activity_diagnostic() {
+  local mgr="$1" prefix="$2"
+
+  # ---------------------------------------- somebody to authenticate as
+  #
+  # Same dance as run_lifecycle, for the same reason: `auth create-admin`
+  # holds the credential store under a process-lifetime advisory flock, so
+  # the engine comes down for the length of it. The password never leaves
+  # this script except down a pipe into stdin here, and as an environment
+  # variable on the exec'd commands below, which is what the CLI's own
+  # documentation prescribes for the route; the container it lives in is
+  # deleted minutes from now.
+  step "  creating an administrator, so the CLI has a route to authenticate on"
+  mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
+  printf '%s' "$admin_pass" | docker exec -i "$mgr" docker compose \
+    -p rclone-manager --env-file "$prefix/.env" \
+    -f "$prefix/compose.yaml" -f "$prefix/compose.image.yaml" \
+    run --rm --no-deps -T rclone-manager \
+    /backup-manager-web auth create-admin --username "$admin_user" --password-stdin \
+    || die "could not create an administrator on the installed instance."
+  mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
+  wait_or_die 180 "the engine to answer again after the administrator was created" \
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+
+  # ------------------------------------------------- the feed, routed
+  step "  the lifecycle feed, read from the engine over its own API (#598)"
+  local feed_out feed_err
+  feed_err="$case_dir/activity.err"
+  feed_out="$(bm_routed "$mgr" "$prefix" activity --config /etc/backup-manager/config 2>"$feed_err")" \
+    || die "\`backup-manager activity\` failed against a deployment that has just completed a backup." \
+           "stderr: $(cat "$feed_err")"
+
+  grep -q '^mode: engine-attached' "$feed_err" \
+    || die "the activity read did not go to the engine." \
+           "It announced: $(head -1 "$feed_err")" \
+           "A read that answered from this host's own journal would satisfy every assertion below about the rows" \
+           "and prove nothing about the route the browser uses, which is what #598 is about."
+  note "the read announced engine-attached, so it came back over /api/v1/activity"
+
+  # The transitions the cycle above actually produced, named. Not "some
+  # rows": these three files are the ones whose bytes were compared
+  # against the source a moment ago, so a feed that listed anything else
+  # would be describing a different deployment.
+  local name
+  for name in payload.bin schema.sql notes.txt; do
+    echo "$feed_out" | grep -q "$name" \
+      || die "the activity feed does not mention $name, which this run backed up and verified by digest." \
+             "the feed said:" "$feed_out"
+  done
+  echo "$feed_out" | grep -q 'COMMITTED' \
+    || die "the activity feed carries no COMMITTED transition, and this run committed three artifacts." \
+           "the feed said:" "$feed_out"
+  # Timestamped, which is half of what the page shows and the half a
+  # projection silently drops.
+  echo "$feed_out" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} ' \
+    || die "no row in the activity feed carries a timestamp." \
+           "the feed said:" "$feed_out"
+  note "the feed names all three artifacts, their COMMITTED transitions, and when each happened"
+
+  # --json is what a support conversation or a cron job parses, so it is
+  # asserted on the contract's field names rather than on the table.
+  local json_out
+  json_out="$(bm_routed "$mgr" "$prefix" activity --config /etc/backup-manager/config --limit 1 --json 2>/dev/null)" \
+    || die "\`backup-manager activity --json\` failed against the running engine."
+  case "$json_out" in
+    *'"events"'*'"artifact_id"'*'"occurred_at"'*) : ;;
+    *) die "--json did not emit the contract's own ListActivityResponse shape." "it emitted: $json_out" ;;
+  esac
+  note "--json emits the wire objects, field names and all"
+
+  # -------------------------------- a read that reaches no service
+  #
+  # #598's second browser claim, in the form a machine with no browser can
+  # make it: with the engine down, the command must never CLAIM the world
+  # it could not reach. Run through `run --rm --no-deps` because there is
+  # no engine container left to exec into, which is itself the situation
+  # being modelled.
+  step "  a read with no engine to reach never claims it reached one"
+  mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
+  local down_err="$case_dir/activity-engine-down.err"
+  docker exec "$mgr" docker compose -p rclone-manager --env-file "$prefix/.env" \
+    -f "$prefix/compose.yaml" -f "$prefix/compose.image.yaml" \
+    run --rm --no-deps -T \
+    -e BACKUP_MANAGER_API_URL=http://127.0.0.1:8080 \
+    -e BACKUP_MANAGER_API_USERNAME="$admin_user" \
+    -e BACKUP_MANAGER_API_PASSWORD="$admin_pass" \
+    rclone-manager \
+    /backup-manager activity --config /etc/backup-manager/config >/dev/null 2>"$down_err" \
+    || true
+  if grep -q 'mode: engine-attached' "$down_err"; then
+    die "the read announced engine-attached with the engine container stopped." \
+        "it said: $(head -1 "$down_err")" \
+        "Claiming a world it could not reach is the defect #536 gave the mode line to prevent, and #598 asks for the same honesty one surface over."
+  fi
+  grep -q '^mode: ' "$down_err" \
+    || die "the read with no engine to reach announced no mode at all, so nothing on screen says which world the answer is about." \
+           "it said: $(cat "$down_err")"
+  note "it announced: $(grep -m1 '^mode: ' "$down_err" | cut -c1-60)..."
+  mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
+  wait_or_die 180 "the engine to answer again" \
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+
+  # ------------------- a 500 an operator can quote, and a log that has it
+  #
+  # The clause the server half of #598 exists for. There were thirty
+  # `writeError(w, 500, "INTERNAL", ...)` sites in the web host, every one
+  # of them binding the error, testing it and dropping it, with nowhere to
+  # write it even if it had wanted to. So the frontend's own words for an
+  # INTERNAL refusal, "its own log holds the detail, under this
+  # correlation id", were untrue of every route in the product.
+  #
+  # A read-only configuration directory is the cheapest deterministic way
+  # to make the engine refuse something it cannot explain: the write fails
+  # in the filesystem, well below anything that could produce a typed
+  # reason, which is exactly the shape those thirty sites are for.
+  step "  a 500 the engine cannot explain still explains itself in the log (#598)"
+  docker exec "$mgr" chmod 0555 "$prefix/config" \
+    || die "could not make the configuration directory read-only on the manager machine."
+
+  local refusal="" refused=0
+  refusal="$(bm_routed "$mgr" "$prefix" settings patch --timezone Europe/Berlin --config /etc/backup-manager/config 2>&1)" || refused=$?
+  docker exec "$mgr" chmod 0755 "$prefix/config" \
+    || die "could not restore the configuration directory's permissions on the manager machine."
+
+  [ "$refused" != "0" ] \
+    || die "a configuration write against a read-only configuration directory succeeded, so there is no refusal to check." \
+           "it said: $refusal"
+  case "$refusal" in
+    *INTERNAL*) : ;;
+    *) die "the refusal is not the INTERNAL one this case is about, so the log assertion below would be about a different failure." \
+           "it said: $refusal" ;;
+  esac
+
+  local cid
+  cid="$(printf '%s' "$refusal" | grep -oE 'cid_[A-Za-z0-9_-]+' | head -1 || true)"
+  [ -n "$cid" ] \
+    || die "the refusal quoted no correlation id, so an operator has nothing to give anybody." \
+           "it said: $refusal"
+  note "the engine refused with correlation id $cid"
+
+  local logs
+  logs="$(mgr_compose "$mgr" "$prefix" logs rclone-manager 2>/dev/null || true)"
+  printf '%s' "$logs" | grep -q "$cid" \
+    || die "the correlation id $cid the operator was handed appears nowhere in the engine's own log." \
+           "That is the whole defect #598's server half is about: an id that matches nothing sends whoever quotes it" \
+           "grepping for a string that was never written."
+  local line
+  line="$(printf '%s' "$logs" | grep -m1 "$cid")"
+  case "$line" in
+    *http_refusal*) : ;;
+    *) die "the line carrying $cid is not the refusal event, so something else happens to mention that id." "the line: $line" ;;
+  esac
+  case "$line" in
+    *'"error"'*) : ;;
+    *) die "the logged refusal carries the correlation id and not the error it refused over, which is the half that makes the id worth quoting." \
+           "the line: $line" ;;
+  esac
+  case "$line" in
+    *'/api/v1/settings'*) : ;;
+    *) die "the logged refusal does not name the route it refused, so an operator holding the id still cannot say what failed." "the line: $line" ;;
+  esac
+  note "the engine's own log carries that id, the route, and the error underneath it"
+
+  step "  activity-diagnostic passed"
+}
+
+# bm_routed is `bm` with the three environment variables that give the CLI
+# a route to the running engine (see `usage()`'s own paragraph on them).
+# Without these the same command answers from this host's journal and
+# announces `direct`, which is a different claim entirely, so every routed
+# assertion above checks the mode line before it checks anything else.
+bm_routed() {  # bm_routed <mgr> <prefix> <backup-manager args...>
+  local mgr="$1" prefix="$2"; shift 2
+  # The -e flags go on `compose exec`, not on the `docker exec` around it:
+  # the outer one would set them for the compose CLI running on the
+  # manager machine, which is not the process that needs them.
+  docker exec "$mgr" docker compose -p rclone-manager --env-file "$prefix/.env" \
+    -f "$prefix/compose.yaml" -f "$prefix/compose.image.yaml" \
+    exec -T \
+    -e BACKUP_MANAGER_API_URL=http://127.0.0.1:8080 \
+    -e BACKUP_MANAGER_API_USERNAME="$admin_user" \
+    -e BACKUP_MANAGER_API_PASSWORD="$admin_pass" \
+    rclone-manager /backup-manager "$@"
 }
 
 # ==================================== #343: upgrade, then factory reset
@@ -1030,11 +1467,11 @@ run_lifecycle() {
   # comes down for the length of it.
   step "  creating an administrator, so there is a user to count"
   mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
-  printf '%s' "$lifecycle_admin_pass" | docker exec -i "$mgr" docker compose \
+  printf '%s' "$admin_pass" | docker exec -i "$mgr" docker compose \
     -p rclone-manager --env-file "$prefix/.env" \
     -f "$prefix/compose.yaml" -f "$prefix/compose.image.yaml" \
     run --rm --no-deps -T rclone-manager \
-    /backup-manager-web auth create-admin --username "$lifecycle_admin_user" --password-stdin \
+    /backup-manager-web auth create-admin --username "$admin_user" --password-stdin \
     || die "could not create an administrator on the installed instance."
   mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
   # On the engine answering, not on the record existing: `run --rm` wrote
@@ -1120,6 +1557,235 @@ run_lifecycle() {
   [ "$still" = "$want_payload" ] \
     || die "the retained backup did not survive the factory reset, which destroys the catalog and not the files."
   note "the retained backups are untouched"
+}
+
+
+# run_retention_apply is issue #602's whole claim, on restore points a real
+# cycle produced on a real machine: an apply removes exactly the set the
+# plan printed as DELETE, and nothing else.
+#
+# # Why the chain gets narrowed first
+#
+# One cycle lands three artifacts on one day, and every GFS tier keeps a
+# representative of its newest bucket, so under the default chain all
+# three are KEEP and the plan selects nothing. A plan that selects nothing
+# makes every assertion below vacuously true, which is the exact shape
+# this case exists to rule out, so the chain is narrowed to one per bucket
+# through `backup-set retention` and the emptiness of the DELETE set is
+# then checked rather than assumed.
+#
+# # Why the engine is stopped for it
+#
+# Not because the apply would be refused: it reads the configuration and
+# writes the journal, so it is allowed beside a serving engine exactly as
+# `restore` is. It is stopped because the poll loop can finish a cycle in
+# the window between the preview and the apply, and a cycle writes the
+# very journal rows the staleness comparison is computed over, so the
+# apply would correctly refuse with RETENTION_PLAN_STALE and this case
+# would be asserting on that refusal instead. That refusal is pinned where
+# it belongs, at both boundaries, in core/service and apps/common/webhost.
+# The engine comes back up afterwards and has to still call the set
+# healthy.
+#
+# # The positive control
+#
+# unmanaged-by-anything.txt is planted in the backup directory and no
+# journal row mentions it. FR-20 never lists a directory to find something
+# to delete, so it has to survive. It is also what the comparison is
+# proven on: after the real apply, retention_apply_complaints is run twice
+# more against listings perturbed by hand, one with that file missing and
+# one with a previewed DELETE still present, and it has to complain about
+# each by name. Without that, an apply that deleted nothing at all passes
+# every other line here.
+run_retention_apply() {
+  local mgr="$1" prefix="$2"
+  local backups="$prefix/backups/source"
+
+  step "  planting a file no journal row mentions"
+  docker exec "$mgr" sh -c "printf 'no journal row mentions this\n' > $backups/unmanaged-by-anything.txt" \
+    || die "could not plant the unmanaged file in $backups."
+
+  # A whole policy, through the CLI, with the engine down: this is a
+  # configuration write and #538 refuses one beside a serving engine, so
+  # it follows the same stop/run --rm/start shape the create above does.
+  step "  narrowing the chain so today's restore points do not all survive it"
+  mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
+  mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
+    /backup-manager backup-set retention e2e/source \
+    --config /etc/backup-manager/config \
+    --daily-days 1 --weekly-months 1 --monthly-months 1 >/dev/null \
+    || die "giving the backup set its own retention policy failed."
+
+  local before after apply_out want_deleted did_delete removed complaints
+  before="$(retention_apply_listing "$mgr" "$backups")"
+  note "before the apply: $(printf '%s\n' "$before" | awk '{print $1}' | tr '\n' ' ')"
+
+  step "  applying the plan"
+  apply_out="$(mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
+    /backup-manager retention apply e2e/source \
+    --config /etc/backup-manager/config --acknowledge 2>/dev/null)" \
+    || die "the retention apply exited non-zero." "It said: $apply_out"
+  printf '%s\n' "$apply_out" | sed 's/^/    | /'
+
+  # The plan the apply printed BEFORE it did anything, which is the plan
+  # it applied. Read off its own output rather than from a second preview:
+  # a second preview is a second decision, and comparing the disk against
+  # one nothing acted on would be comparing two different plans.
+  want_deleted="$(printf '%s\n' "$apply_out" | awk '/: applied plan /{exit} $1 == "DELETE" { print $2 }' | sort)"
+  did_delete="$(printf '%s\n' "$apply_out" | awk '/: applied plan /{on=1;next} on && $1 == "DELETE" { print $2 }' | sort)"
+
+  [ -n "$want_deleted" ] \
+    || die "the plan selected nothing for deletion, so this case certifies nothing." \
+           "Every assertion below is vacuously true of an apply that removed nothing at all." \
+           "The chain narrowed above is supposed to leave one representative per bucket out of three same-day artifacts." \
+           "The apply said: $apply_out"
+  [ "$want_deleted" = "$did_delete" ] \
+    || die "the apply's own receipt names a different set from the plan it printed first." \
+           "planned: $(echo "$want_deleted" | tr '\n' ' ')" \
+           "applied: $(echo "$did_delete" | tr '\n' ' ')"
+  note "the plan selected: $(echo "$want_deleted" | tr '\n' ' ')"
+
+  after="$(retention_apply_listing "$mgr" "$backups")"
+  note "after the apply:  $(printf '%s\n' "$after" | awk '{print $1}' | tr '\n' ' ')"
+
+  complaints="$(retention_apply_complaints "$before" "$after" "$want_deleted")"
+  [ -z "$complaints" ] \
+    || die "the apply did not remove exactly the set the plan named:" "$complaints"
+
+  removed="$(comm -23 <(printf '%s\n' "$before" | awk '{print $1}') <(printf '%s\n' "$after" | awk '{print $1}'))"
+  note "removed exactly: $(echo "$removed" | tr '\n' ' ')"
+
+  # The positive control. Everything above is a comparison, and a
+  # comparison nobody has watched fail is indistinguishable from one that
+  # cannot. Both perturbations are applied to the LISTING rather than to
+  # the machine, because what is under test here is the assertion and a
+  # control that deleted a real file would be testing rm.
+  step "  proving that comparison would have noticed"
+  local perturbed
+  # `|| true` because grep exits 1 on an empty result and this whole
+  # script runs under `set -e`. An empty listing here is not a silent
+  # pass: the comparison below would then complain about every file in
+  # the tree, the planted one included, so the control still fires.
+  perturbed="$(printf '%s\n' "$after" | grep -v '^unmanaged-by-anything.txt ' || true)"
+  retention_apply_complaints "$before" "$perturbed" "$want_deleted" \
+    | grep -q 'unmanaged-by-anything.txt' \
+    || die "the comparison reported nothing wrong about a file no verdict named going missing." \
+           "It would therefore have passed against an apply that removed a file the journal never knew about," \
+           "which makes every assertion in this case worthless."
+  note "a file no verdict named going missing: caught"
+
+  local survivor
+  survivor="$(printf '%s\n' "$want_deleted" | head -1)"
+  perturbed="$(printf '%s\n%s\n' "$after" "$(printf '%s\n' "$before" | grep "^$survivor ")" | grep -v '^$' | sort)"
+  retention_apply_complaints "$before" "$perturbed" "$want_deleted" \
+    | grep -q "$survivor" \
+    || die "the comparison reported nothing wrong about a previewed DELETE still sitting on disk." \
+           "It would therefore have passed against an apply that confirmed a plan and carried none of it out."
+  note "a previewed DELETE still on disk: caught"
+
+  retention_apply_complaints "$before" "$after" "" | grep -q 'certifies nothing' \
+    || die "the comparison answered true for a plan that named nothing to delete, rather than refusing it."
+  note "an empty plan: refused rather than answered true"
+
+  # What the deployment looks like afterwards, and the one thing about it
+  # that has to hold.
+  #
+  # It is not "healthy", and this case found that out rather than assuming
+  # it: an apply removes the local file and leaves the journal row exactly
+  # as it was, so the next reconciliation finds a REMOTE_RETAINED artifact
+  # whose durable local copy is missing and quarantines it. The set then
+  # reports DEGRADED and `status` exits non-zero, for a run that did
+  # precisely what its plan said. That is issue #608 and it is not this
+  # case's to fix: a pruned artifact needs an end state of its own, which
+  # changes internal/state's schema.
+  #
+  # So the exit code is not gated on, and one thing is: nothing may be
+  # reported as UNRECOVERABLE. The source here is read-only, so these
+  # route to the ordinary recoverable QUARANTINED; the same code path
+  # sends a COMPLETE artifact to QUARANTINED_LOST, which is the
+  # unrecoverable one, and retention's own deliberate deletion being
+  # recorded as unrecoverable data loss is the version of #608 that would
+  # be an emergency rather than a defect. Pinning it here is what makes
+  # that distinction something a run can lose rather than something a
+  # reader has to remember.
+  step "  bringing the engine back up"
+  mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
+  wait_or_die 180 "the engine to answer again after the retention apply" \
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+
+  local health
+  health="$(bm "$mgr" "$prefix" status --config /etc/backup-manager/config 2>/dev/null || true)"
+  printf '%s\n' "$health" | sed 's/^/    | /'
+  printf '%s\n' "$health" | grep -q "^e2e/source:" \
+    || die "the engine's status says nothing about e2e/source after the retention apply." \
+           "It said: $health"
+  printf '%s\n' "$health" | grep -qE "unrecoverable: [1-9]" \
+    && die "the engine reports an UNRECOVERABLE artifact after a retention apply that removed only what its own plan named." \
+           "A deletion this product decided on, previewed and confirmed must never be recorded as data it has lost." \
+           "It said: $health"
+  note "nothing is reported as unrecoverable; the DEGRADED reading itself is issue #608"
+}
+
+# retention_apply_listing fingerprints one directory inside a container as
+# "<name> <sha256>" lines, sorted.
+#
+# Names AND digests, because "present afterwards" is a weaker claim than
+# "present and the same file", and the difference is the whole of what a
+# restore point is for.
+retention_apply_listing() {  # retention_apply_listing <container> <dir>
+  docker exec "$1" sh -c "cd $2 && sha256sum * 2>/dev/null" | awk '{print $2, $1}' | sort
+}
+
+# retention_apply_complaints is the assertion, as a function that prints
+# what is wrong rather than one that dies.
+#
+# That shape is the point, and it is the same one core/service's own
+# retentionEvidenceCompare takes: a helper that called die could only ever
+# be exercised by a run that was already failing, so nothing could ask it
+# "would you notice". This one can be handed a deliberately perturbed
+# listing and required to complain, which is what the control above does.
+#
+# An empty <previewed-delete-set> is refused rather than answered true
+# about: with nothing named for deletion every clause here is vacuously
+# satisfied by an apply that did nothing at all.
+retention_apply_complaints() {  # retention_apply_complaints <before> <after> <previewed-delete-set>
+  local before="$1" after="$2" want="$3"
+  local name digest now_digest
+
+  if [ -z "$want" ]; then
+    echo "the plan named nothing for deletion, so this comparison certifies nothing"
+    return 0
+  fi
+
+  while read -r name digest; do
+    [ -z "$name" ] && continue
+    now_digest="$(printf '%s\n' "$after" | awk -v n="$name" '$1 == n { print $2 }')"
+    if [ -z "$now_digest" ]; then
+      printf '%s\n' "$want" | grep -qxF -- "$name" \
+        || echo "$name was removed and no verdict in the plan named it"
+    elif printf '%s\n' "$want" | grep -qxF -- "$name"; then
+      echo "$name is still on disk and the plan marked it DELETE"
+    elif [ "$now_digest" != "$digest" ]; then
+      echo "$name survived the apply but is not the same file"
+    fi
+  done <<LISTING
+$before
+LISTING
+
+  while read -r name digest; do
+    [ -z "$name" ] && continue
+    printf '%s\n' "$before" | awk '{print $1}' | grep -qxF -- "$name" \
+      || echo "$name appeared during the apply, and a retention apply creates nothing"
+  done <<LISTING
+$after
+LISTING
+
+  # Explicit, and not tidiness. A `while read` loop ends on the read that
+  # found nothing, so this function would otherwise return 1 whenever it
+  # had no complaint to make, which under `set -euo pipefail` kills the
+  # run at the assignment above and fires every `|| die` in the control
+  # below on a comparison that was perfectly happy.
+  return 0
 }
 
 count_admins() {  # 1 when the administrator record exists, 0 otherwise

@@ -1,0 +1,236 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Activity: a failure that says what failed</title>
+<style>
+:root{
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;
+  --radius-sm:4px;--radius-md:6px;--radius-lg:8px;--radius-xl:10px;--radius-pill:999px;
+  --bg:#f2f2f0;--surface:#fff;--surface-2:#fafaf9;--surface-3:#f0f0ed;
+  --border:#e0dfdc;--border-strong:#c8c7c3;
+  --text:#191a19;--text-2:#5b5d5b;--text-3:#8b8d8a;
+  --accent:oklch(0.52 0.09 255);--accent-quiet:oklch(0.95 0.02 255);
+  --ok:oklch(0.52 0.10 155);--ok-quiet:oklch(0.955 0.025 155);
+  --warn:oklch(0.56 0.11 70);--warn-quiet:oklch(0.96 0.035 75);
+  --danger:oklch(0.52 0.15 25);--danger-quiet:oklch(0.955 0.03 25);
+  --shadow:0 1px 2px rgba(20,20,18,.05),0 1px 1px rgba(20,20,18,.04);
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:var(--space-6)}
+.wrap{max-width:1040px;margin:0 auto;display:flex;flex-direction:column;gap:var(--space-5)}
+h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01em}
+.sub{color:var(--text-2);font-size:13px;margin:0;max-width:78ch}
+.eyebrow{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--text-3);margin:0}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);
+  box-shadow:var(--shadow);overflow:hidden}
+.card__header{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);
+  padding:var(--space-3) var(--space-5);border-bottom:1px solid var(--border)}
+.tag{font-size:11px;font-weight:600;letter-spacing:.03em;padding:2px 8px;border-radius:var(--radius-pill)}
+.tag--now{background:var(--danger-quiet);color:var(--danger)}
+.tag--after{background:var(--ok-quiet);color:var(--ok)}
+.tag--quiet{background:var(--surface-3);color:var(--text-3)}
+.body{padding:var(--space-4) var(--space-5)}
+.note{padding:var(--space-3) var(--space-5) var(--space-4);color:var(--text-3);font-size:12px;
+  border-top:1px dashed var(--border);background:var(--surface-2);max-width:none}
+.note strong{color:var(--text-2)}
+
+/* the error banner, as EmptyState.tsx's ErrorState draws it */
+.banner{display:flex;gap:var(--space-3);padding:var(--space-4);border-radius:var(--radius-lg);
+  background:var(--danger-quiet);border:1px solid oklch(0.85 0.06 25)}
+.banner__glyph{color:var(--danger);flex:none;line-height:1.35}
+.banner__title{font-weight:600;font-size:13.5px}
+.banner__rem{margin-top:4px;font-size:13px;color:var(--text-2)}
+.details{margin-top:var(--space-2);font-size:12px;color:var(--text-3)}
+.details summary{cursor:pointer;list-style:revert}
+.detailbox{margin-top:6px;font-family:var(--font-mono);font-size:11.5px;line-height:1.7;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);
+  padding:var(--space-3);color:var(--text-2);white-space:pre-wrap}
+.detailbox .k{color:var(--text-3)}
+.detailbox .v{color:var(--text)}
+.detailbox .dead{color:var(--danger)}
+.btnrow{display:flex;gap:var(--space-2);margin-top:var(--space-3)}
+.btn{height:26px;padding:0 10px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);
+  background:var(--surface);color:var(--text-2);font:inherit;font-size:12px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:5px}
+.btn:hover{background:var(--surface-3);color:var(--text)}
+
+/* the dashboard panel that says nothing at all */
+.quietpanel{padding:var(--space-4) var(--space-5);min-height:74px;display:flex;align-items:center;
+  justify-content:center;color:var(--text-3);font-size:12.5px;
+  border:1px dashed var(--border-strong);border-radius:var(--radius-lg);background:var(--surface-2);
+  margin:var(--space-4) var(--space-5)}
+
+/* the engine's own log */
+.term{background:#14150f;color:#d7d9d2;font-family:var(--font-mono);font-size:11px;line-height:1.8;
+  padding:var(--space-3) var(--space-4);overflow-x:auto;white-space:pre}
+.term .t{color:#6f736a}
+.term .lv-err{color:oklch(0.72 0.16 25)}
+.term .lv-warn{color:oklch(0.78 0.12 75)}
+.term .cid{color:oklch(0.78 0.10 255)}
+.term .f{color:#9aa39b}
+
+/* healthy activity page */
+.tl{margin:0;padding:0;list-style:none}
+.tl li{display:grid;grid-template-columns:132px 16px 1fr auto;gap:14px;align-items:baseline;
+  padding:10px var(--space-5);border-bottom:1px solid var(--border);font-size:13px}
+.tl li:last-child{border-bottom:0}
+.tl .time{font-family:var(--font-mono);font-size:12px;color:var(--text-3)}
+.tl .g-ok{color:var(--ok);text-align:center}
+.tl .g-info{color:var(--text-3);text-align:center}
+.tl .g-err{color:var(--danger);text-align:center}
+.tl .det{color:var(--text-3)}
+.tl .set{font-size:12px;color:var(--text-3)}
+.tl .bold{font-weight:600}
+.filters{display:flex;gap:9px;padding:var(--space-3) var(--space-5);border-bottom:1px solid var(--border)}
+.sel{height:30px;padding:0 26px 0 9px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);
+  background:var(--surface);font:inherit;font-size:12.5px;color:var(--text-2);
+  appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--text-3) 50%),linear-gradient(135deg,var(--text-3) 50%,transparent 50%);
+  background-position:calc(100% - 14px) 13px,calc(100% - 9px) 13px;background-size:5px 5px;background-repeat:no-repeat}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}}
+</style>
+<div class="wrap">
+  <div>
+    <h1>Activity, when the request does not come back</h1>
+    <p class="sub">Clicking Activity on a real 0.3.2 NAS gives a red banner and a disclosure holding the
+      words "correlation id unavailable", and there is nothing behind it. The failure is not that the
+      page broke. It is that neither end kept a single fact about how, so the same screen would look
+      identical for a dropped connection, a truncated body and a mapper that threw.</p>
+  </div>
+
+  <!-- 1. TODAY -->
+  <section class="card">
+    <div class="card__header">
+      <h2 class="eyebrow">Activity · today, on the deployment</h2>
+      <span class="tag tag--now">nothing to act on</span>
+    </div>
+    <div class="body">
+      <div class="banner">
+        <span class="banner__glyph">&#10005;</span>
+        <div style="min-width:0">
+          <div class="banner__title">Backup Manager could not complete that request.</div>
+          <details class="details" open>
+            <summary>Advanced details</summary>
+            <div class="detailbox"><span class="dead">correlation id unavailable</span></div>
+          </details>
+          <div class="btnrow"><button class="btn">Try again</button></div>
+        </div>
+      </div>
+    </div>
+    <p class="note"><strong>Where the sentence comes from.</strong> <code>useAsync</code> catches
+      <code>e: unknown</code> and, when it is not a <code>BackupManagerError</code>, replaces it with a
+      fixed sentence and the literal string <code>"unavailable"</code>. The exception is never read and
+      never stored. The literal is what forces the empty disclosure open: <code>ErrorState</code> hides
+      Advanced details when a failure carried no correlation id, and a literal defeats that.</p>
+  </section>
+
+  <!-- 2. THE SAME FAILURE, KEPT -->
+  <section class="card">
+    <div class="card__header">
+      <h2 class="eyebrow">Activity · the same failure, with the exception kept</h2>
+      <span class="tag tag--after">has a next step</span>
+    </div>
+    <div class="body">
+      <div class="banner">
+        <span class="banner__glyph">&#10005;</span>
+        <div style="min-width:0">
+          <div class="banner__title">Backup Manager answered, and the answer could not be read.</div>
+          <div class="banner__rem">The request reached the service and came back, so it may well have
+            been carried out; what failed was reading the reply. Copy the details below into a bug
+            report, then try again.</div>
+          <details class="details" open>
+            <summary>Advanced details</summary>
+            <div class="detailbox"><span class="k">request      </span><span class="v">GET /api/v1/activity</span>
+<span class="k">status       </span><span class="v">200 · 41.2 KB · content-type application/json</span>
+<span class="k">failed at    </span><span class="v">reading the response body</span>
+<span class="k">exception    </span><span class="v">SyntaxError: Unexpected end of JSON input</span>
+<span class="k">correlation  </span><span class="v">cid_9Fq2tZk1 (from the response header)</span>
+<span class="k">at           </span><span class="v">2026-09-07 14:02:11 +02:00</span>
+<span class="k">build        </span><span class="v">0.3.2 (a41c0d9)</span></div>
+          </details>
+          <div class="btnrow">
+            <button class="btn">Copy details</button>
+            <button class="btn">Try again</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="note"><strong>Every line here is a fact somebody already had and threw away.</strong>
+      The request path is the argument to <code>request()</code>. The status, size and content type are
+      on the <code>Response</code>. The exception is the value <code>useAsync</code> catches. The
+      correlation id is the <code>X-Correlation-Id</code> header <code>writeError</code> already sets,
+      read on a 2xx as well as a refusal. Nothing here is a stack trace, so &#167;37 still holds:
+      no frames, no source paths, no internals, just what was asked, what came back and what could not
+      be done with it.</p>
+  </section>
+
+  <div class="grid2">
+    <!-- 3. THE OTHER END -->
+    <section class="card">
+      <div class="card__header">
+        <h2 class="eyebrow">The engine's log, on a refusal</h2>
+        <span class="tag tag--after">after</span>
+      </div>
+      <div class="term">2026-09-07T14:02:11Z <span class="lv-err">ERROR</span> api_refused
+  <span class="f">route=</span>GET /api/v1/activity <span class="f">code=</span>INTERNAL
+  <span class="f">cid=</span><span class="cid">cid_9Fq2tZk1</span>
+  <span class="f">err=</span>"read activity: sql: database is locked"</div>
+      <p class="note"><strong>Today this line does not exist.</strong> <code>listActivity</code> does
+        <code>writeError(w, 500, "INTERNAL", "failed to list activity")</code> and drops <code>err</code>
+        on the floor. Thirty handlers in <code>apps/common/webhost</code> do exactly that, the
+        <code>handlers</code> struct has no logger to write to, and no request logging is installed on
+        the router. Meanwhile <code>describeFailure</code> already tells operators that
+        "its own log holds the detail, under this correlation id", which is a promise the service
+        currently cannot keep for any of them.</p>
+    </section>
+
+    <!-- 4. THE SILENT ONE -->
+    <section class="card">
+      <div class="card__header">
+        <h2 class="eyebrow">Dashboard &#183; Recent activity, same failure</h2>
+        <span class="tag tag--now">says nothing at all</span>
+      </div>
+      <div class="quietpanel">no rows</div>
+      <p class="note"><strong>The same fetch, and a worse answer.</strong> <code>DashboardPage</code>
+        runs the identical <code>useAsync(() =&gt; api.listActivity())</code> and never reads
+        <code>activity.error</code>; it renders <code>(activity.data ?? []).slice(0, 6)</code>. So while
+        the Activity page shows a banner with nothing in it, the dashboard shows an empty panel that
+        looks exactly like a deployment where nothing has happened. Both surfaces have to say the same
+        thing about the same failure.</p>
+    </section>
+  </div>
+
+  <!-- 5. THE FIX WORKING -->
+  <section class="card">
+    <div class="card__header">
+      <h2 class="eyebrow">Activity &#183; what the page is for, once the cause is found</h2>
+      <span class="tag tag--quiet">unchanged by this issue</span>
+    </div>
+    <div class="filters">
+      <select class="sel"><option>All backup sets</option></select>
+      <select class="sel"><option>All severities</option></select>
+    </div>
+    <ul class="tl">
+      <li><span class="time">Sep 07 14:01:52</span><span class="g-ok">&#10003;</span>
+        <span><span>Backup committed</span> <span class="det">TRANSFERRED to COMMITTED</span></span>
+        <span class="set">api-server / var-backups</span></li>
+      <li><span class="time">Sep 07 14:01:49</span><span class="g-ok">&#10003;</span>
+        <span><span>Verification passed</span> <span class="det">md5 matched source</span></span>
+        <span class="set">api-server / var-backups</span></li>
+      <li><span class="time">Sep 07 14:01:33</span><span class="g-info">&#183;</span>
+        <span><span>Transfer started</span> <span class="det">DISCOVERED to TRANSFERRING</span></span>
+        <span class="set">api-server / var-backups</span></li>
+      <li><span class="time">Sep 07 13:47:10</span><span class="g-err">&#10005;</span>
+        <span><span class="bold">Quarantined for review</span> <span class="det">checksum mismatch on dpkg.status.1.gz</span></span>
+        <span class="set">cicd-pipeline / var-backups</span></li>
+      <li><span class="time">Sep 07 13:46:02</span><span class="g-info">&#183;</span>
+        <span><span>Backup discovered</span> <span class="det">discovered on the source</span></span>
+        <span class="set">cicd-pipeline / var-backups</span></li>
+    </ul>
+    <p class="note">The deployment has 100 of these rows in its journal and the endpoint serves them.
+      This is the state the page is supposed to be in, and it is the state the browser test has to
+      reach against a real engine rather than against a fixture.</p>
+  </section>
+</div>

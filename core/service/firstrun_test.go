@@ -96,6 +96,11 @@ func firstRunCreateReq(t *testing.T, fr *FirstRun, name string) CreateBackupSetR
 		LocalPath:          filepath.Join(t.TempDir(), name),
 		Include:            []string{"*.dump"},
 		CompletionStrategy: "marker",
+		// The skip, for the reason validCreateReq (backupsets_test.go)
+		// gives: CreateInitialConfig proves the connection in front of
+		// the write since PR #628's review, and example.internal answers
+		// nothing. backupsetcreatecheck_test.go turns it back off.
+		SkipConnectionCheck: true,
 	}
 }
 

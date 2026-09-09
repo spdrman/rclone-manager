@@ -29,6 +29,7 @@ import type { Operation, SystemHealth } from "@shared/types/operation";
 const noop = () => {};
 
 const SET: BackupSet = {
+  connectionUnverified: false,
   id: "set_test",
   source: "production",
   set: "postgres-primary",
@@ -55,7 +56,8 @@ const SET: BackupSet = {
   retainedCount: 32,
   retainedBytes: 421 * 1024 ** 3,
   trustedHostKeys: [{ algorithm: "ssh-ed25519", fingerprint: "SHA256:test-fingerprint" }],
-  trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00"
+  trustedHostKeyRecordedAt: "2026-08-02T10:14:00+02:00",
+  sshKeyId: "key_a1b2c3"
 };
 
 const HEALTH: SystemHealth = {

@@ -188,6 +188,217 @@
           "either: the bump that removed one is when the offer wants reading again."
         ]
       }
+    ],
+
+    "_vendoredAssetsComment": [
+      "Issue #621. Third-party material this repository carries in its own",
+      "SOURCE rather than resolving through a package manager, which is a third",
+      "kind of thing the two above cannot see: provenance/third-party-licenses.json",
+      "is derived from the Go module graph and ui/shared/package-lock.json, and",
+      "vendored artwork is in neither.",
+      "",
+      "It is a register beside the inventory rather than a row inside it, and",
+      "VendoredAsset's doc comment in vendoredassets.go carries the argument. In",
+      "short: the inventory's one claim about itself is that every row is",
+      "re-derived from the tree on every run, and a hand-written row would have to",
+      "be exempted from that comparison. The cost is that the SPDX SBOM, which is",
+      "built from the inventory, does not carry this either. That is a real gap",
+      "and it is named rather than left to be found.",
+      "",
+      "Nothing here is believed. VendoredAssetComplaints holds the files under",
+      "vendoredInto to whichever evidence their kind uses, reads the artifacts",
+      "under recordedIn for the five things CC BY 4.0 section 3(a)(1) asks an",
+      "attribution to carry, and sweeps the UI's source and the provider shells",
+      "for material no entry claims.",
+      "",
+      "#631 put a second kind of material in the same gap, the woff2 files the",
+      "web UI's typeface is served from, and it goes through this register",
+      "rather than a sibling one. Two registers would have meant two NOTICE",
+      "sections and two sets of rules for one obligation. carriedAs is what",
+      "tells the two apart: \"source\" is reproduced inside a file this project",
+      "maintains and is held to a marker, because a digest over a file that",
+      "changes would go stale on the next edit; \"files\" is the upstream's own",
+      "bytes redistributed, and is held to a SHA-256 each, because OFL-1.1",
+      "reserves the font name for the copyright holder's own builds and",
+      "\"unmodified\" is therefore the permission rather than a nicety. Each kind",
+      "is refused for carrying the other's evidence, since a check that cannot",
+      "fail reads like coverage."
+    ],
+    "vendoredAssets": [
+      {
+        "id": "font-awesome-free-icons",
+        "name": "Font Awesome Free",
+        "version": "6.7.2",
+        "creator": "Fonticons, Inc.",
+        "copyright": "Copyright 2024 Fonticons, Inc.",
+        "spdxId": "CC-BY-4.0",
+        "licenceName": "Creative Commons Attribution 4.0 International",
+        "licenceTextUrl": "https://creativecommons.org/licenses/by/4.0/",
+        "modified": false,
+        "modifiedNote": "reproduced verbatim and unmodified",
+        "whatShips": "the SVG path data of fourteen icons, compiled into the web bundle",
+        "carriedAs": "source",
+        "vendoredInto": [
+          "ui/shared/src/design-system/icons.tsx"
+        ],
+        "marker": "Font Awesome Free 6.7.2",
+        "linkedInto": [
+          "backup-manager-web"
+        ],
+        "sourceUrl": "https://registry.npmjs.org/@fortawesome/fontawesome-free/-/fontawesome-free-6.7.2.tgz",
+        "recordedIn": [
+          "NOTICE",
+          "docs/compliance/bundled-icon-artwork.md",
+          "ui/shared/index.html"
+        ],
+        "rationale": [
+          "The UI drew its icons as Unicode geometric characters until #621, which",
+          "meant the operator's system font decided what a warning triangle was.",
+          "They are Font Awesome Free artwork now, carried as inline SVG paths",
+          "rather than as a dependency, and the three constraints that picked that",
+          "shape are in the icon module's own doc: the product runs on a NAS that",
+          "may have no route off its LAN, the release image size is gated, and the",
+          "package declares a licence EXPRESSION that LicensePolicyComplaints",
+          "refuses as undecided, so a dependency would have needed this written",
+          "down by hand anyway.",
+          "",
+          "Only the icons ship. Font Awesome Free is three licences at once, CC BY",
+          "4.0 for the icons, SIL OFL 1.1 for the webfonts and MIT for the code,",
+          "and whatShips above says which part this product carries because a",
+          "record that did not would claim obligations this project does not have",
+          "while hiding the one it does. No Font Awesome font file and no Font",
+          "Awesome code is in the tree.",
+          "",
+          "The attribution reaches three different readers and that is why it is",
+          "recorded in more than one place. docs/compliance/bundled-icon-artwork.md",
+          "is the full record for somebody with the repository. NOTICE is for",
+          "somebody holding a built artifact, which is the reader CC BY 4.0 section",
+          "3(a) is actually about. ui/shared/index.html carries a short form for",
+          "the same reader in the running page, and Font Awesome's own embedded",
+          "notice sits beside the path data because the licence asks in as many",
+          "words that those comments not be actively removed from files."
+        ]
+      },
+      {
+        "id": "ibm-plex-sans",
+        "name": "IBM Plex Sans",
+        "version": "1.1.0",
+        "creator": "IBM Corp.",
+        "copyright": "Copyright © 2017 IBM Corp. with Reserved Font Name \"Plex\"",
+        "spdxId": "OFL-1.1",
+        "licenceName": "SIL Open Font License 1.1",
+        "licenceTextUrl": "https://openfontlicense.org/open-font-license-official-text/",
+        "modified": false,
+        "modifiedNote": "reproduced verbatim and unmodified",
+        "whatShips": "the Latin1 woff2 subsets of the regular, medium, semibold and bold faces, served from the image",
+        "carriedAs": "files",
+        "vendoredInto": [
+          "ui/shared/public/fonts/IBMPlexSans-Regular-Latin1.woff2",
+          "ui/shared/public/fonts/IBMPlexSans-Medium-Latin1.woff2",
+          "ui/shared/public/fonts/IBMPlexSans-SemiBold-Latin1.woff2",
+          "ui/shared/public/fonts/IBMPlexSans-Bold-Latin1.woff2"
+        ],
+        "digests": {
+          "ui/shared/public/fonts/IBMPlexSans-Regular-Latin1.woff2": "b5ad7bd39f996144915f0ad9849a90183b27d8c28ad97ed98af5b1bebc51f6b1",
+          "ui/shared/public/fonts/IBMPlexSans-Medium-Latin1.woff2": "b5610af04d0d4b5a14a621d96d974b993e945a065db1a8861918f69ef9321934",
+          "ui/shared/public/fonts/IBMPlexSans-SemiBold-Latin1.woff2": "fff0ab3a88b0b4aa0b693e4f0201359a15183b08e3fa5696d1918d8f0ade8ad5",
+          "ui/shared/public/fonts/IBMPlexSans-Bold-Latin1.woff2": "914f1400f363e636b6f9cc7965aa807ff01e93586e1437617525cba0a62aa78d"
+        },
+        "licenceFile": "ui/shared/public/fonts/LICENSE.txt",
+        "linkedInto": [
+          "backup-manager-web"
+        ],
+        "sourceUrl": "https://registry.npmjs.org/@ibm/plex-sans/-/plex-sans-1.1.0.tgz",
+        "recordedIn": [
+          "NOTICE",
+          "docs/compliance/bundled-webfonts.md",
+          "ui/shared/index.html",
+          "ui/shared/src/design-system/typography.css"
+        ],
+        "rationale": [
+          "The web UI fetched its typeface from a font service on every page load",
+          "until #631. On the deployment this product is for, a NAS that may have no",
+          "route off its own LAN, that request fails and the whole UI falls back to a",
+          "system font. Nothing errors, so nothing reports it, which makes it the",
+          "quieter half of the defect #621 is about: a missing icon is an empty box",
+          "somebody reports, a missing typeface is a page that looks fine.",
+          "",
+          "IBM's own files rather than the copies a font service serves, and the",
+          "difference is licensing rather than quality. OFL-1.1 section 3 says a",
+          "Modified Version may not carry the Reserved Font Name, and a service's",
+          "copies are that service's own re-subsetting, so re-hosting one from here",
+          "would be redistributing a modified font under the name the licence",
+          "reserves. The copyright holder's own artifacts, unmodified, are section 2",
+          "and need no further argument, which is why carriedAs is \"files\" and every",
+          "one of them carries a digest this package re-derives on each run.",
+          "",
+          "The Latin1 subsets rather than the complete faces. The image carries the",
+          "web bundle six times over, once compiled into backup-manager-web and once",
+          "per adapter bundle under /ui/bundles, so a face costs six times its own",
+          "size against a gated image ceiling, and the complete faces would have been",
+          "roughly three times what these cost. docs/compliance/bundled-webfonts.md",
+          "carries the measured figures."
+        ]
+      },
+      {
+        "id": "ibm-plex-mono",
+        "name": "IBM Plex Mono",
+        "version": "2.5.0",
+        "creator": "IBM Corp.",
+        "copyright": "Copyright © 2017 IBM Corp. with Reserved Font Name \"Plex\"",
+        "spdxId": "OFL-1.1",
+        "licenceName": "SIL Open Font License 1.1",
+        "licenceTextUrl": "https://openfontlicense.org/open-font-license-official-text/",
+        "modified": false,
+        "modifiedNote": "reproduced verbatim and unmodified",
+        "whatShips": "the Latin1 woff2 subsets of the regular, medium and semibold faces, served from the image",
+        "carriedAs": "files",
+        "vendoredInto": [
+          "ui/shared/public/fonts/IBMPlexMono-Regular-Latin1.woff2",
+          "ui/shared/public/fonts/IBMPlexMono-Medium-Latin1.woff2",
+          "ui/shared/public/fonts/IBMPlexMono-SemiBold-Latin1.woff2"
+        ],
+        "digests": {
+          "ui/shared/public/fonts/IBMPlexMono-Regular-Latin1.woff2": "e8993d946649b9d01abb1ed06d574b19d8ea3e66b5c3948602db335c44c18e56",
+          "ui/shared/public/fonts/IBMPlexMono-Medium-Latin1.woff2": "41201b658a328b9d00368215c2f1102770f80b15952ab82631e4006255e6365d",
+          "ui/shared/public/fonts/IBMPlexMono-SemiBold-Latin1.woff2": "b7acd05041ab65f3b7039e218ddd893065e11a07e85ea85019473152a51b6b7d"
+        },
+        "licenceFile": "ui/shared/public/fonts/LICENSE.txt",
+        "linkedInto": [
+          "backup-manager-web"
+        ],
+        "sourceUrl": "https://registry.npmjs.org/@ibm/plex-mono/-/plex-mono-2.5.0.tgz",
+        "recordedIn": [
+          "NOTICE",
+          "docs/compliance/bundled-webfonts.md",
+          "ui/shared/index.html",
+          "ui/shared/src/design-system/typography.css"
+        ],
+        "rationale": [
+          "The other half of the same change (#631), and a separate entry because it",
+          "is a separate upload with its own version, which this register treats as",
+          "different material. Every machine-readable value in this UI is set in mono",
+          "(paths, hashes, timestamps, sizes, the terminal), so it is load-bearing",
+          "rather than decorative and fell back to whatever the operator's system",
+          "font decided in exactly the same way.",
+          "",
+          "IBM's own files rather than the copies a font service serves, and the",
+          "difference is licensing rather than quality. OFL-1.1 section 3 says a",
+          "Modified Version may not carry the Reserved Font Name, and a service's",
+          "copies are that service's own re-subsetting, so re-hosting one from here",
+          "would be redistributing a modified font under the name the licence",
+          "reserves. The copyright holder's own artifacts, unmodified, are section 2",
+          "and need no further argument, which is why carriedAs is \"files\" and every",
+          "one of them carries a digest this package re-derives on each run.",
+          "",
+          "The Latin1 subsets rather than the complete faces. The image carries the",
+          "web bundle six times over, once compiled into backup-manager-web and once",
+          "per adapter bundle under /ui/bundles, so a face costs six times its own",
+          "size against a gated image ceiling, and the complete faces would have been",
+          "roughly three times what these cost. docs/compliance/bundled-webfonts.md",
+          "carries the measured figures."
+        ]
+      }
     ]
   },
 

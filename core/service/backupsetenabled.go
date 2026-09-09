@@ -8,7 +8,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // This file is the three per-set switches an operator flips from a
@@ -249,10 +248,26 @@ func (b *BackupService) SetBackupSetReadOnly(_ context.Context, id string, readO
 // it echo them would turn a read-only "does this still work" button into
 // a request that could quietly test something else.
 //
-// Everything reachable from here is read-only: it lists the configured
-// remote path over the transport this service already uses and discards
-// the result. Nothing is written locally or remotely, and no trust
-// decision is made or revised.
+// The check itself is read-only: it lists the configured remote path over
+// the transport this service already uses and discards the result.
+// Nothing is written remotely, and no trust decision is made or revised.
+//
+// What it CAN write, since issue #624, is this deployment's own
+// config.yaml, and that is worth stating precisely rather than leaving
+// under "read-only" (PR #628 review). A check that passes against a set
+// marked ConnectionUnverified takes the mark off, through
+// clearConnectionUnverified, which is the same path every configuration
+// write in this package takes: under configMu, re-reading the file from
+// disk, encoding, validating, writing atomically and hot-reloading through
+// adoptConfig. Two things follow for a control shaped like a read. A set
+// that carries no mark still writes nothing, so the ordinary "does this
+// still work" press is a read. And on a marked set, a passing press
+// hot-reloads whatever hand edit was made to config.yaml since this
+// process last loaded it, exactly as an edit to any other set would; that
+// is the house rule for every configuration write here rather than
+// something this button chose. backupsetverified.go's own doc carries the
+// argument for why that one transition is a write a check may make, and
+// why a failing check makes none.
 func (b *BackupService) TestBackupSetConnection(ctx context.Context, id string) (ConnectionTestResult, error) {
 	sourceName, setName, ok := splitBackupSetID(id)
 	if !ok {
@@ -275,51 +290,39 @@ func (b *BackupService) TestBackupSetConnection(ctx context.Context, id string) 
 		return ConnectionTestResult{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
 	}
 
-	root := found.RemotePath
-	if root == "" {
-		root = "/"
-	}
-
 	testCtx, cancel := context.WithTimeout(ctx, connectionTestTimeout)
 	defer cancel()
 
-	r := found.Remote
-	src := transport.Source{
-		ID:         "connection-test",
-		Type:       r.Type,
-		Host:       r.Host,
-		Port:       r.Port,
-		User:       r.User,
-		KeyFile:    r.Key.File,
-		KeyEnv:     r.Key.Env,
-		KeyCommand: r.Key.Command,
-		// The passphrase's own three sources travel too. Without them a
-		// set whose key is passphrase-protected cannot be tested at all:
-		// the adapter is handed a key it has no way to open, and the
-		// operator is told their host is unreachable.
-		PassphraseFile:    r.Key.Passphrase.File,
-		PassphraseEnv:     r.Key.Passphrase.Env,
-		PassphraseCommand: r.Key.Passphrase.Command,
-		// #355: this is the operator's REAL configured remote, so the
-		// ceiling they set on it has to come with it. A reachability
-		// check that runs uncapped against the one host they capped can
-		// fail where a cycle succeeds, or pass where a cycle fails, which
-		// makes the button worse than not having one.
-		MaxConnections:       r.MaxConnections,
-		KeyEncryptionFile:    st.inner.Config.KeyEncryption.File,
-		KeyEncryptionEnv:     st.inner.Config.KeyEncryption.Env,
-		KeyEncryptionCommand: st.inner.Config.KeyEncryption.Command,
-		KnownHosts:           r.KnownHosts,
-		Root:                 root,
-	}
+	// Built by connectionSourceFor rather than here, so this button and
+	// the check UpdateBackupSet runs in front of a connection-changing
+	// edit are asking about the same remote in the same words (#624).
+	// Two constructions of one transport.Source is how a check quietly
+	// starts proving a slightly different connection from the one that
+	// runs.
+	src := connectionSourceFor(*found, st.inner.Config.KeyEncryption)
 
-	if _, err := st.inner.Transport.List(testCtx, src); err != nil {
-		// Deliberately not %w-wrapped and deliberately not put in
-		// Message, for exactly the reason TestConnection gives: a failed
-		// connection test is an ordinary outcome, and err's own text can
-		// embed transport internals a caller must not have to treat as
-		// safe to render.
-		return ConnectionTestResult{OK: false, Message: "could not connect and list the remote path"}, nil
+	// Issue #596: six named steps rather than one boolean. The error is
+	// still never returned to the caller, for exactly the reason
+	// TestConnection gives (err's own text can embed transport internals
+	// a caller must not have to treat as safe to render); what changed is
+	// that DNS, the connect, the host key, the credential, the
+	// authentication and the listing are asked and answered separately,
+	// so a typo'd hostname, an unauthorised key, a rotated host key and a
+	// missing path stop reading identically. See connectiontest.go.
+	result := b.runConnectionTest(testCtx, id, found, src)
+
+	// Issue #624: a check that PASSES against a set created without one
+	// takes the mark off. It is the transition and nothing else, so a set
+	// that carries no mark still reads no files and writes none here, and
+	// a check that failed leaves the mark exactly where it was, because
+	// "somebody pressed the button" is not the claim the mark makes.
+	//
+	// The ctx passed on is the caller's rather than testCtx: the ten
+	// seconds above bound the reachability check, and cancelling a
+	// configuration write halfway through because a network timeout
+	// elapsed would be the wrong deadline on the wrong operation.
+	if result.OK {
+		b.clearConnectionUnverified(ctx, id)
 	}
-	return ConnectionTestResult{OK: true}, nil
+	return result, nil
 }

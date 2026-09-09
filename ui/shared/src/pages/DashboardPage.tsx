@@ -17,6 +17,7 @@
  * than only live ones, and a panel headed "active" that counted the whole
  * list would report the whole day's finished runs as in progress.
  */
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
@@ -25,6 +26,7 @@ import { useCausl } from "@shared/state/graph";
 import { operationsNode } from "@shared/state/appNodes";
 import type { BackupSet } from "@shared/types/backup";
 import type { CycleOutcome, SystemHealth } from "@shared/types/operation";
+import { Banner } from "@shared/components/Banner";
 import { PageHeader } from "@shared/components/PageHeader";
 import { HealthSummary } from "@shared/components/HealthSummary";
 import { MetricCard } from "@shared/components/MetricCard";
@@ -36,6 +38,8 @@ import { WarningBanner } from "@shared/components/WarningBanner";
 import { StatusBadge } from "@shared/components/StatusBadge";
 import { HaltBanner } from "@shared/components/HaltBanner";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
+import { RunControlNotice } from "@shared/components/RunControlNotice";
+import { useRunControls } from "@shared/hooks/useRunControls";
 import { isNotConfigured } from "@shared/api/failure";
 import { bytes } from "@shared/utilities/format";
 import { backupSetPath } from "@shared/utilities/routes";
@@ -77,6 +81,12 @@ export function DashboardPage({
 }) {
   const api = useApi();
   const navigate = useNavigate();
+  // Issue #597. This page's copy of the run button had no onClick at all,
+  // which is the copy an operator presses first, and the two that DID
+  // have one swallowed every refusal. useRunControls is the one place a
+  // run is submitted from now, so all three say the same thing about the
+  // same press.
+  const run = useRunControls();
   // Live operation progress (§52, #95) reads the shared graph node directly
   // — App.tsx owns the one fetch/poll of it, so this page never re-fetches
   // its own copy. BackupSetsPage (#97) reads the exact same node, so the
@@ -104,6 +114,10 @@ export function DashboardPage({
   // answer.
   const lastCycle = operations.data?.find((op) => op.cycle !== null) ?? null;
   const activity = useAsync(() => api.listActivity(), [api]);
+  // See the Recent activity panel below: a fetch that failed has to say so
+  // rather than draw an empty list, and a Try again that failed the same
+  // way has to leave evidence it ran (#598).
+  const [activityRetriedAt, setActivityRetriedAt] = useState<string | null>(null);
   // Issue #286: a separate fetch, not derived from `health` above. GET
   // /system/storage's `manager` object answers a different question than
   // GET /system/health's per-set list (see ManagerStorage's own doc for
@@ -172,13 +186,30 @@ export function DashboardPage({
         }
         actions={
           <>
-            <button className="btn" disabled={readOnly}>Run all due sets</button>
+            {/* "enabled", not "due": RunCycle walks every enabled set and
+                skips only the disabled and the edit-held, so there is no
+                schedule per set and nothing is ever due. The tooltip the
+                other two copies carry has always said the true thing;
+                the label used to contradict it. */}
+            <button
+              className="btn"
+              disabled={readOnly || run.busy}
+              title="Runs one pass over every enabled backup set."
+              onClick={run.runAll}
+            >
+              Run all enabled sets
+            </button>
             <button className="btn btn--primary" disabled={readOnly} onClick={() => navigate("/sets/new")}>
               Add backup set
             </button>
           </>
         }
       />
+
+      {/* What the run button last answered. It goes above the halt banner
+          because it is about something the operator did a moment ago,
+          and the halt banner is about a state that was already true. */}
+      <RunControlNotice notice={run.notice} />
 
       {/* A set the manager cannot connect to is the highest-severity state
           in the product and is surfaced above everything else. The wording
@@ -234,9 +265,13 @@ export function DashboardPage({
                 {storage.data ? (
                   <StorageGauge storage={storage.data} />
                 ) : storage.error ? (
-                  <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+                  <Banner
+                    tone="danger"
+                    style={{ fontSize: "var(--text-sm)" }}
+                    dismissKey={storage.error.message}
+                  >
                     {"Storage capacity is unavailable (" + storage.error.message + ")."}
-                  </div>
+                  </Banner>
                 ) : (
                   <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Checking storage…</p>
                 )}
@@ -247,7 +282,17 @@ export function DashboardPage({
       ) : null}
 
       {staleSet ? (
-        <WarningBanner tone="warn" title={"Stale \u00b7 " + staleSet.name}>
+        <WarningBanner
+          tone="warn"
+          title={"Stale \u00b7 " + staleSet.name}
+          // Named rather than left to the derived key, because what this
+          // reports is one set's note and both halves move independently:
+          // a different set can go stale under the same words, and the
+          // same set's note can change under the same title. Nothing
+          // unmounts while a set stays stale, so a dismissal that ignored
+          // either half would swallow the next thing it said (#620).
+          dismissKey={staleSet.source + "/" + staleSet.set + "\u001f" + staleSet.stateNote}
+        >
           {staleSet.stateNote}
         </WarningBanner>
       ) : null}
@@ -274,9 +319,13 @@ export function DashboardPage({
               should stay visible under the notice rather than being
               replaced by it. */}
           {operations.error ? (
-            <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+            <Banner
+              tone="danger"
+              style={{ fontSize: "var(--text-sm)" }}
+              dismissKey={operations.error.message}
+            >
               Live operation status is unavailable ({operations.error.message}).
-            </div>
+            </Banner>
           ) : null}
           {active === null
             ? (operations.error
@@ -320,7 +369,24 @@ export function DashboardPage({
           </button>
         </div>
         <div style={{ padding: "14px 18px" }}>
-          <ActivityTimeline events={(activity.data ?? []).slice(0, 6)} dense />
+          {/* Issue #598. This panel used to render `activity.data ?? []`
+              and never look at `activity.error`, so the failure that made
+              the Activity page unusable on a real NAS drew HERE as an
+              empty list, indistinguishable from a deployment where nothing
+              has ever happened. Two surfaces, one failure, and the quieter
+              of the two is the one an operator lands on first. */}
+          {activity.error ? (
+            <ErrorState
+              {...activity.error}
+              retriedAt={activityRetriedAt ?? undefined}
+              onRetry={() => {
+                setActivityRetriedAt(new Date().toLocaleTimeString());
+                activity.reload();
+              }}
+            />
+          ) : (
+            <ActivityTimeline events={(activity.data ?? []).slice(0, 6)} dense />
+          )}
         </div>
       </section>
     </>
@@ -366,16 +432,16 @@ function LastCycleOutcome({ outcome }: { outcome: CycleOutcome }) {
       >
         <h2 className="eyebrow">Last run cycle</h2>
         {barren ? (
-          <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing got through</StatusBadge>
+          <StatusBadge tone="warn" icon="warning">Nothing got through</StatusBadge>
         ) : barrenMoves ? (
           // A cycle can back everything up perfectly and put none of it
           // where the chain says it belongs, and this is the badge for
           // exactly that: the backups happened, the moves did not.
-          <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing moved</StatusBadge>
+          <StatusBadge tone="warn" icon="warning">Nothing moved</StatusBadge>
         ) : short ? (
-          <StatusBadge tone="warn" glyph={"\u25b2"}>Some did not get through</StatusBadge>
+          <StatusBadge tone="warn" icon="warning">Some did not get through</StatusBadge>
         ) : (
-          <StatusBadge tone="ok" glyph={"\u25cf"}>All through</StatusBadge>
+          <StatusBadge tone="ok" icon="status-active">All through</StatusBadge>
         )}
       </div>
       <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>

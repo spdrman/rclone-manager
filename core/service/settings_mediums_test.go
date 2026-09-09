@@ -118,8 +118,13 @@ func TestUpdateSettings_KeepsATiersMediumItWasNotAskedToChange(t *testing.T) {
 	if len(before.Retention.Tiers) != 2 {
 		t.Fatalf("Settings reported %d tier(s), want 2", len(before.Retention.Tiers))
 	}
-	if before.Retention.Tiers[0].Medium != "" {
-		t.Errorf("the local tier reports medium %q, want it empty", before.Retention.Tiers[0].Medium)
+	// The local tier names the local hard drive by its reserved id since
+	// #622, rather than naming nothing. That is the read half of the one
+	// normalisation this product does with that fact, and the write half
+	// is what the round trip below actually exercises: this same value
+	// goes back and leaves no medium: key in the file.
+	if before.Retention.Tiers[0].Medium != StorageMediumLocalID {
+		t.Errorf("the local tier reports medium %q, want %q", before.Retention.Tiers[0].Medium, StorageMediumLocalID)
 	}
 	if before.Retention.Tiers[1].Medium != "offsite_s3" {
 		t.Fatalf("Settings dropped the configured medium: tiers[1].Medium = %q, want offsite_s3", before.Retention.Tiers[1].Medium)

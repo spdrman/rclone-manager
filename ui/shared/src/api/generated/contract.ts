@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "71c47cc465c7d1411b807bf18f2db6f018071104b7c26f204f52347f73daf2ef";
+export const CONTRACT_SHA256 = "f0776bd8ada449c3f72b6f8098a351d9707feab58881b8633dac9887c39a1166";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -34,6 +34,7 @@ export const WIRE_ERROR_CODES = [
   "BACKUP_SET_NOT_FOUND",
   "OPERATION_NOT_FOUND",
   "OPERATION_ALREADY_RUNNING",
+  "BACKUP_SET_HELD_FOR_EDITING",
   "IDEMPOTENCY_KEY_CONFLICT",
   "CONFIG_REVISION_STALE",
   "SSH_KEY_NOT_FOUND",
@@ -55,6 +56,13 @@ export const WIRE_ERROR_CODES = [
   "COPY_NOT_FOUND",
   "MEDIUM_NOT_FOUND",
   "ARTIFACT_NOT_FAILED",
+  "MEDIUM_IN_USE",
+  "MEDIUM_IS_DEFAULT",
+  "MEDIUM_EXISTS",
+  "STORAGE_CREDENTIAL_NOT_FOUND",
+  "SSH_KEY_CANDIDATE_NOT_FOUND",
+  "BACKUP_SET_CONNECTION_NOT_PROVEN",
+  "MEDIUM_CONNECTION_NOT_PROVEN",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -101,6 +109,7 @@ export const API_ERROR_CODES = [
   "BACKUP_SET_NOT_FOUND",
   "OPERATION_NOT_FOUND",
   "OPERATION_ALREADY_RUNNING",
+  "BACKUP_SET_HELD_FOR_EDITING",
   "IDEMPOTENCY_KEY_CONFLICT",
   "CONFIG_REVISION_STALE",
   "SSH_KEY_NOT_FOUND",
@@ -122,6 +131,13 @@ export const API_ERROR_CODES = [
   "COPY_NOT_FOUND",
   "MEDIUM_NOT_FOUND",
   "ARTIFACT_NOT_FAILED",
+  "MEDIUM_IN_USE",
+  "MEDIUM_IS_DEFAULT",
+  "MEDIUM_EXISTS",
+  "STORAGE_CREDENTIAL_NOT_FOUND",
+  "SSH_KEY_CANDIDATE_NOT_FOUND",
+  "BACKUP_SET_CONNECTION_NOT_PROVEN",
+  "MEDIUM_CONNECTION_NOT_PROVEN",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -131,7 +147,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "BACKUP_SET_HELD_FOR_EDITING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "ARTIFACT_NOT_FAILED", "BACKUP_SET_CONNECTION_NOT_PROVEN", "MEDIUM_IS_DEFAULT", "MEDIUM_CONNECTION_NOT_PROVEN"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND", "MEDIUM_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -333,7 +349,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
-      409: ["BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"],
+      409: ["BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_CONNECTION_NOT_PROVEN"],
       500: ["INTERNAL"],
       503: ["NOT_CONFIGURED"],
     }
@@ -413,7 +429,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["BACKUP_SET_NOT_FOUND"],
-      409: ["BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED"],
+      409: ["BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED", "BACKUP_SET_CONNECTION_NOT_PROVEN"],
       500: ["INTERNAL"],
     }
   },
@@ -741,8 +757,8 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
-      404: ["ARTIFACT_NOT_FOUND", "COPY_NOT_FOUND"],
-      409: ["CONFIG_REVISION_STALE", "IDEMPOTENCY_KEY_CONFLICT", "OPERATION_ALREADY_RUNNING", "RESTORE_REFUSED"],
+      404: ["BACKUP_SET_NOT_FOUND", "ARTIFACT_NOT_FOUND", "COPY_NOT_FOUND"],
+      409: ["CONFIG_REVISION_STALE", "IDEMPOTENCY_KEY_CONFLICT", "OPERATION_ALREADY_RUNNING", "BACKUP_SET_HELD_FOR_EDITING", "RESTORE_REFUSED"],
       500: ["INTERNAL"],
       503: ["RESTORE_UNAVAILABLE"],
     }
@@ -882,6 +898,23 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "listSSHKeys",
+    method: "GET",
+    path: "/ssh-keys",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListSSHKeysResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "importSSHKey",
     method: "POST",
     path: "/ssh-keys",
@@ -895,6 +928,25 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     successStatus: 201,
     errorCodes: {
       400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "importSSHKeyFromCandidate",
+    method: "POST",
+    path: "/ssh-keys/from-candidate",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "ImportSSHKeyFromCandidateRequest",
+    responseSchema: "ImportSSHKeyResponse",
+    successStatus: 201,
+    errorCodes: {
+      400: ["INVALID_REQUEST", "SSH_KEY_CANDIDATE_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       500: ["INTERNAL"],
@@ -920,6 +972,180 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "listSSHKeyCandidates",
+    method: "GET",
+    path: "/ssh/key-candidates",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListSSHKeyCandidatesResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "importStorageCredentials",
+    method: "POST",
+    path: "/storage-credentials",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "ImportStorageCredentialsRequest",
+    responseSchema: "ImportStorageCredentialsResponse",
+    successStatus: 201,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "listStorageMediums",
+    method: "GET",
+    path: "/storage-mediums",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListStorageMediumsResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "createStorageMedium",
+    method: "POST",
+    path: "/storage-mediums",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "StorageMediumRequest",
+    responseSchema: "StorageMediumSummary",
+    successStatus: 201,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["STORAGE_CREDENTIAL_NOT_FOUND"],
+      409: ["MEDIUM_EXISTS", "MEDIUM_CONNECTION_NOT_PROVEN"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "preflightStorageMediumCandidate",
+    method: "POST",
+    path: "/storage-mediums/preflight",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "StorageMediumRequest",
+    responseSchema: "MediumPreflightResponse",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["STORAGE_CREDENTIAL_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "removeStorageMedium",
+    method: "DELETE",
+    path: "/storage-mediums/{id}",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "",
+    successStatus: 204,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND"],
+      409: ["MEDIUM_IN_USE", "MEDIUM_IS_DEFAULT"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "getStorageMedium",
+    method: "GET",
+    path: "/storage-mediums/{id}",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "StorageMediumSummary",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["MEDIUM_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "updateStorageMedium",
+    method: "PUT",
+    path: "/storage-mediums/{id}",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "StorageMediumRequest",
+    responseSchema: "StorageMediumSummary",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND", "STORAGE_CREDENTIAL_NOT_FOUND"],
+      409: ["MEDIUM_CONNECTION_NOT_PROVEN"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "setDefaultStorageMedium",
+    method: "PUT",
+    path: "/storage-mediums/{id}/default",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "StorageMediumSummary",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "preflightStorageMedium",
     method: "POST",
     path: "/storage-mediums/{id}/preflight",
@@ -935,6 +1161,23 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["MEDIUM_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "getStorageMediumUsage",
+    method: "GET",
+    path: "/storage-mediums/{id}/usage",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "StorageMediumUsageResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
       500: ["INTERNAL"],
     }
   },
@@ -986,7 +1229,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-      409: ["ALREADY_CONFIGURED"],
+      409: ["ALREADY_CONFIGURED", "BACKUP_SET_CONNECTION_NOT_PROVEN"],
       500: ["INTERNAL"],
     }
   },
@@ -1147,6 +1390,7 @@ export interface WireAuthErrorResponse {
 /** A persisted backup set as the API reports it. */
 export interface WireBackupSet {
   completion_strategy: "rename" | "marker" | "stable";
+  connection_unverified?: boolean;
   disabled: boolean;
   host: string;
   id: string;
@@ -1158,6 +1402,7 @@ export interface WireBackupSet {
   remote_path: string;
   retention_is_override: boolean;
   source_name: string;
+  ssh_key_id: string;
   stable_for_seconds: number;
   stale_after_seconds: number;
   trusted_host_key_recorded_at?: string;
@@ -1263,6 +1508,7 @@ export interface WireBackupSetSpec {
   port: number;
   read_only?: boolean;
   remote_path: string;
+  skip_connection_check?: boolean;
   source_name?: string;
   ssh_key_id: string;
   stable_for_seconds?: number;
@@ -1337,6 +1583,25 @@ export interface WireCompleteFirstRunResponse {
 export interface WireConfigRevisionStaleResponse {
   config_revision: string;
   error: WireErrorBody;
+}
+
+/** One step of a connection test. `outcome` is passed, failed or
+ *  skipped, and skipped is a first-class answer rather than a quiet
+ *  pass: a surface that renders a skipped authentication as anything
+ *  but "this was never tried" has told an operator their credentials
+ *  are fine on the strength of a step that never ran. `category` is
+ *  the machine-readable half a surface branches on; `detail` is a
+ *  sentence the engine composed and never an underlying transport
+ *  error's text. This is MediumPreflightCheck's shape asked about a
+ *  SOURCE instead of a destination, deliberately, so a preflight
+ *  table and a connection-test table are two renderings of one idea
+ *  rather than two contracts. */
+export interface WireConnectionCheck {
+  category?: string;
+  detail: string;
+  duration_ms?: number;
+  outcome: "passed" | "failed" | "skipped";
+  step: "credentials" | "resolve" | "connect" | "host_key" | "authenticate" | "list";
 }
 
 /** POST /backup-sets. The backup-set spec, plus the two things only a
@@ -1439,8 +1704,21 @@ export interface WireHostKeyProbeResponse {
   known_hosts_line: string;
 }
 
+/** POST /ssh-keys/from-candidate. Selecting a key this host already
+ *  found is a different act from pasting one this host has never
+ *  seen, and it carries a different body: an opaque handle and no key
+ *  material at all. It is a separate operation rather than a second
+ *  mode of POST /ssh-keys because a shared body with two optional
+ *  halves would have had to stop requiring private_key_pem, and this
+ *  contract does not withdraw a requirement it has already made. */
+export interface WireImportSSHKeyFromCandidateRequest {
+  candidate_id: string;
+}
+
 /** POST /ssh-keys. Sent once; the caller discards its own copy
- *  immediately. */
+ *  immediately. Pasted material only: selecting a key this host
+ *  already holds is POST /ssh-keys/from-candidate, which takes a
+ *  handle instead. */
 export interface WireImportSSHKeyRequest {
   passphrase?: string;
   private_key_pem: string;
@@ -1451,6 +1729,26 @@ export interface WireImportSSHKeyRequest {
 export interface WireImportSSHKeyResponse {
   algorithm: string;
   fingerprint: string;
+  id: string;
+}
+
+/** POST /storage-credentials. Sent once; the caller discards its own
+ *  copy the moment an id comes back. This is the ONLY place in this
+ *  contract where S3 credential material appears, in either
+ *  direction, and it is write-only: no operation anywhere echoes it,
+ *  returns it or derives anything displayable from it. */
+export interface WireImportStorageCredentialsRequest {
+  access_key_id: string;
+  secret_access_key: string;
+  session_token?: string;
+}
+
+/** The reference an import returns, and nothing else. There is
+ *  deliberately no fingerprint, no masked key and no last-four here,
+ *  unlike ImportSSHKeyResponse's algorithm and fingerprint: an SSH
+ *  public key's fingerprint is a safe thing to show a person, and
+ *  nothing derived from an S3 credential is. */
+export interface WireImportStorageCredentialsResponse {
   id: string;
 }
 
@@ -1478,6 +1776,30 @@ export interface WireListOperationsResponse {
   operations: WireOperation[];
 }
 
+/** GET /ssh/key-candidates. The locations travel beside the
+ *  candidates, in one response, so a client cannot render one without
+ *  the other. */
+export interface WireListSSHKeyCandidatesResponse {
+  candidates: WireSSHKeyCandidate[];
+  locations: WireSSHKeyDiscoveryLocation[];
+}
+
+/** GET /ssh-keys. The read this API never had: an imported key's id
+ *  used to cross the wire exactly once, in the response to the POST
+ *  that created it, so ssh_key_id took a value nothing in the product
+ *  would tell anybody. */
+export interface WireListSSHKeysResponse {
+  keys: WireSSHKey[];
+}
+
+/** Every declared storage destination, in declaration order. An
+ *  object rather than a bare array, matching every other list in this
+ *  contract: a top-level array has nowhere to grow a field, and the
+ *  day this needs a count or a cursor it would be a breaking change. */
+export interface WireListStorageMediumsResponse {
+  mediums: WireStorageMediumSummary[];
+}
+
 /** GET /system/storage. The manager-wide reading a dashboard gauge is
  *  drawn from, plus one entry per configured backup set. */
 export interface WireListStorageStatusResponse {
@@ -1491,6 +1813,44 @@ export interface WireListValidatorsResponse {
   validators: WireValidator[];
 }
 
+/** One action that started and has not reported an outcome. It is
+ *  what makes "this announced itself and went quiet" something a
+ *  surface can say, rather than something an operator would have to
+ *  notice by reading every line and remembering which starts they had
+ *  seen. An action still legitimately running appears here too, and
+ *  that is correct rather than a false alarm: the honest sentence is
+ *  "started four minutes ago and has not reported an outcome", and
+ *  whether four minutes is long is a judgement the person reading it
+ *  is far better placed to make than this service is. */
+export interface WireLiveActivityAction {
+  action: string;
+  action_id: string;
+  sequence: number;
+  started_at: string;
+}
+
+/** The log that belongs to no single backup set, served in its own
+ *  right rather than copied onto every set's feed. A cycle starting
+ *  covers every set and a capacity check is about a filesystem, so
+ *  neither belongs on one set's strip; until this bucket existed the
+ *  only alternatives were dropping those lines (which hides them) or
+ *  reporting them on every strip, and the second is what shipped, so
+ *  on a real deployment every set's strip showed the same log and the
+ *  shared lines crowded out each set's own. It is absent when the
+ *  caller narrowed the reading to one backup set, because a caller
+ *  that named a set asked about that set. It is present, and is the
+ *  whole answer, for a deployment with no configured backup sets at
+ *  all, which is exactly when a new operator is pressing buttons in a
+ *  wizard and has nothing else to read. */
+export interface WireLiveActivityDeployment {
+  dropped: boolean;
+  events: WireLiveActivityEvent[];
+  latest_sequence: number;
+  oldest_sequence: number;
+  truncated: boolean;
+  unfinished_actions: WireLiveActivityAction[];
+}
+
 /** One line of the live feed. It carries the engine's own event name,
  *  the engine's own severity and the event's own fields, because what
  *  a moment is worth calling is presentation and belongs to whichever
@@ -1500,11 +1860,14 @@ export interface WireListValidatorsResponse {
  *  when it decided a line was a warning rather than a note, so it is
  *  carried through rather than re-derived. */
 export interface WireLiveActivityEvent {
+  action?: string;
+  action_id?: string;
   at: string;
   event: string;
   fields: WireLiveActivityField[];
   level: "debug" | "info" | "warn" | "error";
   message: string;
+  result?: "success" | "warn" | "error" | "info";
   scope: "deployment" | "set";
   sequence: number;
 }
@@ -1527,6 +1890,7 @@ export interface WireLiveActivityField {
  *  and is exactly as readable from a terminal as from a browser. The
  *  cursor on the request is what keeps polling cheap. */
 export interface WireLiveActivityResponse {
+  deployment?: WireLiveActivityDeployment;
   epoch: string;
   observed_at: string;
   poll_after_ms: number;
@@ -1559,6 +1923,7 @@ export interface WireLiveActivitySet {
   stage?: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
   started_at?: string;
   truncated: boolean;
+  unfinished_actions: WireLiveActivityAction[];
 }
 
 /** The one manager-wide storage reading: what the backup root's
@@ -1603,7 +1968,7 @@ export interface WireMediumPreflightCheck {
   category?: string;
   detail: string;
   outcome: "passed" | "failed" | "skipped";
-  step: "credentials" | "reach" | "deliverable" | "write" | "read_back" | "storage_class" | "verification" | "delete";
+  step: "credentials" | "reach" | "deliverable" | "space" | "write" | "read_back" | "storage_class" | "verification" | "delete";
 }
 
 /** The result of proving one storage medium works. The preflight
@@ -1882,6 +2247,57 @@ export interface WireRunningWork {
   stage: string;
 }
 
+/** One key in this deployment's own key store. It carries no
+ *  server-side path: SSHKeyRef.KeyFile is kept off the wire so a
+ *  caller never learns this process's filesystem layout, and an
+ *  inventory is not an exception to that. What travels instead is the
+ *  id, the public half's algorithm and SHA256 fingerprint, the
+ *  authorized_keys line, and which backup sets point at it. */
+export interface WireSSHKey {
+  algorithm: string;
+  fingerprint: string;
+  id: string;
+  imported_at: string;
+  passphrase_protected: boolean;
+  problem?: string;
+  public_key: string;
+  used_by: string[];
+}
+
+/** One private key file this engine can actually see. Unlike SSHKey,
+ *  this DOES carry a path, because a candidate's path is its identity
+ *  to an operator and there is no other way to say which of several
+ *  files is meant. What makes that safe is that the locations
+ *  searched are a closed, constant set decided server-side, never
+ *  caller-supplied and never walked recursively. The handle
+ *  travelling back is the opaque id, never the path. */
+export interface WireSSHKeyCandidate {
+  algorithm: string;
+  fingerprint: string;
+  id: string;
+  in_store: boolean;
+  in_store_id?: string;
+  location: string;
+  mode: string;
+  path: string;
+  public_key: string;
+  reason?: string;
+  selectable: boolean;
+}
+
+/** One place the scan looked, reported whether or not anything was
+ *  found there. Every location is always reported, including the
+ *  absent ones: an empty candidate list has two readings, "you have
+ *  no keys" and "I could not look where your keys are", and on a
+ *  packaged install the engine is a distroless container with five
+ *  mounts and no home directory, so the second is the true one. */
+export interface WireSSHKeyDiscoveryLocation {
+  found: number;
+  kind: string;
+  path: string;
+  problem?: string;
+}
+
 /** GET /auth/session. */
 export interface WireSessionResponse {
   username: string;
@@ -1918,6 +2334,38 @@ export interface WireSettingsSchema {
   storage: WireStorageSchema;
 }
 
+/** Where one storage medium's credentials come from. Exactly one of
+ *  the four must be set, and none of them is credential MATERIAL:
+ *  this is a reference in all four spellings. credentials_id is the
+ *  one a browser uses, because it is the only one that names nothing
+ *  about the manager's host. */
+export interface WireStorageMediumCredentialsReference {
+  command?: string[];
+  credentials_id?: string;
+  env?: string;
+  file?: string;
+}
+
+/** One storage destination as a caller describes it: for POST
+ *  /storage-mediums (declare it), PUT /storage-mediums/{id} (replace
+ *  its description) and POST /storage-mediums/preflight (prove it
+ *  before either). The same shape for all three deliberately, so what
+ *  is proven and what is saved cannot be different destinations.
+ *  There is no field here for credential material, and there never
+ *  will be (FR-33): the credentials block names a reference. */
+export interface WireStorageMediumRequest {
+  bucket: string;
+  credentials?: WireStorageMediumCredentialsReference;
+  endpoint?: string;
+  id: string;
+  prefix?: string;
+  region?: string;
+  skip_connection_check?: boolean;
+  storage_class?: string;
+  type: "s3";
+  upload_verification?: "readback" | "attested";
+}
+
 /** One configured storage medium, as the settings surface reports it:
  *  what it is called, what kind of place it is, which bucket and
  *  region, and which storage class artifacts are written with. There
@@ -1925,14 +2373,46 @@ export interface WireSettingsSchema {
  *  there never will be (FR-33). A credential reaches this product
  *  only as a reference to a file, an environment variable or a
  *  command, and none of those three has a spelling on this boundary
- *  at all. */
+ *  at all. That absence now covers the WRITE direction too (POST/PUT
+ *  below), and it extends to the credential's KIND: there is no field
+ *  saying whether a medium reads a file, a variable or a command,
+ *  because where a credential comes from is a fact about the
+ *  manager's host that an API caller has no use for. An edit
+ *  therefore does not have to resupply the credential; omitting it
+ *  keeps the one already configured. */
 export interface WireStorageMediumSummary {
   bucket: string;
+  connection_unverified?: boolean;
+  endpoint?: string;
   id: string;
+  is_default: boolean;
+  is_local: boolean;
+  path?: string;
+  prefix?: string;
   reads_require_restore: boolean;
   region?: string;
   storage_class: string;
-  type: "s3";
+  type: "s3" | "local";
+  upload_verification: "readback" | "attested";
+}
+
+/** One backup set's copies on a storage medium. */
+export interface WireStorageMediumUsageBySet {
+  only_copy_here: number;
+  placements: number;
+  set: string;
+}
+
+/** What the journal says is currently on one storage medium, listed
+ *  rather than only counted. It asks the medium nothing: this is what
+ *  the deployment RECORDED, and whether the endpoint answers right
+ *  now is the preflight's question, asked separately. A count with no
+ *  list is not something an operator can act on, which is why the
+ *  backup sets are here. */
+export interface WireStorageMediumUsageResponse {
+  backup_sets: WireStorageMediumUsageBySet[];
+  medium: string;
+  placements: number;
 }
 
 /** The closed value sets and the consent text a storage-medium
@@ -1961,9 +2441,11 @@ export interface WireStorageStatus {
 /** POST /operations. The idempotency key is a header, not a body
  *  field: it is a property of the retry, not of the operation. action
  *  selects which of the parameter objects below is read;
- *  restore_placement reads restore, and run_cycle reads none. */
+ *  restore_placement reads restore, run_backup_set reads
+ *  backup_set_id, and run_cycle reads neither. */
 export interface WireSubmitOperationRequest {
   action: string;
+  backup_set_id?: string;
   config_revision: string;
   restore?: WireRestoreOperationRequest;
 }
@@ -1986,8 +2468,15 @@ export interface WireTestConnectionRequest {
   user?: string;
 }
 
-/** The outcome of a pre-save connection test. */
+/** The outcome of a connection test, as a verdict and as the six
+ *  steps that produced it. `ok` and `message` mean exactly what they
+ *  have always meant, so a client reading only those keeps working;
+ *  `checks` is what the test actually DID, one entry per step and
+ *  always all of them, in the order they run. Both modes of this
+ *  endpoint answer the same six steps: a caller no longer has to
+ *  remember which request it sent to know what shape comes back. */
 export interface WireTestConnectionResponse {
+  checks?: WireConnectionCheck[];
   message?: string;
   ok: boolean;
 }
@@ -2027,6 +2516,7 @@ export interface WireUpdateBackupSetRequest {
   local_path?: string;
   port?: number;
   remote_path?: string;
+  skip_connection_check?: boolean;
   ssh_key_id?: string;
   stable_for_seconds?: number;
   stale_after_seconds?: number;

@@ -22,7 +22,7 @@
  * claims and only the second one can go wrong here.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
@@ -469,9 +469,12 @@ describe("issue #350: entering edit mode stops the cycle, and says so first", ()
     });
 
     // The warning names what will be stopped, not a bare "are you sure".
-    expect(await screen.findByRole("dialog")).toBeTruthy();
-    expect(screen.getByText(/2026-09-01T02-00\.dump/)).toBeTruthy();
-    expect(screen.getByText(/transferring/i)).toBeTruthy();
+    // Scoped to the dialog since #596: the page now carries a live
+    // activity panel that says what stage this set is in as well, and an
+    // unscoped query for the stage matches both.
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/2026-09-01T02-00\.dump/)).toBeTruthy();
+    expect(within(dialog).getByText(/transferring/i)).toBeTruthy();
 
     // Nothing has been held and edit mode has not opened yet.
     expect(take).not.toHaveBeenCalled();
@@ -691,52 +694,48 @@ describe("issue #350: repointing a set that already has history", () => {
 });
 
 /**
- * Issue #572: rotating the key and re-trusting the host, from the page
- * that already edits everything else about a set.
+ * Issues #572 and #592: rotating the key and re-trusting the host.
  *
- * Both boxes start empty and stay empty, which is the one thing here that
- * is not like the other seven. There is nothing to prefill them with: the
- * API answers with the set, and the set carries a reference to a key and a
- * path to a trust anchor, neither of which is a value an operator typed or
- * could usefully be shown back. So they are write-only boxes, and the
- * tests below pin that: an untouched one contributes nothing to any save,
- * and a filled one contributes exactly its own key.
+ * #572 made both editable and what shipped was two text boxes, one of
+ * which asked an operator to "paste the id of an imported key". A key id
+ * is a uuid the product showed exactly once, in the response to the
+ * import that created it, so the box was a blank you filled in with
+ * something nothing in the product would ever tell you again.
+ *
+ * #592 replaced both with a wizard, so the cases below drive that
+ * instead. What they pin is what #572's own cases pinned, because none of
+ * it was about the boxes: the SSH surface never contributes to an
+ * unrelated save, the host key comparison is shown before anything is
+ * written, and the acknowledgement belongs to the fingerprint it was
+ * given for and not to "whatever answers next".
  */
-describe("issue #572: changing a set's SSH key and its trusted host key", () => {
+/** Every element whose own text contains `needle`. getByText compares
+ *  normalized text exactly and a RegExp built from a base64 fingerprint
+ *  is a pattern rather than a literal, so neither answers "is this string
+ *  on screen anywhere". */
+function containing(needle: string): HTMLElement[] {
+  return screen.queryAllByText((_, element) => (element?.textContent ?? "").includes(needle));
+}
+
+describe("issues #572 and #592: changing a set's SSH key and its trusted host key", () => {
   afterEach(() => {
     resetGraphForTests();
     resetMockFixtures();
     vi.restoreAllMocks();
   });
 
-  it("offers a box for each, and a per-box Save that sends only that box", async () => {
+  it("has no SSH boxes in the edit list, and leaves the SSH surface out of an unrelated save", async () => {
     const api = createMockApi();
     const update = vi.spyOn(api, "updateBackupSet");
     const target = await firstSet();
     await openEditMode(api, target);
 
-    fireEvent.change(screen.getByLabelText("SSH key"), { target: { value: "key_9f3c" } });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save ssh key" }));
-    });
-    expect(update).toHaveBeenCalledTimes(1);
-    expect(update.mock.calls[0][2]).toEqual({ sshKeyId: "key_9f3c" });
-
-    fireEvent.change(screen.getByLabelText("Trusted host key"), {
-      target: { value: "prod-db-01.internal ssh-ed25519 AAAAC3Nz" }
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save trusted host key" }));
-    });
-    expect(update).toHaveBeenCalledTimes(2);
-    expect(update.mock.calls[1][2]).toEqual({ knownHostsLine: "prod-db-01.internal ssh-ed25519 AAAAC3Nz" });
-  });
-
-  it("leaves both out of a save that did not touch them", async () => {
-    const api = createMockApi();
-    const update = vi.spyOn(api, "updateBackupSet");
-    const target = await firstSet();
-    await openEditMode(api, target);
+    // The two boxes are gone. Asserted rather than assumed, because the
+    // whole point of the wizard is that the fields it replaced cannot be
+    // typed into any more: a page carrying both would offer two write
+    // paths for one decision.
+    expect(screen.queryByLabelText("SSH key")).toBeNull();
+    expect(screen.queryByLabelText("Trusted host key")).toBeNull();
 
     fireEvent.change(screen.getByLabelText("User"), { target: { value: "backup-agent-2" } });
     await act(async () => {
@@ -745,82 +744,128 @@ describe("issue #572: changing a set's SSH key and its trusted host key", () => 
     expect(update.mock.calls[0][2]).toEqual({ username: "backup-agent-2" });
   });
 
-  it("asks before re-trusting a changed host key, and the retry carries the acknowledgement", async () => {
+  it("offers the keys this deployment already holds, rather than asking for an id", async () => {
     const api = createMockApi();
-    const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
-      new BackupManagerError({
-        code: "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
-        message:
-          "service: this backup set trusts ssh-ed25519 SHA256:oldoldoldold and the line offered is ssh-ed25519 SHA256:newnewnewnew",
-        correlationId: "cid_hostkey"
-      })
-    );
     const target = await firstSet();
-    await openEditMode(api, target);
-
-    fireEvent.change(screen.getByLabelText("Trusted host key"), {
-      target: { value: "prod-db-01.internal ssh-ed25519 AAAAnew" }
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save trusted host key" }));
-    });
-
-    // Both fingerprints, from the service's own sentence: they are the
-    // whole content of the decision being asked for.
-    expect(screen.getByText(/SHA256:oldoldoldold/)).toBeTruthy();
-    expect(screen.getByText(/SHA256:newnewnewnew/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Save anyway" })).toBeTruthy();
-    expect(update.mock.calls[0][2].acknowledgeHostKeyChange).toBeUndefined();
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+      fireEvent.click(screen.getByRole("button", { name: "Change SSH authentication" }));
     });
-    expect(update).toHaveBeenCalledTimes(2);
-    expect(update.mock.calls[1][2]).toEqual({
-      knownHostsLine: "prod-db-01.internal ssh-ed25519 AAAAnew",
-      acknowledgeHostKeyChange: true
-    });
+
+    // A real fingerprint from the store listing, on screen, without
+    // anybody having pasted anything. This is the whole defect: before
+    // the listing existed there was nothing here to click.
+    const listed = await api.listSSHKeys();
+    expect(listed.length).toBeGreaterThan(0);
+    await screen.findByText(listed[0].fingerprint);
+
+    // And the scan names where it looked, including the location it
+    // found nothing in. An empty list has to read as "I looked in these
+    // places", never as "you have no keys".
+    const scan = await api.listSSHKeyCandidates();
+    for (const location of scan.locations) {
+      expect(screen.getAllByText(location.path).length).toBeGreaterThan(0);
+    }
   });
 
-  it("acknowledges the line it showed, not whatever the box holds when Save anyway is pressed", async () => {
-    // The banner prints a fingerprint and asks the operator to compare it
-    // against the host. That takes a minute, the boxes stay editable
-    // underneath it, and the retry used to re-read them: compare
-    // fingerprint A, change the box, press "Save anyway", pin B. The
-    // acknowledgement is an answer about one value, so it travels with
-    // that value.
+  it("shows both fingerprints before it will go on, and never trusts a changed host key on its own", async () => {
     const api = createMockApi();
-    const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
-      new BackupManagerError({
-        code: "BACKUP_SET_HOST_KEY_CHANGE_NOT_ACKNOWLEDGED",
-        message: "service: the line offered pins ssh-ed25519 SHA256:theonecompared",
-        correlationId: "cid_hostkey_swap"
-      })
-    );
+    const update = vi.spyOn(api, "updateBackupSet");
     const target = await firstSet();
-    await openEditMode(api, target);
+    // A host key this set does not trust, which is what a rebuilt server
+    // and a machine in the middle both look like from here.
+    vi.spyOn(api, "probeHostKey").mockResolvedValue({
+      algorithm: "ssh-ed25519",
+      fingerprint: "SHA256:newnewnewnew",
+      knownHostsLine: target.host + " ssh-ed25519 AAAAnew"
+    });
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
 
-    fireEvent.change(screen.getByLabelText("Trusted host key"), {
-      target: { value: "prod-db-01.internal ssh-ed25519 AAAAcompared" }
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Change SSH authentication" }));
+    });
+    const listed = await api.listSSHKeys();
+    await screen.findByText(listed[0].fingerprint);
+    await act(async () => {
+      fireEvent.click(screen.getByText(listed[0].fingerprint));
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save trusted host key" }));
-    });
-    expect(screen.getByText(/SHA256:theonecompared/)).toBeTruthy();
-
-    // Somebody types over the box while the question is on screen.
-    fireEvent.change(screen.getByLabelText("Trusted host key"), {
-      target: { value: "prod-db-01.internal ssh-ed25519 AAAAsomethingelse" }
+      fireEvent.click(screen.getByRole("button", { name: /Next: server identity/ }));
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+      fireEvent.click(screen.getByRole("button", { name: "Ask the server" }));
     });
 
-    expect(update).toHaveBeenCalledTimes(2);
-    expect(update.mock.calls[1][2]).toEqual({
-      knownHostsLine: "prod-db-01.internal ssh-ed25519 AAAAcompared",
-      acknowledgeHostKeyChange: true
+    // Both fingerprints, side by side. They are the entire content of the
+    // decision: an operator working out whether this is their rebuilt
+    // server or somebody else's has nothing else to compare.
+    // A substring predicate rather than a regex: a SHA256 fingerprint is
+    // base64 and carries "+" and "/", which a RegExp built from it reads
+    // as operators, so the pattern would silently stop matching the
+    // string it was built from.
+    expect(containing(target.trustedHostKeys[0].fingerprint).length).toBeGreaterThan(0);
+    expect(containing("SHA256:newnewnewnew").length).toBeGreaterThan(0);
+
+    // And it will not go on. Verify is unreachable until the operator
+    // answers, so there is no path from a changed host key to a saved one
+    // that does not pass through their acknowledgement.
+    expect(screen.getByRole("button", { name: /Next: verify/ }).hasAttribute("disabled")).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("scopes the acknowledgement to the fingerprint it was given for", async () => {
+    // The pane prints a fingerprint and asks the operator to compare it
+    // against the host. That takes a minute. If a re-probe then returns a
+    // DIFFERENT key, the answer they gave is about a string that is no
+    // longer on screen, so it has to be discarded rather than carried
+    // forward: an acknowledgement that survived a changed key would be
+    // "trust whatever answers next", which is the one thing this must not
+    // become.
+    const api = createMockApi();
+    const target = await firstSet();
+    const probe = vi
+      .spyOn(api, "probeHostKey")
+      .mockResolvedValueOnce({
+        algorithm: "ssh-ed25519",
+        fingerprint: "SHA256:theonecompared",
+        knownHostsLine: target.host + " ssh-ed25519 AAAAcompared"
+      })
+      .mockResolvedValueOnce({
+        algorithm: "ssh-ed25519",
+        fingerprint: "SHA256:somethingelse",
+        knownHostsLine: target.host + " ssh-ed25519 AAAAsomethingelse"
+      });
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Change SSH authentication" }));
     });
+    const listed = await api.listSSHKeys();
+    await screen.findByText(listed[0].fingerprint);
+    await act(async () => {
+      fireEvent.click(screen.getByText(listed[0].fingerprint));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Next: server identity/ }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Ask the server" }));
+    });
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(screen.getByRole("button", { name: /Next: verify/ }).hasAttribute("disabled")).toBe(false);
+
+    // The server offers a different key on the next ask.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Ask again" }));
+    });
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByRole("button", { name: /Next: verify/ }).hasAttribute("disabled")).toBe(true);
   });
 });
 
@@ -931,3 +976,138 @@ async function stableSizeSet(): Promise<BackupSet> {
   if (!found) throw new Error("the mock fixture has no stable-size set, so this suite cannot cover the pair");
   return found;
 }
+
+/**
+ * The verify pane, after the #592/#596 convergence.
+ *
+ * The two branches each grew their own breakdown on the same endpoint,
+ * `stages` and `checks`, and they were never populated on the same
+ * request: one filled stages for a candidate and the other filled checks
+ * for a persisted set. Shipping both would have made a caller remember
+ * which request it sent to know which array came back, and taking one
+ * away afterwards would have cost a major version. There is one array
+ * now, `checks`, with six steps, and this pane draws all six.
+ */
+describe("issues #592 and #596: the verify pane draws six steps and never invents a timing", () => {
+  afterEach(() => {
+    resetGraphForTests();
+    resetMockFixtures();
+    vi.restoreAllMocks();
+  });
+
+  /** Walks a freshly-opened wizard to the verify pane and runs it. The
+   *  probe is made to return the key this set ALREADY trusts, so the
+   *  host-identity pane settles on its own and the case can be about the
+   *  pane after it. */
+  async function verifyPane(api: ReturnType<typeof createMockApi>, target: BackupSet) {
+    vi.spyOn(api, "probeHostKey").mockResolvedValue({
+      algorithm: target.trustedHostKeys[0].algorithm,
+      fingerprint: target.trustedHostKeys[0].fingerprint,
+      knownHostsLine: target.host + " " + target.trustedHostKeys[0].algorithm + " AAAAonrecord"
+    });
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Change SSH authentication" }));
+    });
+    const listed = await api.listSSHKeys();
+    await screen.findByText(listed[0].fingerprint);
+    await act(async () => {
+      fireEvent.click(screen.getByText(listed[0].fingerprint));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Next: server identity/ }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Ask the server" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Next: verify/ }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+    });
+    // The run is a request. Waited on rather than sampled: asserting
+    // while "Verifying" is still on screen would be asserting about the
+    // moment before the answer arrived.
+    await waitFor(() => {
+      expect(screen.queryByText("Verifying")).toBeNull();
+    });
+  }
+
+  it("names all six steps, and prints no timing for the two that share one call", async () => {
+    const api = createMockApi();
+    const target = await firstSet();
+    await verifyPane(api, target);
+
+    // Six headings, one per step. A pane that drew four would be drawing
+    // the shape of the branch that lost, and a reader seeing four rows
+    // under a green verdict has no way to know two more were asked.
+    for (const heading of [
+      "Key is usable on this NAS",
+      "Hostname resolves",
+      "Reached the server",
+      "Host key matched what this set trusts",
+      "Authenticated as " + target.username,
+      "Listed the folder this set pulls from"
+    ]) {
+      expect(screen.getAllByText(heading).length).toBeGreaterThan(0);
+    }
+
+    // The four measured steps print their timing and the two that come
+    // out of one call print nothing at all. Asserted PER ROW, because the
+    // failure being pinned is a number appearing beside one particular
+    // heading: a page-wide search for "0 ms" would pass against a pane
+    // that printed "96 ms" next to a step nobody timed.
+    const rows = screen.getAllByRole("listitem");
+    const rowFor = (heading: string) => {
+      const row = rows.find((li) => (li.textContent ?? "").includes(heading));
+      expect(row, "no row for " + heading).toBeTruthy();
+      return row as HTMLElement;
+    };
+    expect(rowFor("Reached the server").textContent).toMatch(/\d+ ms/);
+    expect(rowFor("Hostname resolves").textContent).toMatch(/\d+ ms/);
+    for (const heading of ["Authenticated as " + target.username, "Listed the folder this set pulls from"]) {
+      expect(rowFor(heading).textContent).not.toMatch(/ms/);
+      expect(rowFor(heading).textContent).not.toMatch(/undefined/);
+    }
+  });
+
+  it("arms Apply on the engine's own verdict, so a legitimately skipped step does not lock the pane", async () => {
+    const api = createMockApi();
+    const target = await firstSet();
+    // ok is true and one step was SKIPPED, which is exactly what a set
+    // whose key this deployment does not hold reports. The old gate was
+    // "every step passed" and would have left Apply dead here forever,
+    // with nothing on screen explaining why.
+    vi.spyOn(api, "testCandidateConnection").mockResolvedValue({
+      ok: true,
+      checks: [
+        { step: "credentials", outcome: "skipped", detail: "this deployment does not hold this key, so its public half could not be named" },
+        { step: "resolve", outcome: "passed", detail: target.host + " is 203.0.113.24 (A)", durationMs: 12 },
+        { step: "connect", outcome: "passed", detail: "TCP in 41ms", durationMs: 41 },
+        { step: "host_key", outcome: "passed", detail: "the offered key is trusted", durationMs: 18 },
+        { step: "authenticate", outcome: "passed", detail: "the server accepted publickey for " + target.username },
+        { step: "list", outcome: "passed", detail: target.remoteFolder + " listed, 41 entries" }
+      ]
+    });
+
+    await verifyPane(api, target);
+
+    // The skipped row says it was never tried, and says it in the column
+    // a passing row puts a duration in. A skipped step rendered as a
+    // passing one is the failure the whole outcome vocabulary exists to
+    // prevent.
+    expect(containing("not attempted").length).toBeGreaterThan(0);
+
+    // And the pane lets go. `Next: apply` is armed by the same
+    // `allPassed` that arms `Apply and close` a step later, so a gate
+    // that re-derived "all green" from the rows would strand an operator
+    // here with six honest results and no way forward.
+    expect(screen.getByRole("button", { name: /Next: apply/ }).hasAttribute("disabled")).toBe(false);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Next: apply/ }));
+    });
+    expect(screen.getByRole("button", { name: "Apply and close" }).hasAttribute("disabled")).toBe(false);
+  });
+});

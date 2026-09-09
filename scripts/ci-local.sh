@@ -651,7 +651,26 @@ gate_step "installer prerequisite refusals (#262)"
 # refusal" failure this step exists to close, one line away from closing it.
 (cd scripts/install && python3 -m unittest test_install_docker_host)
 
-gate_step "performance baseline present, and its gate can fail (#165)"
+# Presence and the mutation self-test only, and the label says so on
+# purpose (#635). These two lines assert that a complete baseline exists
+# for the designated host and that the gate is still capable of failing.
+# They compare nothing to it: --compare needs a freshly captured candidate,
+# which is both harnesses plus an image build, and the timing half of that
+# is measured badly on a machine simultaneously running the rest of this
+# script.
+#
+# Six of the seven metrics are therefore still enforced only by somebody
+# choosing to capture. The seventh, image_size_bytes, is enforced on every
+# full run by apps/generic/tests/dockercli's
+# TestTheBuiltImageIsInsideTheRecordedSizeBudget, up in the "apps/generic
+# go build, vet, test -race" step, because that package already builds the
+# image and the metric has no noise to need a quiet machine for. Naming it
+# here rather than leaving the ledger to say "baseline present" is the
+# whole difference between a check that exists and a check that runs: this
+# step's own label was accurate while it was the only perf line in the
+# gate, and would have gone on reading as if nothing had changed after the
+# assertion landed somewhere else.
+gate_step "performance baseline present, its gate can fail, and the image size is enforced in apps/generic (#165, #635)"
 bash scripts/perf/check-baseline.sh
 bash scripts/perf/selftest.sh
 
@@ -769,6 +788,20 @@ if [ "$FAST" != "1" ]; then
   # AND name the promise it broke.
   gate_docker_step "the composed conformance cells can actually fail (mutation self-test, #242)"
   bash scripts/conformance/selftest.sh
+
+  # FR-20's retention apply, shown to fire (#602). The two blocks above are
+  # this repository's answer to "an assertion nobody has watched fail",
+  # applied to the two surfaces that already had one; this is the same
+  # answer applied to the one thing in this product that removes a local
+  # restore point. The cheapest way to pass "every previewed DELETE is
+  # gone and every KEEP survives" is to delete nothing, or to plan
+  # nothing, so each of those is planted here as a real violation in a
+  # real product file and the evidence has to go red naming the promise.
+  # The last control is planted in the test rather than in the product:
+  # the exact-set comparison itself is made vacuous, and its own positive
+  # control is the only thing that can see it. No Docker, a few minutes.
+  gate_step "the retention-apply evidence can actually fail (mutation self-test, #602)"
+  bash scripts/retention/selftest.sh
 
   gate_step "repository-structure dependency rules (§7.1), by actual deletion"
   bash scripts/architecture/check-core-dependency-rule.sh

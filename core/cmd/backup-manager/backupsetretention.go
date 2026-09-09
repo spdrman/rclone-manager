@@ -336,7 +336,15 @@ func printRetentionPolicyBlock(indent string, p service.RetentionSettings) {
 		if t.WindowUnit != "" {
 			fmt.Printf(" window_unit=%s", t.WindowUnit)
 		}
-		if t.Medium != "" {
+		// The local hard drive is not spelled out, for printSettings'
+		// reason at the identical line: it is what every deployment
+		// already has, so naming it on every tier is a column an operator
+		// reads past, and the two commands have to render one chain one
+		// way. #622 made every tier name a destination on this boundary,
+		// so this names the reserved local id where it used to test for
+		// absence; where a tier actually points is settled once, in
+		// core/service/storagedestinations.go, and never here.
+		if t.Medium != "" && t.Medium != service.StorageMediumLocalID {
 			fmt.Printf(" medium=%s", t.Medium)
 		}
 		fmt.Println()

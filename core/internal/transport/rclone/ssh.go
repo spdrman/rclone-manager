@@ -643,3 +643,43 @@ func withSHA256(cfg configmap.Simple) configmap.Simple {
 	out.Set("sha256sum_command", "sha256sum")
 	return out
 }
+
+// CheckSourceKeyFile answers "may this key be used on this host", and
+// nothing else, for the credentials step of a connection test (EPIC G,
+// issues #592 and #596).
+//
+// It is the mode and directory-chain half of what sftpConfig does before
+// a real transfer touches key_file, exported so a check can ask the same
+// question the transfer will ask, from the same code, and get the same
+// answer. Two os.Stat walks and no read: it never opens the file, never
+// decrypts anything, never resolves key_env or key_command, and holds no
+// key material at any point.
+//
+// That last part is the point. A connection test that resolved the
+// private key so it could name a fingerprint would be pulling key
+// material into this process for a diagnostic, and key_file exists
+// precisely so rclone opens the key and this manager never does. The
+// public fingerprint an operator wants is read from this deployment's own
+// key store instead, which holds it already.
+//
+// A source configured with key_env or key_command has nothing here to
+// stat, and gets a nil error: there is no local fact to check, and
+// whether the resolver produces a usable key is settled by the
+// authenticate step against the real transport.
+func CheckSourceKeyFile(src transport.Source) error {
+	if src.KeyFile == "" {
+		if src.KeyEnv == "" && len(src.KeyCommand) == 0 {
+			return fmt.Errorf("source %q: this backup set names no SSH key: exactly one of key_file, key_env or key_command is required", src.ID)
+		}
+		return nil
+	}
+	keyFilePath := env.ShellExpand(src.KeyFile)
+	info, err := os.Stat(keyFilePath)
+	if err != nil {
+		return fmt.Errorf("source %q: key_file %q is not accessible: %w", src.ID, src.KeyFile, err)
+	}
+	if err := checkKeyFileMode(src.ID, src.KeyFile, info); err != nil {
+		return err
+	}
+	return checkKeyDirChainMode(src.ID, src.KeyFile, keyFilePath)
+}

@@ -271,6 +271,27 @@ to **44,811,244** bytes, which is +1,802,482 (+4.19%) against a ceiling of
 one more bundle: this image can carry these five and not a sixth. Shipping all
 seven, as #167 estimated, would have been roughly 2.4 MB and outside the gate.
 
+That paragraph is #180's measurement and it is left as it was taken. Both sides
+of it have since moved, and #635 re-measured them on the same host and platform
+on 2026-09-08: the five bundles now hold 3,503,996 bytes rather than 1,802,482,
+because #632 put 139,744 bytes of woff2 into each one and EPIC F, G and H grew
+the JS chunk.
+
+**The arithmetic no longer decides the count, and the count is unchanged for a
+different reason.** #180's sum worked because the baseline it measured against
+was an image carrying no bundles, so each one had to be paid for out of the
+headroom. The baseline was re-captured at 69,704,266 with these five inside it,
+which means charging them to the 5% counts them twice. Re-derived there it points
+both ways at once: 5% is 3,485,213, the five measure 3,503,996 so charging them
+puts five over by 18,783, and not charging them leaves 3,485,213 against
+1,401,598 for the two missing bundles, so seven would fit with 2,083,615 spare.
+
+What actually settles it is that `generic` is compiled into the binary and `ugos`
+ships in EPIC D's UPK. Those two have a carrier, so a directory for either is
+bytes nobody serves. That holds whatever the image weighs. A reader sizing a
+sixth bundle should take the image size from `docs/perf/` and the count from that
+sentence, and not use either as an argument for the other.
+
 The end-to-end evidence, against the built image rather than against a
 function:
 

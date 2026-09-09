@@ -29,8 +29,8 @@ import type { ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { fetchResource, useResource } from "@shared/state/resource";
-import { graph, useCausl } from "@shared/state/graph";
-import { setsNode, versionNode } from "@shared/state/appNodes";
+import { graph } from "@shared/state/graph";
+import { setsNode } from "@shared/state/appNodes";
 import {
   captureSetEditSnapshot,
   currentSetActivityNode,
@@ -42,19 +42,26 @@ import { PageHeader } from "@shared/components/PageHeader";
 import { HealthBadge } from "@shared/components/StatusBadge";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
+import { Icon } from "@shared/design-system/icons";
+import { SetActivityPanel } from "./SetActivityPanel";
+import { useActivityFeed } from "./useActivityFeed";
+import { emitBrowserNotice } from "@shared/state/browserNotices";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { HaltBanner } from "@shared/components/HaltBanner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { RemoveBackupSetDialog } from "@shared/components/RemoveBackupSetDialog";
+import { SSHAuthWizard } from "@shared/components/SSHAuthWizard";
 import { HelpField } from "@shared/components/FieldHelp";
 import { ErrorState } from "@shared/components/EmptyState";
+import { RunControlNotice } from "@shared/components/RunControlNotice";
+import { useRunControls } from "@shared/hooks/useRunControls";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
 import { BackupSetRetentionCard } from "./BackupSetRetentionCard";
 import { EDIT_FIELDS, readEditFields, visibleEditFields, withCompanions } from "./backupSetEditFields";
 import type { EditField, EditFieldKey } from "./backupSetEditFields";
 import type { BackupSetPatch, RunningWork } from "@shared/api/contracts";
 import { apiErrorOf, describeFailure } from "@shared/api/failure";
-import { bytes, relativeAge } from "@shared/utilities/format";
+import { bytes, clock, relativeAge } from "@shared/utilities/format";
 
 /**
  * How often an open edit form renews its hold (issue #350).
@@ -89,13 +96,38 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   // state/backupSetDetailNodes.ts's captureSetEditSnapshot/isSetEditStale).
   const set = useResource(currentSetDetailNode, () => api.getSet(setId), [api, setId]);
   const activity = useResource(currentSetActivityNode, () => api.listActivity(), [api]);
-  // The configuration revision this screen is CURRENTLY showing. A run
+  // Issue #597. Both run controls on this page go through one hook: it
+  // owns the idempotency key, refuses before sending when the
+  // configuration revision has not loaded, and turns whatever comes back
+  // into a line every terminal can read. Scoped to this set, so the
+  // notice below is this set's own.
+  //
+  // The revision it submits is the one this screen is CURRENTLY showing,
+  // read off the graph rather than fetched fresh at submit time: a run
   // submitted against a revision nobody looking at the page has seen is
-  // what CONFIG_REVISION_STALE exists to refuse, so this deliberately
-  // reads the graph rather than fetching a fresh one at submit time.
-  const version = useCausl(versionNode);
+  // what CONFIG_REVISION_STALE exists to refuse.
+  //
+  // useRunControls owns that revision now (issue #597): it reads the graph
+  // at submit time and renders the refusal by typed code, so this page no
+  // longer holds a version of its own. Taking one here as well would be a
+  // second answer to the same question.
+  const run = useRunControls({ kind: "set", id: setId });
+  // The live feed for THIS set, narrowed by the `backup_set` the route
+  // already takes (issue #596). It is held here rather than inside the
+  // panel because the Test Connection button below asks it for a fresh
+  // reading the moment its request answers: the engine records every step
+  // before it replies, so one poll then is the difference between a
+  // terminal that fills in immediately and one that fills in whenever the
+  // timer next fires.
+  const activityFeed = useActivityFeed(setId);
+  const [testing, setTesting] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
+  // Issue #592. The SSH surface used to be two boxes in the edit list
+  // above; it is a wizard now, opened from the Connection section, and it
+  // lives here rather than inside edit mode because choosing an
+  // authentication method is not a field you type into.
+  const [sshWizardOpen, setSSHWizardOpen] = useState(false);
   // Issue #391's `removing`/`removeError` pair moved into
   // RemoveBackupSetDialog with the rest of the removal, so the list page
   // and this one cannot drift apart on what removal promises, what it
@@ -149,6 +181,26 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     exitAfter: boolean;
   } | null>(null);
 
+  // ------------------------------------------------------- issue #591
+  //
+  // The way out that DISCARDS, and the one piece of bookkeeping it needs.
+  //
+  // `savedThisSession` is every box a per-box Save actually wrote since
+  // the mode opened. It exists because this page saves per box, so
+  // "cancel" cannot mean "undo everything": those writes are already in
+  // config.yaml and the engine has already hot-reloaded them. Cancel
+  // discards the DRAFT and touches nothing that was written, and the only
+  // way to be honest about that is to name the boxes it is not touching.
+  // Nothing here is ever sent anywhere; it is what the confirmation reads.
+  //
+  // `pendingExit` is which discarding exit is waiting on that
+  // confirmation, and it is a route rather than a boolean because the
+  // header's back link goes through the same dialog. A warning that only
+  // appears on the button an operator chose deliberately is guarding the
+  // wrong door.
+  const [savedThisSession, setSavedThisSession] = useState<SavedField[]>([]);
+  const [pendingExit, setPendingExit] = useState<ExitRoute | null>(null);
+
   // The backup set this page is currently showing. Every piece of edit
   // state above belongs to ONE set, and React Router does not remount
   // this page for a :source/:set change alone (the same property this
@@ -181,6 +233,8 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     setWarnAbout(null);
     setEnterError(null);
     setRefusal(null);
+    setSavedThisSession([]);
+    setPendingExit(null);
   }
 
   // The hold's lifetime, tied to `editing` rather than to any one button.
@@ -232,6 +286,45 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const s = set.data;
   const [methodLabel, methodDetail] = COMPLETION_COPY[s.completionMethod];
   const events = (activity.data ?? []).filter((e) => e.setId === s.id).slice(0, 6);
+
+  /**
+   * Runs the connection test and makes sure something is said either way
+   * (issue #596).
+   *
+   * Nothing here renders the steps: the ENGINE emitted them, one line
+   * per step, before it answered this request, so they are already on
+   * the feed and the refresh below pulls them in. Rendering the response
+   * here as well would draw every step twice for the person who pressed
+   * the button and once for everybody else, and would make an export
+   * depend on who ran the test.
+   *
+   * The catch is the other half, and it is the one that could not be
+   * done on the server. A refusal produced in FRONT of the engine (a
+   * stale CSRF pair, a dead connection) never reaches a handler, so
+   * there is nothing on the engine that could log it. That is written
+   * into this set's terminal from here, marked as coming from the
+   * browser, rather than being dropped the way this button dropped every
+   * outcome it ever produced.
+   */
+  const runConnectionTest = async () => {
+    setTesting(true);
+    try {
+      await api.testConnection(s.id);
+      activityFeed.refresh();
+    } catch (e) {
+      const failure = describeFailure(e, "Backup Manager could not test this backup set's connection.");
+      emitBrowserNotice({
+        outcome: apiErrorOf(e) === null ? "unreachable" : "refused",
+        code: apiErrorOf(e)?.code ?? "unknown",
+        message: failure.message,
+        ...(failure.remediation ? { remediation: failure.remediation } : {}),
+        ...(failure.correlationId ? { correlationId: failure.correlationId } : {}),
+        backupSetIds: [s.id]
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   // visibleEditFields, not EDIT_FIELDS: a conditional box that is not on
   // screen (the stable-size window, when another completion method is
@@ -387,6 +480,11 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       // Keys nobody saved are untouched, which is what keeps another
       // box's unsaved edit on screen.
       const persisted = readEditFields(updated);
+      // Written down before anything else re-baselines, because after
+      // this the box is clean and indistinguishable from one nobody
+      // touched. This is the record the discarding exit reads to say
+      // which boxes it is NOT taking back (#591).
+      setSavedThisSession((prev) => recordSaved(prev, keys, persisted, draft));
       setBaseline((prev) => applyKeys(prev, persisted, keys));
       setDraft((prev) => applyKeys(prev, persisted, keys));
       setFieldErrors((prev) => clearKeys(prev, keys));
@@ -448,7 +546,52 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     setStale(false);
     setStopped(null);
     setRefusal(null);
+    setSavedThisSession([]);
+    setPendingExit(null);
   };
+
+  // ------------------------------------------------------- issue #591
+
+  /** Leaves by the route asked for. `leaveEditMode` above is the state
+   *  half and is shared with the exits that save; this adds the
+   *  navigation half, which only the discarding exits have. */
+  const exitEditMode = (route: ExitRoute) => {
+    leaveEditMode();
+    if (route === "backup-sets") navigate("/sets");
+  };
+
+  /**
+   * Asks first, unless there is genuinely nothing to say.
+   *
+   * Nothing dirty and nothing written this session is "I only came to
+   * look", which is a legitimate reason to have been in edit mode and a
+   * legitimate reason to leave it; a confirmation for that is noise on
+   * the one press that costs nothing. Anything else has something to
+   * report, and the second half of that list is the surprising one: a box
+   * a per-box Save already wrote is staying written, and "I pressed
+   * cancel so nothing happened" is exactly the belief that gets somebody
+   * into trouble.
+   */
+  const requestExit = (route: ExitRoute) => {
+    if (dirtyKeys().length === 0 && savedThisSession.length === 0 && !refusal) exitEditMode(route);
+    else setPendingExit(route);
+  };
+
+  /** Every dirty box, the value typed into it and the value it goes back
+   *  to. The two write-only boxes go back to "unchanged" rather than to
+   *  empty, because their baseline is the absence of an instruction and
+   *  not a value: an empty SSH key box means "keep the key this set
+   *  already uses", which is a different sentence from "empty". */
+  const discardedFields = (): DiscardedField[] =>
+    dirtyKeys().map((key) => {
+      const field = fieldFor(key);
+      return {
+        key,
+        label: field.label,
+        typed: draft?.[key] || "(empty)",
+        returnsTo: field.writeOnly ? "unchanged" : baseline?.[key] || "(empty)"
+      };
+    });
 
   const reloadLatestValues = () => {
     const fresh = captureSetEditSnapshot();
@@ -464,7 +607,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   return (
     <>
       <PageHeader
-        back={{ label: "Backup sets", onClick: () => navigate("/sets") }}
+        back={{ label: "Backup sets", onClick: () => requestExit("backup-sets") }}
         title={
           <span style={{ display: "inline-flex", alignItems: "center", gap: 11 }}>
             {s.name}
@@ -491,15 +634,55 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
                 key changed is refused by the transport layer on every
                 cycle (FR-6), which is core's job and not a reason to
                 take the fleet's run away from the operator (#231). */}
+            {/* The per-set run this page has never had (#597). The
+                engine half has existed since FR-1 behind `backup-manager
+                fetch --backup-set`; what was missing was a way to reach
+                it in the serving process, so the work takes the engine's
+                own single-flight lock and lands in its feeds instead of
+                running in a second process against the same journal.
+
+                Unavailable while this set is disabled: a sweep skips a
+                disabled set, and offering a control here that contradicts
+                that would need explaining every time. An operator who
+                means it can still run the command the notice prints. */}
             <button
               className="btn btn--primary"
-              disabled={readOnly}
-              title="Runs one pass over every enabled backup set, not only this one."
-              onClick={() => api.runCycle(version.data?.configRevision ?? "").then(set.reload)}
+              disabled={readOnly || run.busy || !s.enabled}
+              title={
+                s.enabled
+                  ? "Runs one pass over this backup set only."
+                  : "This backup set is disabled, so a run would not visit it."
+              }
+              onClick={() => run.runBackupSet(s.id)}
             >
-              Run all due sets
+              Run this backup set
             </button>
-            <button className="btn" disabled={readOnly} onClick={() => api.testConnection(s.id)}>Test connection</button>
+            <button
+              className="btn"
+              disabled={readOnly || run.busy}
+              title="Runs one pass over every enabled backup set, not only this one."
+              onClick={run.runAll}
+            >
+              Run all enabled sets
+            </button>
+            {/* Issue #596. This used to be `onClick={() =>
+                api.testConnection(s.id)}`: the promise was created and
+                dropped, so nothing read the outcome, nothing caught a
+                rejection and nothing rendered. Pressing it was
+                indistinguishable from not pressing it.
+
+                Now the engine's six steps land in the terminal below
+                (it records them before it answers, so the refresh
+                picks them up), and a refusal that never reached the
+                engine at all is written into that same terminal from
+                here rather than being swallowed. */}
+            <button
+              className="btn"
+              disabled={readOnly || testing}
+              onClick={() => void runConnectionTest()}
+            >
+              {testing ? "Testing\u2026" : "Test connection"}
+            </button>
             {/* Issue #350: Edit is a mode, so this one button is both the
                 way in and the way out. Read-only keeps it unavailable
                 exactly as it always has. */}
@@ -523,10 +706,38 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
             ) : (
               <button className="btn" disabled={readOnly} onClick={() => void onEditPressed()}>Edit</button>
             )}
+            {/* Issue #591: the way out that writes nothing. Caution tier
+                rather than primary, beside the exit that saves, and
+                available whenever the mode is open including with nothing
+                dirty.
+
+                Disabled only while a per-box Save is in flight, which is
+                the same guard SAVE ALL carries and is here for a sharper
+                reason. A request already on the wire cannot be recalled,
+                so a cancel taken during one would put a box in the
+                dialog's "discarded, never sent" column while a write
+                carrying it was about to land. The ledger is the whole
+                point of this control, so it waits the moment out rather
+                than printing something false. */}
+            {editing ? (
+              <button
+                className="btn btn--caution"
+                disabled={savingFields.length > 0}
+                onClick={() => requestExit("edit-mode")}
+              >
+                CANCEL &amp; EXIT EDIT MODE
+              </button>
+            ) : null}
             <button className="btn" disabled={readOnly} onClick={() => setPreviewOpen(true)}>Preview retention</button>
           </>
         }
       />
+
+      {/* What a run control on this page last answered, whichever of the
+          two was pressed. A deployment-wide run names every enabled set,
+          so its refusal shows up here too: this set is one the operator
+          just asked to have backed up and did not (#597). */}
+      <RunControlNotice notice={run.notice} />
 
       {/* No actions beside it, deliberately (#245). This banner used to
           offer "Compare fingerprints" and "Keep set halted" and neither
@@ -536,6 +747,36 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           changed is an administrator action taken out of band that this
           manager will not offer to perform (§77 invariant 5). */}
       <HaltBanner set={s} />
+
+      {/* Issue #624: a backup set nobody ever proved, said out loud.
+          This is what stops `--no-verify` being a hole rather than an
+          escape hatch: the sentence the command printed was read once, by
+          whoever typed it, and this is what is still here for the
+          operator who did not. It clears itself the moment a connection
+          test passes, so it is a state rather than a permanent scar on a
+          set that happened to be created offline.
+
+          It sits above the panels rather than inside the connection one
+          because it is a fact about the whole set: nothing here has been
+          shown to work, including the parts the connection panel does not
+          cover. */}
+      {s.connectionUnverified ? (
+        <div style={{ marginBottom: 14 }}>
+          <WarningBanner
+            tone="warn"
+            title="This connection has never been proven"
+            actions={
+              <button className="btn btn--sm" disabled={readOnly || testing} onClick={() => void runConnectionTest()}>
+                {testing ? "Testing\u2026" : "Test connection"}
+              </button>
+            }
+          >
+            This backup set was created without a connection test, so nothing has shown
+            that its key authenticates or that this account can read the remote folder.
+            A test that passes clears this.
+          </WarningBanner>
+        </div>
+      ) : null}
 
       {enterError ? (
         <div style={{ marginBottom: 14 }}>
@@ -692,9 +933,9 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               <p style={{ margin: "14px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
                 This set&rsquo;s name and source are its identity: every backup, journal
                 entry and recovery manifest is filed under them, so they are not editable
-                here. Its SSH key and trusted host key are. Both boxes start empty because
-                neither holds a value this page can show back, so leaving one empty keeps
-                what the set already uses, and replacing the trusted host key asks first.
+                here. Its SSH key and trusted host key are not boxes here either: they are
+                the wizard in the Connection panel, which offers what this machine already
+                has rather than asking you to paste an id nothing would tell you.
               </p>
             </Section>
           ) : null}
@@ -717,6 +958,23 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
             <p style={{ margin: "12px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
               The private key never leaves this NAS and is never displayed.
             </p>
+            {/* Issue #592. This used to be two text boxes in the edit
+                list above, one of which asked an operator to paste an id
+                the product had shown them exactly once. The wizard offers
+                the keys this deployment already holds and the keys on
+                this machine, settles the host key through #572's own
+                refusal, and proves the whole path before it writes
+                anything. */}
+            <div style={{ marginTop: 12 }}>
+              <button className="btn btn--sm" onClick={() => setSSHWizardOpen(true)}>
+                Change SSH authentication
+              </button>
+              <p style={{ margin: "8px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                {s.sshKeyId === ""
+                  ? "This set uses a key this deployment does not manage, so there is no key id to show. The wizard can point it at one this deployment holds."
+                  : "Authenticating with key " + s.sshKeyId + "."}
+              </p>
+            </div>
           </Section>
 
           <Section title="Backup discovery">
@@ -745,7 +1003,16 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           </Section>
 
           <Section title="Activity">
-            <ActivityTimeline events={events} dense />
+            {/* Two feeds, side by side, because neither can be built from
+                the other (types/activity.ts argues this at length). The
+                panel is the bounded in-memory tail that knows a transfer
+                is at 4 MB/s and has forgotten last Tuesday; the timeline
+                under it is the durable, queryable lifecycle record that
+                remembers last Tuesday and has no idea about the 4 MB/s. */}
+            <SetActivityPanel set={s} feed={activityFeed} />
+            <div style={{ marginTop: 14 }}>
+              <ActivityTimeline events={events} dense />
+            </div>
           </Section>
         </div>
 
@@ -771,8 +1038,12 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
                 const on = s.validations.includes(v);
                 return (
                   <li key={v} style={{ display: "flex", gap: 9 }}>
+                    {/* The tick is artwork after #621 and the en dash
+                        beside it is still an en dash: one is a verdict
+                        and the other is "this is off", which is a thing
+                        a dash says and a picture does not. */}
                     <span aria-hidden="true" style={{ color: on ? "var(--ok)" : "var(--text-3)" }}>
-                      {on ? "\u2713" : "\u2013"}
+                      {on ? <Icon name="success" /> : "\u2013"}
                     </span>
                     <span>
                       {v === "transfer" ? "Transfer verification" : v === "checksum" ? "Checksum verification (SHA-256)" : "Application validation"}
@@ -851,6 +1122,19 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         </p>
       </ConfirmationDialog>
 
+      {/* Issue #591. Rendered only while it is open, rather than handed
+          an `open` prop, so the ledger below is not recomputed on every
+          keystroke of an edit session that may never end this way. */}
+      {pendingExit ? (
+        <CancelEditDialog
+          discarded={discardedFields()}
+          saved={savedThisSession}
+          refusal={refusal?.kind ?? null}
+          onKeepEditing={() => setPendingExit(null)}
+          onDiscard={() => exitEditMode(pendingExit)}
+        />
+      ) : null}
+
       {/* Issue #391. This confirmation used to close and call nothing,
           which meant an operator confirmed a destructive action, watched
           it close, and reasonably believed the set was gone while it kept
@@ -870,6 +1154,20 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           shows the set they just removed, for up to thirty seconds. Same
           refresh, same reason, as the create path in
           BackupSetWizardPage. */}
+      {/* Issue #592. Mounted with the set it is about, and it applies
+          through the same PATCH the edit list uses, so a successful pass
+          reloads this page from the server's own answer rather than from
+          what the wizard hoped it wrote. */}
+      <SSHAuthWizard
+        set={s}
+        open={sshWizardOpen}
+        onCancel={() => setSSHWizardOpen(false)}
+        onApplied={() => {
+          setSSHWizardOpen(false);
+          set.reload();
+        }}
+      />
+
       <RemoveBackupSetDialog
         set={s}
         open={removeOpen}
@@ -959,6 +1257,229 @@ function EditRow({
     </div>
   );
 }
+
+/**
+ * The confirmation both discarding exits go through (issue #591).
+ *
+ * It is a ledger rather than a sentence because the honest answer to "are
+ * you sure" on this page is two answers, and only one of them is the one
+ * an operator expects. Every affected box sits on one of two sides: the
+ * ones about to be thrown away, and the ones a per-box Save already wrote,
+ * which are in the configuration the engine is running right now and which
+ * this control is not touching.
+ *
+ * It never offers to undo the second group, and it says so in words. There
+ * is no undo to offer: the save went through api.updateBackupSet, the
+ * service rewrote config.yaml and the engine hot-reloaded it. Putting an
+ * old value back would be a fresh write dressed up as an undo, and on the
+ * two write-only boxes it is not even expressible, because neither reads a
+ * value back for the page to restore.
+ */
+function CancelEditDialog({
+  discarded,
+  saved,
+  refusal,
+  onKeepEditing,
+  onDiscard
+}: {
+  discarded: DiscardedField[];
+  saved: SavedField[];
+  refusal: AcknowledgeableRefusal | null;
+  onKeepEditing(): void;
+  onDiscard(): void;
+}) {
+  const n = discarded.length;
+  // Caution rather than destructive. Nothing here deletes a backup, and
+  // dressing a discarded draft in the same red as "remove this set" is how
+  // an operator stops reading either of them.
+  return (
+    <ConfirmationDialog
+      open
+      eyebrow={n === 0 ? "Nothing left to discard" : n === 1 ? "1 unsaved change" : n + " unsaved changes"}
+      title={n === 0 ? "Leave edit mode?" : "Leave edit mode and discard them?"}
+      confirmLabel={
+        n === 0 ? "Exit edit mode" : "Discard " + n + (n === 1 ? " change" : " changes") + " and exit"
+      }
+      cancelLabel="Keep editing"
+      onCancel={onKeepEditing}
+      onConfirm={onDiscard}
+    >
+      {/* Only when it has a side to show. A refusal answered by typing the
+          box back to what it was leaves a pending refusal with nothing
+          dirty and nothing saved, and an empty bordered box in the middle
+          of the dialog would be a ledger claiming to have listed
+          something. */}
+      {n > 0 || saved.length > 0 ? (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+          {n > 0 ? (
+            <LedgerGroup id="cancel-ledger-discarded" title="Discarded, never sent" first>
+              {discarded.map((entry) => (
+                <LedgerRow
+                  key={entry.key}
+                  label={entry.label}
+                  value={
+                    <>
+                      {entry.typed}
+                      {/* Reads "becomes", and it is the one arrow in this
+                          app that sits inside a value rather than on a
+                          control (#621). Sized under the mono text it is
+                          in, because at a full 1em a solid arrow is the
+                          heaviest thing in the row and the values are
+                          what an operator is here to read. */}
+                      <Icon
+                        name="arrow-right"
+                        size="0.8em"
+                        style={{ margin: "0 6px", color: "var(--text-3)" }}
+                      />
+                      {entry.returnsTo}
+                    </>
+                  }
+                />
+              ))}
+            </LedgerGroup>
+          ) : null}
+          {saved.length > 0 ? (
+            <LedgerGroup id="cancel-ledger-saved" title="Already saved, and staying saved" first={n === 0}>
+              {saved.map((entry) => (
+                <LedgerRow
+                  key={entry.key}
+                  label={fieldFor(entry.key).label}
+                  value={(entry.value || "(empty)") + " \u00b7 " + clock(entry.at)}
+                />
+              ))}
+            </LedgerGroup>
+          ) : null}
+        </div>
+      ) : null}
+      {saved.length > 0 ? (
+        <p style={{ margin: 0 }}>
+          Cancel is not an undo. Each of those was saved on its own and is in the
+          configuration this deployment is running right now. To put one back, edit
+          it again.
+        </p>
+      ) : null}
+      {/* Said in a line of its own rather than left to be inferred from a
+          box count. A half-answered trust decision is the one thing on
+          this page an operator will remember having been in the middle
+          of, and the reassuring half of it is true for free: an
+          unacknowledged refusal turns back before the write, so nothing
+          was staged to walk back. */}
+      {refusal ? <p style={{ margin: 0 }}>{REFUSAL_ON_CANCEL[refusal]}</p> : null}
+    </ConfirmationDialog>
+  );
+}
+
+/** One side of the ledger. `role="group"` with a name, so the two sides
+ *  are distinguishable to anything reading this by role rather than by
+ *  position, which is the only thing that makes "which side is this box
+ *  on" answerable without sight. */
+function LedgerGroup({
+  id,
+  title,
+  first,
+  children
+}: {
+  id: string;
+  title: string;
+  first: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div role="group" aria-labelledby={id} style={{ borderTop: first ? undefined : "1px solid var(--border)" }}>
+      <div
+        id={id}
+        className="eyebrow"
+        style={{ padding: "7px 12px", background: "var(--surface-2)", fontSize: 10.5, letterSpacing: "0.06em" }}
+      >
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** One box on one side of it. The value is deliberately plain: a
+ *  known_hosts line is long, and splitting it into decorated pieces buys
+ *  nothing an operator can act on. It takes a node rather than a string
+ *  only because one caller puts a "becomes" arrow between two values, and
+ *  #621 made that arrow a picture; nothing else passes anything but a
+ *  string, and nothing else should. */
+function LedgerRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div
+      style={{
+        display: "flex", alignItems: "baseline", gap: 9, padding: "7px 12px",
+        borderTop: "1px solid var(--border)", fontSize: 12.5
+      }}
+    >
+      <span style={{ color: "var(--text-2)", minWidth: 124 }}>{label}</span>
+      <span className="mono" style={{ fontSize: 11.5, flex: 1, minWidth: 0, wordBreak: "break-all" }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/** Where a discarding exit is going. A route rather than a boolean because
+ *  the header's back link and the cancel button share one confirmation:
+ *  the back link discards a draft just as silently as anything else, and
+ *  guarding only the deliberate control would be guarding the wrong
+ *  door. */
+type ExitRoute = "edit-mode" | "backup-sets";
+
+/** One box a per-box Save actually wrote during this edit session. */
+interface SavedField {
+  key: EditFieldKey;
+  /** The value now in the configuration, read back from the SERVER's own
+   *  answer rather than from the text that was sent. The two write-only
+   *  boxes answer "" to that and "" is not what was saved, so for those
+   *  this holds the line that went out: it is the only value the page has
+   *  and the one the operator would recognise. */
+  value: string;
+  at: string;
+}
+
+/** One box about to be thrown away, and what it goes back to. */
+interface DiscardedField {
+  key: EditFieldKey;
+  label: string;
+  typed: string;
+  returnsTo: string;
+}
+
+/**
+ * Adds `keys` to the session's written ledger.
+ *
+ * An earlier entry for the same box is replaced rather than appended to:
+ * saving Host twice is one fact about Host, and the one worth showing is
+ * the value that ended up in the configuration.
+ */
+function recordSaved(
+  prev: SavedField[],
+  keys: EditFieldKey[],
+  persisted: Record<EditFieldKey, string>,
+  sent: Record<EditFieldKey, string>
+): SavedField[] {
+  const at = new Date().toISOString();
+  const next = prev.filter((entry) => !keys.includes(entry.key));
+  for (const key of keys) {
+    next.push({ key, value: fieldFor(key).writeOnly ? sent[key] : persisted[key], at });
+  }
+  return next;
+}
+
+/** What cancelling out from under each refusal actually costs, which in
+ *  both cases is nothing beyond the draft. The refusal is refused BEFORE
+ *  anything is written (prepareTrustChange calls
+ *  requireHostKeyChangeAcknowledgement before stageKnownHostsLine), so
+ *  there is no half-applied state to walk back. Cancel needs no new
+ *  machinery to make that true, only to say it. */
+const REFUSAL_ON_CANCEL: Record<AcknowledgeableRefusal, string> = {
+  repoint:
+    "The change you were asked to confirm goes with the draft. No acknowledgement is sent, and this backup set stays pointed at the data it is pointed at now.",
+  hostKey:
+    "The change you were asked to confirm goes with the draft. No acknowledgement is sent, nothing is written to this set's known_hosts, and the key on record stays the key on record."
+};
 
 /** The two refusals a save can come back with that an operator can answer
  *  rather than fix. Each has its own acknowledgement on the retry, which
