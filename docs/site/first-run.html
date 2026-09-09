@@ -142,8 +142,8 @@
       <tbody>
         <tr>
           <td><strong>The host in the link</strong></td>
-          <td>localhost:8080</td>
-          <td>The shipped Compose file sets <code>PUBLIC_BASE_URL</code> to <code>http://localhost:${LISTEN_PORT}</code>, and <code>localhost</code> only resolves correctly if you open the link <em>on the NAS itself</em>. <span class="does">From a laptop, swap the host for the NAS address and keep the token exactly as printed.</span> Set <code>PUBLIC_BASE_URL</code> in <code>.env</code> to your NAS address to get a link that is correct next time.</td>
+          <td>your NAS's LAN address</td>
+          <td>An installer-driven install (<code>scripts/install/install_docker_host.py</code>) writes <code>PUBLIC_BASE_URL</code> into <code>.env</code> as the address of the interface your NAS's default route uses, which resolves from a laptop on the same LAN with nothing configured - <span class="does">open the link exactly as printed.</span> A host with no default route falls back to its own hostname instead. Running the bare Compose file without the installer still defaults to <code>http://localhost:${LISTEN_PORT}</code>, which only resolves on the NAS itself; set <code>PUBLIC_BASE_URL</code> in <code>.env</code> by hand in that case.</td>
         </tr>
         <tr>
           <td><strong>The token</strong></td>

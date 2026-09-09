@@ -3378,6 +3378,98 @@ class TestNoArgumentInstallHasWhatItNeeds(unittest.TestCase):
         self.assertEqual(key.read_text(), "the key a source already trusts\n")
 
 
+
+class TestPublicBaseUrlDefaultsToTheLanAddress(unittest.TestCase):
+    """Issue #688: the printed enrolment link is read on a different machine
+    from the one it names, because install commonly runs over SSH from a
+    laptop. The hostname default (issue #119) is not the fix either: a
+    hostname resolves on the box it names and, without mDNS or a DNS record
+    somebody set up, nowhere else, which is the same failure for a slightly
+    different reason. What resolves from any machine on the LAN with
+    nothing configured is an address, so a bare install has to find one.
+    """
+
+    def setUp(self):
+        self._real_lan_address = installer.lan_address
+        self._real_gethostname = installer.socket.gethostname
+        self.addCleanup(setattr, installer, "lan_address", self._real_lan_address)
+        self.addCleanup(setattr, installer.socket, "gethostname", self._real_gethostname)
+
+    def _bare(self, extra=None):
+        argv = ["install"] + (extra or [])
+        return installer.resolve(installer.build_parser().parse_args(argv))
+
+    def test_a_bare_install_uses_the_route_address_not_localhost_or_hostname(self):
+        installer.lan_address = lambda: "192.168.1.50"
+        installer.socket.gethostname = lambda: "nas-name"
+        args = self._bare()
+        self.assertEqual(args.public_base_url, "http://192.168.1.50:8080")
+
+    def test_no_default_route_falls_back_to_the_hostname_rather_than_refusing(self):
+        installer.lan_address = lambda: ""
+        installer.socket.gethostname = lambda: "nas-name"
+        args = self._bare()
+        self.assertEqual(args.public_base_url, "http://nas-name:8080",
+                         "no route is not a reason to refuse an install")
+
+    def test_explicit_public_base_url_still_wins(self):
+        installer.lan_address = lambda: "192.168.1.50"
+        args = self._bare(["--public-base-url", "http://my-nas.example:9000"])
+        self.assertEqual(args.public_base_url, "http://my-nas.example:9000")
+
+
+class TestLanAddressProbe(unittest.TestCase):
+    """lan_address()'s mechanism: the local end of a UDP socket connected to
+    an address nothing here will ever send a packet to is the address of the
+    interface the default route would leave by, which is the LAN address and
+    not a docker bridge or loopback. connect() on SOCK_DGRAM only asks the
+    kernel which route it would take; no datagram is ever put on the wire.
+    """
+
+    class _FakeSocket:
+        def __init__(self, connect_error=None, answer=("192.168.1.50", 0)):
+            self.connect_error = connect_error
+            self.answer = answer
+            self.connected_to = None
+            self.closed = False
+
+        def connect(self, address):
+            if self.connect_error is not None:
+                raise self.connect_error
+            self.connected_to = address
+
+        def getsockname(self):
+            return self.answer
+
+        def close(self):
+            self.closed = True
+
+    def setUp(self):
+        self._real_socket = installer.socket.socket
+        self.addCleanup(setattr, installer.socket, "socket", self._real_socket)
+
+    def test_connects_to_an_address_no_packet_can_reach_and_reads_it_back(self):
+        fake = self._FakeSocket()
+        installer.socket.socket = lambda *a, **kw: fake
+        self.assertEqual(installer.lan_address(), "192.168.1.50")
+        self.assertIsNotNone(fake.connected_to, "must probe by connecting, not guess")
+        host, _port = fake.connected_to
+        self.assertFalse(host.startswith("127."), "the probe target itself must never be loopback")
+        self.assertTrue(fake.closed, "the probe socket is not left open")
+
+    def test_a_loopback_answer_is_treated_as_no_address(self):
+        fake = self._FakeSocket(answer=("127.0.0.1", 0))
+        installer.socket.socket = lambda *a, **kw: fake
+        self.assertEqual(installer.lan_address(), "",
+                         "the probe must never answer a loopback address")
+
+    def test_no_default_route_returns_empty_rather_than_raising(self):
+        fake = self._FakeSocket(connect_error=OSError("Network is unreachable"))
+        installer.socket.socket = lambda *a, **kw: fake
+        self.assertEqual(installer.lan_address(), "")
+        self.assertTrue(fake.closed, "the probe socket is closed even when connect() fails")
+
+
 class TestEveryDirectoryIsBornWithoutGroupOrWorldWrite(unittest.TestCase):
     """The engine refuses a key whose ancestry is group- or world-writable,
     and it walks the WHOLE chain. Installing onto the UGREEN it refused

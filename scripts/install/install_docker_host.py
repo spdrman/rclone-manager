@@ -4891,7 +4891,8 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
                          help="Host port the Web UI is published on. The engine publishes nothing.")
     runtime.add_argument("--public-base-url", default=None,
                          help="Externally reachable base URL, used for the one-time enrollment link. Defaults "
-                              "to http://<this host's name>:<listen port>.")
+                              "to http://<this host's LAN address>:<listen port>, or its hostname when the "
+                              "host has no default route.")
     runtime.add_argument("--profile", default="generic",
                          help="Runtime profile, from container/compose.yaml's x-canonical-runtime.profiles.")
     runtime.add_argument("--timezone", default=None,
@@ -5251,6 +5252,48 @@ def resolve_release(args) -> None:
         )
 
 
+# The address a bare install's PUBLIC_BASE_URL default uses (issue #688).
+#
+# The enrolment link is routinely read on a different machine from the one
+# it names: install runs over SSH from a laptop, and the browser is on the
+# laptop, so "localhost" resolves to the wrong box and the operator gets a
+# refused connection on the first thing they try. socket.gethostname()
+# (issue #119's default) is not the fix either, and it is worth writing
+# down why not: a hostname resolves on the box it names and, without mDNS
+# or a DNS record somebody set up, nowhere else, which is the same failure
+# for a slightly different reason.
+#
+# What resolves from any machine on the LAN with nothing configured is an
+# address, and the address that matters is the one belonging to the
+# interface the host's default route would leave by - a docker bridge or
+# loopback address is reachable only from the host itself, same as
+# "localhost". Asking the kernel that question without asking a server
+# anything is the classic UDP-connect trick: connect() on a datagram
+# socket never puts a packet on the wire (UDP is connectionless; connect()
+# only records a peer and asks the routing table which local address would
+# be used to reach it), so 203.0.113.1 - a documented, unrouted address
+# from TEST-NET-3 (RFC 5737) - is never actually contacted. getsockname()
+# then reads back the local half of that route.
+def lan_address() -> str:
+    """The LAN address of the interface the default route would use, or ""
+    when there is none or it resolves to loopback.
+
+    Never sends a packet, and never answers with a loopback address: a
+    host with no default route raises ENETUNREACH here rather than
+    guessing, and that is treated the same as finding no address at all,
+    so the caller can fall back rather than refuse the whole install.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("203.0.113.1", 1))
+        address = probe.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        probe.close()
+    return "" if address.startswith("127.") else address
+
+
 def resolve(args):
     """Fill in every default this installer computes from --prefix and the
     account it runs as.
@@ -5311,7 +5354,7 @@ def resolve(args):
         tzfile = Path("/etc/timezone")
         args.timezone = tzfile.read_text().strip() if tzfile.is_file() else "UTC"
     if hasattr(args, "public_base_url") and args.public_base_url is None:
-        args.public_base_url = f"http://{socket.gethostname()}:{args.listen_port}"
+        args.public_base_url = f"http://{lan_address() or socket.gethostname()}:{args.listen_port}"
     if hasattr(args, "image"):
         # _RecordsThatItWasSupplied only fires when the flag is on the
         # command line, so the attribute is simply absent otherwise.

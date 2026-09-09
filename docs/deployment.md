@@ -427,11 +427,22 @@ that address was a real bug fixed as part of issue #119's review: `--public-base
 actually is, and `container/compose.yaml` sets it by default to
 `http://localhost:${LISTEN_PORT}`, which tracks whatever host port you actually
 published `web-ui` on. `localhost` only resolves correctly when you open the link on
-the NAS itself; set `PUBLIC_BASE_URL` in `.env` to the NAS's real hostname/IP (see
-`container/.env.example`) to get a link that also works from another machine on the
-LAN. Leaving `PUBLIC_BASE_URL` unset entirely (outside of `compose.yaml`'s own default,
-e.g. when running `/rbm-web serve` directly) prints just the raw token
-instead of a clickable but wrong link.
+the NAS itself.
+
+`scripts/install/install_docker_host.py` overrides that default in the `.env` it
+generates: a bare `install` writes the address of the interface the host's default
+route would leave by (found without sending a packet, the same way `traceroute` finds
+a source address; see `lan_address()`), which resolves from any machine on the LAN
+with nothing configured, unlike `localhost` or the host's own name. A host with no
+default route falls back to its hostname rather than refusing the install. So an
+installer-driven install already prints a link that works from the operator's own
+laptop, and there is nothing to fix by hand afterwards; `--public-base-url` (or
+`PUBLIC_BASE_URL` in `.env`, see `container/.env.example`) still overrides it, which
+matters when the LAN address the installer found is not the one operators should use
+(a NAS with several interfaces, or a reverse proxy in front of it). Leaving
+`PUBLIC_BASE_URL` unset entirely (outside of `compose.yaml`'s own default or the
+installer's override, e.g. when running `/rbm-web serve` directly) prints just the raw
+token instead of a clickable but wrong link.
 
 The token itself is required to complete `POST /api/v1/auth/enroll` — reaching the port
 is not enough to claim the account (§49.1) — and is invalidated the moment enrollment
