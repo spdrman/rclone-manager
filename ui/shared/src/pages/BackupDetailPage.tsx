@@ -15,6 +15,7 @@
  * behaviour that is correct for a singleton resource would show one
  * artifact's fields under another artifact's URL.
  */
+import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
@@ -27,10 +28,15 @@ import { ErrorState } from "@shared/components/EmptyState";
 import { bytes, stamp } from "@shared/utilities/format";
 import type { ArtifactRetentionPolicy } from "@shared/types/backup";
 
-export function BackupDetailPage() {
+export function BackupDetailPage({ readOnly = false }: { readOnly?: boolean }) {
   const { artifactId = "" } = useParams();
   const api = useApi();
   const navigate = useNavigate();
+  // The outcome of the recovery press below, so a rejected call has a
+  // visible answer instead of a silent no-op. Same shape and same reason
+  // as QuarantinePage's, which learned it the same way.
+  const [recovery, setRecovery] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+  const [retrying, setRetrying] = useState(false);
   // Page-local, like the sibling BackupSetDetailPage (mandatory review on
   // #144): nothing else reads this particular artifact, so there is no
   // duplicate fetch to eliminate by putting it on the shared graph, and
@@ -71,6 +77,37 @@ export function BackupDetailPage() {
   if (!artifact.data || artifact.loading) return null;
 
   const a = artifact.data;
+
+  // Issue #662, in the browser. A quarantined backup gets three verbs on
+  // the Quarantine page; a FAILED one had none, anywhere, and
+  // `retryFailedIngestion` was declared in the contract and implemented
+  // in the client with nothing in src/pages, src/components or src/hooks
+  // calling it. The product's own premise is a NAS with no shell, so a
+  // backup the browser cannot act on is a backup nobody can act on.
+  //
+  // "Failed and not quarantined" is the whole of what this seam can see:
+  // an artifact carries a validation verdict and a quarantine record, and
+  // a failed verdict with no record is exactly the artifact the
+  // Quarantine page will never list. That is the one this control is for.
+  const stuck = a.validation === "failed" && a.quarantine === null;
+
+  const retryIngestion = () => {
+    setRecovery(null);
+    setRetrying(true);
+    api
+      .retryFailedIngestion(a.id)
+      .then(() => {
+        setRecovery({
+          tone: "ok",
+          text:
+            "Re-attempted. If its local copy was already good and a retry keeps meeting a final-name collision, " +
+            "that retry verifies the copy against the remote object and trusts it in place."
+        });
+        artifact.reload();
+      })
+      .catch((e: unknown) => setRecovery({ tone: "bad", text: e instanceof Error ? e.message : String(e) }))
+      .finally(() => setRetrying(false));
+  };
 
   return (
     <>
@@ -120,7 +157,13 @@ export function BackupDetailPage() {
             <Row label="Checksum" value={a.checksumAlgorithm + ":" + a.checksum} mono />
             <Row
               label="Validation result"
-              value={a.validation === "verified" ? "Checksum passed" : "Failed — see Quarantine"}
+              value={
+                a.validation === "verified"
+                  ? "Checksum passed"
+                  : stuck
+                    ? "Failed — not quarantined, so it is not on the Quarantine page: see Recovery below"
+                    : "Failed — see Quarantine"
+              }
             />
             <Row label="Retention classes" value={a.retentionClasses.join(", ") || "unclassified"} />
             {/* Spelled out in the field list as well as badged in the
@@ -144,6 +187,35 @@ export function BackupDetailPage() {
           </p>
         </section>
       </div>
+
+      {/* #662: the one control this page was missing. It is its own card
+          rather than a button in the header, because the sentence beside
+          it is half of the remedy: an operator meeting a FAILED backup
+          has been told to intervene and never told with what. */}
+      {stuck ? (
+        <section className="card" style={{ marginTop: 14 }}>
+          <div className="card__header"><h2 className="eyebrow">Recovery</h2></div>
+          <div style={{ padding: "15px 18px", display: "grid", gap: 10, fontSize: "var(--text-sm)" }}>
+            <p style={{ margin: 0, color: "var(--text-2)", maxWidth: "72ch" }}>
+              This backup failed an attempt and is not quarantined, so no cycle will attempt it again on its own
+              and the Quarantine page will not list it. Re-attempting it is the way back.
+            </p>
+            <span style={{ display: "flex", gap: 7 }}>
+              <button className="btn btn--sm" disabled={readOnly || retrying} onClick={retryIngestion}>
+                {retrying ? "Retrying…" : "Retry ingestion"}
+              </button>
+            </span>
+            {recovery ? (
+              <p
+                role="status"
+                style={{ margin: 0, maxWidth: "72ch", color: recovery.tone === "ok" ? "var(--text-2)" : "var(--danger)" }}
+              >
+                {recovery.text}
+              </p>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
       <div style={{ marginTop: 14 }}>
         <PlacementList placements={a.placements} storage={settings.data?.schema.storage} />

@@ -172,7 +172,7 @@ func reconcileRemoteRetained(ctx context.Context, deps Deps, rec state.Record) (
 	switch local.Verdict {
 	case localValid:
 		return noAction(rec.Artifact, lifecycle.RemoteRetained,
-			"local final copy verified valid; the remote source remains retained by policy and was never examined"), nil
+			"local final copy verified valid; the remote source remains retained by policy and was never examined"+local.note()), nil
 	case localOnMedium:
 		return leftOnMedium(rec, lifecycle.RemoteRetained, local), nil
 	}
@@ -210,7 +210,7 @@ func reconcileCommitted(ctx context.Context, deps Deps, rec state.Record) (Findi
 	switch local.Verdict {
 	case localValid:
 		return noAction(rec.Artifact, lifecycle.Committed,
-			"local final copy verified valid; remote still untouched, proceeding toward eventual delete"), nil
+			"local final copy verified valid; remote still untouched, proceeding toward eventual delete"+local.note()), nil
 	case localOnMedium:
 		return leftOnMedium(rec, lifecycle.Committed, local), nil
 	}
@@ -289,7 +289,7 @@ func reconcileDeletePending(ctx context.Context, deps Deps, source transport.Sou
 			Artifact: rec.Artifact,
 			From:     lifecycle.RemoteDeletePending,
 			To:       lifecycle.State(completed.State),
-			Reason:   "remote object confirmed already absent; reconciled to COMPLETE without re-attempting the delete",
+			Reason:   "remote object confirmed already absent; reconciled to COMPLETE without re-attempting the delete" + local.note(),
 		}, nil
 	}
 
@@ -309,7 +309,7 @@ func reconcileDeletePending(ctx context.Context, deps Deps, source transport.Sou
 	}
 
 	return noAction(rec.Artifact, lifecycle.RemoteDeletePending,
-		"remote object still present ("+comparison.Reason+"); leaving the pending delete for normal processing to retry"), nil
+		"remote object still present ("+comparison.Reason+"); leaving the pending delete for normal processing to retry"+local.note()), nil
 }
 
 // reconcileComplete handles the COMPLETE row (no-op) and COMPLETE's half
@@ -324,7 +324,7 @@ func reconcileComplete(ctx context.Context, deps Deps, rec state.Record) (Findin
 	switch local.Verdict {
 	case localValid:
 		return noAction(rec.Artifact, lifecycle.Complete,
-			"remote already confirmed gone and the local copy verified valid; nothing to reconcile"), nil
+			"remote already confirmed gone and the local copy verified valid; nothing to reconcile"+local.note()), nil
 	case localOnMedium:
 		// The shape every completed move leaves behind, on the one state
 		// FR-30 lets move. COMPLETE -> QUARANTINED_LOST is for "the

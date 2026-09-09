@@ -264,6 +264,23 @@ type BackupSetHealth struct {
 	PendingDeletes   int
 	Failures         int
 
+	// StuckFailures names the FAILED artifacts with no retry scheduled:
+	// exactly the population the FAILING verdict "a FAILED artifact has
+	// no retry scheduled and needs intervention" is about.
+	//
+	// It exists because that verdict used to be the whole of what an
+	// operator got. Issue #662's session opens with it, and with a count
+	// of three, over a set whose objects all read "(already known)": the
+	// report said intervention was needed and then said nothing about on
+	// what, so the operator had to go hunting through `rbm artifacts` to
+	// find out which three, before they could type anything. This
+	// manager knows, so it says.
+	//
+	// It is reported and never fed back into the verdict: evidence's
+	// hasStuckFailure is what decideState reads, and this is the display
+	// half, exactly like Failures and CurrentTransfers beside it.
+	StuckFailures []model.ArtifactID
+
 	// QuarantinedCount counts every artifact currently quarantined,
 	// recoverable (QUARANTINED) or not (QUARANTINED_LOST): see machine.go's
 	// note that FR-24's quarantined count should count QUARANTINED_LOST

@@ -77,6 +77,28 @@ func cmdStatus(args []string) int {
 		fmt.Printf("  newest known-good backup: %s\n", ageOrNever(bs.NewestGoodBackupAge))
 		fmt.Printf("  stale threshold: %s\n", bs.StaleThreshold)
 		fmt.Printf("  current transfers: %d, pending deletes: %d, failures: %d\n", len(bs.CurrentTransfers), bs.PendingDeletes, bs.Failures)
+		// Issue #662. "a FAILED artifact has no retry scheduled and needs
+		// intervention" was the whole of what an operator got, above a
+		// count of three, and it left them two questions to answer
+		// elsewhere before they could type anything: which artifacts, and
+		// with what. Both are known here.
+		//
+		// The verbs live in this file rather than in the health reason
+		// because `rbm` command names are this binary's vocabulary and
+		// not FR-24's: the same report is rendered by a Web UI that has
+		// no shell. Which artifacts is the other way round, and travels
+		// on the report (health.BackupSetHealth.StuckFailures), because
+		// it is a fact about the deployment that every surface needs.
+		if len(bs.StuckFailures) > 0 {
+			fmt.Printf("  needs intervention: %d artifact(s), no retry scheduled\n", len(bs.StuckFailures))
+			for _, a := range bs.StuckFailures {
+				fmt.Printf("    %s\n", a)
+			}
+			fmt.Println("    `" + cliecho.Binary + " retry <artifact-id>` re-attempts one. If its local copy is already good and a retry" +
+				" keeps failing on a final-name collision, that retry verifies the copy against the remote and trusts it in place.")
+			fmt.Println("    `" + cliecho.Binary + " quarantine reinstate <artifact-id>` is the same decision made by hand," +
+				" and `" + cliecho.Binary + " artifacts <artifact-id>` shows what the last attempt refused.")
+		}
 		// FR-30's hold (issue #602), printed only when there is one, for
 		// the same reason as the conditional lines below it. It comes
 		// third from the top all the same, because unlike those it is not

@@ -61,6 +61,14 @@ const (
 // final file against what the journal says it should be. Reason is
 // populated whenever Verdict is not localValid: for localInvalid it says
 // what failed, for localOnMedium it says where the copy is.
+//
+// A localValid verdict carries a Reason only when the check found
+// something an operator still has to know about, which today means one
+// thing: the row's own two size records contradict each other and the file
+// settled it (issue #662). A fault nobody is told about is how #662's
+// empty record survived four states of a lifecycle, so the sentence
+// travels with the verdict rather than being dropped on the floor because
+// the answer happened to be "valid".
 type localValidity struct {
 	Verdict localVerdict
 	Reason  string
@@ -69,6 +77,19 @@ type localValidity struct {
 // invalid builds the quarantining verdict.
 func invalid(reason string) localValidity {
 	return localValidity{Verdict: localInvalid, Reason: reason}
+}
+
+// note renders a localValid verdict's Reason as a clause a handler can
+// append to its own sentence, or nothing when there is nothing to add.
+//
+// It is a method rather than four string concatenations in reconcile.go so
+// that the four handlers cannot drift on whether a reported record fault
+// reaches the operator at all.
+func (v localValidity) note() string {
+	if v.Reason == "" {
+		return ""
+	}
+	return "; " + v.Reason
 }
 
 // checkLocalFinal is FR-17's "is the final local copy still good" check,
@@ -125,9 +146,9 @@ func checkLocalFinal(rec state.Record) localValidity {
 		return invalid(fmt.Sprintf("local final path %s is a directory, not a file", localPath))
 	}
 
-	expected, source, err := expectedLocalSize(rec)
-	if err != nil {
-		return invalid(err.Error())
+	expected, source, contradiction := expectedLocalSize(rec)
+	if contradiction != nil {
+		return settleRecordContradiction(rec, localPath, info.Size(), contradiction)
 	}
 	if source != "" && info.Size() != expected {
 		return invalid(fmt.Sprintf(
@@ -152,6 +173,70 @@ func checkLocalFinal(rec state.Record) localValidity {
 	return localValidity{Verdict: localValid}
 }
 
+// settleRecordContradiction answers a row whose own two independent size
+// records contradict each other, by reading the file instead of condemning
+// it (issue #662, defect 2).
+//
+// # Why this is not a verdict about the artifact
+//
+// "recorded remote size 294 disagrees with recorded transfer size 0" was
+// the sentence a live deployment quarantined an intact 294-byte backup on.
+// Both of its operands are journal fields. A disagreement between two
+// records is a fault in the RECORDS; which of them is wrong is a question
+// only the bytes can answer, and the file has already been stat'ed by the
+// time this runs.
+//
+// # Which record the file is compared against, and why that one
+//
+// The remote identity, captured at discovery from the remote object's own
+// stat. It is the operand that cannot have been produced by the local
+// read-back this fault comes out of: #662's row recorded 0 bytes
+// transferred AND the sha256 of the empty string, one answer from one
+// empty read of one file. The transfer size and the recorded local hash
+// are that same answer twice, so neither can be used to check the other's
+// story, and the discovery-time remote size is the only independent
+// measurement in the row.
+//
+// That is also why the recorded hash is not consulted on the agreeing
+// branch below: half of a self-contradictory record is not evidence. The
+// row is reported as needing repair, with what was measured, rather than
+// being silently believed.
+//
+// A file that matches neither figure IS refused, and the refusal names the
+// digest this function measured. A reason built only out of record fields
+// cannot tell an operator whether the file was inspected or only the
+// bookkeeping was, and in the field it was only the bookkeeping.
+func settleRecordContradiction(rec state.Record, localPath string, onDisk int64, contradiction error) localValidity {
+	if rec.Remote.Size == nil {
+		// Unreachable through expectedLocalSize, which only contradicts
+		// itself when both sizes are recorded. Stated rather than assumed,
+		// because a nil dereference here would be a panic inside a
+		// reconciliation pass.
+		return invalid(contradiction.Error())
+	}
+	remote := *rec.Remote.Size
+
+	if onDisk != remote {
+		sum, err := sha256File(localPath)
+		if err != nil {
+			return invalid(fmt.Sprintf(
+				"this artifact's own records contradict each other (%v) and hashing %s to settle it failed: %v",
+				contradiction, localPath, err))
+		}
+		return invalid(fmt.Sprintf(
+			"local final file %s is %d bytes and hashes to %s, which is not the %d bytes the remote object was recorded as at discovery; "+
+				"this artifact's own records also contradict each other (%v), so the copy was checked against the remote identity, "+
+				"the one figure the local read-back could not have written",
+			localPath, onDisk, sum, remote, contradiction))
+	}
+
+	return localValidity{Verdict: localValid, Reason: fmt.Sprintf(
+		"this artifact's journal row needs repair (%v), and the durable local copy was checked against the remote identity instead: "+
+			"%s is %d bytes, exactly the size the remote object was recorded as at discovery. "+
+			"The recorded local hash was not used, because it was recorded from the same read of the same copy as the contradicted byte count",
+		contradiction, localPath, onDisk)}
+}
+
 // describeMediumPlacements names each medium copy and the verification
 // class it has achieved, for the one reason an operator reads when
 // reconciliation leaves a moved artifact alone. The class is there
@@ -170,14 +255,20 @@ func describeMediumPlacements(ps []state.Placement) string {
 	return strings.Join(parts, ", ")
 }
 
-// expectedLocalSize mirrors internal/lifecycle/remotedelete.go's helper of
-// the same purpose: it picks the size the local final file must have from
+// expectedLocalSize picks the size the local final file must have from
 // whichever of the journal's two independent size records is present, and
-// refuses outright (a non-nil error) if the two disagree with each other,
-// rather than silently preferring one. source is "" only when neither is
-// recorded at all, in which case there is nothing to compare a file size
-// against and checkLocalFinal skips that part of the check; the hash check,
-// when a hash was recorded, still applies regardless.
+// reports the two disagreeing with each other rather than silently
+// preferring one. source is "" only when neither is recorded at all, in
+// which case there is nothing to compare a file size against and
+// checkLocalFinal skips that part of the check; the hash check, when a
+// hash was recorded, still applies regardless.
+//
+// The returned error is a fault in the ROW, not a verdict about the file,
+// and issue #662 is what the difference cost. checkLocalFinal used to turn
+// it straight into invalid(), which quarantines, so an intact 294-byte
+// backup was condemned on two numbers disagreeing with each other while
+// the file itself, already stat'ed, was never asked.
+// settleRecordContradiction is what answers it now.
 func expectedLocalSize(rec state.Record) (size int64, source string, err error) {
 	haveRemote := rec.Remote.Size != nil
 	haveTransfer := rec.Transfer != nil
