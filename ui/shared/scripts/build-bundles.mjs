@@ -134,9 +134,10 @@ if (failed.length > 0) {
 }
 
 console.log(`\nbuild-bundles: wrote ${targets.length} bundle(s) to ${outRoot}`);
-// `rbm-web` rather than `backup-manager-web`, which is what the image's
-// symlink is called since 0.3.3 renamed the CLI (core/cliecho's
-// cliname.WebBinary). The Go package directory is still
+// `rbm-web` is the only name the web host answers to since 0.3.3 renamed
+// the CLI, and it is spelled once, as cliecho.WebBinary in
+// core/cliecho/cliname.go. 0.3.3 is a clean cut, so there is no older
+// spelling still resolving beside it. The Go package directory is still
 // apps/generic/cmd/backup-manager-web and stays that way, because a
 // package path is not something an operator types: a developer building
 // from a checkout gets a binary named after the directory and would run

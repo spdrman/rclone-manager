@@ -79,12 +79,13 @@ commands, and the list below is checked against the dispatch table in
 `core/cmd/backup-manager/main.go` on every run of the gate, so it cannot quietly go stale
 the way its predecessor did.
 
-**The command is called `rbm` as of 0.3.3, and `backup-manager` still works.** That is the
-one thing to know before upgrading, and it is the whole of it: the old name is kept as an
-alias rather than deprecated, so a cron entry, a Compose healthcheck or a provisioning
-script written against `backup-manager` runs unchanged and keeps running. Every example in
-this document uses the new name because that is what a new operator should be typing, and
-nothing below is a second surface: one binary, two names for it.
+**The command is called `rbm` as of 0.3.3, and the old name is gone.** That is the one
+thing to know before upgrading, and it is the whole of it: 0.3.3 is a clean cut. An image
+built from it carries `rbm` and `rbm-web` and nothing beside them, with no alias and no
+symlink bridging the old spelling to the new one. So a cron entry, a Compose healthcheck or
+a provisioning script still calling the old name stops working the moment you pull 0.3.3,
+and moving it onto `rbm` is the upgrade. Every example in this document uses `rbm`, and
+there is no second spelling of it anywhere below.
 
 <!-- BEGIN CLI-COMMANDS -->
 
