@@ -648,6 +648,23 @@ describe("what this browser wrote reaches the global terminal", () => {
     expect(screen.getByText("cycle started")).toBeInTheDocument();
   });
 
+  it("shows it under Commands only, because the command is the whole point of the echo", async () => {
+    const user = (await import("@testing-library/user-event")).default;
+    renderDock(twoSets());
+    await screen.findByText("cycle started");
+    refuseTheRun();
+    await screen.findByText(/This deployment will not start a backup run/);
+
+    // A notice is not an api_action, which is a line the ENGINE emitted
+    // about a request it served. It still carries the command the press
+    // was equivalent to, and while the destructive gate is shut that
+    // command is the only remaining way to start the backup that was just
+    // refused, so it is the last thing this chip should be hiding.
+    await user.click(screen.getByRole("button", { name: "Commands only" }));
+    expect(screen.getByText(/This deployment will not start a backup run/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("cycle started")).not.toBeInTheDocument());
+  });
+
   it("carries it into the export, because send me what the terminal said is half of why the echo exists", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
