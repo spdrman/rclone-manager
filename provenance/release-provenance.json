@@ -36,11 +36,11 @@
     "spdxId": "Apache-2.0",
     "file": {
       "path": "LICENSE",
-      "sha256": "c280b11a4727ba0a4df3946833798978cbd581bb48696e548b6af6bbf4e71b35"
+      "sha256": "cd4073bef12faa71d454d5b38a4df914037af0ee2b48345b7a9250974901583a"
     },
     "notice": {
       "path": "NOTICE",
-      "sha256": "be43848c396b30ebcd2dfd80f6cd77794f506209facb08f32247aef5f9c53813"
+      "sha256": "9d808d274fe1ea3cc0ade3d902c5013564521d02929d664a89c9d70104b2e042"
     },
     "inventory": {
       "path": "provenance/third-party-licenses.json",
@@ -51,12 +51,12 @@
   },
   "sbom": {
     "path": "provenance/sbom.spdx.json",
-    "sha256": "070e67fc24bc17f4b80cd54e13ca90562e96252b9785bd0a49da11c71a8838fb",
+    "sha256": "c5b83e10a257b883c7e109763fd45e2d72a8fc90fc3728a8996d95855273386f",
     "format": "SPDX-2.3"
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "6e317bef2f3d4d3270a16c71d8b450952216cb207b1e2f51ffb869274bc00a56",
+    "sha256": "b47fa4b388ad0029a993de3521f0376789a7ab113c5822bbe946b6928c925e3c",
     "format": "sha256sum"
   },
   "artifacts": [
@@ -163,7 +163,7 @@
     {
       "target": "generic",
       "path": "container/Dockerfile",
-      "sha256": "c8fb00aeb2f542b5050b3e1298f0f87fb2c48fa6ab2a400f4c6b686e15dbef50"
+      "sha256": "05b1202d0079de2dd45ce2b0a6c49a3186955491b7ca4e740715ff8435856e88"
     },
     {
       "target": "generic",

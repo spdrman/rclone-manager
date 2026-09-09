@@ -363,7 +363,7 @@ COPY provenance/third-party-licenses.json /licenses/third-party-licenses.json
 # distribution/packaging/compliance.json under distribution.licenceDelivery
 # and checked against these lines.
 LABEL org.opencontainers.image.licenses="Apache-2.0" \
-      com.iasbuilt.backupmanager.licenses.path="/licenses"
+      com.iasbuilt.rclonemanager.licenses.path="/licenses"
 
 # The per-provider UI bundles (issue #180). Read-only content, served by
 # `serve-ui --ui-root /ui/bundles`, which resolves <root>/<profile>. Each
