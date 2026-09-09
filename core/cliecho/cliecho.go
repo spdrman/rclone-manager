@@ -97,6 +97,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/spdrman/rclone-manager/core/cliname"
 )
 
 // Action is one API action, as the request that performed it.
@@ -200,7 +202,7 @@ func (l Line) Shell() string {
 
 // gapNoEquivalent is the one wording every gap line uses, so an operator
 // and a grep only ever have one string to know.
-const gapNoEquivalent = "no backup-manager equivalent yet"
+const gapNoEquivalent = "no " + cliname.Binary + " equivalent yet"
 
 // Echo names the command for one action, or the gap where there is none.
 //
@@ -405,7 +407,7 @@ type cmd struct {
 }
 
 func newCmd(words ...string) *cmd {
-	return &cmd{argv: append([]string{"backup-manager"}, words...)}
+	return &cmd{argv: append([]string{cliname.Binary}, words...)}
 }
 
 // flag appends --name value.

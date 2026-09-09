@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/apicontract"
+	"github.com/spdrman/rclone-manager/core/cliname"
 	"github.com/spdrman/rclone-manager/core/internal/apiclient"
 	"github.com/spdrman/rclone-manager/core/service"
 )
@@ -151,7 +152,7 @@ func (r *engineRoute) CreateBackupSet(ctx context.Context, req service.CreateBac
 		// The direct route reports that by returning a nil Operation from
 		// a successful create and nothing else, so this says the part the
 		// direct route cannot: which is more than it could, not less.
-		fmt.Fprintf(os.Stderr, "backup-manager: the set was created and the run it asked for did not start: %s\n", resp.RunError)
+		fmt.Fprintf(os.Stderr, cliname.Binary+": the set was created and the run it asked for did not start: %s\n", resp.RunError)
 	}
 	return result, nil
 }

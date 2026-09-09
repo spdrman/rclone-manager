@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/cliname"
 )
 
 // The gate itself: capture every FR-35 surface from this working tree and
@@ -424,7 +426,7 @@ func TestNormalizeEventTimeTakesTheClockAndNothingElse(t *testing.T) {
 	// A timestamp that is not the event line's own field is left alone: a
 	// product that started printing one in a message would be a change
 	// this corpus has to notice.
-	const inProse = `  err| backup-manager: last run at 2026-09-06T19:49:05Z did not finish`
+	const inProse = `  err| ` + cliname.Binary + `: last run at 2026-09-06T19:49:05Z did not finish`
 	if normalizeEventTime(inProse) != inProse {
 		t.Errorf("a timestamp in an ordinary sentence was normalized away:\n%s", normalizeEventTime(inProse))
 	}

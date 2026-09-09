@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/cliname"
 )
 
 // What each command exits with, and what it says on the way out.
@@ -89,8 +91,8 @@ func TestRun_ArtifactsRefusesAnUnconfiguredFilter(t *testing.T) {
 	cfg := writeTestConfig(t)
 
 	const (
-		missingSet    = "backup-manager: app: no configured backup set named production/no-such-set"
-		missingSource = "backup-manager: app: no configured source named no-such-source"
+		missingSet    = cliname.Binary + ": app: no configured backup set named production/no-such-set"
+		missingSource = cliname.Binary + ": app: no configured source named no-such-source"
 	)
 
 	tests := []struct {
@@ -151,7 +153,7 @@ func TestRun_ValidateAcceptsFlagsOnEitherSideOfItsOperand(t *testing.T) {
 		t.Fatalf("run([\"run\", \"--config\", %q]) = %d, want 0 (this test needs one committed artifact)", cfg, got)
 	}
 	const id = "production/postgres-primary/backup.dump"
-	const arity = "backup-manager: validate takes exactly one argument: <source/backup-set/artifact>"
+	const arity = cliname.Binary + ": validate takes exactly one argument: <source/backup-set/artifact>"
 
 	tests := []struct {
 		name       string
@@ -242,7 +244,7 @@ func TestRun_VersionRefusesWhatItDoesNotUnderstand(t *testing.T) {
 			name:       "an operand it documents no use for",
 			args:       []string{"version", "frobnicate"},
 			wantExit:   2,
-			wantStderr: "backup-manager: version takes no arguments",
+			wantStderr: cliname.Binary + ": version takes no arguments",
 		},
 		{
 			name:       "the convention version was missing, shown on another command",
@@ -283,8 +285,8 @@ func TestRun_CatalogAcceptsFlagsOnEitherSideOfItsSubcommand(t *testing.T) {
 	}
 
 	const (
-		missing = `backup-manager: catalog: missing subcommand (expected "rebuild")`
-		unknown = `backup-manager: catalog: unknown subcommand "frobnicate" (expected "rebuild")`
+		missing = cliname.Binary + `: catalog: missing subcommand (expected "rebuild")`
+		unknown = cliname.Binary + `: catalog: unknown subcommand "frobnicate" (expected "rebuild")`
 	)
 
 	tests := []struct {
@@ -342,7 +344,7 @@ func TestRun_CatalogAcceptsFlagsOnEitherSideOfItsSubcommand(t *testing.T) {
 			name:       "a flag written after -- is an operand, not a flag",
 			args:       []string{"catalog", "--config", cfg, "--", "--dry-run"},
 			wantExit:   2,
-			wantStderr: `backup-manager: catalog: unknown subcommand "--dry-run" (expected "rebuild")`,
+			wantStderr: cliname.Binary + `: catalog: unknown subcommand "--dry-run" (expected "rebuild")`,
 		},
 		{
 			name:       "an unknown flag is still an unknown flag",

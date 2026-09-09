@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/cliname"
 )
 
 // Issue #543's acceptance criterion, driven rather than described: "a
@@ -181,7 +183,7 @@ func refuseThroughAnEngine(t *testing.T, in refusingInput) (int, string) {
 // announces its mode on stderr first, and comparing that in would be
 // comparing the two routes' announcements, which are supposed to differ.
 func refusalReason(stderr string) string {
-	const prefix = "backup-manager: "
+	const prefix = cliname.Binary + ": "
 	for _, line := range reverse(strings.Split(strings.TrimRight(stderr, "\n"), "\n")) {
 		if after, ok := strings.CutPrefix(line, prefix); ok {
 			return after

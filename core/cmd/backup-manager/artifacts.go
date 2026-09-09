@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/cliname"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -180,7 +181,7 @@ func cmdArtifacts(args []string) int {
 	fmt.Printf("%d artifact(s)\n", len(records))
 	if len(ungoverned) > 0 && listedAny(records, ungoverned) {
 		fmt.Println("marked rows belong to backup sets whose configuration was removed: nothing retains, reconciles or")
-		fmt.Println("advances them. `backup-manager unconfigured` says what they hold and what can be done about it.")
+		fmt.Println("advances them. `" + cliname.Binary + " unconfigured` says what they hold and what can be done about it.")
 	}
 	return 0
 }

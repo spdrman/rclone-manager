@@ -14,6 +14,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/spdrman/rclone-manager/core/cliname"
 )
 
 // Set at build time with -ldflags (see container/Dockerfile).
@@ -40,7 +42,7 @@ func run(args []string) int {
 	name, rest := args[0], args[1:]
 	cmd, ok := commands[name]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "backup-manager: unknown command %q\n\n", name)
+		fmt.Fprintf(os.Stderr, cliname.Binary+": unknown command %q\n\n", name)
 		usage()
 		return exitUsage
 	}
@@ -109,7 +111,7 @@ var commands = map[string]func([]string) int{
 // a status a wrapper script branches on is a contract, and a contract read
 // off setup.go by whoever thought to look is not one.
 func usage() {
-	fmt.Fprint(os.Stderr, `usage: backup-manager <command> [flags]
+	fmt.Fprint(os.Stderr, `usage: `+cliname.Binary+` <command> [flags]
 
 commands:
   run                                            perform one processing cycle and exit
@@ -422,7 +424,7 @@ to print:
       does not have is only wrong here (#569)
   3   another process is serving this deployment, so nothing was done: a configuration write
       refused because it would never reach that process, or a daemon refused rather than
-      started beside one. backup-manager-web serve answers the same way for the same
+      started beside one. `+cliname.WebBinary+` serve answers the same way for the same
       reason, which matters because that is the binary this deployment's compose file
       runs, so a supervisor reads one code from either (#557). Read the sentence beside
       it before retrying in a loop. A

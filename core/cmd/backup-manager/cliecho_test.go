@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/spdrman/rclone-manager/core/cliecho"
+	"github.com/spdrman/rclone-manager/core/cliname"
 )
 
 // Every command the Web UI's terminal can print, fed through the real
@@ -57,7 +58,7 @@ func unparseableConfig(t *testing.T) string {
 // would say nothing about the command and everything about the fixture.
 func dispatch(t *testing.T, argv []string, configPath string) int {
 	t.Helper()
-	if len(argv) < 2 || argv[0] != "backup-manager" {
+	if len(argv) < 2 || argv[0] != cliname.Binary {
 		t.Fatalf("an echoed command is %v; every one of them starts with the binary's own name and a verb", argv)
 	}
 	args := append([]string(nil), argv[1:]...)
@@ -114,7 +115,7 @@ func TestEveryEchoedCommandParses_CatchesARenamedFlag(t *testing.T) {
 	// A real echoed command with one flag spelled the way a rename would
 	// leave it. This is the failure the test above exists to catch, and
 	// the exit code has to be 2 rather than 1: nothing ran.
-	renamed := []string{"backup-manager", "backup-set", "patch", "api-server/var-backups", "--stale-after-seconds", "172800"}
+	renamed := []string{cliname.Binary, "backup-set", "patch", "api-server/var-backups", "--stale-after-seconds", "172800"}
 	if code := dispatch(t, renamed, configPath); code != exitUsage {
 		t.Fatalf("a command carrying a flag this binary does not declare exited %d, and the test above only ever asserts that a command is NOT refused; if a bad flag is not refused, that test is checking nothing",
 			code)
@@ -123,7 +124,7 @@ func TestEveryEchoedCommandParses_CatchesARenamedFlag(t *testing.T) {
 	// And the same command with the flag as it is actually spelled gets
 	// past the parse, which is what makes the failure above about the
 	// flag rather than about the fixture.
-	correct := []string{"backup-manager", "backup-set", "patch", "api-server/var-backups", "--stale-after", "48h"}
+	correct := []string{cliname.Binary, "backup-set", "patch", "api-server/var-backups", "--stale-after", "48h"}
 	if code := dispatch(t, correct, configPath); code == exitUsage {
 		t.Fatalf("the same command with the real flag name is also refused (exit %d), so the case above proves nothing about the flag", code)
 	}
