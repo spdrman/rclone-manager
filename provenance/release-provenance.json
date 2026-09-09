@@ -18,8 +18,8 @@
   "imageReference": "ghcr.io/spdrman/backup-manager:0.3.3",
   "releaseManifest": {
     "path": "container/release-manifest.json",
-    "sha256": "11e69a106b7076dd92fc9d37fc71409b186bdcc226d60212a41c2412ac8c474a",
-    "commit": "91a7560b705243fc7053129919a030e19e431aee",
+    "sha256": "2baee3a05cf54cf21dfc1fd4fbac6350dd615b5dac1b97a9e48bf1ba6cb5f9d2",
+    "commit": "2a91866eeee4df2a3b071114eaf4855db05755d7",
     "recordedBuildVersion": "0.3.3",
     "architectures": [
       "amd64",
@@ -51,12 +51,12 @@
   },
   "sbom": {
     "path": "provenance/sbom.spdx.json",
-    "sha256": "525963bec8f34ceaaf301c6d7346780af66effea35e5a3cbbcc4ed8ec94a6349",
+    "sha256": "f5850ed751d2dd34824c29429c0d8c0de42cc9ce88c01045e3e60037c3b9ab8b",
     "format": "SPDX-2.3"
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "7b0e7126634f0ad741e6b31e5d9db582c664e890c1edb8cc3003352772a4e9cf",
+    "sha256": "adc94be39632557c512528bd068f691145b25d8ac7207a2e64562e75eae253c2",
     "format": "sha256sum"
   },
   "artifacts": [

@@ -516,7 +516,7 @@
     <p>Each bucket contributes at most one artifact, and what is kept is the <strong>union</strong> of every tier's selections plus the protected last-known-good. <span class="does">Anything the union does not claim is a delete candidate, including artifacts that fell in a gap between two tiers' windows rather than outside all of them.</span> Tier order never changes which artifacts survive, only the order tier names appear in a verdict.</p>
     <div class="note">
       <span class="note-label">Before you change it</span>
-      <p>There is no spelling of &ldquo;keep nothing&rdquo; in the schema. Emptying the tier list does not disable retention, it reinstates the default daily/weekly/monthly policy, which is the fail-safe direction. Retention is turned off by not running a retention pass. And <code>backup-manager retention</code> previews the decisions without acting on them, which is the right way to check a chain edit before it deletes anything.</p>
+      <p>There is no spelling of &ldquo;keep nothing&rdquo; in the schema. Emptying the tier list does not disable retention, it reinstates the default daily/weekly/monthly policy, which is the fail-safe direction. Retention is turned off by not running a retention pass. And <code>rbm retention</code> previews the decisions without acting on them, which is the right way to check a chain edit before it deletes anything.</p>
     </div>
   </section>
 
