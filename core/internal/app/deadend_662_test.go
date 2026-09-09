@@ -68,6 +68,13 @@ type deadEndFixture struct {
 	localDir string
 	final    string
 
+	// tr is the fake remote the fixture's artifact was discovered from.
+	// The cases about the remote-hash comparison need it: that comparison
+	// is the only evidence in the recovery path the local file did not
+	// itself produce, so a test about it has to be able to say what the
+	// remote holds.
+	tr *fakeTransport
+
 	// diskSize and diskHash are what is really on disk, measured. Every
 	// failure message quotes them, because the whole defect is that the
 	// product never does.
@@ -183,7 +190,7 @@ func newDeadEndFixture(t *testing.T, honestRecord bool) deadEndFixture {
 
 	return deadEndFixture{
 		svc: svc, journal: journal, artifact: rec.Artifact,
-		localDir: localDir, final: final, diskSize: diskSize, diskHash: diskHash,
+		localDir: localDir, final: final, tr: tr, diskSize: diskSize, diskHash: diskHash,
 	}
 }
 
@@ -495,4 +502,142 @@ func failureReason662(t *testing.T, svc *Service, artifact model.ArtifactID) str
 		return "(none recorded)"
 	}
 	return detail.FailureReason
+}
+
+// walkToFailed662 puts the fixture's artifact exactly where issue #662's
+// operator found it: FAILED, because `retry` sent the row back to
+// DISCOVERED and the next cycle met FR-12's collision guard on the
+// artifact's own durable copy.
+//
+// Every step is a verb or a cycle, never a hand-written journal row, so
+// what the cases below argue about is a state the product really reaches.
+func walkToFailed662(t *testing.T, fx deadEndFixture) {
+	t.Helper()
+	ctx := context.Background()
+	if err := fx.svc.RetryQuarantinedIngestion(ctx, fx.artifact); err != nil {
+		t.Fatalf("quarantine retry: %v", err)
+	}
+	fx.svc.RunCycle(ctx)
+	if got := stateOf662(t, fx.journal, fx.artifact); got != string(lifecycle.Failed) {
+		t.Fatalf("precondition: the artifact is %s after the collision cycle, want FAILED", got)
+	}
+	if rec := mustRecord662(t, fx); rec.LocalPath != fx.final {
+		t.Fatalf("precondition: the row's local path is %q, want the occupied final name %q", rec.LocalPath, fx.final)
+	}
+}
+
+func mustRecord662(t *testing.T, fx deadEndFixture) state.Record {
+	t.Helper()
+	rec, err := fx.journal.Get(context.Background(), fx.artifact)
+	if err != nil {
+		t.Fatalf("Journal.Get(%s): %v", fx.artifact, err)
+	}
+	return rec
+}
+
+// recordedBytes662 is what the journal row says was transferred, which is
+// the number reconciliation compares the file against and the number #662
+// is about.
+func recordedBytes662(rec state.Record) int64 {
+	if rec.Transfer == nil {
+		return -1
+	}
+	return rec.Transfer.BytesTransferred
+}
+
+// TestIssue662_RetryRefusesToRecordAByteCountItCouldNotMeasure is review
+// finding A against #662's own remedy.
+//
+// completeIngestionInPlace reads the whole file to hash it and then
+// measures that same file, and the measurement is what replaces the empty
+// read-back's zero in the journal. The two observations are separated by
+// one remote round trip, so a transient local fault can land between them.
+// When it did, the repair fell back to a zero byte count and wrote it
+// beside the correct content sha256 with Checksummed: true -- which is
+// bit for bit the row shape #662 was filed about, over a file the same
+// call had just read end to end, produced by the code that exists to
+// repair it. The next reconciliation pass then condemns the file on it.
+//
+// The declines above this point in the function return an empty state
+// having written nothing, and they mean "this is not the in-place case".
+// This is not one of those: the file was hashed a moment ago, so the case
+// is established and the measurement broke. That has to surface as a
+// failure rather than be papered over with a zero, because the operator
+// can retry a refusal and cannot un-write a journal row.
+func TestIssue662_RetryRefusesToRecordAByteCountItCouldNotMeasure(t *testing.T) {
+	fx := newDeadEndFixture(t, false)
+	ctx := context.Background()
+	walkToFailed662(t, fx)
+
+	rowsBefore := transitionRows(t, fx.journal)
+	before := mustRecord662(t, fx)
+
+	// The fault, injected in the one window that matters: the file stays
+	// present and byte-identical, and only the path to it stops being
+	// traversable, so the local stat fails for a reason a NAS produces
+	// (a permission flap, an unmount, an SMB reconnect) rather than
+	// because the backup is gone.
+	restore := func() { _ = os.Chmod(fx.localDir, 0o755) }
+	t.Cleanup(restore)
+	fx.tr.afterRemoteHash = func() {
+		if err := os.Chmod(fx.localDir, 0o000); err != nil {
+			t.Fatalf("arming the stat failure: %v", err)
+		}
+		if _, err := os.Stat(fx.final); err == nil {
+			t.Fatal("os.Stat still succeeds through a 0000 directory here, so this case is not reproducing a stat failure and would pass for the wrong reason")
+		}
+	}
+
+	retryErr := fx.svc.RetryFailedIngestion(ctx, fx.artifact, "issue #662")
+	restore()
+	fx.tr.afterRemoteHash = nil
+
+	// Without this the whole case is about something else. The premise is
+	// a good file that was never in doubt.
+	onDisk, statErr := os.Stat(fx.final)
+	if statErr != nil {
+		t.Fatalf("the good file is gone after the retry (%v); this case can no longer say anything about a measurement that failed over a file that was there", statErr)
+	}
+	if onDisk.Size() != fx.diskSize {
+		t.Fatalf("the file at %s changed size during the retry: %d -> %d", fx.final, fx.diskSize, onDisk.Size())
+	}
+
+	after := mustRecord662(t, fx)
+
+	// The row, not the return value. Both the fixed and the unfixed code
+	// hand back an error here -- the unfixed one only after it has
+	// already written the row -- so what the operator is left with is the
+	// only thing that discriminates.
+	if recordedBytes662(after) == 0 && strings.EqualFold(after.LocalHash, fx.diskHash) {
+		t.Errorf(
+			"#662 review finding A: the recovery verb wrote #662's own row shape.\n"+
+				"  artifact: %s, now %s\n"+
+				"  recorded: %d bytes, sha256 %s, checksummed=%v\n"+
+				"  on disk:  %s is %d bytes, sha256 %s, present and unchanged throughout\n"+
+				"  retry returned: %v\n"+
+				"A zero byte count beside a content hash of 294 real bytes, with the checksummed flag set, is "+
+				"exactly the record issue #662 was filed about, and reconciliation condemns the file on it. The "+
+				"measurement failed; the repair must say so, not substitute a zero it did not measure.",
+			fx.artifact, after.State,
+			recordedBytes662(after), after.LocalHash, after.Transfer != nil && after.Transfer.Checksummed,
+			fx.final, onDisk.Size(), fx.diskHash,
+			retryErr)
+	}
+	if rows := transitionRows(t, fx.journal); rows != rowsBefore {
+		t.Errorf("state_transitions grew from %d to %d rows on a retry whose own measurement of the file failed; "+
+			"a repair that could not measure what it was repairing must write nothing (#662 finding A)", rowsBefore, rows)
+	}
+	if recordedBytes662(after) != recordedBytes662(before) || after.LocalHash != before.LocalHash {
+		t.Errorf("the row changed from %d bytes/%s to %d bytes/%s although the measurement behind the change failed (#662 finding A)",
+			recordedBytes662(before), before.LocalHash, recordedBytes662(after), after.LocalHash)
+	}
+
+	// And it has to be reported, because an operator who is told nothing
+	// retries into the same window forever.
+	if retryErr == nil {
+		t.Fatal("retry reported success although it could not measure the file it was repairing (#662 finding A)")
+	}
+	if !strings.Contains(retryErr.Error(), fx.final) {
+		t.Errorf("retry error = %q, want it to name the file it could not measure (%s)", retryErr, fx.final)
+	}
 }
