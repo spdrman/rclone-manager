@@ -1,0 +1,144 @@
+Three machines on private networks, a real deployment, and a browser that
+has to talk to it over the wire.
+
+# The blind spot this closes
+
+suites/web-ui over in spdrman/rclone-manager-tests starts `npm run dev`
+and the app it drives resolves createMockApi out of
+ui/shared/src/api/mock.ts. So every case in that suite is a claim about a
+component rendering correctly GIVEN a fixture, and not one of them can go
+red on anything in the path a user actually meets:
+
+    browser -> serve-ui -> reverse proxy -> serve -> SQLite
+
+That is not a theoretical gap. The Activity page errored in the browser on
+a real NAS while the server answered HTTP 200 with valid JSON in twenty
+milliseconds, and it went unnoticed, because nothing that watches the
+server can see it and nothing that mocks the client can either: a mock
+answers with the shape the client already expects. This script stands up
+the whole path so a browser can fail on it.
+
+# The three machines
+
+  CLIENT    the browser and the Playwright runner, both inside the
+            container (scripts/e2e/client-machine.Dockerfile). It is on
+            the edge network and nothing else, so the only thing it can
+            reach is the product's front door.
+
+  RCLONE-MANAGER  the real product image, built from THIS working tree,
+            running the deployment container/compose.yaml describes.
+
+  VPS       a real sshd holding real files (atmoz/sftp, through
+            scripts/e2e/source-machine.Dockerfile, the same definition
+            two-machine-backup.sh and core/tests/machines use), playing
+            the machine being backed up.
+
+Three machines, four containers, and the difference is worth being plain
+about. The product IS two containers: `/rbm-web serve` (the engine: local
+authentication, /api/v1, the scheduler, SQLite) and `/rbm-web serve-ui`
+(the static bundle plus a reverse proxy to the engine). Collapsing them
+into one would delete the reverse-proxy hop, and that hop is half of what
+this suite exists to cover. So "the rclone-manager machine" here is the
+product's own split, unchanged.
+
+# Why this drops docker-in-docker, and what that gives up
+
+scripts/e2e/two-machine-backup.sh runs its manager machine as
+docker-in-docker and installs onto it with the real installer. That is
+the right shape for what it proves, and its own comment says why this one
+cannot borrow it: the dind daemon is a network namespace of its own, so
+8080 in there is not 8080 out here, and a sibling client container has no
+route to it at all. The two ways out were to publish the inner port back
+out of the dind container onto the shared network, or to drop dind and
+run the product image directly on the network. This takes the second.
+
+Publishing back out would work, and what it would produce is a browser
+talking to a port forwarded by a daemon running inside a daemon, which is
+a hop that exists nowhere in production. Every timeout and every reset on
+it would be a question about the test rig. The thing under test here is
+an HTTP path, so the fewer inventions between the browser and the server
+the better.
+
+What that gives up is stated rather than quietly dropped: THIS SCRIPT
+DOES NOT TEST THE INSTALLER. It tests the running product.
+two-machine-backup.sh remains the test that scripts/install/
+install_docker_host.py takes a bare machine to a working deployment, and
+it must stay that way. A green run here says nothing about whether an
+operator can install this.
+
+# Three networks, not one
+
+    client ──edge── web-ui ──internal── engine ──backhaul── vps
+
+One flat network would have been fewer lines. It would also let a spec
+reach the engine directly and pass while proving nothing about the proxy,
+and it would put the client on the same wire as an engine that runs with
+TRUST_FORWARDED_HEADERS=true, which container/compose.yaml goes to some
+length to explain is only safe because serve-ui is its sole possible
+peer. Both of those are the topology doing work, so the topology is the
+real one. Nothing is published to the host on any of them.
+
+The name `rclone-manager` lives on the edge network only, and it resolves
+to the UI container: from outside the deployment that IS rclone-manager,
+and it is the address the browser is given. Inside the deployment the
+containers keep compose's own names. One name per network, so nothing
+ever resolves to two things.
+
+# Seeded state, generated per run, committed never
+
+The VPS holds three files of known content. The deployment is configured
+with a backup set pointing at it over SSH, a cycle is run so the journal
+and the catalogue have real rows in them, and an administrator is
+enrolled. The SSH keypair is generated INSIDE a container and lives in a
+Docker volume that is destroyed at teardown, so the private half never
+touches this host's filesystem. The administrator's password is generated
+per run, reaches the product down a pipe into stdin, and is printed here
+because a suite that has to sign in needs it. Both are dead the moment
+this script returns.
+
+# Handing it to a suite
+
+The client container gets these, and they are the whole contract:
+
+  RM_BASE_URL          http://rclone-manager:8080
+  RM_ADMIN_USERNAME    the enrolled administrator
+  RM_ADMIN_PASSWORD    its password, generated this run
+  RM_BACKUP_SET        the seeded set's name
+  RM_ARTIFACTS_DIR     /artifacts, mounted out to the host
+
+A Playwright config that sees RM_BASE_URL must use it as `baseURL` and
+must NOT start a web server: there is one, it is another container, and
+`npm run dev` in here would serve the mock this whole script exists to
+get away from.
+
+# Running it
+
+  scripts/e2e/three-machine-web-ui.sh
+      stand the stack up and run the built-in browser check.
+
+  scripts/e2e/three-machine-web-ui.sh --suite ../rclone-manager-tests/suites/web-ui
+      stand it up and run that directory's Playwright suite inside the
+      client container. The suite's own node_modules is not used: the
+      image's is, because the checkout's was built for this host.
+
+  scripts/e2e/three-machine-web-ui.sh --keep-up
+      stand it up, print how to drive it, and leave it running. For
+      working on the suite without paying the setup cost per attempt.
+      Tear it down afterwards with the line it prints.
+
+  --artifacts DIR   where traces, screenshots and reports land. Outside
+                    this repository by default, and never removed by the
+                    teardown, because a failing run whose evidence was
+                    deleted with the stack is worse than no evidence.
+  --image REF       skip the build and use an already-built product image.
+  --keep-on-failure leave a failed stack up for reading.
+
+The exit status is the client container's, not the teardown's. A run that
+tore down cleanly after a red suite is a red run.
+
+# Cost
+
+About forty seconds of setup on the machine this was written on once the
+product image is built, and the product image build is minutes on a cold
+cache because it compiles the Go binaries and the UI bundle. --image and
+--keep-up both exist to stop paying that per attempt.

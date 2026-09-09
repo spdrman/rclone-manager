@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# The two end-to-end drivers' --help is operator-visible text, and this pins
-# it (issue #514).
+# The end-to-end drivers' --help is operator-visible text, and this pins it
+# (issue #514).
 #
-# What it is guarding against. Both scripts used to render their help by
-# reading their own header BY LINE NUMBER:
+# What it is guarding against. The two that existed when #514 was written
+# used to render their help by reading their own header BY LINE NUMBER:
 #
 #   sed -n '2,110p' "$0"     two-machine-backup.sh
 #   sed -n '2,84p'  "$0"     run-machine-tier.sh
@@ -47,8 +47,11 @@ SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
 GOLDEN_DIR="$SCRIPTS_DIR/testdata"
 
-# The two drivers, and the golden each one's help is pinned against.
-SUBJECTS="two-machine-backup run-machine-tier"
+# The drivers, and the golden each one's help is pinned against. A new
+# driver belongs on this line the day it lands: the marker mechanism is what
+# every one of them renders through, and a header nothing renders is a
+# header that drifts (which is the whole of #514).
+SUBJECTS="two-machine-backup run-machine-tier three-machine-web-ui"
 
 checks=0
 failures=0
