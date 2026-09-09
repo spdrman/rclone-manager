@@ -299,6 +299,46 @@ figcaption {
   line-height: 1.5;
 }
 
+/* A figure allowed out of the text column. The moving pictures are
+   1100px wide because that is the width at which 13px application text
+   downsamples into something a reader can still read; squeezing one into
+   a 900px measure throws that away for nothing. Clamped to the viewport
+   so it never puts a horizontal scrollbar on the page. */
+figure.wide {
+  width: min(1100px, calc(100vw - 2.5rem));
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+
+/* A clip is a picture that moves, and a reader deserves to be told which
+   ones do before they scroll past a still frame waiting for something to
+   happen. */
+.clip-tag {
+  display: inline-block;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 0.05rem 0.4rem;
+  margin-right: 0.45rem;
+  vertical-align: 0.05em;
+}
+
+/* Two or three short cards side by side, for a page that opens with a
+   list of what is on it. Collapses to one column on a phone. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0 1.75rem;
+}
+
+.cards .clipping { margin: 0; }
+
 /* ---------------------------------------------------------------
    The per-field tables that carry most of the tutorial. "What it
    does" is the column that matters, so it gets the room.

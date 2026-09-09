@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSH keys and proving a source: rclone-manager</title>
+  <meta name="description" content="The rclone-manager SSH authentication wizard, host key comparison, and the six-step connection check a backup set has to pass before it can be saved.">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="topbar.css">
+  <script src="topbar.js" defer></script>
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <div class="topbar-content">
+    <a class="topbar-brand" href="index.html">
+      <img src="assets/logo-mark-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress">
+      <h1 class="brand-name">rclone<span class="brand-dash">-</span>manager</h1>
+    </a>
+  </div>
+
+  <button class="topbar-burger" id="topbarBurger" type="button"
+          aria-label="Toggle menu" aria-expanded="false" aria-controls="topbar-menu">
+    <span class="burger-icon" aria-hidden="true"></span>
+  </button>
+
+  <nav class="topbar-menu" id="topbar-menu" aria-hidden="true">
+    <div class="topbar-menu-inner">
+      <a href="index.html" class="nav-item nav-item-home">
+        <svg class="nav-icon nav-icon-home" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 3 2 12h3v8h5v-5h4v5h5v-8h3L12 3z"/>
+        </svg>
+        <span class="nav-label nav-label-full">Home</span>
+      </a>
+
+      <a href="first-run.html" class="nav-item">
+        <span class="nav-label nav-label-full">First-run tutorial</span>
+        <span class="nav-label nav-label-short">First run</span>
+      </a>
+      <a href="web-ui.html" class="nav-item">
+        <span class="nav-label nav-label-full">The web interface</span>
+        <span class="nav-label nav-label-short">Web UI</span>
+      </a>
+      <a href="storage.html" class="nav-item">
+        <span class="nav-label nav-label-full">Storage &amp; retention</span>
+        <span class="nav-label nav-label-short">Storage</span>
+      </a>
+      <a href="ssh.html" class="nav-item is-current">
+        <span class="nav-label nav-label-full">SSH &amp; connections</span>
+        <span class="nav-label nav-label-short">SSH</span>
+      </a>
+      <a href="cli.html" class="nav-item">
+        <span class="nav-label nav-label-full">Commands</span>
+        <span class="nav-label nav-label-short">Commands</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+        <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        <span class="nav-label nav-label-full">GitHub</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">README</span>
+      </a>
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Deployment</span>
+        <span class="nav-label nav-label-short">Deploy</span>
+      </a>
+      <a href="https://github.com/spdrman/rclone-manager/issues" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Issues</span>
+      </a>
+
+      <hr class="menu-divider">
+
+      <button type="button" class="topbar-theme-toggle" id="themeToggle" role="switch" aria-checked="false" aria-label="Toggle theme">
+        <span class="theme-glyph" aria-hidden="true">&#9790;</span>
+        <span class="theme-label">Dark mode</span>
+        <span class="theme-slider" aria-hidden="true">
+          <span class="theme-slider-track">
+            <span class="theme-slider-sun">&#9728;</span>
+            <span class="theme-slider-moon">&#9790;</span>
+            <span class="theme-slider-knob"></span>
+          </span>
+        </span>
+      </button>
+    </div>
+  </nav>
+</header>
+
+<main>
+
+  <section>
+    <span class="step-eyebrow">Guide</span>
+    <h2 id="top" style="font-size:1.75rem;border:none;padding-bottom:0;margin-bottom:0.5rem;">SSH keys, and proving a source</h2>
+    <p>There are two different questions hiding inside "is this connection set up", and until 0.3.3 the interface only ever asked the first one. <em>Which machine answered</em> is settled by a host key. <em>Whether this account can actually pull backups out of that folder</em> is settled by connecting with the key, authenticating, and listing the folder. A set could be saved with the first one green and the second one never asked.</p>
+
+    <div class="cards">
+      <a href="#wizard" class="clipping">
+        <span class="clipping-tag">Clip</span>
+        <p>The wizard that offers the keys this deployment already holds and the ones sitting on the machine.</p>
+        <span class="clipping-read">Watch it &rarr;</span>
+      </a>
+      <a href="#proof" class="clipping">
+        <span class="clipping-tag">Clip</span>
+        <p>The six-step check that has to pass before a backup set can be saved.</p>
+        <span class="clipping-read">Watch it &rarr;</span>
+      </a>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="wizard">The key wizard</h2>
+    <p>What <a href="https://github.com/spdrman/rclone-manager/issues/592">#592</a> replaced was two text boxes, both write-only. One asked an operator to paste "the id of an imported key", and a key id is a uuid the product showed exactly once, in the response to the import that created it, so the box was a blank you filled in with something you would have had to write down months ago. The other asked for a <code>known_hosts</code> line, which is the same problem one layer down.</p>
+    <p>The wizard's first step is the answer to both. It lists the keys this deployment holds, each with its fingerprint, when it was imported and which backup sets are using it. Under that it lists the keys it can find on the machine, with the locations it searched named and the ones that are not present said out loud rather than silently skipped. On a default install the installer generated <code>&lt;prefix&gt;/secrets/id_ed25519</code> and Compose mounted it read-only, so there is exactly one key sitting there and this is the surface that finally offers it. Pasting a key is still available and it is the last option rather than the only one.</p>
+  <figure class="wide">
+    <img src="screens/ssh-key-wizard.gif" alt="The SSH authentication wizard: the keys held, the keys found on the machine, picking one, probing the server identity, then a six-step verification" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>All four steps. Picking a candidate imports it on the server, so key material never crosses the network; the paste box is in shot and empty throughout.</figcaption>
+  </figure>
+
+    <h3 id="hostkey">Why step two goes through the refusal rather than around it</h3>
+    <p>A wizard is exactly the kind of thing that quietly acquires a trust-on-first-use default in the name of being friendly. This one does not. It probes, it shows the comparison against what this backup set's own <code>known_hosts</code> already pins, and the only way past a mismatch is ticking an acknowledgement. The acknowledgement is scoped to the fingerprint that was shown: a later probe that returns something else clears it, so ticking never grants "trust whatever answers next".</p>
+    <p>A wizard that trusted whatever answered would not be easier to use. It would be a wizard that cannot tell your rebuilt VPS from somebody else's server.</p>
+
+    <h3 id="four">Why the check has four results and not one</h3>
+    <p>"It connected" is the answer that hides the three failures an operator actually hits. Failing to authenticate <em>with the host key green</em> means the public half is not in the remote <code>authorized_keys</code>, and the fix is one line to paste. Failing to <em>list</em> with authentication green means the account works and cannot read the folder, which is a permissions problem on the source and has nothing to do with keys. One red sentence makes those indistinguishable, and that is how somebody ends up regenerating a keypair to fix a <code>chmod</code>.</p>
+    <p>Apply stays unavailable until the run comes back clean, and it is disarmed by any change to what was verified: the wizard records the exact key and host line the greens were about, so editing either after a pass turns Apply off rather than letting a green stand for values nobody checked. Clean is the engine's own verdict and never a count of green rows, because a step is allowed to be <em>skipped</em> and a wizard that counted rows would have called a set with no key at all a pass.</p>
+  </section>
+
+  <section>
+    <h2 id="proof">Proving a source before anything relies on it</h2>
+    <p><a href="https://github.com/spdrman/rclone-manager/issues/624">#624</a> is the gap on the other side. The add-backup-set wizard gated its save on a pinned <code>known_hosts</code> line and an imported key, and both of those are host <em>identity</em>. Neither says whether the key authenticates or whether the account can read the folder, so a set could be created, enabled and scheduled on a connection nobody had ever made.</p>
+    <p>The review step now says so in as many words before the check runs, and none of the three save buttons is available. After it comes back clean the same panel says the source has been proven and saving is enabled.</p>
+  <figure class="wide">
+    <img src="screens/ssh-source-proof.gif" alt="The add-backup-set review step: nothing proven and saving disabled, then a six-step connection report and saving enabled" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>Six named steps: the key resolves and its permissions are unchanged, the hostname resolves, the socket opens, the host key matches what this set trusts, the server accepts the key, and the folder lists with a count of what is in it.</figcaption>
+  </figure>
+
+    <p>The destination side has worked this way for a while and the source side is copying its shape rather than inventing a second one. <code>rbm medium add</code> verifies by default and <code>--no-verify</code> is an explicit opt-out that says nothing was proven. <code>rbm backup-set create</code> and <code>rbm backup-set patch</code> now do the same, and a set written with <code>--no-verify</code> stays marked unverified until a connection test passes.</p>
+
+    <div class="note">
+      <span class="note-label">From a terminal</span>
+      <pre style="margin-bottom:0"><code>rbm backup-set test-connection production/postgres-primary</code></pre>
+      <p style="margin-top:0.6rem">Six named outcomes and a non-zero exit when any of them fails. Beside a serving engine the check is made <em>by</em> that engine, so its steps reach the live feed rather than only your terminal; with nothing serving, it is made where you typed it.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="never">What never appears, in either direction</h2>
+    <p>A private key. The key store listing carries ids, fingerprints and public halves and no paths. The candidate scan carries paths, because a candidate's path is its identity to an operator, and the handle it hands back is opaque. Selecting a candidate imports it server-side, which means key material never crosses the network at all, and the original file on the machine is left alone.</p>
+    <p>There is no password option and no ssh-agent option, and that is a property of the transport rather than an omission: it never sets <code>pass</code>, <code>ask_password</code> or <code>key_use_agent</code>. A key resolved by a command or an environment variable, which is how a secrets manager fits in, is configured in <code>config.yaml</code> under <code>key.command</code> or <code>key.env</code> and is not something this wizard writes.</p>
+    <p>The pictures on this page hold no key material either. The paste box is photographed empty and the fingerprints are fixtures.</p>
+  </section>
+
+</main>
+
+<footer>
+  <p>rclone-manager is Apache-2.0 licensed. <a href="https://github.com/spdrman/rclone-manager">View on GitHub</a></p>
+  <p>Not affiliated with the rclone project. rclone is embedded as a pinned Go library under its own licence.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Where backups go: rclone-manager</title>
+  <meta name="description" content="Storage destinations in rclone-manager: the local drive, declaring an S3 destination and proving it, and binding a retention tier to one.">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="topbar.css">
+  <script src="topbar.js" defer></script>
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <div class="topbar-content">
+    <a class="topbar-brand" href="index.html">
+      <img src="assets/logo-mark-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress">
+      <h1 class="brand-name">rclone<span class="brand-dash">-</span>manager</h1>
+    </a>
+  </div>
+
+  <button class="topbar-burger" id="topbarBurger" type="button"
+          aria-label="Toggle menu" aria-expanded="false" aria-controls="topbar-menu">
+    <span class="burger-icon" aria-hidden="true"></span>
+  </button>
+
+  <nav class="topbar-menu" id="topbar-menu" aria-hidden="true">
+    <div class="topbar-menu-inner">
+      <a href="index.html" class="nav-item nav-item-home">
+        <svg class="nav-icon nav-icon-home" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 3 2 12h3v8h5v-5h4v5h5v-8h3L12 3z"/>
+        </svg>
+        <span class="nav-label nav-label-full">Home</span>
+      </a>
+
+      <a href="first-run.html" class="nav-item">
+        <span class="nav-label nav-label-full">First-run tutorial</span>
+        <span class="nav-label nav-label-short">First run</span>
+      </a>
+      <a href="web-ui.html" class="nav-item">
+        <span class="nav-label nav-label-full">The web interface</span>
+        <span class="nav-label nav-label-short">Web UI</span>
+      </a>
+      <a href="storage.html" class="nav-item is-current">
+        <span class="nav-label nav-label-full">Storage &amp; retention</span>
+        <span class="nav-label nav-label-short">Storage</span>
+      </a>
+      <a href="ssh.html" class="nav-item">
+        <span class="nav-label nav-label-full">SSH &amp; connections</span>
+        <span class="nav-label nav-label-short">SSH</span>
+      </a>
+      <a href="cli.html" class="nav-item">
+        <span class="nav-label nav-label-full">Commands</span>
+        <span class="nav-label nav-label-short">Commands</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+        <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        <span class="nav-label nav-label-full">GitHub</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">README</span>
+      </a>
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Deployment</span>
+        <span class="nav-label nav-label-short">Deploy</span>
+      </a>
+      <a href="https://github.com/spdrman/rclone-manager/issues" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Issues</span>
+      </a>
+
+      <hr class="menu-divider">
+
+      <button type="button" class="topbar-theme-toggle" id="themeToggle" role="switch" aria-checked="false" aria-label="Toggle theme">
+        <span class="theme-glyph" aria-hidden="true">&#9790;</span>
+        <span class="theme-label">Dark mode</span>
+        <span class="theme-slider" aria-hidden="true">
+          <span class="theme-slider-track">
+            <span class="theme-slider-sun">&#9728;</span>
+            <span class="theme-slider-moon">&#9790;</span>
+            <span class="theme-slider-knob"></span>
+          </span>
+        </span>
+      </button>
+    </div>
+  </nav>
+</header>
+
+<main>
+
+  <section>
+    <span class="step-eyebrow">Guide</span>
+    <h2 id="top" style="font-size:1.75rem;border:none;padding-bottom:0;margin-bottom:0.5rem;">Where backups go</h2>
+    <p>A backup lands on the hard drive of the machine running this, unless a retention tier says otherwise. That sentence was true before 0.3.3 and there was nowhere in the interface it was written down: the settings page listed the destinations the configuration declared, which meant the one place every backup actually goes was the one place never named. An operator reading that list could reasonably conclude their backups were going nowhere.</p>
+    <p><a href="https://github.com/spdrman/rclone-manager/issues/622">#622</a> put the drive in the list and gave every retention tier a picker. <a href="https://github.com/spdrman/rclone-manager/issues/636">#636</a> closed the other half: a destination cannot be written into the configuration until something has proven it answers.</p>
+
+    <div class="note">
+      <span class="note-label">Two decisions, deliberately not one</span>
+      <p>Declaring a destination moves nothing. Backups arrive on it only once a retention tier names it, and naming it is a separate act with a disclosure of its own. That separation is the point: declaring a bucket is cheap and reversible, and sending copies of your backups to a third party is neither.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="local">The drive on this machine</h2>
+    <p>It is first in the list, it carries the default mark, and the card says what that mark does and does not mean. Moving it moves no backup and rewrites no tier: it decides where the <em>next</em> tier created from here starts. It cannot be removed while it holds the mark, and it has nothing to edit, because it is not something the configuration declares. It answers a test connection like any other destination.</p>
+  <figure class="wide">
+    <img src="screens/storage-local-drive.gif" alt="The storage destinations card, with the local drive first, then its test connection reporting eight named steps" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>The local drive, the default mark and what it means, and a connection test that reports a fixed order of named steps rather than one verdict. Under every control is the command it is equivalent to.</figcaption>
+  </figure>
+
+    <div class="note warn">
+      <span class="note-label">One thing in that clip is the fixture</span>
+      <p>The development fixture answers the local drive's connection test with the bucket-shaped report it gives an S3 destination, so the detail column says the endpoint "holds bucket" and then names an empty one, and the storage class comes out blank. The engine's own local report is a different set of steps. Nothing on this page is claiming otherwise and I have reported it.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="declare">Declaring another one</h2>
+    <p>Four steps, and the fourth is the one that matters. The wizard writes nothing into the configuration until the check in step three comes back clean, which is <a href="https://github.com/spdrman/rclone-manager/issues/636">#636</a>. The check is not a ping: it obtains the credential, reaches the endpoint, decides whether the storage class can be read on demand, writes a real object, reads it back byte for byte, confirms the class it was stored as, verifies the content, and deletes the probe. Eight named steps in a fixed order, and every one of them is drawn, including the ones that were skipped.</p>
+    <p>Skipped is drawn as skipped and never as a quiet pass, and that rule has an argument behind it worth repeating: a surface that renders a skipped write as anything but "this was never tried" has told an operator their bucket is writable on the strength of a credential that was never obtained.</p>
+  <figure class="wide">
+    <img src="screens/storage-add-destination.gif" alt="The add-a-destination wizard: picking a provider, filling in the bucket, giving it a credential, then the eight-step connection report" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>Provider, description, credential, proof. The command under each step is the same string the terminal prints, from the same function, so the two cannot disagree about what the equivalent command is.</figcaption>
+  </figure>
+
+    <h3 id="credentials">What reaches the configuration file</h3>
+    <p>A reference, in all four cases. There is no field in <code>config.yaml</code> a secret fits in and there never will be. Pasting a key writes it to a 0600 file beside the configuration and keeps only the id, which is exactly what importing an SSH private key already did. The other three name something that already exists: a credentials file rclone opens itself, so the secret never enters this process at all; an environment variable read at connection time; or an argv array run directly and never through a shell, which is how a secrets manager gets adopted without this product taking a dependency on one.</p>
+    <p>That is also why every command line printed under these controls is copy-pasteable exactly as shown with nothing starred out. There is no flag on this surface that takes a secret, so there is nothing to redact.</p>
+  </section>
+
+  <section>
+    <h2 id="tiers">A retention tier picks where its copies go</h2>
+    <p>Every tier in the chain has a destination picker, in both places a chain is edited: the deployment's own policy on the settings page, and one backup set's override on its detail page. They are the same editor, because a second tier editor is a second set of rules about what a tier may be and those two would drift.</p>
+    <p>The command under the picker is recomputed as the value changes. That is the parity rule working live rather than as a caption: what is printed is what the form would send, built by the same function whichever surface asks for it.</p>
+  <figure class="wide">
+    <img src="screens/storage-tier-destination.gif" alt="Changing tier one's Stored on picker from the local drive to an S3 destination and back, with the equivalent command updating underneath" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>The picker, and the command line moving with it. A tier bound to an archive storage class that needs a restore before it can be read is refused at load rather than accepted and discovered later.</figcaption>
+  </figure>
+
+    <div class="note danger">
+      <span class="note-label">Invariant</span>
+      <p>A remote backup artifact is not deleted until a verified and durably committed NAS copy exists. Sending a tier's copies somewhere else does not weaken that: a placement that could not be confirmed is reported as unreachable, which means "this deployment cannot confirm or deny the copy", and emphatically not "the copy is gone". Nothing is pruned on the strength of it and no source copy is reclaimed because of it.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="commands">The same things from a terminal</h2>
+    <p>Every control above prints its own equivalent, so this table is a summary rather than the source of truth. The CLI is <code>rbm</code> as of 0.3.3, and <code>backup-manager</code> still works as an alias.</p>
+    <div class="scroll-x">
+      <table>
+        <thead>
+          <tr><th>Command</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>rbm medium list</code></td><td>every storage destination this deployment declares, the drive on this machine included, with the default marked</td></tr>
+          <tr><td><code>rbm medium show &lt;id&gt;</code></td><td>one destination, plus what the journal says is currently on it</td></tr>
+          <tr><td><code>rbm medium add &lt;id&gt; --bucket B</code></td><td>declare one. Verified before it is written, and refused when it cannot be</td></tr>
+          <tr><td><code>rbm medium add &lt;id&gt; ... --no-verify</code></td><td>write it anyway, saying in so many words that nothing was proven</td></tr>
+          <tr><td><code>rbm medium edit &lt;id&gt;</code></td><td>replace a destination's description; a flag left off keeps what is there</td></tr>
+          <tr><td><code>rbm medium remove &lt;id&gt;</code></td><td>un-declare it. Refused while any copy names it, and the refusal says how many</td></tr>
+          <tr><td><code>rbm medium test-connection &lt;id&gt;</code></td><td>the eight-step check, against a declared destination. <code>medium preflight</code> is the same verb under the name the engine spells it</td></tr>
+          <tr><td><code>rbm medium test-connection --candidate &lt;id&gt; ...</code></td><td>the same check against a destination that does not exist yet, which is what the wizard's step three calls</td></tr>
+          <tr><td><code>rbm medium import-credentials --stdin</code></td><td>read AWS shared-credentials text from standard input and store it, printing back only the id</td></tr>
+          <tr><td><code>rbm medium default &lt;id&gt;</code></td><td>move the mark that decides where a newly created tier starts</td></tr>
+          <tr><td><code>rbm settings patch --tier-medium NAME=ID</code></td><td>bind one retention tier to a destination, with <code>--acknowledge-medium-disclosure</code> where the disclosure applies</td></tr>
+          <tr><td><code>rbm retention --tier ...</code></td><td>preview retention decisions, including where each kept copy is expected to live</td></tr>
+          <tr><td><code>rbm retention apply &lt;source/set&gt; --acknowledge</code></td><td>carry out a previewed plan. The destructive one, and it says so</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The <a href="cli.html">commands page</a> has the rest of the surface, and the note about how the name changed.</p>
+  </section>
+
+</main>
+
+<footer>
+  <p>rclone-manager is Apache-2.0 licensed. <a href="https://github.com/spdrman/rclone-manager">View on GitHub</a></p>
+  <p>Not affiliated with the rclone project. rclone is embedded as a pinned Go library under its own licence.</p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The web interface, in motion: rclone-manager</title>
+  <meta name="description" content="Animated walkthroughs of the rclone-manager web interface: the docked terminal, run controls, per-backup-set activity, retention previews, edit mode and dark mode.">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="topbar.css">
+  <script src="topbar.js" defer></script>
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <div class="topbar-content">
+    <a class="topbar-brand" href="index.html">
+      <img src="assets/logo-mark-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress">
+      <h1 class="brand-name">rclone<span class="brand-dash">-</span>manager</h1>
+    </a>
+  </div>
+
+  <button class="topbar-burger" id="topbarBurger" type="button"
+          aria-label="Toggle menu" aria-expanded="false" aria-controls="topbar-menu">
+    <span class="burger-icon" aria-hidden="true"></span>
+  </button>
+
+  <nav class="topbar-menu" id="topbar-menu" aria-hidden="true">
+    <div class="topbar-menu-inner">
+      <a href="index.html" class="nav-item nav-item-home">
+        <svg class="nav-icon nav-icon-home" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 3 2 12h3v8h5v-5h4v5h5v-8h3L12 3z"/>
+        </svg>
+        <span class="nav-label nav-label-full">Home</span>
+      </a>
+
+      <a href="first-run.html" class="nav-item">
+        <span class="nav-label nav-label-full">First-run tutorial</span>
+        <span class="nav-label nav-label-short">First run</span>
+      </a>
+      <a href="web-ui.html" class="nav-item is-current">
+        <span class="nav-label nav-label-full">The web interface</span>
+        <span class="nav-label nav-label-short">Web UI</span>
+      </a>
+      <a href="storage.html" class="nav-item">
+        <span class="nav-label nav-label-full">Storage &amp; retention</span>
+        <span class="nav-label nav-label-short">Storage</span>
+      </a>
+      <a href="ssh.html" class="nav-item">
+        <span class="nav-label nav-label-full">SSH &amp; connections</span>
+        <span class="nav-label nav-label-short">SSH</span>
+      </a>
+      <a href="cli.html" class="nav-item">
+        <span class="nav-label nav-label-full">Commands</span>
+        <span class="nav-label nav-label-short">Commands</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+        <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        <span class="nav-label nav-label-full">GitHub</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">README</span>
+      </a>
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Deployment</span>
+        <span class="nav-label nav-label-short">Deploy</span>
+      </a>
+      <a href="https://github.com/spdrman/rclone-manager/issues" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Issues</span>
+      </a>
+
+      <hr class="menu-divider">
+
+      <button type="button" class="topbar-theme-toggle" id="themeToggle" role="switch" aria-checked="false" aria-label="Toggle theme">
+        <span class="theme-glyph" aria-hidden="true">&#9790;</span>
+        <span class="theme-label">Dark mode</span>
+        <span class="theme-slider" aria-hidden="true">
+          <span class="theme-slider-track">
+            <span class="theme-slider-sun">&#9728;</span>
+            <span class="theme-slider-moon">&#9790;</span>
+            <span class="theme-slider-knob"></span>
+          </span>
+        </span>
+      </button>
+    </div>
+  </nav>
+</header>
+
+<main>
+
+  <section>
+    <span class="step-eyebrow">Guide</span>
+    <h2 id="top" style="font-size:1.75rem;border:none;padding-bottom:0;margin-bottom:0.5rem;">The web interface, in motion</h2>
+    <p>Most of what 0.3.3 added is a thing that happens rather than a thing that sits still, so most of this page moves. A terminal that stays put while the page scrolls, a filter that takes lines away, a theme that changes a whole window at once and a button that says what it did are all claims about behaviour, and a screenshot of any of them is a screenshot of the moment before or the moment after.</p>
+
+    <div class="note">
+      <span class="note-label">Where these pictures came from</span>
+      <p>Every clip below drives <code>ui/shared</code>'s development server, whose API is the in-memory fixture in <code>src/api/mock.ts</code>. The component tree, the layout, the copy and the interaction are the real product's. The <em>data</em> is not: hostnames, fingerprints, sizes and counts are fixtures.</p>
+      <p>They are deliberately never recorded against a running deployment, and that constraint is older than the clips. A capture script presses real buttons, and some of these buttons remove a storage destination or start a backup run. There is no address for these to point at, by design. <a href="#recording">How they are recorded</a> is at the bottom.</p>
+    </div>
+
+    <div class="cards">
+      <a href="#terminal" class="clipping">
+        <span class="clipping-tag">Clip</span>
+        <p>The terminal docked to the bottom of the window, what is in it, and how to make it show less.</p>
+        <span class="clipping-read">Watch it &rarr;</span>
+      </a>
+      <a href="#runs" class="clipping">
+        <span class="clipping-tag">Clip</span>
+        <p>Starting a backup run from a button, and reading what came back.</p>
+        <span class="clipping-read">Watch it &rarr;</span>
+      </a>
+      <a href="#theme" class="clipping">
+        <span class="clipping-tag">Clip</span>
+        <p>Dark mode, including the native controls that used to be black on black.</p>
+        <span class="clipping-read">Watch it &rarr;</span>
+      </a>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="terminal">The terminal at the bottom of every page</h2>
+    <p>There is a log panel docked to the bottom of the browser window on every signed-in page. It answers one question: what has this deployment done recently, including the thing I just clicked. It reads the engine's own buffers, so two people watching one NAS see the same lines in the same order with the same sequence numbers and can quote a timestamp at each other.</p>
+    <p>It is pinned to the window, not to the end of the document, and that distinction is the whole of <a href="https://github.com/spdrman/rclone-manager/issues/617">#617</a>. In flow it rode the bottom of the page, so on anything longer than a screen the always-on panel had scrolled out of view and only appeared once you had already got to the bottom, which is the opposite of what an always-on panel is for. Watch the page move under it.</p>
+  <figure class="wide">
+    <img src="screens/ui-terminal-pinned.gif" alt="The backup set page scrolling from top to bottom while the terminal stays fixed to the bottom of the window" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>One backup set's page, scrolled from the top to the bottom and back. The terminal does not move, and the content column reserves room under itself so the last row of a long table can still be scrolled clear of it.</figcaption>
+  </figure>
+
+    <p>Collapsing it does not collapse it to nothing. The bar keeps the newest line and a count of what has gone wrong, because a terminal that collapses to a blank strip teaches an operator to stop opening it. Whether it is open, how tall it is and which filter is on are this browser's business and live in <code>localStorage</code>; the lines themselves are the deployment's.</p>
+  <figure class="wide">
+    <img src="screens/ui-terminal-collapse.gif" alt="The terminal collapsing to a single bar that still shows the newest line, then reopening" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>Collapsed, the panel is one line high and still says what happened last. Reopening restores the buffer, the scroll position and the filter, because the panel is a sibling of the routed content and no navigation unmounts it.</figcaption>
+  </figure>
+
+    <h3 id="filters">Filtering it</h3>
+    <p>One deployment runs several backup sets and they all write into one buffer. The chips decide what is drawn, never what is kept, so clearing a filter brings everything back. <strong>Engine</strong> leaves the lines that belong to no single set. A set's own id leaves that set's. <strong>Commands only</strong> is the interesting one: it reduces the panel to the actions somebody took through the API, each with the command line it was equivalent to.</p>
+  <figure class="wide">
+    <img src="screens/ui-terminal-filters.gif" alt="Clicking through the terminal's filter chips: one backup set, then Engine, then Commands only, then Everything" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>The same buffer under four filters. Under <em>Commands only</em> what is left is a transcript: the summary of what was done, the equivalent command, and where there is no equivalent command yet, a line saying so and why.</figcaption>
+  </figure>
+
+    <div class="note warn">
+      <span class="note-label">Two things I found while recording this</span>
+      <p><strong>The <em>This browser</em> chip always draws an empty log.</strong> Notices this browser writes (a run you started, a refusal that never reached the engine) go into <code>state/browserNotices</code>, and <code>ActivityDock</code> never reads that node; only <code>SetActivityPanel</code> does. So a run started from a button lands in the banner and in that set's own panel, and never in the docked terminal. <code>useRunControls</code>' own doc says that node is "the seam the global terminal and the per-set terminal read", which is half true.</p>
+      <p><strong>The filter row clips below about 1300px.</strong> The chips sit in a wrapping flex row inside a bar with a fixed 32px height, so as soon as they need a second line the second line is cut off and those chips cannot be clicked. Four backup sets and a 1280px window is enough to do it, and a deployment with more sets will do it at any width. The clips above are recorded at 1440px, where the row still fits.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="runs">Starting a run, and reading the answer</h2>
+    <p>Both run buttons are real now. Before <a href="https://github.com/spdrman/rclone-manager/issues/597">#597</a> two of them called the API with no error handler, an empty configuration revision and no idempotency key, and the third had no handler at all, so a refusal from the destructive gate, a stale revision, a malformed request and a dead engine were all pixel-identical to a button that did nothing.</p>
+    <p>What comes back is a notice with four parts, and each part is there for a reason. It states an outcome rather than leaving one to be inferred. It says what to do about it when there is something to do. It names the command the press was equivalent to, copy-pasteable exactly as written, which matters most on a <em>refusal</em>, because while the destructive gate is shut that command is the only remaining way to start the backup that was just refused. And it has a close control, which is <a href="https://github.com/spdrman/rclone-manager/issues/620">#620</a>: a banner you have read and cannot put away is a banner that pushes the page down forever.</p>
+  <figure class="wide">
+    <img src="screens/ui-run-controls.gif" alt="Pressing Run this backup set, the notice appearing with the equivalent command, then closing it" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>Run this backup set, the outcome, the command, and the close control. The terminal is collapsed in this clip on purpose: the notice does not reach it, for the reason given above, and leaving it open would suggest otherwise.</figcaption>
+  </figure>
+
+    <p>The set's own page has its own activity panel, which is where a run you started does show up. It is marked <code>[browser]</code>, always, because "the engine said this" and "your browser asked for this" are different facts and only one of them is evidence about the NAS.</p>
+  <figure class="wide">
+    <img src="screens/ui-set-activity.gif" alt="One backup set's activity panel taking a browser-written line with the equivalent command under it, then the log hiding and reappearing" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>The panel answers what THIS set is doing: a bar, a step sentence, and its own log. Pressing Run puts the browser's own line into it, with the command underneath.</figcaption>
+  </figure>
+
+  </section>
+
+  <section>
+    <h2 id="retention">Seeing what retention would do</h2>
+    <p>A preview is a read and deletes nothing. It lists every artifact the policy has an opinion about, on both sides, with the reason beside each one, and the reasons are the engine's own words rather than something the page worked out again: <em>protected as the newest known-good</em>, <em>sibling-prefix directory found at the computed path; refusing to delete</em>. A refusal gets its own group, because "I decided not to delete this and here is why" is a different answer from "this was not selected".</p>
+  <figure class="wide">
+    <img src="screens/ui-retention-preview.gif" alt="The retention preview dialog listing four keeps, one refusal and three deletes, each with its reason" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>Keep, refuse, delete, and how much would be reclaimed. Applying it is a separate press behind a gate of its own, and the plan is identified so the thing applied is the thing that was previewed.</figcaption>
+  </figure>
+
+  </section>
+
+  <section>
+    <h2 id="edit">Editing a set, and getting out of it</h2>
+    <p>Opening the editor takes a hold on that backup set. The hold is a real thing on the server with a command of its own, and it exists so a cycle does not start against a set somebody is halfway through changing. Which means leaving the editor has to give the hold back, and before <a href="https://github.com/spdrman/rclone-manager/issues/591">#591</a> there was a back link and no way to discard what you had typed, so an operator who opened the form just to read it walked away leaving the set held.</p>
+  <figure class="wide">
+    <img src="screens/ui-edit-mode.gif" alt="Opening edit mode on a backup set, then leaving it with Cancel and exit edit mode" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>Edit mode, and the way out that discards. Save all and exit is the other one, and the two are deliberately not the same button in two moods.</figcaption>
+  </figure>
+
+  </section>
+
+  <section>
+    <h2 id="theme">Dark mode</h2>
+    <p>The defect <a href="https://github.com/spdrman/rclone-manager/issues/618">#618</a> fixed was not that dark mode looked bad. It was that the application painted its own surfaces dark and left every native control at the browser's default, so a <code>select</code>, a number input and a file field drew black text on a dark field. It read correctly in light mode, where the browser's default happens to match, which is why it survived so long.</p>
+  <figure class="wide">
+    <img src="screens/ui-dark-mode.gif" alt="The settings page switching to dark mode, scrolling through a form of native selects and number inputs, then switching back" loading="lazy">
+    <figcaption><span class="clip-tag">clip</span>The settings page is the worst case and so it is the one in shot: it is mostly native controls. The choice is remembered per browser.</figcaption>
+  </figure>
+
+  </section>
+
+  <section>
+    <h2 id="icons">The icons</h2>
+    <p>Everything drawn as an icon is Font Awesome Free 6.7.2, compiled into the bundle as paths rather than fetched, under CC-BY-4.0 and reproduced unmodified. Before <a href="https://github.com/spdrman/rclone-manager/issues/621">#621</a> they were Unicode glyphs, which means the navigation looked different on every operating system and sometimes rendered as an emoji. The typeface went the same way in <a href="https://github.com/spdrman/rclone-manager/issues/631">#631</a>: IBM Plex is vendored into the image and served from it, so an isolated deployment with no route to Google Fonts keeps the face it was designed in instead of silently falling back.</p>
+  </section>
+
+  <section>
+    <h2 id="recording">How these were recorded</h2>
+    <p>Every clip on this site comes out of <code>docs/site/tools/</code>, and one command re-records a page's worth:</p>
+    <pre><code>node docs/site/tools/capture-web-ui.mjs</code></pre>
+    <p>A clip is not a video of a browser. It is a list of frames with how long to hold each one, captured between real interactions with the running application. That is a deliberate choice and it buys three things. A video samples at a fixed rate, so how many frames a step gets depends on how fast the machine ran it, and the same script produces a different file every time. A video spends most of its frames on nothing happening, which is most of its bytes. And a video gives a reader no time on the frame that matters, because these interactions happen at typing speed and are being read by somebody trying to see what changed.</p>
+    <p>So the same script produces the same frame count with the same durations on any machine, and a re-record differs only where the application's own rendering differs. The clock, the timezone, the locale and the port the development server runs on are all pinned for the same reason: every time on screen goes through <code>toLocaleTimeString</code> and the terminal's first line is built from the address the page was loaded from, so without pinning them a re-record differs in every frame carrying a stamp or an address.</p>
+    <p>That is not the same as pixel-identical, and I would rather name the exception than claim otherwise: a panel the application animates on its own, such as the spinner and progress bar on a running backup set, is caught at whatever phase it happened to be in. Those clips move by a few kilobytes between runs. Everything that was moving for no reason has stopped.</p>
+    <div class="note">
+      <span class="note-label">What it costs</span>
+      <p>The eight clips on this page come to about 1.4&nbsp;MB between them, and they are loaded lazily. That budget is why the palette is 64 colours and why dithering is off: this is flat interface with hard text edges, and a dither pattern across a solid panel is both uglier and several times larger.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>rclone-manager is Apache-2.0 licensed. <a href="https://github.com/spdrman/rclone-manager">View on GitHub</a></p>
+  <p>Not affiliated with the rclone project. rclone is embedded as a pinned Go library under its own licence.</p>
+</footer>
+
+</body>
+</html>

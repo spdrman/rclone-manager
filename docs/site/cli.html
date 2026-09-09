@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The rbm command line: rclone-manager</title>
+  <meta name="description" content="Every rclone-manager command, the rename from backup-manager to rbm, and the rule that every action in the web interface names the command it is equivalent to.">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="topbar.css">
+  <script src="topbar.js" defer></script>
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <div class="topbar-content">
+    <a class="topbar-brand" href="index.html">
+      <img src="assets/logo-mark-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress">
+      <h1 class="brand-name">rclone<span class="brand-dash">-</span>manager</h1>
+    </a>
+  </div>
+
+  <button class="topbar-burger" id="topbarBurger" type="button"
+          aria-label="Toggle menu" aria-expanded="false" aria-controls="topbar-menu">
+    <span class="burger-icon" aria-hidden="true"></span>
+  </button>
+
+  <nav class="topbar-menu" id="topbar-menu" aria-hidden="true">
+    <div class="topbar-menu-inner">
+      <a href="index.html" class="nav-item nav-item-home">
+        <svg class="nav-icon nav-icon-home" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 3 2 12h3v8h5v-5h4v5h5v-8h3L12 3z"/>
+        </svg>
+        <span class="nav-label nav-label-full">Home</span>
+      </a>
+
+      <a href="first-run.html" class="nav-item">
+        <span class="nav-label nav-label-full">First-run tutorial</span>
+        <span class="nav-label nav-label-short">First run</span>
+      </a>
+      <a href="web-ui.html" class="nav-item">
+        <span class="nav-label nav-label-full">The web interface</span>
+        <span class="nav-label nav-label-short">Web UI</span>
+      </a>
+      <a href="storage.html" class="nav-item">
+        <span class="nav-label nav-label-full">Storage &amp; retention</span>
+        <span class="nav-label nav-label-short">Storage</span>
+      </a>
+      <a href="ssh.html" class="nav-item">
+        <span class="nav-label nav-label-full">SSH &amp; connections</span>
+        <span class="nav-label nav-label-short">SSH</span>
+      </a>
+      <a href="cli.html" class="nav-item is-current">
+        <span class="nav-label nav-label-full">Commands</span>
+        <span class="nav-label nav-label-short">Commands</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+        <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        <span class="nav-label nav-label-full">GitHub</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">README</span>
+      </a>
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Deployment</span>
+        <span class="nav-label nav-label-short">Deploy</span>
+      </a>
+      <a href="https://github.com/spdrman/rclone-manager/issues" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Issues</span>
+      </a>
+
+      <hr class="menu-divider">
+
+      <button type="button" class="topbar-theme-toggle" id="themeToggle" role="switch" aria-checked="false" aria-label="Toggle theme">
+        <span class="theme-glyph" aria-hidden="true">&#9790;</span>
+        <span class="theme-label">Dark mode</span>
+        <span class="theme-slider" aria-hidden="true">
+          <span class="theme-slider-track">
+            <span class="theme-slider-sun">&#9728;</span>
+            <span class="theme-slider-moon">&#9790;</span>
+            <span class="theme-slider-knob"></span>
+          </span>
+        </span>
+      </button>
+    </div>
+  </nav>
+</header>
+
+<main>
+
+  <section>
+    <span class="step-eyebrow">Reference</span>
+    <h2 id="top" style="font-size:1.75rem;border:none;padding-bottom:0;margin-bottom:0.5rem;">The command line</h2>
+    <p>Everything the web interface does, and several things it does not, are reachable from one binary. Every command except <code>version</code> takes <code>--config</code>, which defaults to <code>/etc/backup-manager/config.yaml</code>; pass a directory and it resolves <code>config.yaml</code> inside it. Running it with no arguments prints the whole table.</p>
+
+    <div class="note">
+      <span class="note-label">The name changed in 0.3.3</span>
+      <p>The command is <code>rbm</code>. It used to be <code>backup-manager</code>, which was a mouthful to type twenty times in an afternoon and did not say which product it belonged to.</p>
+      <p><code>backup-manager</code> keeps working as an alias, so nothing anybody has already written stops running. Every command on this site is spelled <code>rbm</code>, and if you are reading an older script, a container log or a support thread that says <code>backup-manager</code>, it means the same thing.</p>
+    </div>
+
+    <div class="note warn">
+      <span class="note-label">In the moving pictures on this site</span>
+      <p>The clips on <a href="web-ui.html">the web interface page</a> were recorded before the rename reached the interface's own strings, so the command lines the application echoes still read <code>backup-manager</code> in frame. I have left the frames alone rather than editing pictures of software to say something the software did not say. They will be re-recorded once the string lands.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="parity">Every action has a command, and says which one</h2>
+    <p>The rule EPIC G and EPIC H were both built under: anything an operator can <em>do</em> in the web interface has an equivalent command, and the interface says which one while the action is taken. Not as a caption written by hand beside a button, which is a second string that goes stale the first time a flag changes, but from the same function that would build the command, so the two cannot disagree.</p>
+    <p>It shows up in three places. Under a form control, recomputed as you edit it, so changing a retention tier's destination changes the printed command. In the notice a run control leaves behind, which matters most on a refusal, because while the destructive gate is shut that command is the only remaining way to do the thing that was just refused. And in the terminal at the bottom of every page, where the engine's own record of an API action carries the command it was equivalent to.</p>
+    <p>Where there is no equivalent command yet, the line says so and says why, rather than being quietly absent. <code>POST /api/v1/backup-sets/test-connection</code> prints "no equivalent yet, there is no verb that tests a connection before a set exists", which is a more useful thing to read than nothing.</p>
+
+    <div class="note">
+      <span class="note-label">Credentials never appear on these lines</span>
+      <p>No flag on this surface takes a secret, which is what lets the interface print its command lines copy-pasteable exactly as shown with nothing starred out. A password on a command line is in every process listing on the host, so the connection details the terminal needs are environment variables and the panel prints them once at the top with the password as a placeholder.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="table">The commands</h2>
+    <div class="scroll-x">
+      <table>
+        <thead>
+          <tr><th>Command</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>rbm run</code></td><td>perform one processing cycle and exit</td></tr>
+          <tr><td><code>rbm daemon</code></td><td>repeat the processing cycle at <code>poll_interval</code>. One engine per deployment: it is refused rather than started if another process is already serving that state database</td></tr>
+          <tr><td><code>rbm check</code></td><td>validate the configuration and the state database, then exit</td></tr>
+          <tr><td><code>rbm status</code></td><td>report process and backup-set health, exiting non-zero unless every set is healthy</td></tr>
+          <tr><td><code>rbm sources</code></td><td>list configured sources and backup sets</td></tr>
+          <tr><td><code>rbm backup-set create</code></td><td>create a backup set. The connection is proven before anything is written and the create is refused when it cannot be; <code>--no-verify</code> writes it anyway, says nothing was proven, and leaves the set marked unverified. On an instance with no <code>config.yaml</code> yet this writes the first one instead</td></tr>
+          <tr><td><code>rbm backup-set patch</code></td><td>change one configured backup set in place; only the flags you pass change. An edit that moves the host, port, user, key, trusted host key or remote path is proven before it is written</td></tr>
+          <tr><td><code>rbm backup-set remove</code></td><td>take one backup set out of the configuration. Configuration only: the backups it collected stay on storage and stay listed, and creating the set again with the same source and name takes them back</td></tr>
+          <tr><td><code>rbm backup-set test-connection</code></td><td>prove one configured source: resolve, connect, check the host key, offer the key, authenticate, list the folder. Six named outcomes and a non-zero exit when any fails. A pass clears the unverified mark a <code>--no-verify</code> write left</td></tr>
+          <tr><td><code>rbm backup-set edit-hold</code></td><td>take or release the hold the web editor takes on a set, so a cycle does not start against a set somebody is halfway through changing</td></tr>
+          <tr><td><code>rbm artifacts</code></td><td>list journal artifacts, optionally filtered by source and backup set; with a full artifact id, print one artifact's detail including the reason recorded for a failed or quarantined one</td></tr>
+          <tr><td><code>rbm activity</code></td><td>list recorded lifecycle events, newest first: the same durable transition log the Activity page draws. <code>--follow</code> tails the live feed instead, which needs something serving the deployment</td></tr>
+          <tr><td><code>rbm fetch</code></td><td>run one backup set's cycle on demand</td></tr>
+          <tr><td><code>rbm retention</code></td><td>preview retention decisions, with per-run policy overrides. A preview and nothing else</td></tr>
+          <tr><td><code>rbm retention apply</code></td><td>carry out a previewed plan. The destructive one, behind <code>--acknowledge</code></td></tr>
+          <tr><td><code>rbm reconcile</code></td><td>reconcile the journal against what is actually on disk, for every backup set</td></tr>
+          <tr><td><code>rbm validate</code></td><td>re-check one artifact's durable copy, wherever it is. <code>--content</code> downloads a copy on a storage medium and re-hashes it</td></tr>
+          <tr><td><code>rbm catalog rebuild</code></td><td>reconstruct a lost or corrupted state database from the sidecar recovery manifests</td></tr>
+          <tr><td><code>rbm quarantine</code></td><td>revalidate, retry or reinstate one quarantined artifact</td></tr>
+          <tr><td><code>rbm retry</code></td><td>put one failed backup back into the pipeline so it is attempted again</td></tr>
+          <tr><td><code>rbm unconfigured</code></td><td>list the backup sets the journal remembers and the configuration no longer declares, and clear one when you mean it</td></tr>
+          <tr><td><code>rbm medium</code></td><td>the storage destinations: <code>list</code>, <code>show</code>, <code>add</code>, <code>edit</code>, <code>remove</code>, <code>default</code>, <code>import-credentials</code>, and <code>test-connection</code> (also spelled <code>preflight</code>). See <a href="storage.html#commands">the storage page</a></td></tr>
+          <tr><td><code>rbm settings</code></td><td>read the deployment's own settings, and <code>settings patch</code> to change them, including binding a retention tier to a destination</td></tr>
+          <tr><td><code>rbm restore</code></td><td>ask the storage provider to make one archived copy readable again. <code>--acknowledge</code> is required rather than a <code>--force</code> to skip, because a restore is billed and takes hours. Restore <em>execution</em> is a different thing and is out of scope: getting a backup back onto a server is a documented manual procedure</td></tr>
+          <tr><td><code>rbm version</code></td><td>report the binary, Go and embedded rclone versions</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md">README</a>'s copy of this table is checked against the binary's own dispatch table on every run of the repository's gate, so it cannot quietly go stale. The copy above is a transcription of it and is not checked, so if the two ever disagree, the README is right.</p>
+  </section>
+
+  <section>
+    <h2 id="serving">Beside a running engine, and without one</h2>
+    <p>Several of these commands behave differently depending on whether something is already serving the deployment, and the difference is not a fallback. One engine per deployment is enforced: a second <code>daemon</code> against the same state database is refused rather than started.</p>
+    <p>So a command that has an API route takes it when an engine is there, which means the change reaches the running process with no restart and its steps land in the live feed. With nothing serving, the same command calls the same service layer the route is built on, in your terminal. A command whose answer only exists in the memory of a serving process, such as the live feed or an edit hold, is refused outright when nothing is serving, because a fallback there would put a different feed on screen looking exactly like an answer.</p>
+    <p>Every configuration read and write says which of those two worlds its answer came from, on stderr, on every run.</p>
+  </section>
+
+  <section>
+    <h2 id="exits">Reading an exit code</h2>
+    <p>A refusal is an answer. <code>check -h</code> is a correct command line, an answered request and an exit 0, and so is any other request for help. What the non-zero codes mean is in the usage block the binary prints, and it is a table rather than a convention, so a script can branch on it.</p>
+    <p>The one worth knowing before you write a cron entry: <code>status</code> exits non-zero unless every backup set is healthy, which makes it the thing to call from a monitor, and <code>check</code> exits non-zero on a configuration or state database that will not load, which makes it the thing to call before a deploy.</p>
+  </section>
+
+</main>
+
+<footer>
+  <p>rclone-manager is Apache-2.0 licensed. <a href="https://github.com/spdrman/rclone-manager">View on GitHub</a></p>
+  <p>Not affiliated with the rclone project. rclone is embedded as a pinned Go library under its own licence.</p>
+</footer>
+
+</body>
+</html>
