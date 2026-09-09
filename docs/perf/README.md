@@ -64,7 +64,7 @@ has to change.
 it cannot drift from what actually ran (see
 `apps/generic/tests/perfbaseline/runtime_test.go`):
 
-- the real `backup-manager-web serve` binary, built from `apps/generic` with
+- the real `rbm-web serve` binary, built from `apps/generic` with
   `GOWORK=off`, driven over real HTTP on loopback with one keep-alive
   connection, never an in-process `httptest` handler;
 - a configuration of **15 backup sets across 3 sources**, local remotes, with
@@ -219,8 +219,8 @@ The components, copied back out of both images with `docker create` plus
 
 | component | `8ad3100` | `186ba0c7` | delta |
 |---|---|---|---|
-| `/backup-manager` | 19,792,032 | 31,391,904 | +11,599,872 |
-| `/backup-manager-web` | 21,102,752 | 32,637,088 | +11,534,336 |
+| `/rbm` | 19,792,032 | 31,391,904 | +11,599,872 |
+| `/rbm-web` | 21,102,752 | 32,637,088 | +11,534,336 |
 | `/ui/bundles`, five adapter bundles | not carried | 3,503,996 | +3,503,996 |
 | `/licenses` | not carried | 57,300 | +57,300 |
 | distroless base layers | 2,113,978 | 2,113,978 | 0 |

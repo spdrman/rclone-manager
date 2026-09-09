@@ -2,7 +2,7 @@
 
 # backup-manager container image (A3.9, extended by issue #82/B4.1).
 #
-# Four stages:
+# Five stages:
 #   1. `build`          - the provider-neutral core binary (manager logic
 #                          plus the embedded rclone packages, see
 #                          core/internal/transport/rclone). Unchanged by
@@ -13,19 +13,22 @@
 #                          which imports core/service + apps/common and
 #                          embeds stage 2's output via go:embed
 #                          (apps/generic/webui).
-#   4. (untagged)       - the distroless runtime, carrying both binaries
+#   4. `alias`          - two symlinks and nothing else, so the runtime
+#                          stage can carry the old binary names without a
+#                          shell. See "The old names" below.
+#   5. (untagged)       - the distroless runtime, carrying both binaries
 #                          and nothing else.
 #
 # There is no `rclone` executable anywhere in this image: rclone is
 # consumed as a Go module (core/go.mod pins github.com/rclone/rclone),
-# imported as packages, and compiled straight into /backup-manager. See
+# imported as packages, and compiled straight into /rbm. See
 # docs/deployment.md for how that claim is verified against the built
 # image, rather than just asserted here.
 #
-# `/backup-manager` (stage 1) implements every execution mode FR-1/FR-24
+# `/rbm` (stage 1) implements every execution mode FR-1/FR-24
 # call for: `run`, `daemon`, `check`, `status`, `sources`, `artifacts`,
 # `fetch`, `retention`, `reconcile`, `validate` and `version`.
-# `/backup-manager-web` (stage 3) adds exactly one more: `serve`, the
+# `/rbm-web` (stage 3) adds exactly one more: `serve`, the
 # generic Web host (docs/EPIC-B-multi-nas.md §9.2) - the shared UI, the
 # versioned API, local authentication and the backup scheduler in one
 # process. Two binaries, not one with two names, because apps/generic
@@ -33,6 +36,38 @@
 # core/'s own module cannot depend on apps/ in either direction (§7.1) -
 # see apps/generic/cmd/backup-manager-web/main.go's own doc for the full
 # reasoning.
+#
+# THE OLD NAMES (the 0.3.3 CLI rename)
+#
+# The command an operator types is `rbm` now, and the web host is
+# `rbm-web`. The names this image shipped before, `/backup-manager` and
+# `/backup-manager-web`, still resolve, because they are written into
+# every compose file, every `docker run` line and every cron entry an
+# operator already has, and a rename that breaks those is a rename that
+# gets reverted. They are SYMLINKS to the two real binaries, created in
+# stage 4 and copied in as links.
+#
+# Two things force that shape, and both are worth writing down because
+# the obvious alternative looks fine right up until it is measured.
+#
+#   - A second `COPY --from=build /out/rbm /backup-manager` would work.
+#     It also costs a second full copy of a ~35 MB Go binary in a new
+#     layer, twice over for the two of them, and the image-size gate
+#     added by #643 (apps/generic/tests/dockercli/imagesize_test.go)
+#     allows 1.05x of the 69,704,266 bytes recorded in
+#     docs/perf/baselines/darwin-arm64-mac17-2.json. That is about
+#     3.4 MB of headroom against about 64 MB of duplicate binary, so the
+#     double copy fails the gate on the first run. Two symlinks cost
+#     about 100 bytes.
+#   - The runtime stage is distroless, which has no shell, so `RUN ln -s`
+#     cannot run there at all. Hence a stage that does have one. It is
+#     `FROM build` rather than a new base image so this file does not
+#     acquire a sixth digest to pin for two symlinks.
+#
+# Nothing else in the repository should grow a second name. The image
+# reference (ghcr.io/spdrman/backup-manager), the compose service names,
+# the config directory at /etc/backup-manager and the product's own name
+# are not the CLI and did not change.
 
 # ---- core builder ---------------------------------------------------------
 # Pinned by digest, not just tag, so this stage resolves to the exact same
@@ -121,12 +156,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -trimpath \
         -buildvcs=false \
         -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
-        -o /out/backup-manager \
+        -o /out/rbm \
         ./cmd/backup-manager
 
 # ---- frontend builder -------------------------------------------------
 # ui/shared's static bundle (docs/EPIC-B-multi-nas.md §9.2/§11): built
-# once here, embedded into /backup-manager-web below via go:embed
+# once here, embedded into /rbm-web below via go:embed
 # (apps/generic/webui). Node/npm are build-time dependencies only -
 # neither ships in the runtime stage.
 #
@@ -253,8 +288,30 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -trimpath \
         -buildvcs=false \
         -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
-        -o /out/backup-manager-web \
+        -o /out/rbm-web \
         ./cmd/backup-manager-web
+
+# ---- old-name aliases ---------------------------------------------------
+# Two symlinks, and the only reason this stage exists is that the runtime
+# stage below cannot make them itself: distroless has no shell, so there
+# is nowhere in it to run `ln -s`. See "THE OLD NAMES" at the top of this
+# file for why the alternative (copying each binary in twice under both
+# names) is not an option this image can afford.
+#
+# `FROM build` reuses a stage this build already has rather than adding a
+# sixth base image to pin by digest. It is $BUILDPLATFORM-native, which
+# does not matter here the way it does for a compiled binary: a symlink is
+# a path in a tar header, identical whatever architecture wrote it, and
+# only the two links leave this stage.
+#
+# The targets do not exist here and never will. `ln -s` does not check,
+# and BuildKit copies a dangling link as a link, so both resolve for the
+# first time in the runtime stage, where /rbm and /rbm-web are real.
+FROM build AS alias
+
+RUN mkdir -p /aliases \
+    && ln -s /rbm /aliases/backup-manager \
+    && ln -s /rbm-web /aliases/backup-manager-web
 
 # ---- runtime ------------------------------------------------------------
 # distroless static, nonroot variant: no shell, no package manager, no libc
@@ -268,8 +325,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # rather than a value baked in here).
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
-COPY --from=build /out/backup-manager /backup-manager
-COPY --from=build-web /out/backup-manager-web /backup-manager-web
+COPY --from=build /out/rbm /rbm
+COPY --from=build-web /out/rbm-web /rbm-web
+
+# `/backup-manager` and `/backup-manager-web`, as links to the two lines
+# above. The directory is copied rather than the two links by name, which
+# is the shape that keeps them links: `COPY --from=<stage> <dir>/ /`
+# reproduces a dangling symlink as a symlink, and execve follows it, so
+# `docker run <image> /backup-manager status` runs /rbm with argv[0] of
+# /backup-manager and every compose file written before the rename keeps
+# working unchanged.
+COPY --from=alias /aliases/ /
 
 # The licence, the notices and the machine-readable inventory the other
 # two point at, at a fixed path a recipient can find without a shell
@@ -318,7 +384,7 @@ COPY --from=frontend-build /src/ui/shared/dist-bundles/ /ui/bundles/
 
 # Documentary only - EXPOSE does not itself publish anything (see
 # container/compose.yaml's own `ports:` for what actually does): this is
-# `/backup-manager-web serve`'s own default --listen port, self-documented
+# `/rbm-web serve`'s own default --listen port, self-documented
 # on the image for `docker inspect`/`docker port`/tooling. A headless-only
 # deployment that never runs `serve` simply never binds it.
 EXPOSE 8080
@@ -327,19 +393,19 @@ EXPOSE 8080
 # ENTRYPOINT is a fixed prefix Docker prepends to whatever `command:` (or
 # `docker run <image> ...`) supplies, so a single ENTRYPOINT could only
 # ever name one of the two - exactly the trap an earlier version of this
-# file fell into (`ENTRYPOINT ["/backup-manager"]` plus `command:
-# ["/backup-manager-web", "serve"]` resolves to running
-# "/backup-manager /backup-manager-web serve", not what anyone intended).
+# file fell into (`ENTRYPOINT ["/rbm"]` plus `command:
+# ["/rbm-web", "serve"]` resolves to running
+# "/rbm /rbm-web serve", not what anyone intended).
 # Every `command:` in container/compose.yaml and every `docker run`
 # example in docs/deployment.md therefore names its binary explicitly by
-# full path (`/backup-manager-web serve`, `/backup-manager daemon`,
-# `/backup-manager version`, ...). This image's own default CMD stays
+# full path (`/rbm-web serve`, `/rbm daemon`,
+# `/rbm version`, ...). This image's own default CMD stays
 # unset for the same reason: there is no single default that would be
 # right for both binaries, so a bare `docker run <image>` with no command
 # fails immediately with "no command specified" - a loud, safe failure,
 # not a silent no-op or an ambiguous guess.
 
-# `backup-manager status` (issue #26, FR-24) exits 0 only when every
+# `rbm status` (issue #26, FR-24) exits 0 only when every
 # configured backup set reports HEALTHY, and non-zero on DEGRADED, STALE or
 # FAILING (see core/cmd/backup-manager/status.go's own doc for the exact
 # contract). This is the real backup-freshness signal FR-24's health states
@@ -347,10 +413,17 @@ EXPOSE 8080
 # previous `version`-based HEALTHCHECK could only ever answer. Verified
 # directly (see docs/deployment.md and apps/generic/tests/dockercli): a container
 # whose one backup set is DEGRADED now reports Docker health "unhealthy",
-# not "healthy". This runs against the plain `/backup-manager` binary
+# not "healthy". This runs against the plain `/rbm` binary
 # regardless of which command the container's own main process
-# (`/backup-manager-web serve`, or a headless `/backup-manager daemon`) is
+# (`/rbm-web serve`, or a headless `/rbm daemon`) is
 # running: `status` is a fresh, read-only check against the same shared
 # state database file either way.
+#
+# The real binary, not the `/backup-manager` link beside it, and that is a
+# choice rather than a detail. A HEALTHCHECK is baked into the image and
+# re-read by the daemon on every interval for the life of every container
+# anyone ever starts from it, so it is the one caller here that gains
+# nothing from compatibility and would quietly outlive the aliases if they
+# were ever dropped.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD ["/backup-manager", "status"]
+    CMD ["/rbm", "status"]

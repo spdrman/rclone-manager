@@ -4,7 +4,7 @@
   (WP4.3, deliverable D-7).
 
   Two templates, not one: the canonical image needs the engine
-  (/backup-manager-web serve) and the Web UI (/backup-manager-web serve-ui)
+  (/rbm-web serve) and the Web UI (/rbm-web serve-ui)
   as separate containers, and an Unraid template describes exactly one.
   Install this one first, then backup-manager-ui.xml.
 
@@ -53,7 +53,7 @@
   <Icon>https://raw.githubusercontent.com/spdrman/rclone-manager/main/docs/submission/icon.svg</Icon>
   <Requires>Run `docker network create backup-manager` before installing, and install the companion backup-manager-ui template for the web interface.</Requires>
   <ExtraParams>--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=64m,mode=1777,uid=99,gid=100 --user 99:100</ExtraParams>
-  <PostArgs>/backup-manager-web serve --profile=unraid</PostArgs>
+  <PostArgs>/rbm-web serve --profile=unraid</PostArgs>
   <DonateText/>
   <DonateLink/>
   <Config Name="Application state" Target="/data/state" Default="/mnt/user/appdata/backup-manager/state" Mode="rw" Description="Holds the SQLite catalog and the local-authentication administrator record. Must exist and be owned by the uid/gid in ExtraParams before first start." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/backup-manager/state</Config>

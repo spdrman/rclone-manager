@@ -62,7 +62,7 @@ type platformFixture struct {
 	engineService string
 	uiService     string
 	// uiHealthcheck says how this platform stops the Web UI container
-	// from running the image's baked-in `/backup-manager status`
+	// from running the image's baked-in `/rbm status`
 	// healthcheck, which needs a config file and a state database that
 	// container does not have (WP4.3 calls this out by name).
 	uiHealthcheck uiHealthcheckStrategy
@@ -133,7 +133,7 @@ type uiHealthcheckStrategy int
 
 const (
 	// overrideHealthcheck: the profile replaces the test with
-	// `/backup-manager-web healthcheck`.
+	// `/rbm-web healthcheck`.
 	overrideHealthcheck uiHealthcheckStrategy = iota
 	// disableHealthcheck: the profile turns it off. Unraid's only seam is
 	// `docker run --health-cmd`, which is shell form, and the distroless
@@ -574,10 +574,17 @@ func TestArchitectureParityAndRecordedBinaryHashes(t *testing.T) {
 	for _, a := range manifest.Architectures {
 		built = append(built, a.Architecture)
 		for _, binary := range c.Binaries {
-			name := strings.TrimPrefix(binary, "/")
+			// The manifest's own key for this binary, which is not the
+			// path any more (the 0.3.3 CLI rename): the image carries
+			// /rbm and /rbm-web, the manifest still records
+			// backup-manager and backup-manager-web, and
+			// manifestBinaryKey is the single place those two are
+			// bridged. Reading the path here instead would report every
+			// binary missing on every architecture.
+			name := manifestBinaryKey(binary)
 			if a.BinarySHA256[name] == "" {
-				t.Errorf("release manifest records no SHA-256 for %s on %s, but the packages ship an image claiming to contain it",
-					name, a.Architecture)
+				t.Errorf("release manifest records no SHA-256 for %s (canonical binary %s) on %s, but the packages ship an image claiming to contain it",
+					name, binary, a.Architecture)
 			}
 		}
 	}
@@ -822,7 +829,7 @@ func TestOnlyTheWebUIContainerPublishesAPort(t *testing.T) {
 
 // TestTheWebUIContainerDoesNotRunTheImageHealthcheck is WP4.3's own
 // warning made executable: the canonical image bakes in
-// `HEALTHCHECK /backup-manager status`, which needs a config file and a
+// `HEALTHCHECK /rbm status`, which needs a config file and a
 // state database the Web UI container does not have, so every profile has
 // to override or disable it.
 func TestTheWebUIContainerDoesNotRunTheImageHealthcheck(t *testing.T) {
@@ -844,7 +851,7 @@ func TestTheWebUIContainerDoesNotRunTheImageHealthcheck(t *testing.T) {
 					}
 				case disableHealthcheck:
 					if !svc.HealthcheckDisabled {
-						t.Errorf("the Web UI template does not disable the image healthcheck (ExtraParams = %q); left inherited, `/backup-manager status` fails forever in a container with no config and no state database",
+						t.Errorf("the Web UI template does not disable the image healthcheck (ExtraParams = %q); left inherited, `/rbm status` fails forever in a container with no config and no state database",
 							svc.ExtraParams)
 					}
 				}

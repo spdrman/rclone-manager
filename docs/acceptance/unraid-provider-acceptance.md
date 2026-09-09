@@ -19,9 +19,9 @@ cannot reach.
 ## The one structural thing to understand first
 
 Unraid's Docker template model describes exactly **one** container per template.
-The canonical image needs **two**: `/backup-manager-web serve` (the engine: API,
+The canonical image needs **two**: `/rbm-web serve` (the engine: API,
 scheduler, local authentication, no published port) and
-`/backup-manager-web serve-ui` (the static UI plus a reverse proxy, the only
+`/rbm-web serve-ui` (the static UI plus a reverse proxy, the only
 published port). There is no single command that does both, by design, so the
 package ships two templates.
 
@@ -146,7 +146,7 @@ takes. On a reinstall the same command would rewrite the retained backup store.
 > confirmed on its Verify server step, and no `config.yaml` is written by hand
 > at all.
 
-`/backup-manager-web serve` starts without a `config.yaml` and serves the
+`/rbm-web serve` starts without a `config.yaml` and serves the
 first-run setup flow instead (#176), but a config file that EXISTS and does not
 validate is still a hard startup failure. Given the read-only mount above, create
 all three before the first start.
@@ -156,7 +156,7 @@ now a writable directory the application owns, so the container can create and r
 `config.yaml` itself, and an empty directory is a legitimate state rather than a broken
 deployment. Two things nonetheless keep this step here. The directory itself must exist
 and be owned by the app's uid/gid before the first start, because a bind mount does not
-create or chown its source. And `/backup-manager-web serve` still refuses to start
+create or chown its source. And `/rbm-web serve` still refuses to start
 without a valid config: removing that refusal, and serving a first-run flow instead, is
 #176's work and is not merged. Once it is, everything below except creating and owning
 the directory becomes optional.
@@ -197,7 +197,7 @@ in `apps/unraid/README.md`.
       and the right default
 - [ ] The container starts
 - [ ] It reaches Docker health **healthy** (it inherits the image's own
-      `HEALTHCHECK`, `/backup-manager status`, which is the right answer here:
+      `HEALTHCHECK`, `/rbm status`, which is the right answer here:
       an Unraid template declares no start-ordering dependency, so nothing waits
       on this verdict and it is the backup-freshness badge FR-24 means it to be.
       On a fresh install it will be red until the first backup lands)
@@ -214,8 +214,8 @@ in `apps/unraid/README.md`.
 3. Apply.
 
 - [ ] The container starts and reaches Docker health **healthy** via its own
-      `/backup-manager-web healthcheck` override, not the image's
-      `/backup-manager status` (which would fail: this container has no config
+      `/rbm-web healthcheck` override, not the image's
+      `/rbm status` (which would fail: this container has no config
       file and no state database)
 - [ ] It publishes exactly one port
 - [ ] It is attached to the `backup-manager` network

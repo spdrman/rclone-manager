@@ -26,7 +26,7 @@ the container health check asking the local process whether it is healthy
 The app does open outbound network connections, and it opens exactly the ones
 the operator configured: SFTP sessions to the hosts named in the operator's own
 backup sets, made by the pinned rclone packages compiled into
-`/backup-manager`. Those connections carry the operator's own data to the
+`/rbm`. Those connections carry the operator's own data to the
 operator's own destination. No third party is in that path, and the app adds no
 destination of its own.
 

@@ -81,14 +81,14 @@
   "healthchecks": {
     "engine": [
       "CMD",
-      "/backup-manager-web",
+      "/rbm-web",
       "healthcheck",
       "--url",
       "http://127.0.0.1:8080/health/live"
     ],
     "webUI": [
       "CMD",
-      "/backup-manager-web",
+      "/rbm-web",
       "healthcheck"
     ]
   },
@@ -126,7 +126,7 @@
     "dependency either, so the badge it produces is the freshness report it is",
     "meant to be.",
     "",
-    "The Web UI's is unchanged: `/backup-manager status` needs a config file and a",
+    "The Web UI's is unchanged: `/rbm status` needs a config file and a",
     "state database that container does not have, so every adapter has to either",
     "override it with the Web UI test or disable it outright (Unraid, whose only",
     "seam is `docker run --health-cmd`, which is shell form the distroless image",
@@ -134,29 +134,29 @@
   ],
   "commands": {
     "engine": [
-      "/backup-manager-web",
+      "/rbm-web",
       "serve"
     ],
     "webUI": [
-      "/backup-manager-web",
+      "/rbm-web",
       "serve-ui"
     ],
     "headless": [
-      "/backup-manager",
+      "/rbm",
       "daemon"
     ],
     "healthcheck": [
-      "/backup-manager-web",
+      "/rbm-web",
       "healthcheck"
     ],
     "imageHealthcheck": [
-      "/backup-manager",
+      "/rbm",
       "status"
     ]
   },
   "binaries": [
-    "/backup-manager",
-    "/backup-manager-web"
+    "/rbm",
+    "/rbm-web"
   ],
   "containerPaths": {
     "state": "/data/state",

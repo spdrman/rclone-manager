@@ -1270,15 +1270,15 @@ The release manifest SHALL prove core parity through binary hashes and image/pac
 The provider-neutral core executable SHALL support at minimum:
 
 ```bash
-backup-manager run
-backup-manager daemon
-backup-manager status
-backup-manager check
-backup-manager retention --dry-run
-backup-manager retention
-backup-manager reconcile
-backup-manager validate <artifact-id>
-backup-manager version
+rbm run
+rbm daemon
+rbm status
+rbm check
+rbm retention --dry-run
+rbm retention
+rbm reconcile
+rbm validate <artifact-id>
+rbm version
 ```
 
 ## 9.1 Headless Docker default
@@ -1286,13 +1286,13 @@ backup-manager version
 The headless Docker distribution SHOULD default to:
 
 ```bash
-backup-manager daemon
+rbm daemon
 ```
 
 Users SHALL be able to override the command, for example:
 
 ```bash
-docker run --rm ... backup-manager check
+docker run --rm ... rbm check
 ```
 
 ## 9.2 Generic Web App host
@@ -1842,8 +1842,8 @@ Recovery metadata MUST NOT contain:
 Provide a dry-run recovery command such as:
 
 ```bash
-backup-manager catalog rebuild --dry-run
-backup-manager catalog rebuild
+rbm catalog rebuild --dry-run
+rbm catalog rebuild
 ```
 
 Reconstruction MUST NOT delete remote or local backup files.
@@ -2587,7 +2587,7 @@ docker run --rm \
   -v /path/to/state:/var/lib/backup-manager \
   -v /path/to/backups:/data/backups \
   <registry>/iasbuilt/backup-manager:0.1.0 \
-  backup-manager check
+  rbm check
 ```
 
 Daemon:
@@ -2600,7 +2600,7 @@ docker run -d \
   -v /path/to/state:/var/lib/backup-manager \
   -v /path/to/backups:/data/backups \
   <registry>/iasbuilt/backup-manager:0.1.0 \
-  backup-manager daemon
+  rbm daemon
 ```
 
 The HTTP/UI listener SHALL be disabled by default in headless mode unless explicitly enabled.
@@ -3525,7 +3525,7 @@ Container/CLI behavior SHALL be specified as integration tests before the packag
 
 Test:
 
-- `backup-manager check`;
+- `rbm check`;
 - one-cycle `run`;
 - daemon;
 - clean `SIGTERM`;
@@ -4119,14 +4119,14 @@ Include:
 
 ## Work Package 4.3 — TrueNAS + Unraid + OpenMediaVault Container Provider Packages
 
-> If a packaging profile here runs `/backup-manager-web serve-ui` as its own
+> If a packaging profile here runs `/rbm-web serve-ui` as its own
 > container (the same two-container split B4.1 shipped for the generic Docker
 > app), remember to override the canonical image's own baked-in `HEALTHCHECK`
-> independently for that container: it runs `backup-manager status`, which
+> independently for that container: it runs `rbm status`, which
 > needs a config file and a state database `serve-ui` never has. See
 > `container/compose.yaml`'s `web-ui` service and docs/deployment.md's
 > "Healthchecks differ per container" for the working example
-> (`/backup-manager-web healthcheck` instead).
+> (`/rbm-web healthcheck` instead).
 
 ### TrueNAS
 
@@ -4862,9 +4862,9 @@ docker pull canonical versioned image
         ↓
 mount config/state/backups
         ↓
-backup-manager check
+rbm check
         ↓
-backup-manager daemon
+rbm daemon
         ↓
 manage via CLI
 ```

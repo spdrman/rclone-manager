@@ -28,9 +28,9 @@ an archive class is not a place a tier can deliver to.
 | Retention plans, previews and prune understand mediums | Landed, including across the HTTP boundary: the preview carries every move with both mediums, and every deletion with the medium it happens on (#430) |
 | The API and the UI show placements, access states and the disclosure | Landed |
 | A tier's destination is reachable from `backup-manager`, not only the browser | Landed (#595): `retention --tier-medium NAME=MEDIUM_ID` previews a supplied chain against the destinations it names, `settings patch --policy-file` replaces the deployment's whole chain, and `backup-set retention --policy-file` already did one set's |
-| A medium can be proved to work before a cycle carries a real backup to it | Landed (#443): `backup-manager medium test-connection` (`preflight` still works, see below), and a button on the settings form |
-| A medium can be DECLARED without hand-editing config.yaml, and proved before it is | Landed (#594): a wizard on the settings page, and `backup-manager medium list/show/import-credentials/add/edit/remove` |
-| The drive backups already land on is a destination like any other, a tier picks one without leaving the tier, and one destination is the default | Landed (#622): a picker under every tier in both editors, a `local` entry in the destinations list, `backup-manager medium default` and `settings patch --tier-medium` |
+| A medium can be proved to work before a cycle carries a real backup to it | Landed (#443): `rbm medium test-connection` (`preflight` still works, see below), and a button on the settings form |
+| A medium can be DECLARED without hand-editing config.yaml, and proved before it is | Landed (#594): a wizard on the settings page, and `rbm medium list/show/import-credentials/add/edit/remove` |
+| The drive backups already land on is a destination like any other, a tier picks one without leaving the tier, and one destination is the default | Landed (#622): a picker under every tier in both editors, a `local` entry in the destinations list, `rbm medium default` and `settings patch --tier-medium` |
 | Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
 
 One limit is worth knowing before you write a chain, and it is the manager
@@ -64,7 +64,7 @@ downloaded, and the copy it would have moved stays exactly where it is.
 Every reason a move does not happen is visible without reading logs. A cycle in which artifacts were due to move and none
 arrived says so on the `Last run cycle` panel, in the operation record the
 activity feed reads, in the FR-23 event stream under `op=move`, and in
-`backup-manager run`'s exit status, which becomes 1 with the engine's own reason
+`rbm run`'s exit status, which becomes 1 with the engine's own reason
 on stderr. A deployment that declares no storage medium attempts no moves, so
 none of that can fire for it.
 
@@ -185,7 +185,7 @@ just been handed an access key by their provider and has none of them yet
 (#594). It does not add a schema field and does not soften the refusal above:
 
 ```
-backup-manager medium import-credentials --stdin
+rbm medium import-credentials --stdin
 ```
 
 reads AWS shared-credentials text from standard input, writes it to a 0600 file
@@ -218,7 +218,7 @@ not there, a credentials file the daemon cannot read, or a policy that denies
 been chosen to leave local disk. There is a test now:
 
 ```
-backup-manager medium test-connection offsite_s3
+rbm medium test-connection offsite_s3
 ```
 
 and the same check sits behind a button on the settings form and under every
@@ -237,7 +237,7 @@ It answers for the drive on this machine too, which used to have nothing to
 test on the reasoning that no network was involved:
 
 ```
-backup-manager medium test-connection local
+rbm medium test-connection local
 ```
 
 A local destination fails in the shapes a remote one does, minus the credential,
@@ -260,7 +260,7 @@ declared yet**, which is what lets a destination be proved before it is written
 down rather than after:
 
 ```
-backup-manager medium test-connection --candidate offsite_s3 --bucket nas-backups \
+rbm medium test-connection --candidate offsite_s3 --bucket nas-backups \
         --region us-east-1 --prefix monthly --credentials-id 9b41c7e2
 ```
 
@@ -329,7 +329,7 @@ Nothing is deleted and nothing is marked lost. The copies on that medium read as
 **unreachable**, which means this deployment currently has no way to ask about
 them, and is a different sentence from "the copy is gone". No prune runs against
 them, and no source copy anywhere is reclaimed on the strength of a placement
-that could not be confirmed. `backup-manager medium show <id>` lists what is
+that could not be confirmed. `rbm medium show <id>` lists what is
 there, per backup set, with a count of how many of those are the only confirmed
 copy of their backup anywhere.
 
@@ -474,7 +474,7 @@ hash capability, MD5 (`backend/s3.Fs.Hashes()` returns `hash.Set(hash.MD5)`), so
 it cannot produce a full-object SHA-256 attestation at all. There is nothing an
 s3 medium could ever do to satisfy the class.
 
-Until recently `backup-manager check` accepted `upload_verification: attested`
+Until recently `rbm check` accepted `upload_verification: attested`
 and the refusal arrived from the move engine instead: after the upload, at the
 verification step, on every cycle, forever, in a log line. `Validate` now names
 the reason and names `readback` as the way out, and `check` fails. Nothing about

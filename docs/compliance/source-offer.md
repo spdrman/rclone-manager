@@ -33,7 +33,7 @@ obligation is recorded and this file does not actually carry the offer.
 
 The one dependency worth naming here is **rclone**, which is MIT licensed and is
 consumed as a Go module rather than as an executable: its packages are compiled
-directly into `/backup-manager` behind a narrow transport adapter. There is no
+directly into `/rbm` behind a narrow transport adapter. There is no
 `rclone` binary anywhere in the image, and `container/Dockerfile` says so and is
 checked on it.
 
@@ -170,7 +170,7 @@ and the container is never started, so the command never runs:
 
 ```
 docker image inspect --format '{{json .Config.Labels}}' <image>
-docker create --name bm <image> /backup-manager version
+docker create --name bm <image> /rbm version
 docker cp bm:/licenses .
 docker rm bm
 ```

@@ -7,8 +7,8 @@
 # binary hashes and image/package digests."
 #
 # This builds container/Dockerfile for each of linux/amd64 and
-# linux/arm64, extracts both shipped binaries (/backup-manager and
-# /backup-manager-web) from each built image, hashes them with SHA-256,
+# linux/arm64, extracts both shipped binaries (/rbm and
+# /rbm-web) from each built image, hashes them with SHA-256,
 # and writes the result to container/release-manifest.json - a record a
 # reviewer (or a future provider package, per §8's "provider-specific
 # packages MUST NOT contain different lifecycle logic") can diff against
@@ -179,12 +179,19 @@ for arch in $ARCHES; do
     --load \
     . >&2
 
-  cid=$(docker create --platform "linux/${arch}" "$tag" /backup-manager version)
+  cid=$(docker create --platform "linux/${arch}" "$tag" /rbm version)
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
 
-  docker cp "${cid}:/backup-manager" "${tmp}/backup-manager" >&2
-  docker cp "${cid}:/backup-manager-web" "${tmp}/backup-manager-web" >&2
+  # /rbm and /rbm-web, never the /backup-manager and /backup-manager-web
+  # beside them, and this is not cosmetic (the 0.3.3 CLI rename). Those
+  # two are SYMLINKS now, and `docker cp` without -L copies a link as a
+  # link, so this would write two dead links into $tmp and sha256 would
+  # fail on a file that is not there. The local names below stay the old
+  # ones on purpose: they are the keys binary_sha256 records, and the
+  # release ARTIFACT did not get renamed, only the command.
+  docker cp "${cid}:/rbm" "${tmp}/backup-manager" >&2
+  docker cp "${cid}:/rbm-web" "${tmp}/backup-manager-web" >&2
   docker rm "$cid" >/dev/null
 
   backup_manager_sha=$(sha256_of "${tmp}/backup-manager")

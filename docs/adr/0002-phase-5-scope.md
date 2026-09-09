@@ -208,7 +208,7 @@ recomputing anything.
 
 It also doesn't need a daemon to be useful the way alert delivery would: a Prometheus
 exposition-format renderer is exactly the shape the "textfile collector" pattern wants
-(`backup-manager status --prometheus > some.prom` on a cron, no HTTP server, no long-running
+(`rbm status --prometheus > some.prom` on a cron, no HTTP server, no long-running
 process), which fits a binary that doesn't have a daemon mode yet better than a `/metrics`
 HTTP endpoint would.
 
@@ -264,7 +264,7 @@ those the caller actually populated (`BackupSetInputs`' optional fields stay opt
 too; an unset value omits that metric series rather than fabricating a zero).
 
 It is deliberately a pure, dependency-free, standard-library-only transformation with no
-new call site anywhere else in the repository. Wiring it into a `backup-manager status
+new call site anywhere else in the repository. Wiring it into a `rbm status
 --prometheus` flag or an HTTP handler is issue #25/#26's job, once a daemon or a CLI exists
 to call it from; this package is written so that wiring, whenever it lands, is a few lines
 calling `metrics.Render`, not a redesign.
