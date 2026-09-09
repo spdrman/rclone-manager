@@ -165,6 +165,13 @@ func noAction(artifact model.ArtifactID, st lifecycle.State, reason string) Find
 // exists not to. A repair belongs to whoever owns that edge, not to a
 // read-only reconciliation pass; reporting on every pass is the correct,
 // if lesser, answer until that edge exists.
+//
+// Contract for future readers: NeedsInvestigation set by this function
+// never implies a transition happened. Every Finding it is called on has
+// From == To (a converged row), so anything downstream that starts
+// treating NeedsInvestigation as "this artifact was quarantined" or "a
+// journal write occurred" will be wrong about exactly the findings this
+// function produces.
 func flagRecordFault(f Finding, local localValidity) Finding {
 	if local.recordFault() {
 		f.NeedsInvestigation = true
