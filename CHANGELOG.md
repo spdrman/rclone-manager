@@ -37,6 +37,28 @@
   `retry` can no longer take away a recovery option and leave the artifact as
   stuck as before. The FR-12 collision refusal itself is unchanged.
 
+- **The browser offers a stuck backup a way out, on the backup it is actually
+  stuck on** (#662). A backup's detail page had no control that reached any
+  recovery verb, and the card added to answer that was gated on a combination
+  no backend produces: a backup that failed an attempt carries no validation
+  verdict at all, so the API reports it as `pending`, and a FAILED row is not
+  quarantined either — so the card rendered for nothing real. It is gated on
+  the lifecycle state now, which the API already reported and the client
+  simply dropped. Pressing it re-enters the pipeline and the page re-reads the
+  backup, because the verb answers before the pipeline has run: it says the
+  request was accepted, never that the backup is recovered. A refused press
+  carries the service's own words, what to do next, and the correlation id an
+  operator can quote, instead of a bare error. Note that reaching this page at
+  all still needs #677: the route matches one path segment and an artifact id
+  has three.
+
+- **The docked terminal no longer contradicts its own advice on screen**
+  (#662). The suppression of a *"no rbm equivalent yet"* line printed under a
+  remedy that names a command was applied to what Copy and Save produce and,
+  separately, to what the panel draws — and only the first was ever exercised,
+  so the window an operator reads could disagree with the file they exported
+  from it. Both are now asserted against the rendered panel.
+
 ### Changed
 
 - `rbm status` names the artifacts that need intervention and the commands
