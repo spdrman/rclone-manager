@@ -1,6 +1,6 @@
 /**
- * The `rbm` command each storage-destination action in the
- * browser is equivalent to (G2.2, issue #594; EPIC G's standing rule).
+ * The `rbm` command each storage-destination action in the browser is
+ * equivalent to (G2.2, issue #594; EPIC G's standing rule).
  *
  * # Why the UI prints commands at all
  *

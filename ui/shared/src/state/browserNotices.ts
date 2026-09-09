@@ -89,8 +89,8 @@ export interface BrowserNotice {
    */
   backupSetIds: string[];
   /**
-   * The `rbm` command line this action is equivalent to,
-   * copy-pasteable exactly as written.
+   * The `rbm` command line this action is equivalent to, copy-pasteable
+   * exactly as written.
    *
    * The epic's standing rule, and it earns its keep hardest on a refused
    * run: while the destructive gate is shut this command is the only
