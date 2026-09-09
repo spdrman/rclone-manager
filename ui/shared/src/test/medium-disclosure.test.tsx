@@ -205,13 +205,13 @@ describe("mapping a retention tier to a storage medium", () => {
   // direction: an operator who came here to put backups on a second disk
   // learns nothing from a menu that simply does not mention it, and asks
   // again next month.
-  it("lists a saved local volume, disabled, and says it is not built", async () => {
+  it("lists a saved local volume, disabled, so its value can never be submitted", async () => {
     await renderSettings();
 
     const picker = tier(2).getByLabelText("Storage medium for tier 2") as HTMLSelectElement;
     const volume = Array.from(picker.options).find((o) => /second hard disk/i.test(o.textContent ?? ""));
     expect(volume).toBeTruthy();
-    expect(volume?.textContent).toMatch(/NOT BUILT/);
+    expect(volume?.textContent).toMatch(/not built/i);
     expect(volume?.disabled).toBe(true);
     // disabled is what keeps it out of a save: a disabled option cannot
     // be chosen. (Asserted as the attribute rather than by firing a
@@ -227,6 +227,50 @@ describe("mapping a retention tier to a storage medium", () => {
     // The control: with the not-built row on the list, the row that works
     // is still selectable and still the local one.
     expect(Array.from(picker.options).find((o) => o.value === "")?.disabled).toBeFalsy();
+  });
+
+  // The bug this row caused in the running UI. The explanation used to be
+  // the option's own label, and a native <select> is exactly as wide as
+  // its widest option, so one row stretched the picker across most of the
+  // window and the browser STILL truncated the sentence with an ellipsis:
+  // the layout wrecked, and the text it was wrecking the layout to deliver
+  // unreadable.
+  //
+  // Asserted against the longest option actually on the menu rather than a
+  // character count picked out of the air, because "does this one row size
+  // the control" is the real property and a magic number stops tracking it
+  // the moment another label grows.
+  it("keeps the not-built label short enough that it does not size the picker", async () => {
+    await renderSettings();
+
+    const picker = tier(2).getByLabelText("Storage medium for tier 2") as HTMLSelectElement;
+    const label = (o: HTMLOptionElement) => (o.textContent ?? "").trim();
+    const volume = Array.from(picker.options).find((o) => /second hard disk/i.test(label(o)));
+    const longest = Math.max(...Array.from(picker.options).map((o) => label(o).length));
+
+    expect(label(volume as HTMLOptionElement).length).toBeLessThan(longest);
+  });
+
+  // The other half of the fix, and the half that decides whether it was
+  // worth doing: the reasoning did not get deleted to make the menu
+  // behave, it moved somewhere it can be read in full. Asserted on the
+  // substance rather than on one phrase, because "not built" on its own is
+  // what the short label already says, and the thing an operator came here
+  // to find out is WHY, and whether asking again next month would help.
+  it("explains beside the picker why a saved local volume is not built", async () => {
+    await renderSettings();
+
+    const row = tier(2);
+    // Scoped to the tier's own row, so this cannot pass on some other
+    // paragraph elsewhere on the Settings page.
+    expect(row.getByText(/second local destination would be a new medium type/i)).toBeTruthy();
+    expect(row.getByText(/architecture decision rather than a setting/i)).toBeTruthy();
+
+    // And it is readable without hovering, focusing or pinning anything:
+    // it is ordinary page text beside the control, not the field's help
+    // pop-up, which is FIELD_HELP.tierMedium and is about the field.
+    const note = row.getByText(/second local destination would be a new medium type/i);
+    expect(note.closest(".fieldhelp__pop")).toBeNull();
   });
 
   it("shows the deletion consequence, in the backend's own words, before the first mapping can be saved", async () => {

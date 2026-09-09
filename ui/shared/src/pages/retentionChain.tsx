@@ -410,11 +410,19 @@ export function TierRow({
                   built is a real answer. Its value can never be
                   submitted: the option is disabled, so the select refuses
                   it, and a medium id nothing declares would be refused at
-                  config load anyway. */}
+                  config load anyway.
+
+                  The label is short, and that is not a style preference.
+                  A native <select> is as wide as its widest option, so
+                  the paragraph this used to carry stretched the picker
+                  across most of the window AND still arrived truncated
+                  with an ellipsis, which is both failures at once: the
+                  layout wrecked, and the sentence it was wrecking the
+                  layout to deliver unreadable. The reason lives in the
+                  note under the select instead, where it can be read in
+                  full and costs the picker no width. */}
               <option value={NOT_BUILT_LOCAL_VOLUME} disabled>
-                A saved local volume, such as a second hard disk (NOT BUILT: a second local
-                destination is a new medium type, which is an architecture decision rather than
-                a setting)
+                {"A saved local volume, such as a second hard disk (not built)"}
               </option>
               {mediums.map((m) => (
                 <option key={m.id} value={m.id} disabled={m.readsRequireRestore}>
@@ -424,6 +432,23 @@ export function TierRow({
             </select>
           )}
         </Field>
+
+        {/* The sentence the option label cannot carry, in the one place on
+            this field that was still free.
+
+            Not the help pop-up: this Field already passes
+            FIELD_HELP.tierMedium, that copy describes the field itself
+            rather than one row of its menu, and evicting it would trade
+            one missing explanation for another. Not inside the Field
+            either, because Field's own doc spells out what extra text in
+            a wrapping <label> does to the control's accessible name. So
+            it sits here, a sibling of the picker in the same column, read
+            without hovering anything. */}
+        <p style={{ margin: 0, fontSize: "var(--text-sm)", maxWidth: "78ch" }}>
+          A saved local volume, such as a second hard disk, is listed here but not built. A
+          second local destination would be a new medium type, and that is an architecture
+          decision rather than a setting.
+        </p>
 
         <TierDestinationActions
           tier={tier}
