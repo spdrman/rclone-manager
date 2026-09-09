@@ -163,10 +163,152 @@ Run one case on its own with `--case`, and add `--keep-on-failure` to
 leave a failing case's containers up for reading. Everything else is torn
 down on success, on failure and on interrupt.
 
-## Both drivers' `--help` is a pinned block, not a line range
+## The third thing in here: a browser that has to use the wire
 
-`two-machine-backup.sh` and `run-machine-tier.sh` print their `--help` from the
-header block between `# HELP-START` and `# HELP-END` near the top of each file.
+`three-machine-web-ui.sh` exists because of a sentence in the section
+above that is easy to read past. Suite B "drives a mock through a dev
+server, so it proves a component renders rather than that the product
+works." That is not a caveat, it is a structural ceiling, and the run it
+let through was on real hardware: the Activity page errored in the browser
+while the server answered HTTP 200 with valid JSON in twenty milliseconds.
+Nothing watching the server can see that. Nothing mocking the client can
+either, because a mock answers with the shape the client already expects.
+
+So this stands up the whole path and puts a real browser at the end of it:
+
+```
+  CLIENT ── edge ── web-ui ── internal ── engine ── backhaul ── VPS
+ Playwright         serve-ui              serve                sshd
+ + Chromium         + proxy               + SQLite             + files
+```
+
+Three machines. Four containers, because the middle machine is the product's
+own two-container split (`/rbm-web serve` and `/rbm-web serve-ui`) and
+collapsing it into one would delete the reverse-proxy hop, which is half of
+what this exists to cover.
+
+Three networks rather than one, and that is the topology doing work rather
+than decoration. The client can reach the UI container and nothing else, so
+a spec cannot pass by talking to the engine directly, and the engine runs
+with `TRUST_FORWARDED_HEADERS=true` next to the only peer
+`container/compose.yaml` says may ever be its peer. Nothing is published to
+a host port on any of the three.
+
+### It tests the running product, not the installer
+
+`two-machine-backup.sh` runs its manager machine as docker-in-docker and
+installs onto it with the real installer, and its own comment says why this
+one cannot borrow that: the dind daemon is a network namespace of its own,
+so 8080 in there is not 8080 out here and a sibling client container has no
+route to it. The two ways out were to publish the inner port back out onto
+the shared network, or to drop dind. This drops dind, because publishing
+back out means a browser talking to a port forwarded by a daemon inside a
+daemon, and every reset on that hop would be a question about the rig
+rather than about the product.
+
+What that gives up is worth saying plainly rather than leaving to be
+discovered: **a green run here says nothing about whether an operator can
+install this.** `two-machine-backup.sh` is still the only test that
+`scripts/install/install_docker_host.py` takes a bare machine to a working
+deployment, and it has to stay that way.
+
+### What is seeded, and where the credentials come from
+
+The VPS holds three files of known content. The deployment is configured
+with a read-only backup set pointing at it over SSH, one cycle is run so
+the journal and the catalogue have real rows in them, and an administrator
+is enrolled with `rbm-web auth create-admin`. So a browser can sign in and
+read data that came off another machine.
+
+Nothing here is committed and nothing is reused between runs. The SSH
+keypair is generated INSIDE a container and lives in a Docker volume that
+teardown destroys, so its private half never touches the host at all: that
+is also what satisfies `core/internal/transport/rclone/ssh.go`, which
+refuses a key that is not exactly 0600 or that sits under a group-writable
+directory, and a bind mount cannot promise either across a Docker Desktop
+share. The administrator's password is generated per run, reaches the
+product down a pipe into stdin, and is printed on the terminal because a
+suite that has to sign in needs it.
+
+### Running it
+
+```sh
+scripts/e2e/three-machine-web-ui.sh
+    # stand it up and run the built-in browser check
+
+scripts/e2e/three-machine-web-ui.sh --suite ../rclone-manager-tests/suites/web-ui
+    # ... and run that directory's Playwright suite in the client container
+
+scripts/e2e/three-machine-web-ui.sh --keep-up
+    # stand it up, print how to drive it, and leave it running
+```
+
+`--image REF` skips the product build and uses an image already on the
+machine, `--artifacts DIR` says where traces and screenshots land, and
+`--keep-on-failure` leaves a failed stack up for reading. `--help` prints
+the full reasoning, from the same pinned header block both other drivers
+use.
+
+The exit status is the client container's, never the teardown's: a run that
+tore down cleanly after a red suite is a red run.
+
+### The contract with the suite
+
+The client container is where `npx playwright test` runs. Not Playwright on
+the developer's machine driving a remote browser, and not a bare Chromium
+something else attaches to: the runner, the browser and the page all share
+one network position, which is why a spec cannot reach the engine by
+accident. The image is `scripts/e2e/client-machine.Dockerfile`, the
+official Playwright image pinned by digest the way `container/Dockerfile`
+pins its own bases, and its `@playwright/test` version tracks
+`suites/web-ui/package-lock.json` in the tests repository. The two have to
+move together: the browsers live in the image under a build id the npm
+package computes, so a skew reads as "Executable doesn't exist" rather than
+as a version problem.
+
+These five variables are the whole handover:
+
+| variable | what it is |
+|---|---|
+| `RM_BASE_URL` | `http://rclone-manager:8080`, resolved by Docker's embedded DNS on the edge network. Never localhost, and nothing is published to the host |
+| `RM_ADMIN_USERNAME` | the enrolled administrator |
+| `RM_ADMIN_PASSWORD` | its password, generated this run |
+| `RM_BACKUP_SET` | the seeded set's name |
+| `RM_ARTIFACTS_DIR` | `/artifacts`, mounted out to the host and never removed by the teardown |
+
+A Playwright config that sees `RM_BASE_URL` must use it as `baseURL` and
+must not start a web server of its own. There is one, it is another
+container, and `npm run dev` in there would serve the mock this whole thing
+exists to get away from.
+
+The suite is MOUNTED rather than baked in, because specs change every time
+somebody works on them and the runtime changes when a lockfile moves. Its
+own `node_modules` is not used: an anonymous volume over `/suite/node_modules`
+is seeded from the image's linux install, so a `node_modules` built for the
+developer's Mac never reaches the container.
+
+### Two things about running a browser in a container
+
+Both are the failures everyone meets once, so they are settled here rather
+than left to be rediscovered. Chromium's renderers put their shared buffers
+in `/dev/shm` and Docker's 64 MiB default is not enough for a 1440x900 page,
+so the client gets `--shm-size=1g`; `--ipc=host` would also work and is a
+much larger hole than the size default is a problem. And the client runs
+`--init`, because Chromium leaves zombies when its parent is a test runner
+rather than an init, and a few hundred defunct processes is how the next run
+finds no pids left.
+
+The client runs as the invoking user's uid so the traces and screenshots it
+writes are owned by whoever has to read them. Chromium's own sandbox stays
+on: it was checked rather than assumed, and `RM_CHROMIUM_NO_SANDBOX=1` is
+there for a host where it cannot be.
+
+
+## Every driver's `--help` is a pinned block, not a line range
+
+`two-machine-backup.sh`, `run-machine-tier.sh` and `three-machine-web-ui.sh`
+all print their `--help` from the header block between `# HELP-START` and
+`# HELP-END` near the top of each file.
 That used to be a range of line numbers, `sed -n '2,110p' "$0"`, so the help an
 operator reads was a set of coordinates rather than a piece of text: a comment
 inserted above the boundary rewrote it and deleting one truncated it, with
@@ -174,7 +316,7 @@ nothing anywhere rendering either script's help. Both had already drifted by the
 time #514 was written, one of them to a sentence cut off inside a word.
 
 Edit the header freely; move a marker if you want the block to cover more or
-less. `scripts/tests/e2e-help.test.sh` renders both drivers and diffs them
+less. `scripts/tests/e2e-help.test.sh` renders every driver and diffs each
 against `scripts/tests/testdata/*.help.txt` on every gate run, the way
 `core/tests/compat` pins the CLI under FR-35 clause 4, so a reword fails until
 somebody updates the golden on purpose. It also proves the property that used to
