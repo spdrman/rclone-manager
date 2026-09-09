@@ -219,14 +219,16 @@ The components, copied back out of both images with `docker create` plus
 
 | component | `8ad3100` | `186ba0c7` | delta |
 |---|---|---|---|
-| `/rbm` | 19,792,032 | 31,391,904 | +11,599,872 |
-| `/rbm-web` | 21,102,752 | 32,637,088 | +11,534,336 |
+| `backup-manager` | 19,792,032 | 31,391,904 | +11,599,872 |
+| `backup-manager-web` | 21,102,752 | 32,637,088 | +11,534,336 |
 | `/ui/bundles`, five adapter bundles | not carried | 3,503,996 | +3,503,996 |
 | `/licenses` | not carried | 57,300 | +57,300 |
 | distroless base layers | 2,113,978 | 2,113,978 | 0 |
 | **image** | **43,008,762** | **69,704,266** | **+26,695,504** |
 
-Both columns sum to their image exactly, so nothing is unattributed.
+Both columns sum to their image exactly, so nothing is unattributed. Both
+commits predate 0.3.3, so the binaries carry the names they had then;
+0.3.3 renamed them to `/rbm` and `/rbm-web`.
 
 **9,502,720 bytes of each binary is rclone's S3 backend**, which #369 imported
 for EPIC E's MediumStore. Measured by building each command for `linux/arm64`

@@ -76,7 +76,7 @@ services:
   # credentials, and publishes no port at all.
   backup-manager:
     image: ghcr.io/spdrman/backup-manager:0.3.3
-    command: ["/rbm-web", "serve", "--profile=generic"]
+    command: ["/backup-manager-web", "serve", "--profile=generic"]
 
     user: "1000:1000"
     read_only: true
@@ -127,7 +127,7 @@ services:
     # verdict (issue #206). The Web UI below declares
     # `depends_on: backup-manager: condition: service_healthy`, so
     # whatever this asks stands between an operator and the only
-    # container with a published port. `/rbm status` is
+    # container with a published port. `/backup-manager status` is
     # FR-24's backup-freshness verdict and exits non-zero on any
     # DEGRADED, STALE or FAILING set, and on a fresh install, which has
     # backed nothing up yet: gating the Web UI on it means an app an
@@ -138,12 +138,12 @@ services:
     # is the right default for a plain `docker run` and for the headless
     # `daemon` command, which serves no HTTP and so has no liveness
     # endpoint to ask. Backup freshness is not lost - read it with
-    # `docker exec backup-manager /rbm status`, or let the
+    # `docker exec backup-manager /backup-manager status`, or let the
     # alerts block deliver it.
     #
     # Derived from container/compose.yaml, never authored here.
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -188,7 +188,7 @@ services:
   # opens when the tile is clicked.
   backup-manager-ui:
     image: ghcr.io/spdrman/backup-manager:0.3.3
-    command: ["/rbm-web", "serve-ui", "--profile=generic"]
+    command: ["/backup-manager-web", "serve-ui", "--profile=generic"]
 
     depends_on:
       backup-manager:
@@ -217,7 +217,7 @@ services:
     # key, known_hosts, or either data directory.
 
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck"]
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
       interval: 30s
       timeout: 5s
       start_period: 5s

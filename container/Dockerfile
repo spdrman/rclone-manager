@@ -34,8 +34,9 @@
 # process. Two binaries, not one with two names, because apps/generic
 # needs to import apps/common/webhost and apps/common/auth/local, and
 # core/'s own module cannot depend on apps/ in either direction (§7.1) -
-# see apps/generic/cmd/backup-manager-web/main.go's own doc for the full
-# reasoning.
+# see apps/generic/cmd/backup-manager-web/main.go's own doc for the module
+# boundary reasoning (that half is unaffected by the rename; the name it
+# gives itself is a separate matter tracked on #651).
 #
 # THE OLD NAMES (the 0.3.3 CLI rename)
 #
@@ -46,6 +47,15 @@
 # operator already has, and a rename that breaks those is a rename that
 # gets reverted. They are SYMLINKS to the two real binaries, created in
 # stage 4 and copied in as links.
+#
+# These are not a courtesy for old deployments, they are the primary
+# path. Every compose file this repo ships, and the blob embedded in
+# scripts/install/install_docker_host.py, names `/backup-manager-web`
+# deliberately, because `IMAGE` and `--release` both let an operator
+# point the same compose at 0.3.0, 0.3.1 or 0.3.2, and none of those
+# images carries `/rbm` at all. The symlink runs one way: new images
+# answer to both names, old ones answer only to the old. So these links
+# are exercised on every deployment, not just inherited ones.
 #
 # Two things force that shape, and both are worth writing down because
 # the obvious alternative looks fine right up until it is measured.
@@ -65,6 +75,13 @@
 #     cannot run there at all. Hence a stage that does have one. It is
 #     `FROM build` rather than a new base image so this file does not
 #     acquire a sixth digest to pin for two symlinks.
+#     To be precise about what is forced and what is chosen: only the
+#     RUNTIME stage lacks a shell. `RUN ln -s` in `build` followed by
+#     `COPY --from=build /out/ /` would also work, since it is the
+#     directory COPY that preserves link-ness either way. I kept the
+#     separate stage because copying `/out/` wholesale would silently
+#     ship anything a future `RUN` drops there, and naming the two
+#     files is worth one stage that costs 0 B.
 #
 # Nothing else in the repository should grow a second name. The image
 # reference (ghcr.io/spdrman/backup-manager), the compose service names,
