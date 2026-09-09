@@ -40,7 +40,7 @@ import (
 // requireANonDefaultPort returns the source's port, having established
 // that it is not 22.
 //
-// Under the in-network placement (scripts/e2e/run-machine-tier.sh, #451)
+// Under the in-network placement (scripts/rcmtools/e2e/run_machine_tier.py, #451)
 // nothing is published and the server is reached by its alias on 22, so
 // there is no non-default port in play and this proof cannot be made. That
 // is a skip rather than a pass, and it says what is not being proven,
