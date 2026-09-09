@@ -149,7 +149,7 @@ type Metadata struct {
 	// definition has no store to appear in.
 	StoreArtifacts []string `json:"storeArtifacts"`
 	// BinaryArtifacts maps a canonical binary path
-	// ("/backup-manager-web") to a checked-in file in this provider's
+	// ("/rbm-web") to a checked-in file in this provider's
 	// package that is supposed to BE those bytes. Empty for every
 	// provider that consumes the OCI image by reference, which is all of
 	// them today, and that is the point: core-binary-hash-parity cannot
@@ -844,7 +844,7 @@ func ImportsProviderRe(provider string) *regexp.Regexp {
 type ReleaseManifest struct {
 	Commit string `json:"commit"`
 	// Version is the VERSION build argument the recorded binaries were
-	// stamped with, which is what `/backup-manager version` answers. It
+	// stamped with, which is what `/rbm version` answers. It
 	// is NOT necessarily the semantic version the provider packages
 	// advertise: the generator defaults it to `git describe --tags
 	// --always`, and this repository has no tags, so today it is an
@@ -940,6 +940,36 @@ func (m ReleaseManifest) ArchitectureSet() []string {
 	return out
 }
 
+// manifestBinaryKey turns a canonical binary path into the key
+// container/release-manifest.json records its SHA-256 under.
+//
+// The two are not the same string any more, and that is deliberate
+// rather than an oversight left over from the 0.3.3 CLI rename. What an
+// operator types became `rbm` and `rbm-web`, so canonical.json's
+// commands, every compose file and every adapter name /rbm and /rbm-web,
+// and scan.go checks a `command:`'s argv[0] against exactly that list.
+// The release ARTIFACT did not get renamed: the manifest's binary_sha256
+// keys, apps/synology/spk's payload members and the provenance inventory
+// all still say backup-manager and backup-manager-web, because they
+// identify a recorded build rather than a command, and re-keying a
+// record that already carries 0.3.3's hashes would invalidate evidence
+// to change a label.
+//
+// So one translation, in one place, rather than either half being made
+// to lie about the other. A path this map does not know is passed
+// through with its slash stripped, which is what the two callers did
+// before this existed: an unrecognised binary must fail the lookup and
+// be reported missing, never quietly resolve to one of these two.
+func manifestBinaryKey(binary string) string {
+	switch strings.TrimPrefix(binary, "/") {
+	case "rbm":
+		return "backup-manager"
+	case "rbm-web":
+		return "backup-manager-web"
+	}
+	return strings.TrimPrefix(binary, "/")
+}
+
 // RecordsEveryBinary reports whether every canonical binary has a
 // recorded SHA-256 on every architecture, and says which one does not
 // when the answer is no.
@@ -952,8 +982,8 @@ func (m ReleaseManifest) RecordsEveryBinary(binaries []string) (bool, string) {
 	}
 	for _, a := range m.Architectures {
 		for _, binary := range binaries {
-			if a.BinarySHA256[strings.TrimPrefix(binary, "/")] == "" {
-				return false, fmt.Sprintf("no SHA-256 recorded for %s on %s", binary, a.Architecture)
+			if a.BinarySHA256[manifestBinaryKey(binary)] == "" {
+				return false, fmt.Sprintf("no SHA-256 recorded for %s (release-manifest key %q) on %s", binary, manifestBinaryKey(binary), a.Architecture)
 			}
 		}
 	}
@@ -964,7 +994,7 @@ func (m ReleaseManifest) RecordsEveryBinary(binaries []string) (bool, string) {
 func (m ReleaseManifest) HashesFor(binary string) map[string]string {
 	out := map[string]string{}
 	for _, a := range m.Architectures {
-		if h := a.BinarySHA256[strings.TrimPrefix(binary, "/")]; h != "" {
+		if h := a.BinarySHA256[manifestBinaryKey(binary)]; h != "" {
 			out[a.Architecture] = h
 		}
 	}

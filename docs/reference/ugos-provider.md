@@ -877,16 +877,16 @@ A UI-only feature that belongs in `BackupService` SHALL be rejected in code revi
 The Go executable SHALL support at minimum:
 
 ```bash
-backup-manager run
-backup-manager daemon
+rbm run
+rbm daemon
 backup-manager serve
-backup-manager status
-backup-manager check
-backup-manager retention --dry-run
-backup-manager retention
-backup-manager reconcile
-backup-manager validate <artifact-id>
-backup-manager version
+rbm status
+rbm check
+rbm retention --dry-run
+rbm retention
+rbm reconcile
+rbm validate <artifact-id>
+rbm version
 ```
 
 ## 9.1 Headless Docker default
@@ -894,13 +894,13 @@ backup-manager version
 The headless Docker distribution SHOULD default to:
 
 ```bash
-backup-manager daemon
+rbm daemon
 ```
 
 Users SHALL be able to override the command, for example:
 
 ```bash
-docker run --rm ... backup-manager check
+docker run --rm ... rbm check
 ```
 
 ## 9.2 UGOS Docker App default
@@ -1407,8 +1407,8 @@ Recovery metadata MUST NOT contain:
 Provide a dry-run recovery command such as:
 
 ```bash
-backup-manager catalog rebuild --dry-run
-backup-manager catalog rebuild
+rbm catalog rebuild --dry-run
+rbm catalog rebuild
 ```
 
 Reconstruction MUST NOT delete remote or local backup files.
@@ -2142,7 +2142,7 @@ docker run --rm \
   -v /path/to/state:/var/lib/backup-manager \
   -v /path/to/backups:/data/backups \
   <registry>/iasbuilt/backup-manager:0.1.0 \
-  backup-manager check
+  rbm check
 ```
 
 Daemon:
@@ -2155,7 +2155,7 @@ docker run -d \
   -v /path/to/state:/var/lib/backup-manager \
   -v /path/to/backups:/data/backups \
   <registry>/iasbuilt/backup-manager:0.1.0 \
-  backup-manager daemon
+  rbm daemon
 ```
 
 The HTTP/UI listener SHALL be disabled by default in headless mode unless explicitly enabled.
@@ -2992,7 +2992,7 @@ Container/CLI behavior SHALL be specified as integration tests before the packag
 
 Test:
 
-- `backup-manager check`;
+- `rbm check`;
 - one-cycle `run`;
 - daemon;
 - clean `SIGTERM`;
@@ -4239,9 +4239,9 @@ docker pull canonical versioned image
         ↓
 mount config/state/backups
         ↓
-backup-manager check
+rbm check
         ↓
-backup-manager daemon
+rbm daemon
         ↓
 manage via CLI
 ```

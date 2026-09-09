@@ -51,7 +51,7 @@ notification mechanism itself:
 
 - **Every condition, on the generic image.** `apps/generic`'s adapter
   declares no capability at all, so `notify.NewPlatformSink` refuses it
-  and `backup-manager-web serve` prints "proactive alerting is off" on
+  and `rbm-web serve` prints "proactive alerting is off" on
   every start. The §37 headless Docker distribution therefore has no
   proactive alerting for any of the four conditions, and §71's second
   option (one explicit opt-in generic mechanism) has not been built. This

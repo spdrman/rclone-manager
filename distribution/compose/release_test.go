@@ -255,7 +255,7 @@ func sameHealthTest(a, b []string) bool {
 // two commands being different is what makes "an adapter that declares
 // nothing inherits the canonical check" false.
 //
-// container/Dockerfile bakes in `backup-manager status`: FR-24's
+// container/Dockerfile bakes in `rbm status`: FR-24's
 // backup-freshness verdict, the right default for a plain `docker run`
 // and for the headless `daemon` command, which serves no HTTP and so has
 // no liveness endpoint to ask. The canonical start gate is a liveness

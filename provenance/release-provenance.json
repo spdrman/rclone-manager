@@ -56,7 +56,7 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "123f4b5b69fc360faaced3ad01870e14ef343e5846e7b471eb73e064fd04e239",
+    "sha256": "7e0e4a4f7649595c249361501d842cab4999b52645ba1ae25acc31458e29d0c1",
     "format": "sha256sum"
   },
   "artifacts": [
@@ -163,12 +163,12 @@
     {
       "target": "generic",
       "path": "container/Dockerfile",
-      "sha256": "61513caa86fd035ef1aa2b26fad5fb745b747f325b8e8cfe73d2be152745a9d2"
+      "sha256": "f1884f59598d5a5d748c351dac5975dd7ec095b66207bb79b99e67bde4ccbf2b"
     },
     {
       "target": "generic",
       "path": "container/compose.yaml",
-      "sha256": "3b0c90a4b3a7beb4f88921adbbc9feabfd67905428f31d3a51569e306f494137"
+      "sha256": "0d44a31a122efb9e141bbb7f41ce9d471d0d378d0a0f45414e1699c42cdaf0d4"
     }
   ],
   "unbuiltTargets": [

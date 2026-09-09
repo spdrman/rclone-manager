@@ -83,7 +83,7 @@ that workflow to actually invoke it, and flip this table's row to Enforced.
 7. **Merge by hand.** Never squash-and-auto-merge a dependency PR for this
    ecosystem, see the rule at the top of this file.
 8. **Update the certified version** wherever it's recorded (`README.md`,
-   `backup-manager version` output) if that hasn't already been done as part
+   `rbm version` output) if that hasn't already been done as part
    of the PR.
 
 ## What actually gets pulled in: three different questions

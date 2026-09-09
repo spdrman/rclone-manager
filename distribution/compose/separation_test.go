@@ -500,7 +500,7 @@ func TestTheSeparationRuleWouldNoticeANestedLayout(t *testing.T) {
 services:
   engine:
     image: backup-manager:dev
-    command: ["/backup-manager-web", "serve", "--profile=generic"]
+    command: ["/rbm-web", "serve", "--profile=generic"]
     volumes:
       - /srv/backups:/data/backups
       - /srv/backups/private:/data/state
@@ -674,7 +674,7 @@ func TestAnUnresolvedHostPathIsRefusedRatherThanCompared(t *testing.T) {
 services:
   engine:
     image: backup-manager:dev
-    command: ["/backup-manager-web", "serve", "--profile=generic"]
+    command: ["/rbm-web", "serve", "--profile=generic"]
     volumes:
       - "{{ .Values.storage.backups.hostPath }}:/data/backups"
       - "{{ .Values.storage.state.hostPath }}:/data/state"

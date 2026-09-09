@@ -115,7 +115,7 @@ func TestTheImageCarriesTheLicenceMaterials(t *testing.T) {
 	}
 	sawBinary := false
 	for _, cp := range copies {
-		if cp.From == "build" && cp.Dest == "/backup-manager" {
+		if cp.From == "build" && cp.Dest == "/rbm" {
 			sawBinary = true
 		}
 		if cp.From == "" && strings.HasPrefix(cp.Sources[0], "core/") {
@@ -123,7 +123,7 @@ func TestTheImageCarriesTheLicenceMaterials(t *testing.T) {
 		}
 	}
 	if !sawBinary {
-		t.Error("the runtime stage read here does not copy /backup-manager from the build stage, so this is not the stage that becomes the image")
+		t.Error("the runtime stage read here does not copy /rbm from the build stage, so this is not the stage that becomes the image")
 	}
 }
 

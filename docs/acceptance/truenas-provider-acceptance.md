@@ -26,8 +26,8 @@ reach.
 | Term | Meaning here |
 | --- | --- |
 | `POOL` | The ZFS pool you install into. The package's defaults assume `tank`; substitute yours everywhere. |
-| Engine container | `/backup-manager-web serve`: API, scheduler, local authentication. No published port. |
-| Web UI container | `/backup-manager-web serve-ui`: static UI plus reverse proxy. The only published port. |
+| Engine container | `/rbm-web serve`: API, scheduler, local authentication. No published port. |
+| Web UI container | `/rbm-web serve-ui`: static UI plus reverse proxy. The only published port. |
 | Canonical image | The single OCI reference in `distribution/packaging/canonical.json`. |
 
 ---
@@ -152,7 +152,7 @@ Nothing in this app needs that, so nothing here does it.
 > confirmed on its Verify server step, and no `config.yaml` is written by hand
 > at all.
 
-`/backup-manager-web serve` starts without a `config.yaml` and serves the
+`/rbm-web serve` starts without a `config.yaml` and serves the
 first-run setup flow instead (#176), but a config file that EXISTS and does not
 validate is still a hard startup failure. Given the read-only mount above,
 create all three before the first start.
@@ -162,7 +162,7 @@ now a writable directory the application owns, so the container can create and r
 `config.yaml` itself, and an empty directory is a legitimate state rather than a broken
 deployment. Two things nonetheless keep this step here. The directory itself must exist
 and be owned by `PUID:PGID` before the first start, because a bind mount does not create
-or chown its source. And `/backup-manager-web serve` still refuses to start without a
+or chown its source. And `/rbm-web serve` still refuses to start without a
 valid config: removing that refusal, and serving a first-run flow instead, is #176's
 work and is not merged. Once it is, everything below except creating and owning the
 directory becomes optional.
@@ -208,13 +208,13 @@ Record: how long the install took, and the full text of any warning TrueNAS show
 - [ ] Install completed without error
 - [ ] TrueNAS shows the app, and both containers reach **running**
 - [ ] The engine container reaches Docker health **healthy** (it declares the
-      liveness probe, `/backup-manager-web healthcheck --url
+      liveness probe, `/rbm-web healthcheck --url
       http://127.0.0.1:8080/health/live`, and NOT the image's own
-      `HEALTHCHECK`, `/backup-manager status`. The Web UI will not start until
+      `HEALTHCHECK`, `/rbm status`. The Web UI will not start until
       this reports healthy, and `status` is the backup-freshness verdict, which
       is non-zero on a fresh install that has backed nothing up)
 - [ ] The Web UI container reaches Docker health **healthy** (it overrides that
-      healthcheck with `/backup-manager-web healthcheck`, because it has no config
+      healthcheck with `/rbm-web healthcheck`, because it has no config
       file and no state database of its own to report on)
 
 If the Web UI container is unhealthy while the engine is healthy, the override did

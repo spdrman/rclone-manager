@@ -167,20 +167,20 @@ func TestUIBundleSelectionIsDecidedByTheArtifact(t *testing.T) {
 	}{
 		{
 			name:     "nothing configured: the bundle compiled into the binary",
-			webUI:    svc(map[string]string{}, "/backup-manager-web", "serve-ui"),
+			webUI:    svc(map[string]string{}, "/rbm-web", "serve-ui"),
 			payload:  UIBundleSelection{Mechanism: UIBundleNone},
 			wantMech: UIBundleEmbedded,
 		},
 		{
 			name:         "UI_ROOT plus a profile: the image's bundle for that profile",
-			webUI:        svc(map[string]string{"UI_ROOT": "/ui/bundles"}, "/backup-manager-web", "serve-ui", "--profile=truenas"),
+			webUI:        svc(map[string]string{"UI_ROOT": "/ui/bundles"}, "/rbm-web", "serve-ui", "--profile=truenas"),
 			payload:      UIBundleSelection{Mechanism: UIBundleNone},
 			wantMech:     UIBundleImageRoot,
 			wantProvider: "truenas",
 		},
 		{
 			name:         "UI_DIR wins outright, whatever the profile says",
-			webUI:        svc(map[string]string{"UI_DIR": "/opt/pkg/ui-bundle/unraid", "UI_ROOT": "/ui/bundles"}, "/backup-manager-web", "serve-ui", "--profile=truenas"),
+			webUI:        svc(map[string]string{"UI_DIR": "/opt/pkg/ui-bundle/unraid", "UI_ROOT": "/ui/bundles"}, "/rbm-web", "serve-ui", "--profile=truenas"),
 			payload:      UIBundleSelection{Mechanism: UIBundleNone},
 			wantMech:     UIBundleImageRoot,
 			wantProvider: "unraid",
@@ -191,7 +191,7 @@ func TestUIBundleSelectionIsDecidedByTheArtifact(t *testing.T) {
 			// or the matrix would claim a bridge for a deployment that
 			// does not start.
 			name:     "UI_ROOT with no profile at all selects nothing",
-			webUI:    svc(map[string]string{"UI_ROOT": "/ui/bundles"}, "/backup-manager-web", "serve-ui"),
+			webUI:    svc(map[string]string{"UI_ROOT": "/ui/bundles"}, "/rbm-web", "serve-ui"),
 			payload:  UIBundleSelection{Mechanism: UIBundleNone},
 			fallback: "",
 			wantMech: UIBundleImageRoot,

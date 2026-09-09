@@ -95,7 +95,7 @@
 #                   order they matter.
 #
 #                   First, that the lifecycle feed is readable at all
-#                   against a real deployment: `backup-manager activity`
+#                   against a real deployment: `rbm activity`
 #                   with the route configured announces
 #                   `mode: engine-attached`, which means it asked the
 #                   engine over HTTP, and it lists the transitions the
@@ -500,9 +500,9 @@ mgr_compose() {
 # reserves for the gate's "could not run" verdict: see EXIT_CANNOT_RUN
 # above for what keeps the two apart, and scripts/tests/two-machine-exit-status.test.sh
 # for the proof that it does.
-bm() {  # bm <mgr> <prefix> <backup-manager args...>
+bm() {  # bm <mgr> <prefix> <rbm args...>
   local mgr="$1" prefix="$2"; shift 2
-  mgr_compose "$mgr" "$prefix" exec -T rclone-manager /backup-manager "$@"
+  mgr_compose "$mgr" "$prefix" exec -T rclone-manager /rbm "$@"
 }
 
 # ------------------------------------------------------------- preflight
@@ -747,7 +747,7 @@ run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
   # standing behind one.
   step "  #624: --no-verify writes a set without proving it, and marks it"
   mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
-    /backup-manager backup-set create e2e/offline "${base[@]}" \
+    /rbm backup-set create e2e/offline "${base[@]}" \
     --user "$sftp_user" --local-path /data/backups/offline --no-verify \
     || die "\`backup-set create --no-verify\` failed against a source it was told not to check."
   config_yaml | grep -q 'connection_unverified: true' \
@@ -775,7 +775,7 @@ run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
   step "  #624: a create against a source that cannot authenticate is refused"
   local refused=0
   out="$(mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
-    /backup-manager backup-set create e2e/nobody "${base[@]}" \
+    /rbm backup-set create e2e/nobody "${base[@]}" \
     --user "nobody-$run_id" --local-path /data/backups/nobody 2>&1)" || refused=$?
   [ "$refused" = "1" ] \
     || die "a create against a source that cannot authenticate exited $refused, want 1." \
@@ -793,7 +793,7 @@ run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
 
   step "  #624: a check that fails leaves the mark where it was"
   mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
-    /backup-manager backup-set create e2e/nobody "${base[@]}" \
+    /rbm backup-set create e2e/nobody "${base[@]}" \
     --user "nobody-$run_id" --local-path /data/backups/nobody --no-verify \
     || die "\`backup-set create --no-verify\` failed for the unreachable set."
   refused=0
@@ -818,7 +818,7 @@ run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
   local id
   for id in e2e/nobody e2e/offline; do
     mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
-      /backup-manager backup-set remove "$id" --config /etc/backup-manager/config >/dev/null \
+      /rbm backup-set remove "$id" --config /etc/backup-manager/config >/dev/null \
       || die "could not remove $id, so the rest of this case would be asserting about three backup sets."
   done
 }
@@ -828,9 +828,9 @@ run_source_verification() {  # <mgr> <prefix> <source-ip> <sftp-user>
 # above uses `compose exec`, which needs a running container; this uses
 # `compose run --rm`, which starts one for the command and takes it away
 # again.
-bm_stopped() {  # bm_stopped <mgr> <prefix> <backup-manager args...>
+bm_stopped() {  # bm_stopped <mgr> <prefix> <rbm args...>
   local mgr="$1" prefix="$2"; shift 2
-  mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager /backup-manager "$@"
+  mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager /rbm "$@"
 }
 
 # run_case is one whole proof, from a machine with nothing on it to a
@@ -987,7 +987,14 @@ run_case() {
   local reported
   reported="$(bm "$mgr" "$prefix" version)"
   echo "$reported" | sed 's/^/       /'
-  echo "$reported" | grep -q "^backup-manager $version\$" \
+  # Either spelling of the binary's own name, because `version` prints
+  # argv[0]'s idea of it and this line is about the VERSION, not the name
+  # (the 0.3.3 CLI rename). The command is `rbm` now; the binary still
+  # answers to /backup-manager through the image's compatibility symlink,
+  # and core/'s own suite is what pins which of the two the banner says.
+  # Anchored and alternated rather than dropped so a banner that says
+  # neither still fails here.
+  echo "$reported" | grep -qE "^(rbm|backup-manager) $version\$" \
     || die "the installed engine reports a different version from the one that was installed." \
            "asked for: $version" \
            "reported:  $(echo "$reported" | head -1)" \
@@ -1126,7 +1133,7 @@ run_case() {
   step "  creating a backup set through the CLI, with the engine stopped"
   mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
   mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
-    /backup-manager "${create_argv[@]}" \
+    /rbm "${create_argv[@]}" \
     || die "creating the backup set through the CLI failed."
   # Issue #624, in the one window where it can be proven: the engine is
   # stopped, so every configuration write and every check below takes the
@@ -1140,7 +1147,7 @@ run_case() {
   # before this line was reached, so waiting on the file would wait for
   # nothing and the next step would race the restart.
   wait_or_die 180 "the engine to answer again after the backup set was created" \
-    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /rbm version"
 
   # ------------------------------------------------------ run it
   step "  running the backup set"
@@ -1270,18 +1277,18 @@ run_activity_diagnostic() {
     -p rclone-manager --env-file "$prefix/.env" \
     -f "$prefix/compose.yaml" -f "$prefix/compose.image.yaml" \
     run --rm --no-deps -T rclone-manager \
-    /backup-manager-web auth create-admin --username "$admin_user" --password-stdin \
+    /rbm-web auth create-admin --username "$admin_user" --password-stdin \
     || die "could not create an administrator on the installed instance."
   mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
   wait_or_die 180 "the engine to answer again after the administrator was created" \
-    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /rbm version"
 
   # ------------------------------------------------- the feed, routed
   step "  the lifecycle feed, read from the engine over its own API (#598)"
   local feed_out feed_err
   feed_err="$case_dir/activity.err"
   feed_out="$(bm_routed "$mgr" "$prefix" activity --config /etc/backup-manager/config 2>"$feed_err")" \
-    || die "\`backup-manager activity\` failed against a deployment that has just completed a backup." \
+    || die "\`rbm activity\` failed against a deployment that has just completed a backup." \
            "stderr: $(cat "$feed_err")"
 
   grep -q '^mode: engine-attached' "$feed_err" \
@@ -1315,7 +1322,7 @@ run_activity_diagnostic() {
   # asserted on the contract's field names rather than on the table.
   local json_out
   json_out="$(bm_routed "$mgr" "$prefix" activity --config /etc/backup-manager/config --limit 1 --json 2>/dev/null)" \
-    || die "\`backup-manager activity --json\` failed against the running engine."
+    || die "\`rbm activity --json\` failed against the running engine."
   case "$json_out" in
     *'"events"'*'"artifact_id"'*'"occurred_at"'*) : ;;
     *) die "--json did not emit the contract's own ListActivityResponse shape." "it emitted: $json_out" ;;
@@ -1339,7 +1346,7 @@ run_activity_diagnostic() {
     -e BACKUP_MANAGER_API_USERNAME="$admin_user" \
     -e BACKUP_MANAGER_API_PASSWORD="$admin_pass" \
     rclone-manager \
-    /backup-manager activity --config /etc/backup-manager/config >/dev/null 2>"$down_err" \
+    /rbm activity --config /etc/backup-manager/config >/dev/null 2>"$down_err" \
     || true
   if grep -q 'mode: engine-attached' "$down_err"; then
     die "the read announced engine-attached with the engine container stopped." \
@@ -1352,7 +1359,7 @@ run_activity_diagnostic() {
   note "it announced: $(grep -m1 '^mode: ' "$down_err" | cut -c1-60)..."
   mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
   wait_or_die 180 "the engine to answer again" \
-    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /rbm version"
 
   # ------------------- a 500 an operator can quote, and a log that has it
   #
@@ -1423,7 +1430,7 @@ run_activity_diagnostic() {
 # Without these the same command answers from this host's journal and
 # announces `direct`, which is a different claim entirely, so every routed
 # assertion above checks the mode line before it checks anything else.
-bm_routed() {  # bm_routed <mgr> <prefix> <backup-manager args...>
+bm_routed() {  # bm_routed <mgr> <prefix> <rbm args...>
   local mgr="$1" prefix="$2"; shift 2
   # The -e flags go on `compose exec`, not on the `docker exec` around it:
   # the outer one would set them for the compose CLI running on the
@@ -1434,7 +1441,7 @@ bm_routed() {  # bm_routed <mgr> <prefix> <backup-manager args...>
     -e BACKUP_MANAGER_API_URL=http://127.0.0.1:8080 \
     -e BACKUP_MANAGER_API_USERNAME="$admin_user" \
     -e BACKUP_MANAGER_API_PASSWORD="$admin_pass" \
-    rclone-manager /backup-manager "$@"
+    rclone-manager /rbm "$@"
 }
 
 # ==================================== #343: upgrade, then factory reset
@@ -1471,14 +1478,14 @@ run_lifecycle() {
     -p rclone-manager --env-file "$prefix/.env" \
     -f "$prefix/compose.yaml" -f "$prefix/compose.image.yaml" \
     run --rm --no-deps -T rclone-manager \
-    /backup-manager-web auth create-admin --username "$admin_user" --password-stdin \
+    /rbm-web auth create-admin --username "$admin_user" --password-stdin \
     || die "could not create an administrator on the installed instance."
   mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
   # On the engine answering, not on the record existing: `run --rm` wrote
   # that file before this line was reached, so waiting on it would wait
   # for nothing and the next command would race the restart.
   wait_or_die 180 "the engine to answer again after the administrator was created" \
-    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /rbm version"
 
   # ---------------------------------------------------- count, before
   local users_before sets_before artifacts_before
@@ -1611,7 +1618,7 @@ run_retention_apply() {
   step "  narrowing the chain so today's restore points do not all survive it"
   mgr_compose "$mgr" "$prefix" stop rclone-manager >/dev/null 2>&1
   mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
-    /backup-manager backup-set retention e2e/source \
+    /rbm backup-set retention e2e/source \
     --config /etc/backup-manager/config \
     --daily-days 1 --weekly-months 1 --monthly-months 1 >/dev/null \
     || die "giving the backup set its own retention policy failed."
@@ -1622,7 +1629,7 @@ run_retention_apply() {
 
   step "  applying the plan"
   apply_out="$(mgr_compose "$mgr" "$prefix" run --rm --no-deps -T rclone-manager \
-    /backup-manager retention apply e2e/source \
+    /rbm retention apply e2e/source \
     --config /etc/backup-manager/config --acknowledge 2>/dev/null)" \
     || die "the retention apply exited non-zero." "It said: $apply_out"
   printf '%s\n' "$apply_out" | sed 's/^/    | /'
@@ -1711,7 +1718,7 @@ run_retention_apply() {
   step "  bringing the engine back up"
   mgr_compose "$mgr" "$prefix" start rclone-manager >/dev/null
   wait_or_die 180 "the engine to answer again after the retention apply" \
-    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /backup-manager version"
+    bash -c "docker exec '$mgr' docker compose -p rclone-manager --env-file '$prefix/.env' -f '$prefix/compose.yaml' -f '$prefix/compose.image.yaml' exec -T rclone-manager /rbm version"
 
   local health
   health="$(bm "$mgr" "$prefix" status --config /etc/backup-manager/config 2>/dev/null || true)"

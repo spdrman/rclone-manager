@@ -31,7 +31,7 @@ Not "the container started". Two shipped behaviours decide the success
 condition:
 
   * the engine's start gate is a LIVENESS probe and deliberately not
-    `backup-manager status` (issue #206), because `status` is a backup
+    `rbm status` (issue #206), because `status` is a backup
     freshness verdict that a fresh install legitimately fails, and gating
     the UI on it means the page you would fix a backup problem from never
     loads;
@@ -2278,6 +2278,37 @@ EMBEDDED_COMPOSE_YAML = """\
 # credential material (the SSH private key) lives only at the host path
 # SSH_KEY_FILE points to, mounted read-only into the container.
 #
+# THE COMMANDS BELOW ARE `/backup-manager-web`, AND THAT IS DELIBERATE
+#
+# The 0.3.3 release renamed the command an operator types: `rbm` for the
+# engine CLI and `rbm-web` for the web host. These `command:` lines keep
+# the old paths anyway, because they are not commands anybody types. They
+# are absolute paths to a file inside whatever image `IMAGE` resolves to,
+# and `IMAGE` is an override precisely so that image can be an older one.
+#
+# The compatibility symlink only runs one way. container/Dockerfile ships
+# /backup-manager and /backup-manager-web as symlinks beside the two real
+# binaries, so an image built from 0.3.3 onwards answers to both names.
+# No image published before 0.3.3 carries /rbm or /rbm-web at all, and
+# 0.3.0, 0.3.1 and 0.3.2 are all still on the registry. Naming the new
+# paths here would mean pinning IMAGE to any of them writes a deployment
+# that cannot start: both containers die with "exec /rbm-web: no such
+# file or directory". scripts/install/install_docker_host.py embeds this
+# very file and has a `--release` flag whose whole purpose is installing
+# an older release, so it would break there by construction.
+#
+# core/cliecho/cliname.go already draws this line. Filesystem paths are
+# the first thing it lists as deliberately NOT following the rename,
+# next to /etc/backup-manager/config and /var/lib/backup-manager. A
+# compose `command:` is one of those paths. The rename is about what an
+# operator types, and the prose here says `rbm` throughout.
+#
+# What did NOT change is everything that names the project rather than
+# the command: `image: backup-manager:...`, the `rclone-manager` and
+# `web-ui` service names, and the container config directory at
+# /etc/backup-manager. Renaming any of those would move an operator's
+# data or break their tooling for no gain.
+#
 # TWO SERVICES, ONE IMAGE (project-owner requirement, folded in before
 # this issue merged): `rclone-manager` is the engine - core service,
 # scheduler, local authentication, and the versioned /api/v1 API, all in
@@ -2594,12 +2625,12 @@ services:
     # `up -d`, which bypasses `restart` entirely.
     restart: unless-stopped
 
-    # Liveness, deliberately, and NOT `backup-manager status`.
+    # Liveness, deliberately, and NOT `rbm status`.
     #
     # This is the check web-ui waits on: it declares `depends_on:
     # rclone-manager: condition: service_healthy` below, so whatever this
     # asks is what stands between an operator and the only LAN-facing
-    # listener in the deployment. `backup-manager status` answers backup
+    # listener in the deployment. `rbm status` answers backup
     # freshness (HEALTHY/DEGRADED/STALE/FAILING) and exits non-zero on a
     # DEGRADED, STALE or FAILING set, and also when it cannot open the
     # service at all - so gating on it means a stale backup set, or an
@@ -2616,7 +2647,7 @@ services:
     #
     # Backup freshness is not lost, it moves back to being the thing it
     # was built as: the image's own HEALTHCHECK instruction still runs
-    # `backup-manager status` (container/Dockerfile, so a plain `docker
+    # `rbm status` (container/Dockerfile, so a plain `docker
     # run` still reports backup health), the alerts block delivers it
     # proactively, and an operator reads it directly with
     # `docker compose exec rclone-manager /backup-manager status`.
@@ -2789,7 +2820,7 @@ services:
 """
 
 # Written by scripts/install/embed_compose.py alongside the blob above.
-EMBEDDED_COMPOSE_SHA256 = "3b0c90a4b3a7beb4f88921adbbc9feabfd67905428f31d3a51569e306f494137"
+EMBEDDED_COMPOSE_SHA256 = "0d44a31a122efb9e141bbb7f41ce9d471d0d378d0a0f45414e1699c42cdaf0d4"
 
 
 def embedded_compose_bytes() -> bytes:
@@ -3047,8 +3078,8 @@ def wait_for_engine_health(args, timeout: int):
 
     Read out of the daemon rather than inferred from the container being
     up, and it is the LIVENESS probe specifically: container/compose.yaml
-    declares `/backup-manager-web healthcheck --url .../health/live` for
-    the engine and explains at length why it is not `backup-manager
+    declares `/rbm-web healthcheck --url .../health/live` for
+    the engine and explains at length why it is not `rbm
     status` (issue #206). A fresh install fails `status` by design, and
     gating on it means the Web UI never starts.
     """

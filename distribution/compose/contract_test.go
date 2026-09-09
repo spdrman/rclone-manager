@@ -448,7 +448,7 @@ func TestProhibitionScanSeesKeysTheParserHasNoFieldFor(t *testing.T) {
 services:
   something-nobody-modelled:
     image: backup-manager:dev
-    command: ["/backup-manager-web", "serve"]
+    command: ["/rbm-web", "serve"]
     privileged: true
     x-invented-key:
       nested:
@@ -468,7 +468,7 @@ services:
 // TestTheStartGateRejectsTheBackupFreshnessCommand is the control that
 // names the regression rather than a generic mutation: the exact
 // healthcheck this file used to declare, put back, has to be rejected.
-// web-ui waits on this check, so with `backup-manager status` in it a
+// web-ui waits on this check, so with `rbm status` in it a
 // DEGRADED backup set or an unconfigured instance keeps the only
 // LAN-facing listener from starting.
 func TestTheStartGateRejectsTheBackupFreshnessCommand(t *testing.T) {
@@ -491,10 +491,10 @@ func TestTheStartGateRejectsTheBackupFreshnessCommand(t *testing.T) {
 		t.Fatalf("the canonical definition already fails its own start-gate rule: %s", findingText(findings))
 	}
 
-	mutated := doc.WithServiceHealthcheckTest(compose.RoleEngine, []any{"CMD", "/backup-manager", "status"})
+	mutated := doc.WithServiceHealthcheckTest(compose.RoleEngine, []any{"CMD", "/rbm", "status"})
 	findings := mutated.CheckField(field)
 	if len(findings) == 0 {
-		t.Fatal("declaring `backup-manager status` as the engine's healthcheck passed the start-gate rule, so the rule cannot see the thing it exists to prevent")
+		t.Fatal("declaring `rbm status` as the engine's healthcheck passed the start-gate rule, so the rule cannot see the thing it exists to prevent")
 	}
 	if !strings.Contains(findingText(findings), "start-gate-liveness") {
 		t.Errorf("the finding %q does not name the rule that produced it", findingText(findings))
@@ -568,7 +568,7 @@ func TestMountsRefusesWhatItCannotResolveInsteadOfAnsweringWrongly(t *testing.T)
 services:
   engine:
     image: backup-manager:dev
-    command: ["/backup-manager-web", "serve"]
+    command: ["/rbm-web", "serve"]
     volumes:
       - ${KEY_FILE:?set KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
       - /srv/backup-manager/state:/data/state
@@ -688,10 +688,10 @@ func TestServiceRolesAreDerivedFromTheCommand(t *testing.T) {
 services:
   totally-different-name:
     image: backup-manager:dev
-    command: ["/backup-manager-web", "serve", "--profile=generic"]
+    command: ["/rbm-web", "serve", "--profile=generic"]
   another-name-entirely:
     image: backup-manager:dev
-    command: ["/backup-manager-web", "serve-ui", "--profile=generic"]
+    command: ["/rbm-web", "serve-ui", "--profile=generic"]
 `), "synthetic.yaml", env())
 	if err != nil {
 		t.Fatalf("parse: %v", err)
