@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+
+	"github.com/spdrman/rclone-manager/core/cliecho"
 )
 
 // The composition root: everything this package's doc comment lays out,
@@ -255,11 +257,11 @@ func (s *Service) PrintBootstrapNotice(w io.Writer, baseURL string) error {
 
 	if baseURL != "" {
 		_, err = fmt.Fprintf(w,
-			"backup-manager: no administrator account exists yet. Open %s/enroll?token=%s to create one (valid 30 minutes, single use).\n",
+			cliecho.WebBinary+": no administrator account exists yet. Open %s/enroll?token=%s to create one (valid 30 minutes, single use).\n",
 			baseURL, token)
 	} else {
 		_, err = fmt.Fprintf(w,
-			"backup-manager: no administrator account exists yet. Enrollment bootstrap token: %s (valid 30 minutes, single use).\n",
+			cliecho.WebBinary+": no administrator account exists yet. Enrollment bootstrap token: %s (valid 30 minutes, single use).\n",
 			token)
 	}
 	return err
