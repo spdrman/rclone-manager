@@ -663,7 +663,12 @@ describe("what this browser wrote reaches the global terminal", () => {
     const copied = writeText.mock.calls[0][0] as string;
     expect(copied).toContain("[you]");
     expect(copied).toContain("This deployment will not start a backup run.");
-    expect(copied).toContain("rbm run");
+    // With the prompt the panel draws in front of every other command,
+    // and only one of them: a log that printed `$ rbm run` for a request
+    // the engine served and `rbm run` for one it refused would be two
+    // renderings of the same thing in one export.
+    expect(copied).toContain("\n$ rbm run");
+    expect(copied).not.toContain("$ $");
     vi.unstubAllGlobals();
   });
 
