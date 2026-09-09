@@ -208,7 +208,7 @@ func allPlatforms() []platformFixture {
 			services: func(t *testing.T) []Service {
 				t.Helper()
 				var out []Service
-				for _, f := range []string{"rclone-manager.xml", "web-ui.xml"} {
+				for _, f := range []string{"rclone-manager.xml", "rclone-manager-ui.xml"} {
 					tpl, err := ReadUnraidTemplate(filepath.Join(PlatformDir("unraid"), "template", f))
 					if err != nil {
 						t.Fatalf("read Unraid template %s: %v", f, err)
@@ -226,7 +226,7 @@ func allPlatforms() []platformFixture {
 			runtimeArtifacts: func(t *testing.T) []derivationArtifact {
 				t.Helper()
 				var out []Service
-				for _, f := range []string{"rclone-manager.xml", "web-ui.xml"} {
+				for _, f := range []string{"rclone-manager.xml", "rclone-manager-ui.xml"} {
 					tpl, err := ReadUnraidTemplate(filepath.Join(PlatformDir("unraid"), "template", f))
 					if err != nil {
 						t.Fatalf("read Unraid template %s: %v", f, err)
@@ -1177,7 +1177,7 @@ func TestUnraidWebUIJSONAgreesWithTheTemplate(t *testing.T) {
 		t.Fatalf("parse webui.json: %v", err)
 	}
 
-	tpl, err := ReadUnraidTemplate(filepath.Join(PlatformDir("unraid"), "template", "web-ui.xml"))
+	tpl, err := ReadUnraidTemplate(filepath.Join(PlatformDir("unraid"), "template", "rclone-manager-ui.xml"))
 	if err != nil {
 		t.Fatalf("read Unraid UI template: %v", err)
 	}

@@ -192,19 +192,19 @@ func TestTheBinaryNameGuardFailsOnAScriptThatMovedAlone(t *testing.T) {
 			name:    "the start script spawns a binary the payload does not carry",
 			file:    "scripts/start-stop-status",
 			old:     "${PKG_BIN}/" + CoreBinaries[1],
-			planted: "${PKG_BIN}/rbm-web",
+			planted: "${PKG_BIN}/rbm-webhook",
 		},
 		{
 			name:    "the liveness check watches for a binary the payload does not carry",
 			file:    "scripts/" + SharedScriptName,
 			old:     "${PKG_BIN}/" + CoreBinaries[1],
-			planted: "${PKG_BIN}/rbm-web",
+			planted: "${PKG_BIN}/rbm-webhook",
 		},
 		{
 			name:    "conf/privilege grants to a file the payload does not carry",
 			file:    "conf/privilege",
 			old:     `"` + PayloadBinDir + "/" + CoreBinaries[1] + `"`,
-			planted: `"` + PayloadBinDir + `/rbm-web"`,
+			planted: `"` + PayloadBinDir + `/rbm-webhook"`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -218,6 +218,20 @@ func TestTheBinaryNameGuardFailsOnAScriptThatMovedAlone(t *testing.T) {
 			}
 			if !strings.Contains(body, tc.old) {
 				t.Fatalf("%s does not contain %q, so the substitution below is a no-op and this control proves nothing", tc.file, tc.old)
+			}
+			// The 0.3.3 rename rewrote `planted` into a name CoreBinaries
+			// DOES install, which made every substitution here a no-op: the
+			// guard correctly found nothing and the control reported that as
+			// a failure. Checking that the two differ, and that the planted
+			// name is genuinely not installed, is what stops a future rename
+			// disarming this file while leaving it green.
+			if tc.planted == tc.old {
+				t.Fatalf("planted and old are the same string (%q), so this control mutates nothing", tc.old)
+			}
+			for _, installed := range CoreBinaries {
+				if strings.Contains(tc.planted, "/"+installed+`"`) || strings.HasSuffix(tc.planted, "/"+installed) {
+					t.Fatalf("planted names %q, which CoreBinaries installs, so the guard is right to stay silent and this control can never fail", installed)
+				}
 			}
 			mutated[tc.file] = strings.Replace(body, tc.old, tc.planted, 1)
 

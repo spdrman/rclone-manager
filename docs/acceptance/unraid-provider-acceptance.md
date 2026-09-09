@@ -209,7 +209,7 @@ in `apps/unraid/README.md`.
 ## Step 2 — Install the Web UI template
 
 1. Copy `apps/unraid/template/rclone-manager-ui.xml` to
-   `/boot/config/plugins/dockerMan/templates-user/my-web-ui.xml`.
+   `/boot/config/plugins/dockerMan/templates-user/my-rclone-manager-ui.xml`.
 2. **Docker → Add Container**, pick `web-ui`.
 3. Apply.
 
