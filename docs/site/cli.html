@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>The rbm command line: rclone-manager</title>
-  <meta name="description" content="Every rclone-manager command, the rename from backup-manager to rbm, and the rule that every action in the web interface names the command it is equivalent to.">
+  <meta name="description" content="Every rclone-manager command, the rename from backup-manager to rbm, what that breaks, and the rule that every action in the web interface names the command it is equivalent to.">
   <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
@@ -106,7 +106,7 @@
     <div class="note">
       <span class="note-label">The name changed in 0.3.3</span>
       <p>The command is <code>rbm</code>. It used to be <code>backup-manager</code>, which was a mouthful to type twenty times in an afternoon and did not say which product it belonged to.</p>
-      <p><code>backup-manager</code> keeps working as an alias, so nothing anybody has already written stops running. Every command on this site is spelled <code>rbm</code>, and if you are reading an older script, a container log or a support thread that says <code>backup-manager</code>, it means the same thing.</p>
+      <p>0.3.3 is a clean cut, so <code>backup-manager</code> stops resolving: images built from 0.3.3 onwards carry <code>rbm</code> and nothing else. Anything you have already written that names the old command, a cron entry, a <code>docker exec</code>, a hand-written compose file, has to move across when you upgrade. If you are reading an older script or a support thread that says <code>backup-manager</code>, it means the same thing, but it will not run against this release.</p>
     </div>
 
     <div class="note">

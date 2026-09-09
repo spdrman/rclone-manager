@@ -158,8 +158,8 @@
     <h2 id="log">The enrolment link in the log</h2>
     <p>There is no screen for this one. On first start, before any browser is involved, the engine prints a one-time enrolment secret to its own stdout. Read it from the engine container, not the web one:</p>
     <pre><code>docker compose logs rclone-manager | grep enroll</code></pre>
-    <p>What comes back looks like this. The prefix is the binary's own name, so on a build where the rename to <code>rbm</code> has reached this string it says <code>rbm</code> instead; nothing else about the line changes.</p>
-    <pre><code><span class="cm">backup-manager: no administrator account exists yet. Open</span>
+    <p>What comes back looks like this. The prefix is the binary's own name, and the web host is what prints it.</p>
+    <pre><code><span class="cm">rbm-web: no administrator account exists yet. Open</span>
 <span class="cm">http://localhost:8080/enroll?token=</span>&lt;a long random string&gt;<span class="cm"> to create one</span>
 <span class="cm">(valid 30 minutes, single use).</span></code></pre>
 
