@@ -51,6 +51,16 @@
   wired to the retry verb; the docked terminal no longer prints "no rbm
   equivalent yet" about an operation the same window has just handed the
   operator a command for (#662).
+- The machine-tier end-to-end case for #662 (`--case empty-record`) asserts the
+  fix instead of the defect, and its own `--help` no longer tells operators it
+  is red on purpose. It was written to fail and said so in four places,
+  including the rendered help and the golden that is compared to it byte for
+  byte; with #662 fixed, the first person to see it fail would have read that
+  text and dismissed a regression as expected. It now requires the planted
+  empty record to leave the copy at a durable restore point, the recorded fault
+  to still reach an operator in words, and the file to be untouched. The
+  dead-end walk it replaced is retained rather than deleted, and runs if
+  reconciliation ever leaves the artifact outside a durable state.
 
 ### What you may need to do
 
