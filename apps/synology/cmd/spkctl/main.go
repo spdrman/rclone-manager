@@ -10,13 +10,19 @@
 // Where the release binaries come from: they are the two executables
 // inside the canonical OCI image 4.1 builds. Extract them with
 //
-//	cid=$(docker create --platform linux/amd64 backup-manager:<version> /backup-manager version)
-//	docker cp "${cid}:/backup-manager"     ./release/amd64/backup-manager
-//	docker cp "${cid}:/backup-manager-web" ./release/amd64/backup-manager-web
+//	cid=$(docker create --platform linux/amd64 backup-manager:<version> /rbm version)
+//	docker cp "${cid}:/rbm"     ./release/amd64/rbm
+//	docker cp "${cid}:/rbm-web" ./release/amd64/rbm-web
 //	docker rm "${cid}"
 //
 // which is the same extraction scripts/release/record-release-hashes.sh
-// does to produce the manifest in the first place. Never rebuild them
+// does to produce the manifest in the first place. The source paths are
+// /rbm and /rbm-web because those are the real binaries after the 0.3.3
+// CLI rename; /rbm and /rbm-web still resolve in
+// the image, but they are symlinks, and `docker cp` without -L copies a
+// link rather than what it points at. The destination names, and this
+// package's own payload names, stay as they are: they are what
+// container/release-manifest.json records a hash under. Never rebuild them
 // here: a rebuild is precisely what verify exists to detect.
 package main
 
@@ -66,8 +72,8 @@ commands:
 build flags:
   --arch GOARCH        amd64 or arm64 (required)
   --version VERSION    INFO's version, e.g. 1.0.0-1 (required)
-  --binaries DIR       directory holding backup-manager and
-                        backup-manager-web for --arch (required)
+  --binaries DIR       directory holding rbm and rbm-web for
+                        --arch (required)
   --ui-bundle DIR      the built shared UI bundle for this provider,
                         i.e. ui/shared/dist-bundles/synology, produced by
                         "npm run build:bundles synology" (required). The

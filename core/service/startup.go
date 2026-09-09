@@ -53,7 +53,7 @@ const journalLockSuffix = ".journal-lock"
 //
 // It is a separate file from the journal lock because the journal lock
 // answers a different question and cannot be made to answer this one:
-// every `backup-manager status`, every `sources`, every cron `run` holds
+// every `rbm status`, every `sources`, every cron `run` holds
 // the journal lock too, which is exactly what openUnderSharedLock's own
 // doc says is ordinary use of this CLI. Asking the journal lock "is an
 // engine running" gets "somebody has this journal open", and issue #537
@@ -110,7 +110,7 @@ const servingLockSuffix = ".serving-lock"
 // That ordering is the point, not an optimisation. The restore below
 // rename-overwrites the journal's files, so an armed restore is the one
 // thing in this codebase that can destroy an FR-9 journal. Keeping it
-// armed on every `backup-manager status` bought nothing (there was no
+// armed on every `rbm status` bought nothing (there was no
 // migration to undo) and risked everything, so it is now reached only on a
 // start that genuinely is about to change the schema.
 //
@@ -119,7 +119,7 @@ const servingLockSuffix = ".serving-lock"
 // This sequence used to mint the deployment identity here, under the
 // startup lock, on the reasoning that every process opening the journal
 // passes through it exactly once. That is true and it is the wrong set of
-// processes. `backup-manager status`, `sources` and every routed write
+// processes. `rbm status`, `sources` and every routed write
 // come through here too, and none of them is serving anything, so a
 // deployment whose identity file was missing got a brand new name from
 // whichever CLI command happened to run next, while the engine went on

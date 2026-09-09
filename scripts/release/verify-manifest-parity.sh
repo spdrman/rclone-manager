@@ -134,13 +134,16 @@ for arch in $arches; do
     --load \
     . >&2
 
-  cid=$(docker create --platform "linux/${arch}" "$tag" /backup-manager version)
+  cid=$(docker create --platform "linux/${arch}" "$tag" /rbm version)
   tmp=$(mktemp -d)
-  docker cp "${cid}:/backup-manager" "${tmp}/backup-manager" >&2
-  docker cp "${cid}:/backup-manager-web" "${tmp}/backup-manager-web" >&2
+  # /rbm and /rbm-web are the only executables in the image as of 0.3.3,
+  # and they are also the binary_sha256 keys $MANIFEST records under, so
+  # the name is the same on both sides of this comparison.
+  docker cp "${cid}:/rbm" "${tmp}/rbm" >&2
+  docker cp "${cid}:/rbm-web" "${tmp}/rbm-web" >&2
   docker rm "$cid" >/dev/null
 
-  for binary in backup-manager backup-manager-web; do
+  for binary in rbm rbm-web; do
     want="$(recorded "$arch" "$binary")"
     got="$(sha256_of "${tmp}/${binary}")"
     if [ -z "$want" ]; then

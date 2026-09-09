@@ -38,7 +38,7 @@ import (
 // far more slowly.
 //
 // It is for the tests with NO engine behind the announcement: a
-// `backup-manager daemon`, which serves this deployment and no HTTP, and
+// `rbm daemon`, which serves this deployment and no HTTP, and
 // the routes that were named and cannot be used. A test that stands a
 // fake engine up over this deployment does not call it, because
 // startFakeEngine announces for itself, and announcing twice over one
@@ -235,7 +235,7 @@ func TestSettingsPatchReachesTheAttachedEngine(t *testing.T) {
 }
 
 // TestAnEngineAttachedWriteIsStillRefusedWithNoRouteToTheEngine keeps
-// #538's guard where it was. A `backup-manager daemon` serves no HTTP at
+// #538's guard where it was. A `rbm daemon` serves no HTTP at
 // all, and an operator who has told this command nothing about the engine
 // has given it no way to hand the change over, so the refusal is still the
 // only honest answer and the file still must not change.

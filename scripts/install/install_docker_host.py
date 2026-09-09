@@ -31,7 +31,7 @@ Not "the container started". Two shipped behaviours decide the success
 condition:
 
   * the engine's start gate is a LIVENESS probe and deliberately not
-    `backup-manager status` (issue #206), because `status` is a backup
+    `rbm status` (issue #206), because `status` is a backup
     freshness verdict that a fresh install legitimately fails, and gating
     the UI on it means the page you would fix a backup problem from never
     loads;
@@ -175,6 +175,12 @@ EXIT_PERSISTENCE_UNVERIFIED = 46
 # retries a pull should not retry a digest that does not match.
 EXIT_RELEASE_CONFLICT = 50
 EXIT_RELEASE_OFFLINE = 51
+EXIT_RELEASE_TOO_OLD = 52
+
+# The release that renamed the binaries inside the image. The embedded
+# compose runs /rbm-web, which exists from here onwards and in no image
+# published before it, so --release cannot honestly go lower.
+FIRST_RELEASE_WITH_RBM = "0.3.3"
 EXIT_RELEASE_DIGEST_MISMATCH = 52
 
 # The architectures the release manifest claims. Anything else has no
@@ -2278,6 +2284,31 @@ EMBEDDED_COMPOSE_YAML = """\
 # credential material (the SSH private key) lives only at the host path
 # SSH_KEY_FILE points to, mounted read-only into the container.
 #
+# THE COMMANDS BELOW ARE `/rbm-web`, AND THEY NEED 0.3.3 OR NEWER
+#
+# 0.3.3 renamed the binaries an operator runs: `rbm` for the engine CLI and
+# `rbm-web` for the web host. This file names them, because it is the
+# definition every adapter derives from and it should say what the product
+# is called.
+#
+# That makes this file forward-only, which is worth stating plainly. `/rbm`
+# and `/rbm-web` exist in images built from 0.3.3 onwards and in no image
+# published before it, and 0.3.0, 0.3.1 and 0.3.2 are all still on the
+# registry. So pointing `IMAGE` at one of those while using this file gives
+# you two containers that die with "exec /rbm-web: no such file or
+# directory". Use the compose file that shipped with the version you are
+# installing.
+#
+# scripts/install/install_docker_host.py embeds a copy of this file and
+# refuses `--release` below 0.3.3 for exactly that reason, so the one path
+# that could have produced the broken combination on its own no longer can.
+#
+# What did NOT change is everything that names the project rather than
+# the command: `image: backup-manager:...`, the `rclone-manager` and
+# `web-ui` service names, and the container config directory at
+# /etc/backup-manager. Renaming any of those would move an operator's
+# data or break their tooling for no gain.
+#
 # TWO SERVICES, ONE IMAGE (project-owner requirement, folded in before
 # this issue merged): `rclone-manager` is the engine - core service,
 # scheduler, local authentication, and the versioned /api/v1 API, all in
@@ -2286,9 +2317,9 @@ EMBEDDED_COMPOSE_YAML = """\
 # network below. `web-ui` serves the shared static UI and reverse-proxies
 # API requests to `rclone-manager`, and is the ONLY service with a
 # LAN-facing published port. Both run the exact same
-# `/backup-manager-web` binary from the exact same image - only `command:`
+# `/rbm-web` binary from the exact same image - only `command:`
 # differs - matching the "one canonical image, vary command" principle
-# already applied to `/backup-manager` vs. `/backup-manager-web`
+# already applied to `/rbm` vs. `/rbm-web`
 # themselves; no nginx or other new runtime dependency was introduced for
 # this (see apps/common/webhost/serve's own doc comment for the plain
 # net/http/httputil.ReverseProxy this uses instead).
@@ -2402,15 +2433,15 @@ services:
         COMMIT: ${COMMIT:-none}
     image: backup-manager:${VERSION:-dev}
 
-    # `/backup-manager-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md
+    # `/rbm-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md
     # §9.2's "Generic Web App host") is the engine: local authentication,
     # the versioned /api/v1 API, and the backup scheduler, all in one
     # process sharing one shutdown context (§9.3). No static UI - that is
     # web-ui's job, over the `internal` network below, never a published
-    # port here. `/backup-manager` (no "-web") is still in this same image
+    # port here. `/rbm` (no "-web") is still in this same image
     # for headless-only use with no web listener at all: override
-    # `command` with `["/backup-manager", "daemon"]` for that, or `docker
-    # compose run --rm rclone-manager /backup-manager version` / `... check`
+    # `command` with `["/rbm", "daemon"]` for that, or `docker
+    # compose run --rm rclone-manager /rbm version` / `... check`
     # for a one-shot check; see the `restart` note below, which assumes
     # the default `serve` command specifically.
     # `command` carries the runtime profile, which is one contract field
@@ -2419,7 +2450,7 @@ services:
     # the profile with no host integration at all, so defaulting to it can
     # only ever under-claim; RUNTIME_PROFILE in .env selects another one
     # out of x-canonical-runtime.profiles above.
-    command: ["/backup-manager-web", "serve", "--profile=${RUNTIME_PROFILE:-generic}"]
+    command: ["/rbm-web", "serve", "--profile=${RUNTIME_PROFILE:-generic}"]
 
     <<: *security
 
@@ -2481,7 +2512,7 @@ services:
       # process-level default match the host rather than the image.
       TZ: ${TZ:-UTC}
 
-      # `/backup-manager-web serve`'s own `--listen` flag defaults to this
+      # `/rbm-web serve`'s own `--listen` flag defaults to this
       # variable when set (falling back to :8080 otherwise), so it binds
       # this address inside the container without it needing to be an
       # explicit command-line argument above. Never published to the
@@ -2492,7 +2523,7 @@ services:
 
       # This container has no published port at all (see the top-of-file
       # note), so its OWN --listen address is never something an operator
-      # can actually open - `/backup-manager-web serve` used to print the
+      # can actually open - `/rbm-web serve` used to print the
       # one-time enrollment link against that internal address anyway,
       # which was always wrong once this two-container split shipped
       # (issue #119's review). PUBLIC_BASE_URL is what `web-ui`'s own
@@ -2550,7 +2581,7 @@ services:
 
     volumes:
       # Persistent SQLite lifecycle journal (FR-9). A directory, per the
-      # WAL note above, not a single file. `/backup-manager-web serve` also
+      # WAL note above, not a single file. `/rbm-web serve` also
       # keeps its local-authentication administrator record
       # (apps/common/auth/local) at /data/state/local-auth.json — the
       # Argon2id password hash only, never a plaintext password — so
@@ -2587,19 +2618,19 @@ services:
 
     # `unless-stopped`: restart across crashes and NAS reboots, but stay
     # down if an operator deliberately stops it — the right policy now that
-    # `command` above (`/backup-manager-web serve`) is a real long-running
+    # `command` above (`/rbm-web serve`) is a real long-running
     # process rather than the immediately-exiting `version` this file used
     # to default to. For a one-shot check, use `docker compose run --rm
-    # rclone-manager /backup-manager version` (or `... check`) instead of
+    # rclone-manager /rbm version` (or `... check`) instead of
     # `up -d`, which bypasses `restart` entirely.
     restart: unless-stopped
 
-    # Liveness, deliberately, and NOT `backup-manager status`.
+    # Liveness, deliberately, and NOT `rbm status`.
     #
     # This is the check web-ui waits on: it declares `depends_on:
     # rclone-manager: condition: service_healthy` below, so whatever this
     # asks is what stands between an operator and the only LAN-facing
-    # listener in the deployment. `backup-manager status` answers backup
+    # listener in the deployment. `rbm status` answers backup
     # freshness (HEALTHY/DEGRADED/STALE/FAILING) and exits non-zero on a
     # DEGRADED, STALE or FAILING set, and also when it cannot open the
     # service at all - so gating on it means a stale backup set, or an
@@ -2616,10 +2647,10 @@ services:
     #
     # Backup freshness is not lost, it moves back to being the thing it
     # was built as: the image's own HEALTHCHECK instruction still runs
-    # `backup-manager status` (container/Dockerfile, so a plain `docker
+    # `rbm status` (container/Dockerfile, so a plain `docker
     # run` still reports backup health), the alerts block delivers it
     # proactively, and an operator reads it directly with
-    # `docker compose exec rclone-manager /backup-manager status`.
+    # `docker compose exec rclone-manager /rbm status`.
     #
     # Declared here rather than inherited from the image (issue #167):
     # the runtime contract requires an operator to be able to read what
@@ -2636,7 +2667,7 @@ services:
     # freshness verdict, so inheriting it here would be inheriting the
     # wrong question.
     healthcheck:
-      test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      test: ["CMD", "/rbm-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -2677,7 +2708,7 @@ services:
       rclone-manager:
         condition: service_healthy
 
-    # `/backup-manager-web serve-ui`: the shared static UI plus a reverse
+    # `/rbm-web serve-ui`: the shared static UI plus a reverse
     # proxy to the engine (apps/common/webhost/serve's own doc comment has the
     # full routing shape). --upstream defaults to
     # http://rclone-manager:8080 (the engine's own compose service name,
@@ -2685,7 +2716,7 @@ services:
     # below), set explicitly here via UPSTREAM_ADDR anyway so the
     # dependency is visible in this file, not just in the binary's own
     # default.
-    command: ["/backup-manager-web", "serve-ui", "--profile=${RUNTIME_PROFILE:-generic}"]
+    command: ["/rbm-web", "serve-ui", "--profile=${RUNTIME_PROFILE:-generic}"]
 
     <<: *security
 
@@ -2758,14 +2789,14 @@ services:
 
     restart: unless-stopped
 
-    # Overrides the image's own HEALTHCHECK (`/backup-manager status`,
+    # Overrides the image's own HEALTHCHECK (`/rbm status`,
     # which needs a config file and a state database neither of which
-    # this container has): `/backup-manager-web healthcheck` just GETs
+    # this container has): `/rbm-web healthcheck` just GETs
     # its own listener and checks for a non-error response - "is this
     # web server up," the only question that applies to a container with
     # no backup state of its own to report on.
     healthcheck:
-      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      test: ["CMD", "/rbm-web", "healthcheck"]
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -2789,7 +2820,7 @@ services:
 """
 
 # Written by scripts/install/embed_compose.py alongside the blob above.
-EMBEDDED_COMPOSE_SHA256 = "3b0c90a4b3a7beb4f88921adbbc9feabfd67905428f31d3a51569e306f494137"
+EMBEDDED_COMPOSE_SHA256 = "ab5363e02f4d44b250a85735a0ba203243f466b665c64afe1ddaf0bd43d4b2d7"
 
 
 def embedded_compose_bytes() -> bytes:
@@ -3047,8 +3078,8 @@ def wait_for_engine_health(args, timeout: int):
 
     Read out of the daemon rather than inferred from the container being
     up, and it is the LIVENESS probe specifically: container/compose.yaml
-    declares `/backup-manager-web healthcheck --url .../health/live` for
-    the engine and explains at length why it is not `backup-manager
+    declares `/rbm-web healthcheck --url .../health/live` for
+    the engine and explains at length why it is not `rbm
     status` (issue #206). A fresh install fails `status` by design, and
     gating on it means the Web UI never starts.
     """
@@ -5155,6 +5186,22 @@ def resolve_release(args) -> None:
             "tag orders against nothing, so it would be written into the .env as the "
             "installed version and leave this host un-orderable by every later installer. "
             "Name the version you want.",
+        )
+
+    if _semver(args.release) < _semver(FIRST_RELEASE_WITH_RBM):
+        raise Refusal(
+            EXIT_RELEASE_TOO_OLD,
+            f"--release {args.release} is older than {FIRST_RELEASE_WITH_RBM}, and this "
+            f"installer can only write a deployment that {FIRST_RELEASE_WITH_RBM} and newer "
+            "can start.",
+            "The runtime definition embedded here runs `/rbm-web`, which is the name the "
+            f"binaries got in {FIRST_RELEASE_WITH_RBM}. Images published before that carry "
+            "`/backup-manager-web` and nothing at `/rbm-web`, so both containers would die "
+            "with \"exec /rbm-web: no such file or directory\" and this installer would sit "
+            "waiting for a deployment that was never going to come up. Refusing now is the "
+            "same promise --release already makes, that you get the version you named or an "
+            "error, rather than something that looks installed and is not. To install an "
+            "older release, use the installer that shipped with it.",
         )
 
     if args.image_archive is not None or args.no_pull:

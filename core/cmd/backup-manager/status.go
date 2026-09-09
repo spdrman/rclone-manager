@@ -6,10 +6,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
-// cmdStatus is `backup-manager status`: FR-24's health surface, rendered
+// cmdStatus is `rbm status`: FR-24's health surface, rendered
 // for a terminal (and, per container/Dockerfile's TODO(#26), for a
 // container healthcheck: see this exit-code convention's own doc below).
 //
@@ -64,7 +65,7 @@ func cmdStatus(args []string) int {
 		return fail(err)
 	}
 
-	fmt.Printf("process: backup-manager %s (commit %s), go %s, rclone %s\n",
+	fmt.Printf("process: "+cliecho.Binary+" %s (commit %s), go %s, rclone %s\n",
 		report.Process.BinaryVersion, commit, info.GoVersion, report.Process.RcloneVersion)
 
 	healthy := true
@@ -170,7 +171,7 @@ func cmdStatus(args []string) int {
 		for _, u := range unconfigured {
 			fmt.Printf("  %s: %d artifact(s), %d byte(s), under no retention policy\n", u.Set, u.Artifacts, u.Bytes)
 		}
-		fmt.Println("  nothing collects, retains, reconciles or deletes these; `backup-manager unconfigured` says what to do about it.")
+		fmt.Println("  nothing collects, retains, reconciles or deletes these; `" + cliecho.Binary + " unconfigured` says what to do about it.")
 	}
 
 	if !healthy {

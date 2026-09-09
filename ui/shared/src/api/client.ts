@@ -1774,7 +1774,7 @@ export const httpApi: BackupManagerApi = {
   // revision-checked long work is started, and the durable row has always
   // had a backup set id column that run_cycle correctly leaves empty.
   //
-  // The engine half is not new either. `backup-manager fetch
+  // The engine half is not new either. `rbm fetch
   // --backup-set` has called internal/app.Service.Fetch since FR-1; what
   // was missing was a way to reach it in the SERVING process, so the work
   // takes the engine's single-flight lock and shows up in its feeds

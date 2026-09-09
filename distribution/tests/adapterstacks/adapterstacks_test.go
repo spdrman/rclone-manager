@@ -5,7 +5,7 @@
 //
 // Every adapter gates its web UI on `depends_on: <engine>: condition:
 // service_healthy`, and every adapter derived the engine's health check
-// from canonical.json, which said `backup-manager status`. That is FR-24's
+// from canonical.json, which said `rbm status`. That is FR-24's
 // backup-freshness verdict, and it exits non-zero on a fresh install by
 // design, because a fresh install has backed nothing up. So on every
 // adapter the one container an operator installed the app to reach never
@@ -189,7 +189,7 @@ func TestMain(m *testing.M) {
 // the configuration mount is a directory at all (issue #196), and an
 // empty one is the only honest shape for an install nobody has
 // configured. The engine serves the first-run setup flow from it, and
-// `backup-manager status` exits non-zero in it, which every test below
+// `rbm status` exits non-zero in it, which every test below
 // reads back rather than assumes.
 func freshInstall(t *testing.T) string {
 	t.Helper()
@@ -537,20 +537,20 @@ func containerState(t *testing.T, id string) string {
 	return inspect(t, id).State.Status
 }
 
-// statusExitCode runs `backup-manager status` inside a running container.
+// statusExitCode runs `rbm status` inside a running container.
 //
 // This is the control the whole file turns on: without it a green run
 // proves only that some stack came up, and a fixture that had quietly
 // become healthy would pass while saying nothing at all about the defect.
 func statusExitCode(t *testing.T, id string) (int, string) {
 	t.Helper()
-	out, err := exec.Command("docker", "exec", id, "/backup-manager", "status").CombinedOutput()
+	out, err := exec.Command("docker", "exec", id, "/rbm", "status").CombinedOutput()
 	if err == nil {
 		return 0, string(out)
 	}
 	exit, ok := err.(*exec.ExitError)
 	if !ok {
-		t.Fatalf("docker exec %s /backup-manager status: %v\n%s", id, err, out)
+		t.Fatalf("docker exec %s /rbm status: %v\n%s", id, err, out)
 	}
 	return exit.ExitCode(), string(out)
 }
@@ -678,7 +678,7 @@ func TestEveryDerivedAdapterBringsUpTheWebUIOnAFreshInstall(t *testing.T) {
 			// happened to be healthy.
 			code, statusOut := statusExitCode(t, engineID)
 			if code == 0 {
-				t.Fatalf("%s: `backup-manager status` exited 0 inside this fixture, so it is not the fresh install this test claims to run:\n%s", rel, statusOut)
+				t.Fatalf("%s: `rbm status` exited 0 inside this fixture, so it is not the fresh install this test claims to run:\n%s", rel, statusOut)
 			}
 
 			uiID := project.containerID(t, uiName)

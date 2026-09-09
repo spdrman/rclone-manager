@@ -56,7 +56,7 @@ type retentionVerdictResponse struct {
 	// the field, which is the one decision on this projection that is not
 	// a straight translation. It is what keeps a deployment that declares
 	// no storage medium serving exactly the bytes it served before this
-	// field existed, and `backup-manager retention` already states the
+	// field existed, and `rbm retention` already states the
 	// same asymmetry the same way (mediumSuffix, core/cmd/backup-manager/
 	// retention.go), so the two operator surfaces read alike.
 	//

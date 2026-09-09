@@ -54,7 +54,7 @@ import (
 //
 // # The one thing that still renders it, and why that is not a third spelling
 //
-// `backup-manager settings` and `backup-set retention` print a
+// `rbm settings` and `backup-set retention` print a
 // `medium=...` column only for a tier that is NOT on the local hard drive.
 // That reads like a call site with an opinion and is not one: it is a
 // RENDERING rule ("a destination column is worth a reader's attention when

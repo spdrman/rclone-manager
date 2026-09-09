@@ -8,7 +8,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
-// cmdCatalog is `backup-manager catalog`, so far just one subcommand,
+// cmdCatalog is `rbm catalog`, so far just one subcommand,
 // section 71 Work Package 3.3's `catalog rebuild` / `catalog rebuild
 // --dry-run` (EPIC-B section 19.3, issue #102).
 //

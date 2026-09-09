@@ -301,7 +301,7 @@ type BackupServiceClient interface {
 
 	// ListArtifacts and GetArtifact back GET /api/v1/backups, GET
 	// /api/v1/backups/{id} and GET /api/v1/quarantine (issue #211):
-	// read-only reads of the FR-9 journal `backup-manager artifacts`
+	// read-only reads of the FR-9 journal `rbm artifacts`
 	// already prints.
 	ListArtifacts(ctx context.Context, filter service.ArtifactFilter) ([]service.Artifact, error)
 	GetArtifact(ctx context.Context, id string) (service.Artifact, error)
@@ -401,7 +401,7 @@ type BackupServiceClient interface {
 
 	// Health backs GET /api/v1/system/health: FR-24's backup-freshness
 	// verdict for every configured backup set, the same computation
-	// `backup-manager status` prints. Deliberately not the same question
+	// `rbm status` prints. Deliberately not the same question
 	// as /health/ready, which is about this process rather than about
 	// whether backups are landing.
 	Health(ctx context.Context) (service.HealthReport, error)

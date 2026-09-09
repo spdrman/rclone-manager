@@ -13,7 +13,7 @@
 # refuses the commit. It does two things:
 #
 #   1. the CLI smoke slice (55 of Suite A's 60 cases) against a
-#      backup-manager built from THIS working tree;
+#      rbm built from THIS working tree;
 #   2. the browser suite against THIS working tree's ui/shared.
 #
 # Both come from spdrman/rclone-manager-tests at the sha in tests-repo.pin,
@@ -132,14 +132,14 @@ if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet 2>/dev/nul
   build_commit="$head_sha-dirty"
 fi
 
-echo "==> e2e gate: building backup-manager from this working tree"
+echo "==> e2e gate: building rbm from this working tree"
 (cd core && GOWORK=off go build \
   -ldflags "-X main.version=$(git rev-parse --short HEAD) -X main.commit=$build_commit" \
-  -o "$work/backup-manager" ./cmd/backup-manager)
+  -o "$work/rbm" ./cmd/backup-manager)
 
 echo "==> e2e gate: Suite A smoke slice, against that binary"
 RM_MODE=local \
-RM_BINARY="$work/backup-manager" \
+RM_BINARY="$work/rbm" \
 RM_COMMIT="$head_sha" \
 RM_SOURCE_DIR="$repo_root" \
   make -C "$checkout" smoke

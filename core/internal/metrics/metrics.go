@@ -24,7 +24,7 @@
 // Render yet either: cmd/backup-manager has no subcommand to serve it from
 // (issues #25, #26), the same position internal/health, internal/obs and
 // internal/capacity are already in. Wiring this in later, a
-// "backup-manager status --prometheus" flag, an HTTP handler, or both, is
+// "rbm status --prometheus" flag, an HTTP handler, or both, is
 // meant to be a few lines calling Render, not a redesign.
 //
 // # Format
@@ -254,7 +254,7 @@ func Render(report health.Report) string {
 
 func writeProcessInfo(b *strings.Builder, report health.Report) {
 	name := namePrefix + "process_info"
-	writeHelp(b, name, "Build information for the running backup-manager process. Constant 1; the version data is in the labels.")
+	writeHelp(b, name, "Build information for the running rbm process. Constant 1; the version data is in the labels.")
 	writeType(b, name, "gauge")
 	fmt.Fprintf(b, "%s{binary_version=%s,rclone_version=%s} 1\n",
 		name, quoteLabel(report.Process.BinaryVersion), quoteLabel(report.Process.RcloneVersion))

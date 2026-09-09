@@ -86,13 +86,13 @@ func TestCoreBinaryHashParity_NeedsARealByteComparison(t *testing.T) {
 	binary := []byte("not really a binary, but it has a SHA-256 like everything else")
 	write(t, filepath.Join(dir, "payload", "backup-manager-web"), string(binary))
 	p.spec.Metadata.BinaryArtifacts = map[string]string{
-		"/backup-manager-web": filepath.Join("payload", "backup-manager-web"),
+		"/rbm-web": filepath.Join("payload", "backup-manager-web"),
 	}
 
 	good := ReleaseManifest{
 		Commit: "0123456789abcdef",
 		Architectures: []ReleaseArchitecture{
-			{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager-web": sha256Of(binary)}},
+			{Architecture: "amd64", BinarySHA256: map[string]string{"rbm-web": sha256Of(binary)}},
 		},
 	}
 
@@ -105,7 +105,7 @@ func TestCoreBinaryHashParity_NeedsARealByteComparison(t *testing.T) {
 	corrupted := ReleaseManifest{
 		Commit: "0123456789abcdef",
 		Architectures: []ReleaseArchitecture{
-			{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager-web": sha256Of([]byte("a different build"))}},
+			{Architecture: "amd64", BinarySHA256: map[string]string{"rbm-web": sha256Of([]byte("a different build"))}},
 		},
 	}
 	ok, detail := coreBinaryHashParity(p, corrupted)
@@ -141,8 +141,8 @@ func TestCoreBinaryHashParity_RefusesEveryProviderThatShipsNoBinary(t *testing.T
 // directions.
 func TestArchitectureParity_IsPerProvider(t *testing.T) {
 	manifest := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager": "x", "backup-manager-web": "x"}},
-		{Architecture: "arm64", BinarySHA256: map[string]string{"backup-manager": "x", "backup-manager-web": "x"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "x", "rbm-web": "x"}},
+		{Architecture: "arm64", BinarySHA256: map[string]string{"rbm": "x", "rbm-web": "x"}},
 	}}
 
 	p, dir := tempProvider(t, "fictional")
@@ -233,20 +233,64 @@ func TestReleaseManifestIntegrity_SeparatesGitFailingFromGitSayingNo(t *testing.
 // hash-completeness half.
 func TestReleaseManifest_RecordsEveryBinary(t *testing.T) {
 	full := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager": "a", "backup-manager-web": "b"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "a", "rbm-web": "b"}},
 	}}
-	if ok, detail := full.RecordsEveryBinary([]string{"/backup-manager", "/backup-manager-web"}); !ok {
+	if ok, detail := full.RecordsEveryBinary([]string{"/rbm", "/rbm-web"}); !ok {
 		t.Fatalf("a complete manifest must be accepted, got: %s", detail)
 	}
 	partial := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"backup-manager": "a"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "a"}},
 	}}
-	if ok, _ := partial.RecordsEveryBinary([]string{"/backup-manager", "/backup-manager-web"}); ok {
+	if ok, _ := partial.RecordsEveryBinary([]string{"/rbm", "/rbm-web"}); ok {
 		t.Errorf("a manifest missing one binary's hash must be refused")
 	}
 	empty := ReleaseManifest{}
-	if ok, _ := empty.RecordsEveryBinary([]string{"/backup-manager"}); ok {
+	if ok, _ := empty.RecordsEveryBinary([]string{"/rbm"}); ok {
 		t.Errorf("a manifest with no architectures at all must be refused")
+	}
+}
+
+// TestTheManifestKeyCannotPairAHashWithTheWrongBinary pins the mapping
+// between canonical.json's binary paths and
+// container/release-manifest.json's keys.
+//
+// There is nothing to translate any more: 0.3.3 moved the manifest's keys
+// onto the binaries' own names, so this is the path minus its leading
+// slash. The guard still earns its place, because the risk never came
+// from the translation being wrong, it came from a mapping nobody
+// constrained. A function that returned one of the two recorded keys for
+// absolutely everything would satisfy every provider row in the matrix,
+// and it would turn "this binary is not in the manifest" into "some
+// binary is", which is the architecture-parity and artifact-provenance
+// columns reporting a hash nobody asked for. So it is checked from the
+// side that matters: on names the map must NOT recognise.
+func TestTheManifestKeyCannotPairAHashWithTheWrongBinary(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"/rbm", "rbm"},
+		{"rbm", "rbm"},
+		{"/rbm-web", "rbm-web"},
+		{"rbm-web", "rbm-web"},
+
+		// Anything else keeps its own name and therefore fails the lookup,
+		// which is the whole point: an invented binary must be reported
+		// missing rather than borrowing one of the two above.
+		{"/rclone", "rclone"},
+		{"/rbm-webhook", "rbm-webhook"},
+		{"/rbmx", "rbmx"},
+	} {
+		if got := manifestBinaryKey(tc.in); got != tc.want {
+			t.Errorf("manifestBinaryKey(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	// And the negative control the map itself cannot give: a canonical
+	// binary the manifest does not record has to come back refused, not
+	// translated onto one it does.
+	m := ReleaseManifest{Architectures: []ReleaseArchitecture{
+		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "a", "rbm-web": "b"}},
+	}}
+	if ok, detail := m.RecordsEveryBinary([]string{"/rbm", "/rbm-web", "/rbm-sidecar"}); ok {
+		t.Errorf("a binary with no hash of its own was accepted: %s", detail)
 	}
 }
 
@@ -373,7 +417,7 @@ func TestBridgeFlagsOnlyCountWhereABundleLoadsThem(t *testing.T) {
 	// bridge flag would notice.
 	wrong := SelectUIBundle(&Service{
 		Name:        "backup-manager-ui",
-		Command:     []string{"/backup-manager-web", "serve-ui", "--profile=truenas"},
+		Command:     []string{"/rbm-web", "serve-ui", "--profile=truenas"},
 		Environment: map[string]string{"UI_ROOT": "/ui/bundles"},
 	}, UIBundleSelection{Mechanism: UIBundleNone}, "unraid")
 	if wrong.Provider != "truenas" {
@@ -583,7 +627,7 @@ func TestRoleMountsRefusesAMountWithNoKnownRole(t *testing.T) {
 	write(t, filepath.Join(dir, "compose.yaml"), `services:
   backup-manager:
     image: `+canonical.Image.Reference+`
-    command: ["/backup-manager-web", "serve"]
+    command: ["/rbm-web", "serve"]
     volumes:
       - /srv/app/state:/data/state
       - /srv/app/backups:/data/backups

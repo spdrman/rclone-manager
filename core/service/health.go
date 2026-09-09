@@ -36,7 +36,7 @@ import (
 // BackupSetHealth is one configured backup set's FR-24 verdict, in plain
 // provider-agnostic terms.
 //
-// It is the same computation `backup-manager status` prints, read through
+// It is the same computation `rbm status` prints, read through
 // core/service instead of a terminal, so the CLI and the Web UI cannot
 // disagree about whether a deployment is healthy.
 type BackupSetHealth struct {
@@ -133,7 +133,7 @@ type BackupSetHealth struct {
 	// and whether the relocations meant to close that gap are getting
 	// anywhere.
 	//
-	// It is the same computation `backup-manager status` prints, reached
+	// It is the same computation `rbm status` prints, reached
 	// through the same call, which is the property this whole type exists
 	// to hold: a CLI and a Web UI that compute health separately will
 	// eventually disagree about whether a deployment is healthy, and the

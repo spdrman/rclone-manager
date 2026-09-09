@@ -337,14 +337,23 @@ export function activityLine(e: SetActivityEvent): ActivityLine {
       const parts = ["[browser] " + (e.message || "a request from this browser did not go through")];
       if (f.remediation) parts.push("  " + f.remediation);
       if (f.correlation_id) parts.push("  correlation id " + f.correlation_id);
-      if (f.command) parts.push(f.command);
+      // With the prompt, the same way an api_action's is drawn a few
+      // lines down. The wire carries a command bare and the "$ " belongs
+      // to the terminal, and until the dock read this seam the two never
+      // met on one screen: a notice only ever appeared in the per-set
+      // panel. They meet now, and one log printing `$ rbm run` for a
+      // request the engine served and `rbm run` for one it refused is two
+      // renderings of the same thing three lines apart. RunControlNotice
+      // draws the prompt too, so this is the third surface agreeing
+      // rather than a new convention.
+      if (f.command) parts.push("$ " + f.command);
       text = parts.join("\n");
       break;
     }
     case "api_action": {
       // Something somebody did through the API rather than something the
       // cycle did (issue #599). The engine composes the summary, the
-      // refusal's own words and the `backup-manager` command line; this
+      // refusal's own words and the `rbm` command line; this
       // lays them out. Rendering it here rather than only in the dock is
       // what gives a set's own strip, and every export, the same lines:
       // logText is built on this function.

@@ -49,7 +49,7 @@ import (
 // every "I could not check" that leaks into the verdict path costs a good
 // backup its standing.
 
-// ValidateResult is `backup-manager validate <artifact-id>`'s use case
+// ValidateResult is `rbm validate <artifact-id>`'s use case
 // output.
 type ValidateResult struct {
 	Artifact model.ArtifactID
@@ -71,7 +71,7 @@ type ValidateResult struct {
 	NewState lifecycle.State
 }
 
-// ValidateArtifact is `backup-manager validate <artifact-id>`'s use case:
+// ValidateArtifact is `rbm validate <artifact-id>`'s use case:
 // an operator-triggered, on-demand re-check of one already-committed
 // artifact's durable local copy, right now, regardless of Phase 4's
 // scheduled-revalidation cadence (internal/revalidate.Run, which this does

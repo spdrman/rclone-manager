@@ -250,7 +250,7 @@ func DetectRunningEngineForJournal(dbPath string) (*RunningEngine, error) {
 // deploymentidentity.go), and it is here because of who calls it: a
 // process about to serve, and nothing else. It used to sit in
 // runStartupSequence, which every CLI subcommand goes through, so a
-// `backup-manager status` against a deployment whose identity file had
+// `rbm status` against a deployment whose identity file had
 // gone missing renamed the deployment out from under the engine still
 // serving it, and every routed write afterwards refused against that
 // deployment's own engine.
@@ -584,7 +584,7 @@ func configAbsent(configPath string) bool {
 //
 // It is not free and the cost is worth naming: while a write holds it,
 // another process's startup sequence waits (startupLockWait, lock_unix.go)
-// and then reports ErrStartupLocked. For a `backup-manager status` that
+// and then reports ErrStartupLocked. For a `rbm status` that
 // wait is longer than the hold and nothing is felt. For a container
 // starting at the exact moment of a `create --trust-host-key` that is
 // dialling a source host, the start fails and the supervisor restarts it,

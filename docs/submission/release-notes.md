@@ -39,7 +39,7 @@ worth saying here rather than leaving to be found.
   a set with the same source and name again takes those backups back, along with their
   retention history. Nothing this operation can reach deletes a byte of backup data.
 - The same operation is on the API (`DELETE /api/v1/backup-sets/{source}/{set}`) and on the
-  command line (`backup-manager backup-set remove <source/backup-set>`). Against a server that
+  command line (`rbm backup-set remove <source/backup-set>`). Against a server that
   is already running the command line uses that route; with nothing running it reaches the
   same code directly. See "The command line and a running server" below.
 - The Backups list now includes the backups of sets whose configuration has been removed.
@@ -115,7 +115,7 @@ installing, not after.
   of them, is refused rather than landed in the other one. The one arrangement that check
   cannot see through is a whole state directory copied to seed a second installation: the
   copy carries the original's identity, and the two then claim to be each other.
-- One engine per deployment. Starting a second `backup-manager daemon`, or a second web host,
+- One engine per deployment. Starting a second `rbm daemon`, or a second web host,
   against a state database another one is already serving is refused rather than started. Two
   of them would run two schedules over one set of backups and hold two independent copies of
   one configuration, which is the divergence everything above exists to prevent.

@@ -51,12 +51,12 @@ TrueNAS-specific service. `distribution/packaging` fails the build if any appear
 
 ## Two containers, one image
 
-`backup-manager` runs `/backup-manager-web serve`: local authentication, the
+`backup-manager` runs `/rbm-web serve`: local authentication, the
 versioned `/api/v1` API and the backup scheduler in one process sharing one
 shutdown context. It holds the state database and the credentials, and it
 publishes no port.
 
-`backup-manager-ui` runs `/backup-manager-web serve-ui`: the shared static UI plus
+`backup-manager-ui` runs `/rbm-web serve-ui`: the shared static UI plus
 a reverse proxy to the engine. It is the only container with a published port, and
 it mounts nothing at all.
 
@@ -64,18 +64,18 @@ Same image, different argv. The image ships no `ENTRYPOINT` and no `CMD` on
 purpose, because no single default would be right for both of its binaries.
 
 Both containers override the image's baked-in healthcheck, for two different
-reasons. The image runs `/backup-manager status`, which needs a config file and a
+reasons. The image runs `/rbm status`, which needs a config file and a
 state database the Web UI container does not have, so left inherited there it
 would report unhealthy forever while working perfectly.
 
 The engine's override is the one that decides whether you get a page at all. The
-Web UI will not start until the engine reports healthy, and `backup-manager
+Web UI will not start until the engine reports healthy, and `rbm
 status` is FR-24's backup-freshness verdict: it exits non-zero on any DEGRADED,
 STALE or FAILING set, and on a fresh install, which has backed nothing up yet. So
 the engine asks `/health/live` instead, a liveness probe that needs no
 configuration. Backup freshness is still reported, by the image's own HEALTHCHECK
 for a plain `docker run`, by the alerts block, and by
-`docker exec backup-manager /backup-manager status`; it just no longer decides
+`docker exec backup-manager /rbm status`; it just no longer decides
 whether a container starts.
 
 ## Storage

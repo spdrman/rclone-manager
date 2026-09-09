@@ -386,7 +386,7 @@ Not "the container started". Three conditions, and the third exists because a re
 install taught me it was a separate claim:
 
 1. Docker reports the engine healthy **by its own liveness probe**. Not
-   `backup-manager status`, which is a backup freshness verdict a fresh install
+   `rbm status`, which is a backup freshness verdict a fresh install
    legitimately fails; gating on that means the Web UI never starts, which is issue
    #206.
 2. The Web UI serves its bundle. A fresh install with no config serves a first-run

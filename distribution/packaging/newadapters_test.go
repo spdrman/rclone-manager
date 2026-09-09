@@ -166,13 +166,13 @@ func mutateForEquivalence(a AdapterRuntime, property string) (AdapterRuntime, st
 
 	switch property {
 	case PropRoleSet:
-		out.Others = append(out.Others, Service{Name: "backup-manager-sidecar", Command: []string{"/backup-manager", "daemon"}})
+		out.Others = append(out.Others, Service{Name: "backup-manager-sidecar", Command: []string{"/rbm", "daemon"}})
 		return out, "added a third container", true
 	case PropCommand:
 		if out.WebUI == nil {
 			return out, "", false
 		}
-		out.WebUI.Command = append([]string{"/backup-manager-web", "serve"}, out.WebUI.Command[2:]...)
+		out.WebUI.Command = append([]string{"/rbm-web", "serve"}, out.WebUI.Command[2:]...)
 		return out, "made the Web UI run the engine command", true
 	case PropContainerMounts:
 		if out.Engine == nil || len(out.Engine.Mounts) == 0 {
@@ -190,7 +190,7 @@ func mutateForEquivalence(a AdapterRuntime, property string) (AdapterRuntime, st
 		if out.WebUI == nil {
 			return out, "", false
 		}
-		out.WebUI.HealthcheckTest = []string{"CMD", "/backup-manager", "status"}
+		out.WebUI.HealthcheckTest = []string{"CMD", "/rbm", "status"}
 		return out, "gave the Web UI the engine's health check, which needs a state database it does not have", true
 	case PropEngineEnvironment:
 		if out.Engine == nil {

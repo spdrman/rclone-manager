@@ -107,7 +107,7 @@ const (
 	// SeamImageInherited: the adapter declares nothing, so the image's
 	// own HEALTHCHECK instruction applies.
 	//
-	// That instruction is `/backup-manager status`, FR-24's
+	// That instruction is `/rbm status`, FR-24's
 	// backup-freshness verdict, and it is deliberately NOT the canonical
 	// engine check any more (issue #206). It is the right default for a
 	// plain `docker run` and for the headless `daemon` command, which

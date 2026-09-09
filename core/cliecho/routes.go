@@ -42,9 +42,9 @@ import (
 // sentence that could differ between those two would be a sentence the
 // guard in core/cmd/backup-manager checks a copy of.
 const (
-	gapRunCycle = "`backup-manager run` starts a cycle in your own shell, not in this engine, so it is a different act against a different process"
+	gapRunCycle = "`" + Binary + " run` starts a cycle in your own shell, not in this engine, so it is a different act against a different process"
 
-	gapRunBackupSet = "`backup-manager fetch --backup-set <source/backup-set>` runs that set's cycle in your own shell, not in this engine, so it is a different act against a different process"
+	gapRunBackupSet = "`" + Binary + " fetch --backup-set <source/backup-set>` runs that set's cycle in your own shell, not in this engine, so it is a different act against a different process"
 
 	gapDeploymentScope = "there is no flag that narrows `activity --follow` to the deployment's own events: --backup-set names one set, and naming none already means every set"
 
@@ -54,7 +54,7 @@ const (
 	// values exist nowhere, so the command would have to carry all of
 	// them, and the moment they are worth carrying is the create, which
 	// proves the connection before it writes anything.
-	gapCandidateConnection = "there is no verb that checks a source that is not saved yet: `backup-manager backup-set create` proves the connection before it writes, and `backup-manager backup-set test-connection <source/backup-set>` re-checks one that exists"
+	gapCandidateConnection = "there is no verb that checks a source that is not saved yet: `" + Binary + " backup-set create` proves the connection before it writes, and `" + Binary + " backup-set test-connection <source/backup-set>` re-checks one that exists"
 )
 
 // positiveQuery reads a query parameter that is a count, and reports 0
@@ -120,7 +120,7 @@ var routes = map[string]entry{
 		// of the three and never was: the client sends restore_placement
 		// and run_backup_set, so NO real request matched that arm. Every
 		// restore and every per-set run fell through to a default whose
-		// sentence is about `backup-manager run`, a different verb for a
+		// sentence is about `rbm run`, a different verb for a
 		// different act, and the example body said "restore" too, so the
 		// dispatcher-driven parse test certified a branch production
 		// never reaches. A constant spelled in one place cannot be wrong
@@ -158,12 +158,12 @@ var routes = map[string]entry{
 				return newCmd().refuse(gapRunBackupSet)
 			default:
 				// The gap the issue names, and the one a lazier
-				// implementation gets wrong. `backup-manager run`
+				// implementation gets wrong. `rbm run`
 				// exists and is NOT this: usage() puts it among the
 				// commands that are "ordinary beside a running engine",
 				// so it opens the service in the operator's own process
 				// and runs a cycle there. This asks the SERVING engine
-				// to run one. Printing `backup-manager run` would print
+				// to run one. Printing `rbm run` would print
 				// a command that does something different to a
 				// different process.
 				return newCmd().refuse(gapRunCycle)
@@ -777,7 +777,7 @@ var routes = map[string]entry{
 	// selected candidate has an opaque id that would sit on one
 	// perfectly well, and the only thing missing is a verb that takes it.
 	key("POST", "/ssh-keys/from-candidate"): {
-		why: "there is no verb that imports a key this machine already holds; the id is an opaque handle that would sit on a command line perfectly well, and `backup-manager ssh-key import --candidate ID` would be it",
+		why: "there is no verb that imports a key this machine already holds; the id is an opaque handle that would sit on a command line perfectly well, and `" + Binary + " ssh-key import --candidate ID` would be it",
 	},
 	key("POST", "/ssh/host-key-probe"): {
 		why: "there is no verb that probes a host key on its own; a terminal settles it with --trust-host-key or --known-hosts-line while creating or patching a set",
@@ -796,11 +796,11 @@ var routes = map[string]entry{
 	// pastes and gets exit 2 from, which the dispatcher-driven parity
 	// test in core/cmd/backup-manager catches on purpose.
 	key("GET", "/ssh-keys"): {
-		why:               "there is no verb that lists the key store, which is why `backup-set patch --ssh-key-id ID` currently takes an id nothing will print for you. `backup-manager ssh-key list` would be it",
+		why:               "there is no verb that lists the key store, which is why `backup-set patch --ssh-key-id ID` currently takes an id nothing will print for you. `" + Binary + " ssh-key list` would be it",
 		namesShippedVerbs: []string{"backup-set"},
 	},
 	key("GET", "/ssh/key-candidates"): {
-		why: "there is no verb that scans this machine for keys it can offer, so the key the installer generated and mounted is reachable from the browser and not from a terminal. `backup-manager ssh-key discover` would be it",
+		why: "there is no verb that scans this machine for keys it can offer, so the key the installer generated and mounted is reachable from the browser and not from a terminal. `" + Binary + " ssh-key discover` would be it",
 	},
 
 	// -------------------------------------------------------- settings ---

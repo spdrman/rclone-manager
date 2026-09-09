@@ -624,7 +624,7 @@ const LIVE_ACTIVITY: SetActivity[] = [
  * every set, and this fixture is where that split is visible without a
  * running engine. It carries what the global terminal is for: the cycle's
  * own brackets, an error nothing could attribute, and the actions taken
- * in the browser with the `backup-manager` command each one is equivalent
+ * in the browser with the `rbm` command each one is equivalent
  * to. */
 const LIVE_DEPLOYMENT: DeploymentActivity = {
   unfinishedActions: [{ action: "cycle", actionId: "c_1", startedAt: "2026-08-29T02:01:11+02:00", sequence: 1 }],
@@ -643,7 +643,7 @@ const LIVE_DEPLOYMENT: DeploymentActivity = {
         actor: "admin",
         route: "PATCH /api/v1/backup-sets/{source}/{set}",
         status: "200",
-        command: "backup-manager backup-set patch production/auth-config --stale-after 48h"
+        command: "rbm backup-set patch production/auth-config --stale-after 48h"
       },
       "info",
       "deployment",
@@ -657,7 +657,7 @@ const LIVE_DEPLOYMENT: DeploymentActivity = {
         actor: "admin",
         route: "POST /api/v1/backup-sets/test-connection",
         status: "200",
-        command_gap: "no backup-manager equivalent yet",
+        command_gap: "no rbm equivalent yet",
         command_gap_detail: "there is no verb that tests a connection before a set exists"
       },
       "info",

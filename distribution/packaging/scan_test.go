@@ -46,7 +46,7 @@ func cleanFixture(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, "compose", "backup-manager.yml"), `services:
   engine:
     image: ghcr.io/spdrman/backup-manager:1.0.0
-    command: ["/backup-manager-web", "serve"]
+    command: ["/rbm-web", "serve"]
     read_only: true
     volumes:
       - /srv/state:/data/state
@@ -142,7 +142,7 @@ func TestScanLifecycleCatchesViolations(t *testing.T) {
   engine:
     build:
       context: ../..
-    command: ["/backup-manager-web", "serve"]
+    command: ["/rbm-web", "serve"]
 `)
 			},
 			wantRule: RuleBuildsOwnImage,
@@ -153,7 +153,7 @@ func TestScanLifecycleCatchesViolations(t *testing.T) {
 				mustWrite(t, filepath.Join(root, "compose", "backup-manager.yml"), `services:
   engine:
     image: ghcr.io/spdrman/backup-manager:1.0.0
-    command: ["/bin/sh", "-c", "/setup && /backup-manager-web serve"]
+    command: ["/bin/sh", "-c", "/setup && /rbm-web serve"]
 `)
 			},
 			wantRule: RuleNonCanonicalCommand,
@@ -165,7 +165,7 @@ func TestScanLifecycleCatchesViolations(t *testing.T) {
   engine:
     image: ghcr.io/spdrman/backup-manager:1.0.0
     entrypoint: ["/init"]
-    command: ["/backup-manager-web", "serve"]
+    command: ["/rbm-web", "serve"]
 `)
 			},
 			wantRule: RuleEntrypointOverride,
@@ -185,7 +185,7 @@ post_install: /usr/local/bin/seed-state.sh
 				mustWrite(t, filepath.Join(root, "compose", "backup-manager.yml"), `services:
   engine:
     image: ghcr.io/spdrman/backup-manager:1.0.0
-    command: ["/backup-manager-web", "serve"]
+    command: ["/rbm-web", "serve"]
     privileged: true
 `)
 			},
@@ -212,7 +212,7 @@ post_install: /usr/local/bin/seed-state.sh
 				mustWrite(t, filepath.Join(root, "template", "backup-manager.xml"),
 					`<?xml version="1.0"?>`+"\n"+`<Container version="2">
   <Name>backup-manager</Name>
-  <PostArgs>/backup-manager-web serve &amp;&amp; /usr/local/bin/seed.sh</PostArgs>
+  <PostArgs>/rbm-web serve &amp;&amp; /usr/local/bin/seed.sh</PostArgs>
 </Container>
 `)
 			},
@@ -256,7 +256,7 @@ func TestScanLifecycleAcceptsACanonicalUnraidCommand(t *testing.T) {
 	mustWrite(t, filepath.Join(root, "template", "backup-manager.xml"),
 		`<?xml version="1.0"?>`+"\n"+`<Container version="2">
   <Name>backup-manager</Name>
-  <PostArgs>/backup-manager-web serve</PostArgs>
+  <PostArgs>/rbm-web serve</PostArgs>
 </Container>
 `)
 	got, err := ScanLifecycle(root)
@@ -469,7 +469,7 @@ func TestScanForBespokeAuthCatchesAnOwnAuthMechanism(t *testing.T) {
 		{"an LDAP bind in a catalog file", "catalog/app.yaml", "auth: ldap\n", true},
 		{"an htpasswd file", "compose/users.yml", "htpasswd: /etc/nginx/.htpasswd\n", true},
 		{"an --auth-mode override", "compose/backup-manager.yml",
-			"services:\n  engine:\n    command: [\"/backup-manager-web\", \"serve\", \"--auth-mode=ugos\"]\n", true},
+			"services:\n  engine:\n    command: [\"/rbm-web\", \"serve\", \"--auth-mode=ugos\"]\n", true},
 		{"a README explaining there is no SSO", "README.md",
 			"There is no SSO and no LDAP here: this platform uses the generic host's local auth.\n", false},
 		{"the clean baseline", "compose/extra.yml", "services: {}\n", false},

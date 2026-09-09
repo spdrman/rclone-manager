@@ -208,6 +208,34 @@
 # The product half is in this same branch, because either one alone leaves a
 # gate red: theirs was red against the old pin until this line moved, and ours
 # was red the moment #622 put a picker on a form their spec said had none.
+#
+# Moved to bfbe51e, rclone-manager-tests#64, read off their merged main and not
+# off the branch, for the reason the paragraph about a794c38 above already
+# gives. This is the specs half of the CLI rename: the command an operator types
+# is `rbm` now, and 41 of that suite's cases asserted the old name in a
+# diagnostic prefix or a usage banner. They assert the new one.
+#
+# The bump has to ride with the product change rather than follow it, because
+# either half alone leaves a gate red. Measured both ways over there before it
+# landed: against this repository's main those 41 pass and the rename fails
+# them; against this branch the rename passes and main fails them. That is the
+# pin doing its job rather than a problem with it.
+#
+# It also brings two cases the old suite could not express. `invoke_as` runs the
+# argv under test through a second filename for the same binary, so g6 reaches
+# `version` under `backup-manager` and g7 reaches an unknown command under it,
+# and both require the output to say `rbm`. What that proves is that the binary
+# does not care which name reached it. What it does NOT prove, and their case
+# doc says so, is that the shipped image carries both names: the `go` builder
+# makes no image, so that half belongs to container/Dockerfile, where
+# apps/generic/tests/dockercli runs /rbm inside the built image.
+#
+# Their harness needed one fix that is worth knowing about here, because this
+# repository caused it. `docker cp` copies a symlink AS a symlink, and the new
+# image ships /rbm with /rbm as a link to it, so extraction was
+# landing a four-byte dangling link and exec'ing it. They pass `-L` now, which
+# is a no-op against a pre-rename image. The same defect was in this
+# repository's own release scripts and is fixed on the image branch.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
 #
 # Moved to 1b79f8d, rclone-manager-tests#60, off their merged main and not
@@ -239,4 +267,4 @@ TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
 # #624, so #60's three cases are red over there until it moves to whatever
 # commit this branch merges as. That is the same manual half every paragraph
 # above keeps flagging.
-TESTS_REPO_SHA=82fee279feb55b670a026f96df1b17d0c33aa2e5
+TESTS_REPO_SHA=bfbe51e542319482d388695f15b2597677f38d8e

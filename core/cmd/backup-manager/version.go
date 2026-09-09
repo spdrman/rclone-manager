@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
@@ -37,7 +38,7 @@ func cmdVersion(args []string) int {
 	}
 
 	info := app.BuildVersionInfo(version, commit)
-	fmt.Printf("backup-manager %s\n", info.BinaryVersion)
+	fmt.Printf(cliecho.Binary+" %s\n", info.BinaryVersion)
 	fmt.Printf("rclone %s\n", info.RcloneVersion)
 	fmt.Printf("go %s\n", info.GoVersion)
 	fmt.Printf("commit %s\n", info.Commit)

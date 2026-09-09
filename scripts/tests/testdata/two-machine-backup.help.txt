@@ -93,7 +93,7 @@ the version and commit that were installed.
                   order they matter.
 
                   First, that the lifecycle feed is readable at all
-                  against a real deployment: `backup-manager activity`
+                  against a real deployment: `rbm activity`
                   with the route configured announces
                   `mode: engine-attached`, which means it asked the
                   engine over HTTP, and it lists the transitions the
