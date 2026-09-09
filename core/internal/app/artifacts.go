@@ -206,7 +206,7 @@ func (f ArtifactFilter) matches(sourceName, setName string) bool {
 	return true
 }
 
-// ListArtifacts is `backup-manager artifacts`' use case: every journal
+// ListArtifacts is `rbm artifacts`' use case: every journal
 // record for every backup set filter selects, in config order (source
 // order, then backup-set order within each source), which is the same
 // deterministic order Sources() renders in.
@@ -346,7 +346,7 @@ type ArtifactDetail struct {
 	Copies []ArtifactCopy
 }
 
-// GetArtifactDetail is `backup-manager artifacts <source/backup-set/name>`'s
+// GetArtifactDetail is `rbm artifacts <source/backup-set/name>`'s
 // use case (issue #284): until this existed, sqlite3 against the state
 // database directly was the only way for an operator to learn why one
 // specific artifact reached FAILED or QUARANTINED, because

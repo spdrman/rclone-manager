@@ -12,7 +12,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
-// cmdBackupSetRetention is `backup-manager backup-set retention
+// cmdBackupSetRetention is `rbm backup-set retention
 // <source/backup-set> [flags]` (issue #333): read which retention policy
 // one backup set is retained under, give that set a whole policy of its
 // own, or take that policy back off so it inherits the deployment's

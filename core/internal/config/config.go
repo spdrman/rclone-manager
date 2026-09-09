@@ -1187,7 +1187,7 @@ type RetentionTier struct {
 	// used to record as inert and defer to #239 "when retention starts
 	// planning on it". #239 landed and it stopped being inert: an
 	// override replaced the file's chain with an all-local one, so
-	// `backup-manager retention --tier` previewed placement against local
+	// `rbm retention --tier` previewed placement against local
 	// beside a deployment sending monthly to S3, and printed it no less
 	// confidently. `--tier-medium NAME=MEDIUM_ID` answers it (issue #595,
 	// retention_flags.go): a repeatable flag rather than a fifth

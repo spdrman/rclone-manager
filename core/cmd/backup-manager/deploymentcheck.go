@@ -143,7 +143,7 @@ func misaimedRoute(address, stateDatabase, local, served string) *routeRefusal {
 // setup.go broke two calls later: openConfigWriteRoute calls service.Open,
 // which ran runStartupSequence, which minted. On a deployment restored
 // from its .db alone, beside an engine still holding the old identity,
-// one `backup-manager status` renamed the deployment and every routed
+// one `rbm status` renamed the deployment and every routed
 // write afterwards refused against its own engine while pointing the
 // operator at $BACKUP_MANAGER_API_URL.
 //

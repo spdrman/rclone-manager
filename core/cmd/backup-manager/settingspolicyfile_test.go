@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// `backup-manager settings patch --policy-file` (EPIC G, G2.3, issue
+// `rbm settings patch --policy-file` (EPIC G, G2.3, issue
 // #595): the deployment's whole retention chain, from the command line.
 //
 // cmdSettings used to say the opposite in its own doc, and these tests are

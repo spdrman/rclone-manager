@@ -351,7 +351,7 @@ func TestWatchForHold_CatchesAHoldPlacedInsideTheCheckWindow(t *testing.T) {
 // this manager was asked to do, so it must not come back looking like a
 // backup that broke: a cycle report carrying context.Canceled here is
 // read as a failure by every consumer downstream of it (core/service
-// fails the operation an operator submitted, `backup-manager run` exits
+// fails the operation an operator submitted, `rbm run` exits
 // 1, and the health surface counts the set as unevaluated), which turns
 // an ordinary edit into a false alarm in the one product where a false
 // alarm about a backup is expensive.
@@ -459,7 +459,7 @@ func TestRunCycle_AStoppedSetIsNotReportedAsBarrenEither(t *testing.T) {
 
 	v := set.Verdict()
 	if v.Systemic {
-		t.Errorf("Verdict().Systemic = true for a pass an operator stopped; `backup-manager run` exits 1 on that and the activity feed calls an ordinary edit a backup that failed")
+		t.Errorf("Verdict().Systemic = true for a pass an operator stopped; `rbm run` exits 1 on that and the activity feed calls an ordinary edit a backup that failed")
 	}
 	if !v.Stopped {
 		t.Errorf("Verdict().Stopped = false; a consumer that cannot see the pass was stopped on purpose has to guess from an absent error, which is also what a pass that simply finished looks like")

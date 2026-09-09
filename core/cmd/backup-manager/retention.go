@@ -13,7 +13,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/retention"
 )
 
-// cmdRetention is `backup-manager retention` / `backup-manager retention
+// cmdRetention is `rbm retention` / `rbm retention
 // --dry-run`: FR-20's mandatory dry-run, wired to internal/retention's
 // classification (GFS + last-known-good) via internal/app.
 //

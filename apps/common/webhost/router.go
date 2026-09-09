@@ -490,7 +490,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/storage-mediums/{id}/usage", h.getStorageMediumUsage)
 
 		// Issue #211: FR-9 catalog recovery, the API expression of
-		// `backup-manager catalog rebuild` and its --dry-run. Rebuild only
+		// `rbm catalog rebuild` and its --dry-run. Rebuild only
 		// ever adds records whose recovery manifests are already on disk
 		// and never removes or overwrites one, so it carries CSRF but not
 		// the destructive gate; see handlers_catalog.go for the argument

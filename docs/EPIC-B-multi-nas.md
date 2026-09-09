@@ -1313,7 +1313,7 @@ It SHALL be used by generic Docker and provider packages that do not yet impleme
 The UPK Compose profile SHALL run the canonical image in a combined supervised mode such as:
 
 ```bash
-backup-manager serve --with-daemon --auth-mode=ugos
+rbm serve --with-daemon --auth-mode=ugos
 ```
 
 Exact command naming may vary.

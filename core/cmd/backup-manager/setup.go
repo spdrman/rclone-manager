@@ -598,7 +598,7 @@ const (
 	// The second half is not an accident somebody should fix quietly.
 	// Every subcommand parses with flag.ContinueOnError and returns this
 	// for whatever fs.Parse hands back, and flag.ErrHelp is one of those,
-	// so `backup-manager check -h` is a correct command line, a request
+	// so `rbm check -h` is a correct command line, a request
 	// this binary answered, and a 2. That predates #551 and did not
 	// matter while the codes were an implementation detail; publishing
 	// them as a contract is what made it a promise, so the promise says

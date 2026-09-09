@@ -120,7 +120,7 @@ var routes = map[string]entry{
 		// of the three and never was: the client sends restore_placement
 		// and run_backup_set, so NO real request matched that arm. Every
 		// restore and every per-set run fell through to a default whose
-		// sentence is about `backup-manager run`, a different verb for a
+		// sentence is about `rbm run`, a different verb for a
 		// different act, and the example body said "restore" too, so the
 		// dispatcher-driven parse test certified a branch production
 		// never reaches. A constant spelled in one place cannot be wrong
@@ -158,12 +158,12 @@ var routes = map[string]entry{
 				return newCmd().refuse(gapRunBackupSet)
 			default:
 				// The gap the issue names, and the one a lazier
-				// implementation gets wrong. `backup-manager run`
+				// implementation gets wrong. `rbm run`
 				// exists and is NOT this: usage() puts it among the
 				// commands that are "ordinary beside a running engine",
 				// so it opens the service in the operator's own process
 				// and runs a cycle there. This asks the SERVING engine
-				// to run one. Printing `backup-manager run` would print
+				// to run one. Printing `rbm run` would print
 				// a command that does something different to a
 				// different process.
 				return newCmd().refuse(gapRunCycle)

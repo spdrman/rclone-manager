@@ -155,7 +155,7 @@ func TestAStorageMediumWriteEchoesTheSkipOnlyWhenItWasAskedFor(t *testing.T) {
 }
 
 // The gap the issue singles out, because it is the one a lazier
-// implementation gets wrong. `backup-manager run` exists, and printing it
+// implementation gets wrong. `rbm run` exists, and printing it
 // here would print a command that does something different to a different
 // process.
 func TestRunAllDueSetsPrintsTheGapAndNotBackupManagerRun(t *testing.T) {

@@ -102,7 +102,7 @@ var backtickedPhrase = regexp.MustCompile("`([^`]+)`")
 // It reads `backup-manager <verb> [<sub>]` and the bare `<verb> [<sub>]`
 // this file's prose also uses ("`settings` prints the thresholds"), and it
 // understands one level of subcommand: a sentence naming
-// `backup-manager backup-set test-connection` is naming a verb this binary
+// `rbm backup-set test-connection` is naming a verb this binary
 // does NOT have, even though `backup-set` is dispatched, and that is a
 // true gap rather than a stale sentence.
 func shippedVerbsNamedIn(why string) []string {

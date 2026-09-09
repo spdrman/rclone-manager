@@ -31,7 +31,7 @@
 //     field name out of habit.
 //
 // Report exists only to bundle one ProcessHealth with every configured
-// backup set's BackupSetHealth so a renderer (the `backup-manager status`
+// backup set's BackupSetHealth so a renderer (the `rbm status`
 // CLI, or an optional HTTP handler, both separate issues) can print both
 // halves from one already-computed value, without recomputing anything and
 // without either half leaking into the other's answer.

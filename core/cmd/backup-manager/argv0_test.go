@@ -1,25 +1,19 @@
 package main
 
 import (
-	"bytes"
-	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/spdrman/rclone-manager/core/cliecho"
 )
 
-// The command an operator types is `rbm`, and `backup-manager` goes on
-// working. That promise is kept by a symlink beside the binary in the
-// image (container/Dockerfile), not by anything in Go, and it holds only
-// for as long as this binary behaves identically however it was reached.
+// The command an operator types is `rbm`, and this binary must answer the
+// same way no matter what path it was reached through: the image installs
+// it at /rbm, a developer runs it straight out of go build under whatever
+// name they chose, and the e2e harness copies it somewhere else again.
 //
 // Nothing here reads argv[0] today. main() passes os.Args[1:] to run() and
 // dispatches on the first word of that, so the filename the operator
@@ -130,7 +124,7 @@ func checkArgv0(t *testing.T, path string) {
 			if dispatchSlice[ast.Node(sel)] {
 				return true
 			}
-			t.Errorf("%s:%d reads os.Args in a shape other than os.Args[1:].\n\nThe old command name is kept alive by a symlink beside this binary, so `backup-manager status` and `rbm status` are the same binary reached under two filenames and have to behave identically. Anything that can see argv[0] can make them differ, and the operator who finds out is one whose script broke after an upgrade. Take the argument from the parsed command line instead; if a build genuinely needs to know its own filename, that is a decision to argue in the commit rather than a line to slip past this test.",
+			t.Errorf("%s:%d reads os.Args in a shape other than os.Args[1:].\n\nThe old command name is kept alive by a symlink beside this binary, so `rbm status` and `rbm status` are the same binary reached under two filenames and have to behave identically. Anything that can see argv[0] can make them differ, and the operator who finds out is one whose script broke after an upgrade. Take the argument from the parsed command line instead; if a build genuinely needs to know its own filename, that is a decision to argue in the commit rather than a line to slip past this test.",
 				fset.Position(sel.Pos()).Filename, fset.Position(sel.Pos()).Line)
 		case "Executable":
 			t.Errorf("%s:%d calls os.Executable, which answers the same question os.Args[0] does and has the same problem: see the message above and this file's doc comment.",
@@ -148,111 +142,4 @@ func isOSArgs(e ast.Expr) bool {
 	}
 	pkg, ok := sel.X.(*ast.Ident)
 	return ok && pkg.Name == "os"
-}
-
-// legacyName is the command this binary answered to before 0.3.3, and goes
-// on answering to. It is spelled out here rather than derived from
-// cliecho.Binary because it is a promise about a name that no longer moves:
-// the day the constant changes again, `backup-manager` is still the thing
-// an operator's four-year-old cron line says, and a test that followed the
-// constant would quietly stop making the promise.
-const legacyName = "backup-manager"
-
-// TestTheOldNameReachesTheSameBinary builds this command, symlinks it under
-// the old name, and requires the two to answer identically.
-//
-// The rename ships with a symlink in the image and a claim attached to it:
-// nothing an operator already automated has to change. The symlink itself
-// belongs to container/Dockerfile and cannot be tested from here, but the
-// half that can go wrong in Go can be, and it is the half that would fail
-// silently. A binary that looked at its own argv[0] would still start,
-// still run the right subcommand, and print a different sentence, and the
-// only place that shows up is on somebody's terminal after an upgrade.
-//
-// A symlink rather than a copy, because the copy would prove something
-// weaker. Exec through a symlink hands the child the symlink's own path as
-// argv[0], which is exactly the arrangement the image makes; a second copy
-// of the file would test that two identical binaries behave identically,
-// which nobody doubted.
-//
-// The three argv it drives are chosen for the three ways the name reaches
-// an operator: `version` prints it on stdout, no arguments at all prints
-// the usage block on stderr, and an unknown command prints the diagnostic
-// prefix. Between them every shape in this package is covered, and all
-// three exit through a different path.
-func TestTheOldNameReachesTheSameBinary(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds the binary; -short is for the runs that cannot afford a compile")
-	}
-
-	dir := t.TempDir()
-	canonical := filepath.Join(dir, cliecho.Binary)
-	build := exec.Command("go", "build", "-o", canonical, "./cmd/backup-manager")
-	build.Dir = coreRoot
-	build.Env = append(os.Environ(), "GOWORK=off")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building %s: %v\n%s", cliecho.Binary, err, out)
-	}
-
-	alias := filepath.Join(dir, legacyName)
-	if alias == canonical {
-		t.Fatalf("%s and %s are the same path, so this test would compare a binary with itself and pass however it behaved. cliecho.Binary is %q; if the product really has gone back to the old name, this test has stopped meaning anything and should say so out loud rather than keep passing.",
-			cliecho.Binary, legacyName, cliecho.Binary)
-	}
-	if err := os.Symlink(canonical, alias); err != nil {
-		t.Fatalf("symlinking %s to %s: %v", alias, canonical, err)
-	}
-
-	for _, argv := range [][]string{
-		{"version"},
-		{},
-		{"definitely-not-a-command"},
-	} {
-		label := strings.Join(argv, " ")
-		if label == "" {
-			label = "(no arguments)"
-		}
-		wantCode, wantOut, wantErr := runUnderName(t, canonical, argv)
-		gotCode, gotOut, gotErr := runUnderName(t, alias, argv)
-
-		if gotCode != wantCode {
-			t.Errorf("%s %s exited %d and %s %s exited %d. The old name is a symlink to the same file, so a script that branches on the exit status has to get the same answer from either.",
-				legacyName, label, gotCode, cliecho.Binary, label, wantCode)
-		}
-		if gotOut != wantOut {
-			t.Errorf("%s %s and %s %s printed different things on stdout.\nunder %s:\n%s\nunder %s:\n%s",
-				legacyName, label, cliecho.Binary, label, cliecho.Binary, wantOut, legacyName, gotOut)
-		}
-		if gotErr != wantErr {
-			t.Errorf("%s %s and %s %s printed different things on stderr.\nunder %s:\n%s\nunder %s:\n%s",
-				legacyName, label, cliecho.Binary, label, cliecho.Binary, wantErr, legacyName, gotErr)
-		}
-	}
-}
-
-// runUnderName executes path with argv and returns its exit status and both
-// streams.
-//
-// The environment is built rather than inherited, for the reason
-// core/tests/compat's runCLI gives at greater length: a developer with
-// $BACKUP_MANAGER_API_URL exported would otherwise have both halves of the
-// comparison aimed at their own engine.
-func runUnderName(t *testing.T, path string, argv []string) (int, string, string) {
-	t.Helper()
-
-	cmd := exec.Command(path, argv...)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "TZ=UTC"}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	code := 0
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) {
-			t.Fatalf("running %s %v: %v", path, argv, err)
-		}
-		code = exitErr.ExitCode()
-	}
-	return code, stdout.String(), stderr.String()
 }

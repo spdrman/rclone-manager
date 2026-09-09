@@ -137,8 +137,8 @@ Docker app:
 
 | Process | Command | Listener |
 |---|---|---|
-| engine | `backup-manager-web serve` | `127.0.0.1:8478`, loopback only |
-| web UI | `backup-manager-web serve-ui` | `:8477`, the only LAN-facing port |
+| engine | `rbm-web serve` | `127.0.0.1:8478`, loopback only |
+| web UI | `rbm-web serve-ui` | `:8477`, the only LAN-facing port |
 
 The command an operator types on a Docker host is `rbm-web` since 0.3.3,
 and these two lines are deliberately not that. A `.spk` installs native
@@ -167,7 +167,7 @@ here is not attributable to one verified peer.
 | `/var/packages/BackupManager/target` | the two binaries, the DSM UI files, the config seed | replaced | removed |
 | `/var/packages/BackupManager/etc` | `config.yaml`, and the SSH key/known_hosts you put there | kept | kept |
 | `/var/packages/BackupManager/var` | SQLite journal, `local-auth.json`, logs, pid files | kept | kept |
-| `/volume?/backup-manager` | backup data (a DSM shared folder) | kept | kept |
+| `/volume?/rbm` | backup data (a DSM shared folder) | kept | kept |
 
 Both daemons' logs live under `var/log`, on the DSM system volume, and
 `var/` survives every upgrade and reboot. `common.sh` caps each at

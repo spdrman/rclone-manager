@@ -183,19 +183,19 @@ for arch in $ARCHES; do
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
 
-  # /rbm and /rbm-web, never the /backup-manager and /backup-manager-web
+  # /rbm and /rbm-web, never the /rbm and /rbm-web
   # beside them, and this is not cosmetic (the 0.3.3 CLI rename). Those
   # two are SYMLINKS now, and `docker cp` without -L copies a link as a
   # link, so this would write two dead links into $tmp and sha256 would
   # fail on a file that is not there. The local names below stay the old
   # ones on purpose: they are the keys binary_sha256 records, and the
   # release ARTIFACT did not get renamed, only the command.
-  docker cp "${cid}:/rbm" "${tmp}/backup-manager" >&2
-  docker cp "${cid}:/rbm-web" "${tmp}/backup-manager-web" >&2
+  docker cp "${cid}:/rbm" "${tmp}/rbm" >&2
+  docker cp "${cid}:/rbm-web" "${tmp}/rbm-web" >&2
   docker rm "$cid" >/dev/null
 
-  backup_manager_sha=$(sha256_of "${tmp}/backup-manager")
-  backup_manager_web_sha=$(sha256_of "${tmp}/backup-manager-web")
+  backup_manager_sha=$(sha256_of "${tmp}/rbm")
+  backup_manager_web_sha=$(sha256_of "${tmp}/rbm-web")
   local_image_id=$(docker images --no-trunc --format '{{.ID}}' "$tag" | head -n1 | sed 's/^sha256://')
 
   rm -rf "$tmp"

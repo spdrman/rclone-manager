@@ -47,7 +47,7 @@ import (
 // where the engine is. Two shapes still refuse, and both are refusals
 // rather than gaps:
 //
-// A `backup-manager daemon` announces that it serves this deployment and
+// A `rbm daemon` announces that it serves this deployment and
 // serves no HTTP at all (core/service's liveengine.go says so in as many
 // words). There is nothing to route to, so the change is refused exactly
 // as it was before.

@@ -879,7 +879,7 @@ The Go executable SHALL support at minimum:
 ```bash
 rbm run
 rbm daemon
-backup-manager serve
+rbm serve
 rbm status
 rbm check
 rbm retention --dry-run
@@ -908,7 +908,7 @@ docker run --rm ... rbm check
 The UPK Compose profile SHALL run the canonical image in a combined supervised mode such as:
 
 ```bash
-backup-manager serve --with-daemon --auth-mode=ugos
+rbm serve --with-daemon --auth-mode=ugos
 ```
 
 Exact command naming may vary.

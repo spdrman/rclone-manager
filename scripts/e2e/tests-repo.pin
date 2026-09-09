@@ -228,11 +228,11 @@
 # does not care which name reached it. What it does NOT prove, and their case
 # doc says so, is that the shipped image carries both names: the `go` builder
 # makes no image, so that half belongs to container/Dockerfile, where
-# apps/generic/tests/dockercli runs /backup-manager inside the built image.
+# apps/generic/tests/dockercli runs /rbm inside the built image.
 #
 # Their harness needed one fix that is worth knowing about here, because this
 # repository caused it. `docker cp` copies a symlink AS a symlink, and the new
-# image ships /rbm with /backup-manager as a link to it, so extraction was
+# image ships /rbm with /rbm as a link to it, so extraction was
 # landing a four-byte dangling link and exec'ing it. They pass `-L` now, which
 # is a no-op against a pre-rename image. The same defect was in this
 # repository's own release scripts and is fixed on the image branch.

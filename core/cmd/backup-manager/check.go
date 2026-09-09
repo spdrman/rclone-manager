@@ -7,7 +7,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
-// cmdCheck is `backup-manager check`: a pre-flight answer to "can this
+// cmdCheck is `rbm check`: a pre-flight answer to "can this
 // deployment actually start" (see internal/app.Check's doc for exactly
 // what it validates and, just as importantly, what it deliberately does
 // not: it never contacts a configured remote).

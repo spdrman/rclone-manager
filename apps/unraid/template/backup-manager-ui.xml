@@ -15,10 +15,10 @@
   The no-healthcheck flag in ExtraParams is deliberate, and it is the one
   place the two compose profiles and this template solve the same problem
   differently. The canonical image bakes in a HEALTHCHECK running
-  "/backup-manager status", which needs a config file and a state database
+  "/rbm status", which needs a config file and a state database
   this container does not have, so left inherited it would report
   unhealthy forever while working perfectly. Compose overrides the test
-  with "/backup-manager-web healthcheck". Unraid's only seam is docker
+  with "/rbm-web healthcheck". Unraid's only seam is docker
   run's health-cmd flag, which is shell form, and the runtime image is
   distroless with no shell, so an override there would be a healthcheck
   that can never pass. Off is honest; permanently failing is not.
@@ -43,7 +43,7 @@
   <Icon>https://raw.githubusercontent.com/spdrman/rclone-manager/main/docs/submission/icon.svg</Icon>
   <Requires>Run `docker network create backup-manager` and install the backup-manager engine template before this one.</Requires>
   <ExtraParams>--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=16m,mode=1777,uid=99,gid=100 --user 99:100 --no-healthcheck</ExtraParams>
-  <PostArgs>/backup-manager-web serve-ui --profile=unraid</PostArgs>
+  <PostArgs>/rbm-web serve-ui --profile=unraid</PostArgs>
   <DonateText/>
   <DonateLink/>
   <Config Name="Web UI port" Target="8080" Default="8080" Mode="tcp" Description="The only published port in this deployment. The engine container publishes nothing." Type="Port" Display="always" Required="true" Mask="false">8080</Config>

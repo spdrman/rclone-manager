@@ -87,14 +87,14 @@
   "healthchecks": {
     "engine": [
       "CMD",
-      "/backup-manager-web",
+      "/rbm-web",
       "healthcheck",
       "--url",
       "http://127.0.0.1:8080/health/live"
     ],
     "webUI": [
       "CMD",
-      "/backup-manager-web",
+      "/rbm-web",
       "healthcheck"
     ]
   },
@@ -140,19 +140,19 @@
   ],
   "commands": {
     "engine": [
-      "/backup-manager-web",
+      "/rbm-web",
       "serve"
     ],
     "webUI": [
-      "/backup-manager-web",
+      "/rbm-web",
       "serve-ui"
     ],
     "headless": [
-      "/backup-manager",
+      "/rbm",
       "daemon"
     ],
     "healthcheck": [
-      "/backup-manager-web",
+      "/rbm-web",
       "healthcheck"
     ],
     "imageHealthcheck": [
@@ -163,30 +163,6 @@
   "binaries": [
     "/rbm",
     "/rbm-web"
-  ],
-  "_commandNames_comment": [
-    "Every path an adapter's `command:` (or Unraid's <PostArgs>) is allowed to name,",
-    "which is NOT the same question as `binaries` above and stopped being the same",
-    "question in 0.3.3.",
-    "",
-    "`binaries` is the list of real files in the image. The release scripts extract",
-    "each one by that exact path and hash it, and RecordsEveryBinary demands a hash",
-    "per entry, so a symlink must never appear there: it would demand a hash for a",
-    "file that is not independently present.",
-    "",
-    "This list is the entrypoints. It carries the two real binaries AND the two",
-    "compatibility symlinks container/Dockerfile ships beside them, because a",
-    "compose file naming /backup-manager-web is naming a legitimate entrypoint of",
-    "this image, not drifting from it. The shipped compose files deliberately name",
-    "the old paths: they are the only ones that resolve on 0.3.0, 0.3.1 and 0.3.2 as",
-    "well as on 0.3.3, and IMAGE and --release both let an operator point the same",
-    "file at those. See container/Dockerfile's THE OLD NAMES block."
-  ],
-  "commandNames": [
-    "/rbm",
-    "/rbm-web",
-    "/backup-manager",
-    "/backup-manager-web"
   ],
   "containerPaths": {
     "state": "/data/state",

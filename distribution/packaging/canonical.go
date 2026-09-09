@@ -282,17 +282,12 @@ type Canonical struct {
 	// Profiles are the runtime profiles the canonical definition declares
 	// and the executable implements. An adapter may select one of these
 	// and nothing else.
-	Profiles     []string     `json:"profiles"`
-	Healthchecks Healthchecks `json:"healthchecks"`
-	ListenPort   int          `json:"listenPort"`
-	AuthMode     string       `json:"authMode"`
-	Commands     Commands     `json:"commands"`
-	Binaries     []string     `json:"binaries"`
-	// CommandNames is every path a profile may name as argv[0]. It is
-	// Binaries plus the compatibility symlinks, and it is separate from
-	// Binaries because Binaries drives the release manifest, which needs a
-	// hash for each entry and must not be asked for one for a symlink.
-	CommandNames   []string       `json:"commandNames"`
+	Profiles       []string       `json:"profiles"`
+	Healthchecks   Healthchecks   `json:"healthchecks"`
+	ListenPort     int            `json:"listenPort"`
+	AuthMode       string         `json:"authMode"`
+	Commands       Commands       `json:"commands"`
+	Binaries       []string       `json:"binaries"`
 	ContainerPaths ContainerPaths `json:"containerPaths"`
 	// ConfigFileName is the file the engine reads inside the config
 	// directory.

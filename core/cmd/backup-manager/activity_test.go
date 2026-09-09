@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Issue #598's CLI half: `backup-manager activity`.
+// Issue #598's CLI half: `rbm activity`.
 //
 // There was no verb for the lifecycle feed at all, which is worse than
 // cosmetic on the issue this comes from. The one screen that says what the

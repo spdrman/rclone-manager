@@ -274,11 +274,11 @@ func TestCmdHealthcheck_FailsWhenNothingIsListening(t *testing.T) {
 // TestCmdServe_RefusesWithItsOwnExitCodeWhenSomethingElseIsAlreadyServing
 // is issue #551 at the binary the shipped container actually runs.
 //
-// container/compose.yaml runs `/backup-manager-web serve`, so the
+// container/compose.yaml runs `/rbm-web serve`, so the
 // deployment shape the exit code was justified by (a supervisor replacing
 // a container while the outgoing process still holds the serving lock,
 // where waiting and trying again is the right answer) is this binary's
-// shape and not `backup-manager daemon`'s. A code that only the CLI
+// shape and not `rbm daemon`'s. A code that only the CLI
 // returns would be a contract a container operator cannot use.
 //
 // The lock is taken here, in the test process, and it is a real one:

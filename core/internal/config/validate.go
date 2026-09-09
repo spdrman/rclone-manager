@@ -1516,7 +1516,7 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 // and cannot happen, and it is here rather than left to the move engine
 // because of WHERE the engine's refusal lands: at the verification step of
 // a move, after the object has already been uploaded, once per artifact
-// per cycle, in a log line, forever. `backup-manager check` says "config
+// per cycle, in a log line, forever. `rbm check` says "config
 // OK" on the way in and the artifacts never arrive. That is a
 // configuration this product can validate and can never execute, which is
 // the one thing validation exists to prevent.
@@ -1841,7 +1841,7 @@ func (v *validator) validateTierMediumReferences(path string, r *Retention, decl
 // value is spelled perfectly and describes something that can never
 // happen, and the place the product would otherwise say so is the middle
 // of a move, once per artifact per cycle, in a log line, for ever, while
-// `backup-manager check` said "config OK" on the way in.
+// `rbm check` said "config OK" on the way in.
 //
 // What cannot happen is #428's chain of four facts, and every link is
 // read from the code that defines it. A source copy is deleted only after

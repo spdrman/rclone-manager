@@ -976,7 +976,7 @@ if 'utf' in locale.getpreferredencoding(False).lower().replace('-', ''):
     raise SystemExit(0)
 tmp = tempfile.mkdtemp()
 args = installer.resolve(installer.build_parser().parse_args(
-    ['install', '--prefix', tmp + '/backup-manager']))
+    ['install', '--prefix', tmp + '/rbm']))
 installer.stage_payload(args)
 sys.stdout.buffer.write(b'STAGED ')
 sys.stdout.buffer.write(
@@ -4007,12 +4007,12 @@ class TestNamingAPreviousRelease(unittest.TestCase):
         return Fixture(self).args(*extra, command=command)
 
     def test_it_fills_the_tag_of_the_reference_nobody_named(self):
-        args = self.args("--release", "0.1.0")
-        self.assertEqual(installer.image_tag(args.image), "0.1.0")
+        args = self.args("--release", "0.4.0")
+        self.assertEqual(installer.image_tag(args.image), "0.4.0")
         self.assertEqual(installer.image_name(args.image),
                          f"{installer.RELEASE_REGISTRY}/{installer.RELEASE_REPOSITORY}",
                          "--release moves the tag and nothing else; the registry is not its to change")
-        self.assertIn("VERSION=0.1.0", installer.render_env(args))
+        self.assertIn("VERSION=0.4.0", installer.render_env(args))
         self.assertIn(args.image, installer.render_image_override(args))
 
     def test_leaving_it_alone_changes_nothing(self):
@@ -4027,32 +4027,58 @@ class TestNamingAPreviousRelease(unittest.TestCase):
         self.assertEqual(self.args("--release", installer.CARRIED_RELEASE).image, default)
 
     def test_it_fills_a_tagless_reference_an_operator_did_name(self):
-        args = self.args("--image", "registry.example:5000/backup-manager", "--release", "0.1.0")
-        self.assertEqual(args.image, "registry.example:5000/backup-manager:0.1.0")
+        args = self.args("--image", "registry.example:5000/backup-manager", "--release", "0.4.0")
+        self.assertEqual(args.image, "registry.example:5000/backup-manager:0.4.0")
 
     def test_an_image_that_already_agrees_is_not_a_conflict(self):
-        args = self.args("--image", "ghcr.io/spdrman/backup-manager:0.1.0", "--release", "0.1.0")
-        self.assertEqual(args.image, "ghcr.io/spdrman/backup-manager:0.1.0")
+        args = self.args("--image", "ghcr.io/spdrman/backup-manager:0.4.0", "--release", "0.4.0")
+        self.assertEqual(args.image, "ghcr.io/spdrman/backup-manager:0.4.0")
+
+    def test_it_refuses_a_release_older_than_the_binaries_it_writes(self):
+        # The embedded compose runs /rbm-web. That path exists from 0.3.3
+        # onwards and in no image published before it, so writing this
+        # deployment against an older tag produces two containers that die
+        # with "exec /rbm-web: no such file or directory" while the
+        # installer waits for a health check that can never pass. 0.3.0,
+        # 0.3.1 and 0.3.2 are all still on the registry, so this is
+        # reachable rather than theoretical.
+        for old in ("0.3.2", "0.3.0", "0.2.0", "0.1.0"):
+            with self.subTest(release=old):
+                exc = refusal_from(self.args, "--release", old)
+                self.assertIsNotNone(exc, f"--release {old} names an image with no /rbm-web in it")
+                self.assertEqual(exc.code, installer.EXIT_RELEASE_TOO_OLD)
+                self.assertIn(old, exc.message)
+                self.assertIn(installer.FIRST_RELEASE_WITH_RBM, exc.message)
+
+    def test_the_floor_itself_is_installable(self):
+        # A floor that refused its own boundary would be off by one, and
+        # 0.3.3 is the release that carries these binaries.
+        exc = refusal_from(self.args, "--release", installer.FIRST_RELEASE_WITH_RBM)
+        self.assertIsNone(
+            exc,
+            f"--release {installer.FIRST_RELEASE_WITH_RBM} is the first release whose image "
+            "carries /rbm-web, so it has to be accepted",
+        )
 
     def test_two_flags_naming_different_versions_refuse_rather_than_pick_one(self):
-        exc = refusal_from(self.args, "--image", "ghcr.io/spdrman/backup-manager:0.1.0",
-                           "--release", "0.3.0")
+        exc = refusal_from(self.args, "--image", "ghcr.io/spdrman/backup-manager:0.5.0",
+                           "--release", "0.4.0")
         self.assertIsNotNone(exc, "installing a version other than the one that was named, quietly, "
                                   "is the whole failure this flag exists to prevent")
         self.assertEqual(exc.code, installer.EXIT_RELEASE_CONFLICT)
-        self.assertIn("0.1.0", exc.message)
-        self.assertIn("0.3.0", exc.message)
+        self.assertIn("0.5.0", exc.message)
+        self.assertIn("0.4.0", exc.message)
 
     def test_a_digest_is_not_weakened_into_a_tag(self):
         exc = refusal_from(self.args,
                            "--image", "ghcr.io/spdrman/backup-manager@sha256:" + "ab" * 32,
-                           "--release", "0.1.0")
+                           "--release", "0.4.0")
         self.assertIsNotNone(exc)
         self.assertEqual(exc.code, installer.EXIT_RELEASE_CONFLICT)
         self.assertIn("sha256:", exc.message)
 
     def test_it_refuses_under_no_pull(self):
-        exc = refusal_from(self.args, "--no-pull", "--release", "0.1.0")
+        exc = refusal_from(self.args, "--no-pull", "--release", "0.4.0")
         self.assertIsNotNone(exc, "the offline paths resolve nothing against a registry")
         self.assertEqual(exc.code, installer.EXIT_RELEASE_OFFLINE)
         self.assertIn("--no-pull", exc.message)
@@ -4060,9 +4086,9 @@ class TestNamingAPreviousRelease(unittest.TestCase):
 
     def test_it_refuses_under_an_image_archive(self):
         fx = Fixture(self)
-        archive = fx.prefix / "backup-manager-0.1.0.tar"
+        archive = fx.prefix / "backup-manager-0.4.0.tar"
         archive.write_bytes(b"not really a tarball")
-        exc = refusal_from(fx.args, "--image-archive", str(archive), "--release", "0.1.0")
+        exc = refusal_from(fx.args, "--image-archive", str(archive), "--release", "0.4.0")
         self.assertIsNotNone(exc)
         self.assertEqual(exc.code, installer.EXIT_RELEASE_OFFLINE)
         self.assertIn("--image-archive", exc.message)
@@ -4085,8 +4111,8 @@ class TestNamingAPreviousRelease(unittest.TestCase):
                 self.assertEqual(exc.code, installer.EXIT_USAGE)
 
     def test_a_prerelease_is_a_version_and_is_accepted(self):
-        args = self.args("--release", "0.2.0-rc.1")
-        self.assertEqual(installer.image_tag(args.image), "0.2.0-rc.1")
+        args = self.args("--release", "0.4.0-rc.1")
+        self.assertEqual(installer.image_tag(args.image), "0.4.0-rc.1")
 
     def test_resolving_it_reaches_no_network(self):
         """The constraint the whole design rests on. Fixture.args() calls
@@ -4102,7 +4128,7 @@ class TestNamingAPreviousRelease(unittest.TestCase):
         was = installer.urllib.request.urlopen
         installer.urllib.request.urlopen = refuse
         self.addCleanup(setattr, installer.urllib.request, "urlopen", was)
-        self.args("--release", "0.1.0", command="install")
+        self.args("--release", "0.4.0", command="install")
         self.assertEqual(opened, [])
 
 
@@ -4515,13 +4541,13 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
 
     def test_a_release_this_installer_has_no_digest_for_says_so(self):
         registry = _FakeRegistry(digest=self.recorded)
-        pf = self.preflight("--release", "0.1.0", registry=registry)
+        pf = self.preflight("--release", "0.4.0", registry=registry)
         printed = self.notes_from(pf)
         self.assertEqual(registry.asked, [],
-                         "there is nothing to compare a 0.1.0 digest against, and asking anyway "
+                         "there is nothing to compare a 0.4.0 digest against, and asking anyway "
                          "would be theatre")
         self.assertIn("!!", printed)
-        self.assertIn("0.1.0", printed)
+        self.assertIn("0.4.0", printed)
 
     def test_a_reference_already_pinned_to_the_recorded_digest_needs_no_question(self):
         registry = _FakeRegistry(digest=self.recorded)

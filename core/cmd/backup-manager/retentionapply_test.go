@@ -18,7 +18,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
-// `backup-manager retention apply` (issue #602).
+// `rbm retention apply` (issue #602).
 //
 // `retention` previews and has never been able to do anything else, so
 // until this verb the only way to run FR-20's deletion was the HTTP

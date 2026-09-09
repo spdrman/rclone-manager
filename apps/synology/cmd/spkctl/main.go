@@ -18,7 +18,7 @@
 // which is the same extraction scripts/release/record-release-hashes.sh
 // does to produce the manifest in the first place. The source paths are
 // /rbm and /rbm-web because those are the real binaries after the 0.3.3
-// CLI rename; /backup-manager and /backup-manager-web still resolve in
+// CLI rename; /rbm and /rbm-web still resolve in
 // the image, but they are symlinks, and `docker cp` without -L copies a
 // link rather than what it points at. The destination names, and this
 // package's own payload names, stay as they are: they are what

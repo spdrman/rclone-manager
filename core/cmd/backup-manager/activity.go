@@ -17,7 +17,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
-// cmdActivity is `backup-manager activity`: the durable lifecycle feed,
+// cmdActivity is `rbm activity`: the durable lifecycle feed,
 // newest first, which is the same append-only transition log the Web UI's
 // Activity page draws (issue #598).
 //

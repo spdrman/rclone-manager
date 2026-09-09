@@ -117,7 +117,7 @@ func newRetainedFixture(t *testing.T) committedFixture {
 // TestValidateArtifact_RemoteRetained_QuarantinesOnCorruption is issue
 // #315's core proof for the operator-triggered path: before this fix,
 // ValidateArtifact refused every REMOTE_RETAINED artifact outright ("not a
-// durable restore point"), so `backup-manager validate <id>` gave an
+// durable restore point"), so `rbm validate <id>` gave an
 // operator no on-demand way to check a retained artifact's local copy
 // either, on top of reconcile.go's and internal/revalidate's own gaps.
 // This proves the refusal is gone and a corrupted local copy is actually

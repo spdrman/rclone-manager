@@ -1,6 +1,6 @@
 // This file is issue #211's authenticated health surface: FR-24's
 // backup-freshness verdict for every configured backup set, the same
-// computation `backup-manager status` prints.
+// computation `rbm status` prints.
 //
 // It is a different thing from /health/live and /health/ready
 // (handlers_system.go), and the difference is the point. Those two are

@@ -9,7 +9,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
-// cmdBackupSetEditHold is `backup-manager backup-set edit-hold
+// cmdBackupSetEditHold is `rbm backup-set edit-hold
 // <source/backup-set> [--release]`.
 //
 // # The gap this closes

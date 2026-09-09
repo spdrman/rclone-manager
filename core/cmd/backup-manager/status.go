@@ -10,7 +10,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
-// cmdStatus is `backup-manager status`: FR-24's health surface, rendered
+// cmdStatus is `rbm status`: FR-24's health surface, rendered
 // for a terminal (and, per container/Dockerfile's TODO(#26), for a
 // container healthcheck: see this exit-code convention's own doc below).
 //

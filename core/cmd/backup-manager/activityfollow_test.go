@@ -13,7 +13,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
-// `backup-manager activity --follow`, driven against a real route.
+// `rbm activity --follow`, driven against a real route.
 //
 // The three claims worth testing here are all about the CLIENT half of a
 // polling contract, and none of them is visible from a single request.
@@ -293,7 +293,7 @@ func TestActivityFollow_ReadsTheDeploymentBucketOnADeploymentWithNoSets(t *testi
 	e := startFakeEngine(t, writeTestConfig(t))
 	e.holdLiveActivity(
 		oneDeploymentReading("epoch-1", 2,
-			deploymentEvent(1, "info", "startup", "backup-manager starting"),
+			deploymentEvent(1, "info", "startup", "rbm starting"),
 			deploymentEvent(2, "info", "api_action", "patch /settings"),
 		),
 		oneDeploymentReading("epoch-1", 2),
@@ -303,7 +303,7 @@ func TestActivityFollow_ReadsTheDeploymentBucketOnADeploymentWithNoSets(t *testi
 	if err != nil {
 		t.Fatalf("followActivity: %v", err)
 	}
-	for _, want := range []string{"backup-manager starting", "patch /settings"} {
+	for _, want := range []string{"rbm starting", "patch /settings"} {
 		if got := strings.Count(out, want); got != 1 {
 			t.Errorf("%q was printed %d time(s) on a deployment whose only bucket is the deployment's own; a follow that reads Sets alone prints nothing here for ever:\n%s", want, got, out)
 		}

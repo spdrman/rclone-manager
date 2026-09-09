@@ -113,7 +113,7 @@ func TestTheRoutesWhoseVerbsNowExistNameThem(t *testing.T) {
 // one of the three values the contract defines and not one any client has
 // ever sent. So no real request matched that arm: every restore and every
 // per-set run fell through to a default whose sentence is about
-// `backup-manager run`, a different verb for a different act. The
+// `rbm run`, a different verb for a different act. The
 // example body said "restore" too, so the end-to-end parse test certified
 // a branch production never reaches.
 //

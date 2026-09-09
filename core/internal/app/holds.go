@@ -96,7 +96,7 @@ type BackupSetHolds interface {
 // Before it, the cancellation surfaced as a bare context.Canceled, which
 // every consumer of a cycle report reads as a failure: the operation an
 // operator submitted was marked failed with "context canceled" as its
-// reason, `backup-manager run` exited 1, and the activity feed said a
+// reason, `rbm run` exited 1, and the activity feed said a
 // backup had gone wrong. Nothing had. See
 // BackupSetCycleResult.SystemicFailure, which is what callers should ask
 // rather than comparing against this directly.

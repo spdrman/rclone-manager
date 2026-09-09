@@ -47,7 +47,7 @@ type FetchPreviewEntry struct {
 	Known bool
 }
 
-// FetchResult is `backup-manager fetch`'s use case output: either a
+// FetchResult is `rbm fetch`'s use case output: either a
 // dry-run preview (Preview populated, everything else zero) or a real,
 // on-demand run of one specific backup set's whole cycle share
 // (Reconcile/Discovery populated, Preview nil).
@@ -90,7 +90,7 @@ type FetchResult struct {
 	Progress CycleProgress
 }
 
-// Fetch is `backup-manager fetch --source ... --backup-set ...`'s use
+// Fetch is `rbm fetch --source ... --backup-set ...`'s use
 // case: an operator-triggered, on-demand run of exactly one backup set's
 // share of the same cycle RunCycle performs for every configured backup
 // set (reconcile, then discover, then drive every in-flight artifact
