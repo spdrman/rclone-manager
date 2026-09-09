@@ -943,30 +943,23 @@ func (m ReleaseManifest) ArchitectureSet() []string {
 // manifestBinaryKey turns a canonical binary path into the key
 // container/release-manifest.json records its SHA-256 under.
 //
-// The two are not the same string any more, and that is deliberate
-// rather than an oversight left over from the 0.3.3 CLI rename. What an
-// operator types became `rbm` and `rbm-web`, so canonical.json's
-// commands, every compose file and every adapter name /rbm and /rbm-web,
-// and scan.go checks a `command:`'s argv[0] against exactly that list.
-// The release ARTIFACT did not get renamed: the manifest's binary_sha256
-// keys, apps/synology/spk's payload members and the provenance inventory
-// all still say backup-manager and backup-manager-web, because they
-// identify a recorded build rather than a command, and re-keying a
-// record that already carries 0.3.3's hashes would invalidate evidence
-// to change a label.
+// They are the same string today, and that took two moves rather than
+// one. 0.3.3 renamed what an operator types to `rbm` and `rbm-web`, so
+// canonical.json's commands, every compose file and every adapter name
+// /rbm and /rbm-web, and scan.go checks a `command:`'s argv[0] against
+// exactly that list. The manifest's binary_sha256 keys were left behind
+// on the old names for a while and then re-keyed (#654), and the
+// provenance inventory's binary labels moved with them. What still
+// carries the old names is apps/synology/spk's payload members, and
+// those are file names inside a package rather than anything this
+// function is ever asked to look up.
 //
-// So one translation, in one place, rather than either half being made
-// to lie about the other. A path this map does not know is passed
-// through with its slash stripped, which is what the two callers did
-// before this existed: an unrecognised binary must fail the lookup and
-// be reported missing, never quietly resolve to one of these two.
+// It stays a named function rather than a bare TrimPrefix at the two
+// call sites, because it is the one place to change if a key and a path
+// ever part company again, and because the failure worth keeping out is
+// a lookup that quietly resolves an unrecognised binary to one of these
+// two instead of reporting it missing.
 func manifestBinaryKey(binary string) string {
-	// The manifest keys each binary by its own name, so this is just the
-	// path with its leading slash removed. It used to translate, because
-	// 0.3.3 renamed the binaries while the release artefact kept the old
-	// keys; the keys moved with the rest of the cut, so there is nothing
-	// left to bridge and nothing here that can pair a hash with the wrong
-	// binary.
 	return strings.TrimPrefix(binary, "/")
 }
 

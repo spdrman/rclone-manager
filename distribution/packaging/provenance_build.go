@@ -62,7 +62,7 @@ var inventoryNote = []string{
 	"of the two binaries container/Dockerfile copies into the runtime stage, resolved",
 	"for GOOS=linux on every architecture canonical.json claims. Every npm component",
 	"is a non-dev entry of ui/shared/package-lock.json, which is what the frontend",
-	"build stage installs and what ends up embedded in backup-manager-web.",
+	"build stage installs and what ends up embedded in rbm-web.",
 	"",
 	"licenseSha256 is the SHA-256 of the licence text as it appears in the module,",
 	"not of the SPDX id. An upstream that relicenses in place keeps its id and",

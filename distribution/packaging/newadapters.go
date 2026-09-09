@@ -144,7 +144,7 @@ func CheckPortainerTemplate(source string, t PortainerTemplates, composeVars []s
 	for _, v := range tpl.Volumes {
 		if HostPathIsAt(v.Bind, "/var/run/docker.sock") || HostPathIsAt(v.Bind, "/run/docker.sock") {
 			out = append(out, Violation{source, RuleProhibitedHostPath,
-				fmt.Sprintf("the template binds %s: Portainer holds the Docker socket because that is what Portainer is, and backup-manager must never inherit it", v.Bind)})
+				fmt.Sprintf("the template binds %s: Portainer holds the Docker socket because that is what Portainer is, and rclone-manager must never inherit it", v.Bind)})
 		}
 	}
 	if tpl.Image != "" {

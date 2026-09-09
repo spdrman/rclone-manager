@@ -558,7 +558,7 @@ fi
 # spdrman/rclone-manager-tests, pinned by scripts/e2e/tests-repo.pin. What
 # it runs against is not the pin's own build, it is THIS working tree's
 # ui/shared, on a port the harness picks and proves free. The same step
-# also runs that repository's CLI smoke slice against a backup-manager
+# also runs that repository's CLI smoke slice against an rbm
 # built from this tree, which is a black-box signal this repository has
 # never had at all.
 #
@@ -773,7 +773,7 @@ if [ "$FAST" != "1" ]; then
   # for the wrong reason. This runs each cell against a real planted
   # violation in a copy of the tree, including the two the EPIC E spec's own
   # section 4 table names by hand. It costs a few minutes because every
-  # mutant builds core/ and backup-manager and runs a real capture; that is
+  # mutant builds core/ and rbm and runs a real capture; that is
   # the price of the corpus meaning anything.
   gate_step "the FR-35 compatibility cells can actually fail (mutation self-test, #242)"
   bash scripts/compat/selftest.sh

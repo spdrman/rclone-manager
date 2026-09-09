@@ -355,10 +355,10 @@ class DeployGenericIntegrationTest(unittest.TestCase):
         return [
             "--ssh-key", str(self.fixture.client_key),
             "--known-hosts", str(self.fixture.known_hosts),
-            # The deployed backup-manager container reaches the fixture
+            # The deployed rclone-manager container reaches the fixture
             # through the host's published port via
             # CONTAINER_VISIBLE_HOST, NOT self.fixture.host ("127.0.0.1"
-            # would mean the backup-manager container itself, not this
+            # would mean the rclone-manager container itself, not this
             # host machine, from inside that container).
             "--host", GenericSFTPFixture.CONTAINER_VISIBLE_HOST,
             "--port", str(self.fixture.port),

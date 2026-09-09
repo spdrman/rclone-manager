@@ -46,7 +46,7 @@ fi
 # record-release-hashes.sh, but this reads it with a real parser rather
 # than sed: unlike publish-image.sh's json_string, which pulls two
 # top-level scalars, this needs a nested per-architecture map, and a
-# regex that silently matches the wrong "backup-manager" key would
+# regex that silently matches the wrong "rbm" key would
 # compare a hash against itself and pass.
 if ! command -v python3 >/dev/null 2>&1; then
   echo "refusing: python3 is not on PATH, and this check reads a nested JSON structure out of ${MANIFEST}." >&2

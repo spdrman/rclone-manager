@@ -574,13 +574,14 @@ func TestArchitectureParityAndRecordedBinaryHashes(t *testing.T) {
 	for _, a := range manifest.Architectures {
 		built = append(built, a.Architecture)
 		for _, binary := range c.Binaries {
-			// The manifest's own key for this binary, which is not the
-			// path any more (the 0.3.3 CLI rename): the image carries
-			// /rbm and /rbm-web, the manifest still records
-			// backup-manager and backup-manager-web, and
-			// manifestBinaryKey is the single place those two are
-			// bridged. Reading the path here instead would report every
-			// binary missing on every architecture.
+			// The manifest's own key for this binary, through the same
+			// function the product reader uses. The two agree today,
+			// both dropping the leading slash off /rbm and /rbm-web,
+			// but they have not always, and manifestBinaryKey is the
+			// single place they are bridged. Reading the path here
+			// directly would pass by accident now and report every
+			// binary missing on every architecture the next time a key
+			// and a path part company.
 			name := manifestBinaryKey(binary)
 			if a.BinarySHA256[name] == "" {
 				t.Errorf("release manifest records no SHA-256 for %s (canonical binary %s) on %s, but the packages ship an image claiming to contain it",

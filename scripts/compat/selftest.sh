@@ -30,7 +30,7 @@
 # path that exists in this tree today: prune deleting a file it could not
 # stat instead of refusing.
 #
-# This is not fast. Each mutant builds core/ and backup-manager and runs a
+# This is not fast. Each mutant builds core/ and rbm and runs a
 # real capture, so budget a few minutes. It is the only thing standing
 # between "the compatibility suite is green" and "the compatibility suite
 # is green because it cannot go red".

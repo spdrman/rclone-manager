@@ -7,7 +7,7 @@
   "creationInfo": {
     "created": "2026-09-09T15:40:02Z",
     "creators": [
-      "Tool: backup-manager-provenance",
+      "Tool: rclone-manager-provenance",
       "Organization: The Backup Manager Authors"
     ]
   },

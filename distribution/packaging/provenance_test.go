@@ -457,8 +457,8 @@ func TestNPMProductionComponents(t *testing.T) {
 		if c.Integrity == "" {
 			t.Errorf("%s carries no integrity hash, so the lockfile's own evidence is dropped on the way into the SBOM", c.Name)
 		}
-		if len(c.LinkedInto) != 1 || c.LinkedInto[0] != "backup-manager-web" {
-			t.Errorf("%s records linkedInto %v; the frontend bundle is embedded in backup-manager-web and nowhere else", c.Name, c.LinkedInto)
+		if len(c.LinkedInto) != 1 || c.LinkedInto[0] != "rbm-web" {
+			t.Errorf("%s records linkedInto %v; the frontend bundle is embedded in rbm-web and nowhere else", c.Name, c.LinkedInto)
 		}
 	}
 }
