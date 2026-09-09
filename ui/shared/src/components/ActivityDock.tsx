@@ -56,6 +56,22 @@
  * otherwise overwrite the dead process's line 1 in a buffer keyed by
  * sequence.
  *
+ * # Two feeds, one log
+ *
+ * The lines come from the engine, with one exception that is the whole
+ * reason state/browserNotices exists: a refusal produced in FRONT of the
+ * engine never reaches its ring at all. The destructive gate, the CSRF
+ * check and a dead connection all refuse before any handler runs, so
+ * there is nothing on the server that could have logged them, and a
+ * terminal drawing only the live feed shows nothing whatsoever for
+ * exactly the presses that need explaining (issue #597). Those come off
+ * that seam and are folded in by time (foldBrowserNotices), marked as
+ * this browser's rather than the engine's, and they are what puts a
+ * deployment-wide "Run all enabled sets" into the terminal at all. It is
+ * EPIC H's standing rule that every action taken in the web UI echoes its
+ * equivalent command here, and until this panel read the seam that rule
+ * held for everything the engine served and for nothing it refused.
+ *
  * # Shared log, private chrome
  *
  * The lines come from the engine's own buffers, so two people watching
@@ -70,6 +86,10 @@ import { usePlatform } from "@shared/platform/PlatformContext";
 import { mergeActivity, useActivityWindow } from "@shared/pages/useActivityFeed";
 import { activityLine, logText, UnfinishedActionsNotice } from "@shared/pages/ActivityStrip";
 import type { LineTone } from "@shared/pages/ActivityStrip";
+import { BROWSER_NOTICE_EVENT, noticeAsEvent } from "@shared/pages/SetActivityPanel";
+import { useCausl } from "@shared/state/graph";
+import { browserNoticesNode } from "@shared/state/browserNotices";
+import type { BrowserNotice } from "@shared/state/browserNotices";
 import type { LiveActivity, SetActivity, SetActivityEvent, UnfinishedAction } from "@shared/types/activity";
 import { clock } from "@shared/utilities/format";
 
@@ -107,12 +127,44 @@ export function dockReservedHeight(open: boolean, height: number): number {
   return open ? height + DOCK_BAR_HEIGHT + 8 : DOCK_BAR_HEIGHT;
 }
 
-/** One thing the dock draws: a line, or the rule marking where a process
- *  ended. The rule is an entry rather than a flag on the next line
- *  because it has a time of its own and belongs between two lines. */
+/** One thing the dock draws: a line the engine sent, a line this browser
+ *  wrote, or the rule marking where a process ended. The rule is an entry
+ *  rather than a flag on the next line because it has a time of its own
+ *  and belongs between two lines.
+ *
+ *  A notice is held as the NOTICE rather than as the event it renders as,
+ *  and that is the one place this panel consumes G1.4's seam differently
+ *  from the per-set terminal. A BrowserNotice names a LIST of backup sets
+ *  (a deployment-wide run names every enabled one), and an event has a
+ *  single `backup_set` field with nowhere to put the rest. The per-set
+ *  panel never meets that problem: it has already narrowed to one set
+ *  with noticesForBackupSet before it converts. This panel has not, and
+ *  its per-set chips are exactly the reader that needs the whole list, so
+ *  the list survives into the entry and the conversion happens at the
+ *  moment of drawing (see entryEvent, which calls the panel's own
+ *  noticeAsEvent so both terminals and every export say the same words). */
 export type DockEntry =
   | { kind: "event"; event: SetActivityEvent }
-  | { kind: "restart"; at: string };
+  | { kind: "restart"; at: string }
+  | { kind: "notice"; notice: BrowserNotice };
+
+/**
+ * The event an entry draws as.
+ *
+ * One conversion, called by everything that renders: the scrollback, the
+ * collapsed bar's newest line, the problem counters and both exports. A
+ * second copy of it is how the screen and the clipboard come to disagree,
+ * which is the argument logText already makes about itself.
+ *
+ * The restart rule is excluded in the TYPE rather than answered with a
+ * null, because it is not an event and has no message, no level and no
+ * fields to be asked for. Every caller already knows which one it is
+ * holding, so making them say so costs a line and buys a function with no
+ * empty answer in it.
+ */
+export function entryEvent(entry: Exclude<DockEntry, { kind: "restart" }>, index: number): SetActivityEvent {
+  return entry.kind === "event" ? entry.event : noticeAsEvent(entry.notice, index);
+}
 
 /** What is written in front of a line, and the whole reason `scope` was
  *  plumbed through in #573 and read by nothing until now. */
@@ -141,6 +193,22 @@ export interface DockPrefix {
  */
 export function dockPrefix(e: SetActivityEvent, viewer: string | null): DockPrefix {
   const setId = e.scope === "set" ? e.fields.backup_set ?? "" : "";
+  if (e.event === BROWSER_NOTICE_EVENT) {
+    // A line this browser wrote (state/browserNotices). It is an action
+    // somebody took here by definition, and the somebody is whoever is
+    // reading, so it is `[you]` without consulting an actor: there is no
+    // actor field on it, because the request never reached a service that
+    // could have identified one. That is also why it cannot be labelled
+    // by the account name the way an api_action is.
+    //
+    // The line's own text still says `[browser]` (ActivityStrip's
+    // activityLine), and the two are not the same claim said twice.
+    // `[you]` is WHO, and it is what tells the other administrator on the
+    // same NAS that this was not them. `[browser]` is that the engine
+    // never saw it, which is the only fact that decides whether the line
+    // is evidence about the NAS at all.
+    return { label: "you", setId, action: true };
+  }
   if (e.event === "api_action") {
     const actor = e.fields.actor ?? "";
     const label = actor === "" ? "request" : viewer !== null && actor === viewer ? "you" : actor;
@@ -245,6 +313,34 @@ export type DockFilter = "all" | "engine" | "mine" | "commands" | string;
 
 function passesFilter(entry: DockEntry, filter: DockFilter, viewer: string | null): boolean {
   if (entry.kind === "restart") return true;
+  if (entry.kind === "notice") {
+    // Asked here rather than through dockPrefix, because the question a
+    // chip asks a notice is about the LIST of sets it names and a prefix
+    // only carries one (see DockEntry).
+    switch (filter) {
+      case "all":
+      case "mine":
+        // Always: a notice is this browser's line and there is no other
+        // browser whose lines could be in this buffer.
+        return true;
+      case "engine":
+        // Never: it is the one thing in here the engine never saw.
+        return false;
+      case "commands":
+        // It is not an api_action, which is a line the ENGINE emitted
+        // about a request it served, and a notice is the opposite: a
+        // request that never got that far. It still carries the command
+        // the press was equivalent to, and that is what this chip is for.
+        return entry.notice.command !== undefined;
+      default:
+        // A line belongs to a set by NAMING it, which is
+        // noticesForBackupSet's rule and the reason a deployment-wide
+        // refusal lists every enabled set: somebody looking at one set
+        // after pressing "Run all enabled sets" is looking for the answer
+        // about that set.
+        return entry.notice.backupSetIds.includes(filter);
+    }
+  }
   const prefix = dockPrefix(entry.event, viewer);
   switch (filter) {
     case "all":
@@ -258,6 +354,54 @@ function passesFilter(entry: DockEntry, filter: DockFilter, viewer: string | nul
     default:
       return prefix.setId === filter;
   }
+}
+
+/**
+ * The engine's lines with this browser's own folded in, in the order the
+ * two happened.
+ *
+ * This is the seam state/browserNotices was built for and its own doc
+ * names two readers: the per-set terminal (G1.3) and this one (G1.2).
+ * Only the first was ever wired to it, so until now the "This browser"
+ * chip filtered a buffer that could not contain a browser line, and a
+ * deployment-wide run announced itself in a banner and nowhere else,
+ * which is EPIC H's standing rule half implemented.
+ *
+ * Placed by TIME, because time is the only thing the two sides share: a
+ * notice is written in a browser with no access to the engine's sequence
+ * counter, and cannot have one (foldNotices makes the same argument for
+ * the per-set panel). What this deliberately does NOT do is re-sort the
+ * engine's own lines by their timestamps. They are ordered by sequence,
+ * which is one counter for the whole process and therefore a total order
+ * on lines that a second-resolution timestamp cannot reproduce. So each
+ * notice is INSERTED after everything already stamped at or before it and
+ * the engine's order is carried through untouched.
+ *
+ * Both rings are bounded on their own (DOCK_BUFFER here,
+ * MAX_BROWSER_NOTICES there), so this does not re-trim: trimming the
+ * merged list would let a burst of refusals evict the engine lines that
+ * explain them.
+ */
+export function foldBrowserNotices(entries: DockEntry[], notices: BrowserNotice[]): DockEntry[] {
+  if (notices.length === 0) return entries;
+  const out: DockEntry[] = [];
+  let i = 0;
+  for (const notice of notices) {
+    // `!(t > notice.at)` rather than `t <= notice.at` so an unparseable
+    // timestamp on an engine line keeps that line where it is instead of
+    // being jumped by every notice: NaN fails both comparisons, and only
+    // one of the two answers preserves what the engine sent.
+    while (i < entries.length && !(entryTime(entries[i]) > notice.at)) out.push(entries[i++]);
+    out.push({ kind: "notice", notice });
+  }
+  while (i < entries.length) out.push(entries[i++]);
+  return out;
+}
+
+/** When an entry happened, as epoch milliseconds. */
+function entryTime(entry: DockEntry): number {
+  if (entry.kind === "notice") return entry.notice.at;
+  return Date.parse(entry.kind === "restart" ? entry.at : entry.event.at);
 }
 
 /** The rule a restart draws, in the one wording both the screen and the
@@ -309,10 +453,11 @@ export function environmentPreamble(origin: string, viewer: string | null): stri
  * the same reason it is the first line on screen: the commands under it
  * are only runnable with it said once above them. */
 export function dockText(entries: DockEntry[], viewer: string | null, preamble: string | null = null): string {
-  const lines = entries.map((entry) => {
+  const lines = entries.map((entry, i) => {
     if (entry.kind === "restart") return restartRule(entry.at);
-    const prefix = dockPrefix(entry.event, viewer);
-    const [first, ...rest] = logText([entry.event]).split("\n");
+    const event = entryEvent(entry, i);
+    const prefix = dockPrefix(event, viewer);
+    const [first, ...rest] = logText([event]).split("\n");
     const head = first.replace(/^(\S+)\s/, "$1 [" + prefix.label + "] ");
     return [head, ...rest].join("\n");
   });
@@ -341,6 +486,14 @@ function writeStored(key: string, value: string): void {
 export function ActivityDock() {
   const { auth } = usePlatform();
   const viewer = auth?.username ?? null;
+
+  // The lines this browser wrote. Read straight off G1.4's seam, the same
+  // node SetActivityPanel reads, so a refusal produced in FRONT of the
+  // engine reaches this panel at all: the destructive gate, the CSRF
+  // check and a dead connection all refuse before any handler runs, so
+  // there is nothing on the server that could have logged them and no
+  // reading of the live feed can ever carry one.
+  const notices = useCausl(browserNoticesNode);
 
   const [history, setHistory] = useState<DockEntry[]>([]);
 
@@ -392,7 +545,10 @@ export function ActivityDock() {
   // their own: a set is configured or it is not, and the reading says so
   // on every poll.
   const sets = useMemo(() => (feed.reading?.sets ?? []).map((s) => s.setId), [feed.reading]);
-  const all = useMemo(() => dockEntries(history, held), [history, held]);
+  const all = useMemo(
+    () => foldBrowserNotices(dockEntries(history, held), notices),
+    [history, held, notices]
+  );
   const shown = useMemo(() => all.filter((e) => passesFilter(e, filter, viewer)), [all, filter, viewer]);
   // The origin this page was loaded from is the address the reader would
   // type, which is the one fact the engine cannot know (see
@@ -402,10 +558,15 @@ export function ActivityDock() {
   const problems = useMemo(() => {
     let errors = 0;
     let warnings = 0;
-    for (const entry of all) {
-      if (entry.kind !== "event") continue;
-      if (entry.event.level === "error") errors++;
-      else if (entry.event.level === "warn") warnings++;
+    // Through entryEvent, so a refusal this browser wrote is counted as
+    // the warning it is. A press that was refused is exactly the thing an
+    // operator is looking for a count of, and it is the one kind of line
+    // the engine's own feed can never contribute.
+    for (const [i, entry] of all.entries()) {
+      if (entry.kind === "restart") continue;
+      const event = entryEvent(entry, i);
+      if (event.level === "error") errors++;
+      else if (event.level === "warn") warnings++;
     }
     return { errors, warnings };
   }, [all]);
@@ -444,10 +605,16 @@ export function ActivityDock() {
         maxHeight: open ? dockReservedHeight(true, height) : DOCK_BAR_HEIGHT
       }}
     >
+      {/* Exactly one line tall, always, and DOCK_BAR_HEIGHT rather than a
+          second copy of 32: the shell reserves room under the content
+          column from that constant and the section's maxHeight above is
+          computed from it, so a bar that measured differently from what
+          was reserved is content sitting behind the terminal (#617). It
+          is the chips inside it that give way (see below), never this. */}
       <div
         style={{
           flex: "none",
-          height: 32,
+          height: DOCK_BAR_HEIGHT,
           display: "flex",
           alignItems: "center",
           gap: "var(--space-3)",
@@ -472,7 +639,48 @@ export function ActivityDock() {
             {newestLine(all, viewer)}
           </span>
         ) : (
-          <span style={{ flex: 1, display: "flex", gap: 6, flexWrap: "wrap" }}>
+          /* One line that scrolls, never a second row.
+           *
+           * These were a wrapping flex row inside a bar pinned at
+           * DOCK_BAR_HEIGHT, so as soon as the chips did not fit, the
+           * second row was drawn outside the bar and clipped by the
+           * section's own maxHeight: the chips past the fold were not
+           * merely cramped, they were gone, with nothing on screen saying
+           * so. Four backup sets at 1280px is enough, and more sets does
+           * it at any width. It was found while recording the
+           * documentation GIFs, which were taken at 1440px to dodge it.
+           *
+           * Letting the bar grow instead is the fix that looks obvious
+           * and is not: AppShell reserves dockReservedHeight() under the
+           * content column from this exact constant, and the panel's own
+           * maxHeight is computed from it, so a taller bar puts the last
+           * row of a long table back behind the terminal, which is #617
+           * arriving again from the other side.
+           *
+           * `minWidth: 0` is what actually makes it shrink. A flex
+           * child's default min-width is its content, so `flex: 1` on a
+           * row of eight chips does not shrink at all and overflows its
+           * parent no matter what overflow says. The scrollbar chrome is
+           * hidden by the class rather than shown, because a classic
+           * horizontal scrollbar is about 15px and the bar is 32 with
+           * 24px buttons in it: drawing one would clip the chips it was
+           * there to rescue. The row still scrolls by wheel and trackpad,
+           * and tabbing to a chip scrolls it into view, so every chip
+           * stays reachable by both. */
+          <span
+            role="group"
+            aria-label="Filter the terminal"
+            className="activity-toolbar__filters"
+            style={{
+              flex: "1 1 0",
+              minWidth: 0,
+              display: "flex",
+              gap: 6,
+              flexWrap: "nowrap",
+              overflowX: "auto",
+              overflowY: "hidden"
+            }}
+          >
             {chips(sets).map((chip) => (
               <button
                 key={chip.value}
@@ -480,7 +688,14 @@ export function ActivityDock() {
                 className="activity-toolbar__button"
                 aria-pressed={filter === chip.value}
                 onClick={() => setFilter(chip.value)}
-                style={filter === chip.value ? { background: "var(--accent-quiet)", color: "var(--text)" } : undefined}
+                style={{
+                  // Never shrink and never wrap the label: a chip narrowed
+                  // to fit is a set id an operator cannot read, which is a
+                  // quieter version of the same defect.
+                  flex: "0 0 auto",
+                  whiteSpace: "nowrap",
+                  ...(filter === chip.value ? { background: "var(--accent-quiet)", color: "var(--text)" } : {})
+                }}
               >
                 {chip.label}
               </button>
@@ -489,7 +704,7 @@ export function ActivityDock() {
         )}
 
         {problems.errors > 0 || problems.warnings > 0 ? (
-          <span className="mono" style={{ color: problems.errors > 0 ? "var(--danger)" : "var(--warn)" }}>
+          <span className="mono" style={{ flex: "none", color: problems.errors > 0 ? "var(--danger)" : "var(--warn)" }}>
             {problems.errors > 0 ? problems.errors + " error" + (problems.errors === 1 ? "" : "s") : ""}
             {problems.errors > 0 && problems.warnings > 0 ? " · " : ""}
             {problems.warnings > 0 ? problems.warnings + " warning" + (problems.warnings === 1 ? "" : "s") : ""}
@@ -499,7 +714,11 @@ export function ActivityDock() {
         {/* Never a spinner over a word: while the poll is failing the dock
             says the reading is not refreshing rather than drawing
             something that claims the process is alive. */}
-        <span className="mono" style={{ color: feed.error ? "var(--warn)" : "var(--text-3)" }}>
+        {/* `flex: none` on everything to the right of the chips: the chip
+            strip is the only thing in this bar that may shrink, and a
+            line count or a Save button squeezed to nothing would be the
+            clip moved rather than fixed. */}
+        <span className="mono" style={{ flex: "none", color: feed.error ? "var(--warn)" : "var(--text-3)" }}>
           {feed.error ? "not refreshing" : shown.length + (shown.length === 1 ? " line" : " lines")}
         </span>
 
@@ -531,13 +750,19 @@ export function ActivityDock() {
   );
 }
 
-/** The newest line, for the collapsed bar. */
+/** The newest line, for the collapsed bar.
+ *
+ *  A line this browser wrote counts, and it is the case that matters most
+ *  here: a refusal produced in front of the engine arrives at the moment
+ *  somebody presses a button, which is the moment they are most likely to
+ *  be looking at a collapsed panel. */
 function newestLine(entries: DockEntry[], viewer: string | null): string {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry.kind !== "event") continue;
-    const prefix = dockPrefix(entry.event, viewer);
-    const line = activityLine(entry.event);
+    if (entry.kind === "restart") continue;
+    const event = entryEvent(entry, i);
+    const prefix = dockPrefix(event, viewer);
+    const line = activityLine(event);
     return line.time + " [" + prefix.label + "] " + line.text.split("\n")[0];
   }
   return "nothing has happened since this page was opened";
@@ -650,15 +875,17 @@ function DockLog({
             {"──── earlier lines are not held here any more · the full record is on the Activity page ────"}
           </div>
         ) : null}
-        {entries.map((entry, i) =>
-          entry.kind === "restart" ? (
-            <div key={"restart-" + i} style={{ color: "var(--warn)" }}>
-              {restartRule(entry.at)}
-            </div>
-          ) : (
-            <DockLine key={entry.event.sequence + "-" + i} event={entry.event} viewer={viewer} />
-          )
-        )}
+        {entries.map((entry, i) => {
+          if (entry.kind === "restart") {
+            return (
+              <div key={"restart-" + i} style={{ color: "var(--warn)" }}>
+                {restartRule(entry.at)}
+              </div>
+            );
+          }
+          const event = entryEvent(entry, i);
+          return <DockLine key={event.sequence + "-" + i} event={event} viewer={viewer} />;
+        })}
         {/* Inside the scrollback and at the FOOT of it, which is where
             the log already follows to, so a reader watching the tail is
             looking straight at it. Below the scroller it would sit

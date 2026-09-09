@@ -1384,7 +1384,7 @@ export interface BackupManagerApi {
    * one (issue #597, EPIC G's G1.4).
    *
    * `backupSetId` is the full "source/backup-set" id, which is the id
-   * every surface in this product prints and the one `backup-manager
+   * every surface in this product prints and the one `rbm
    * fetch --backup-set` has taken since #569.
    *
    * It shares runCycle's route, gate and single-flight lock, so a per-set

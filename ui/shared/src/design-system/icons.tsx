@@ -28,13 +28,16 @@
  * box there, and it fails silently, with the layout intact and nothing on
  * screen saying a thing is missing.
  *
- * Worth saying rather than leaving as an implication, because it is still
- * true of one thing: index.html pulls IBM Plex Sans and IBM Plex Mono from
- * Google Fonts over the network. On an isolated NAS that request fails and
- * every surface falls back to a system font, which is the same class of
- * defect #621 is about, one layer up, and it is not this change's to fix.
- * The icons no longer depend on it either way: a path does not need a font
- * to be drawn, which is half of why this shape was picked.
+ * That was true of the typeface as well when this was written:
+ * index.html pulled IBM Plex Sans and IBM Plex Mono from Google Fonts
+ * over the network, so on an isolated NAS the request failed and every
+ * surface fell back to a system font, which is the same class of defect
+ * one layer up. #631 vendored the faces into the image and
+ * design-system/typography.css declares them from files this repository
+ * ships, so nothing is fetched to draw a page any more (the four promises
+ * that change makes are pinned in vendored-fonts.test.ts). The icons
+ * never depended on it either way: a path does not need a font to be
+ * drawn, which is half of why this shape was picked.
  *
  * There is a bundle budget and the image size is gated at 1.05x its
  * baseline. Font Awesome's React packages would spend a slice of that on

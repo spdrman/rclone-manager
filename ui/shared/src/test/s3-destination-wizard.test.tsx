@@ -250,7 +250,7 @@ describe("the S3 destination wizard", () => {
     expect(shown).not.toContain("access_key_id: ");
   });
 
-  it("prints the equivalent backup-manager command, and it carries no secret", async () => {
+  it("prints the equivalent rbm command, and it carries no secret", async () => {
     await openTheWizard({
       importStorageCredentials: vi.fn(() => Promise.resolve("cred-1")),
       preflightStorageMediumCandidate: vi.fn(() => Promise.resolve(report(true))),
@@ -258,7 +258,7 @@ describe("the S3 destination wizard", () => {
     });
 
     await describeDestinationThroughStepOne();
-    expect(screen.getByText("backup-manager medium import-credentials --stdin")).toBeTruthy();
+    expect(screen.getByText("rbm medium import-credentials --stdin")).toBeTruthy();
 
     fill("Access key id", PLACEHOLDER_KEY_ID);
     fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
@@ -267,7 +267,7 @@ describe("the S3 destination wizard", () => {
 
     const group = await screen.findByRole("group", { name: "Add a destination" });
     const shown = group.textContent ?? "";
-    expect(shown).toContain("backup-manager medium add offsite_s3");
+    expect(shown).toContain("rbm medium add offsite_s3");
     expect(shown).toContain("--credentials-id cred-1");
     expect(shown).not.toContain("--secret-access-key");
     expect(shown).not.toContain(CANARY_SECRET);

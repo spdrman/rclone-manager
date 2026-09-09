@@ -14,7 +14,7 @@
  * ever delete it. Rendered plainly beside the governed rows it reads as an
  * ordinary healthy backup, and the disk fills quietly. So the Retention
  * cell says the consequence for those rows and the list carries the same
- * footnote `backup-manager artifacts` prints under its own (issue #523).
+ * footnote `rbm artifacts` prints under its own (issue #523).
  *
  * The set list behind the filter is the shared node rather than another
  * fetch, so the dropdown cannot offer a set the rest of the app has
@@ -226,7 +226,7 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
                 {"This server did not say which retention policy governs " +
                   (unreported === 1 ? "one backup above" : unreported + " backups above") +
                   ", so this page cannot tell you which of them nothing will ever delete." +
-                  " Updating Backup Manager restores the answer; the backup-manager unconfigured" +
+                  " Updating Backup Manager restores the answer; the rbm unconfigured" +
                   " command has it in the meantime."}
               </span>
             </div>

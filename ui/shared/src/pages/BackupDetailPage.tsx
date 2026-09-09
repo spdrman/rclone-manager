@@ -175,7 +175,7 @@ function retentionPolicySentence(policy: ArtifactRetentionPolicy): string {
     default:
       return (
         "This server did not say, so this page cannot tell you whether anything will ever delete this" +
-        " backup. Updating Backup Manager restores the answer; the backup-manager unconfigured command" +
+        " backup. Updating Backup Manager restores the answer; the rbm unconfigured command" +
         " has it in the meantime."
       );
   }

@@ -403,7 +403,7 @@ describe("picking a destination under a retention tier (#622)", () => {
     // line an operator pastes has to be the line that works.
     expect(
       tier(2).getByText(
-        "backup-manager settings patch --tier-medium monthly=offsite_s3 --acknowledge-medium-disclosure"
+        "rbm settings patch --tier-medium monthly=offsite_s3 --acknowledge-medium-disclosure"
       )
     ).toBeTruthy();
   });
@@ -579,7 +579,7 @@ describe("the storage destinations card (#622)", () => {
     fireEvent.click(row("offsite_s3").getByRole("button", { name: "Test connection" }));
     await waitFor(() => expect(preflightStorageMedium).toHaveBeenCalledWith("offsite_s3"));
 
-    expect(row("offsite_s3").getByText("backup-manager medium test-connection offsite_s3")).toBeTruthy();
+    expect(row("offsite_s3").getByText("rbm medium test-connection offsite_s3")).toBeTruthy();
   });
 
   // Issue #636. A destination declared with --no-verify and one checked

@@ -28,9 +28,19 @@
  * about either terminal, which is why the two lanes can land in either
  * order.
  *
- * Until they land, RunControlNotice (components/) renders the newest
- * notice for a scope as a banner, so a refusal is visible today rather
- * than only after the terminals arrive.
+ * Both have landed, and the second one arrived late enough to be worth
+ * recording: the per-set terminal read this node from the day it shipped
+ * (#596) and the global one did not, so for two releases the dock's
+ * "This browser" chip filtered a buffer that could not contain a browser
+ * line and a deployment-wide refusal appeared in a banner and nowhere
+ * else. The lesson is in this doc's own shape. A seam that names its
+ * readers cannot tell you whether they turned up, and nothing failed when
+ * one of them did not.
+ *
+ * RunControlNotice (components/) still renders the newest notice for a
+ * scope as a banner. It was written as an interim surface for exactly
+ * that gap, and it has outlived the gap; whether it stays is a decision
+ * about screens rather than about this seam, and it is made there.
  */
 import type { ApiErrorCode } from "@shared/api/contracts";
 import { registerInput, graph } from "./graph";
@@ -79,8 +89,8 @@ export interface BrowserNotice {
    */
   backupSetIds: string[];
   /**
-   * The `backup-manager` command line this action is equivalent to,
-   * copy-pasteable exactly as written.
+   * The `rbm` command line this action is equivalent to, copy-pasteable
+   * exactly as written.
    *
    * The epic's standing rule, and it earns its keep hardest on a refused
    * run: while the destructive gate is shut this command is the only

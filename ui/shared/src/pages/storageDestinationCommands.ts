@@ -1,6 +1,6 @@
 /**
- * The `backup-manager` command each storage-destination action in the
- * browser is equivalent to (G2.2, issue #594; EPIC G's standing rule).
+ * The `rbm` command each storage-destination action in the browser is
+ * equivalent to (G2.2, issue #594; EPIC G's standing rule).
  *
  * # Why the UI prints commands at all
  *
@@ -42,10 +42,11 @@
  *
  * # It is a module rather than a component
  *
- * These are strings. G1.2's global terminal is where they will be printed
- * once it exists; until then the wizard renders them itself. Either way
- * one function decides what the equivalent command IS, so the terminal and
- * the on-screen copy cannot come to name two different commands.
+ * These are strings. They are printed in two places now: beside the
+ * control, by CommandEcho, and in the global terminal that landed with
+ * #599. One function decides what the equivalent command IS, which is
+ * what stops the terminal and the on-screen copy naming two different
+ * commands.
  */
 import { LOCAL_DESTINATION_ID } from "@shared/api/contracts";
 import type { StorageMediumSpec } from "@shared/api/contracts";
@@ -56,7 +57,7 @@ import type { StorageMediumSpec } from "@shared/api/contracts";
  *  access key and no secret to interpolate, so this line is safe to print
  *  before the operator has typed either. */
 export function importCredentialsCommand(): string {
-  return "backup-manager medium import-credentials --stdin";
+  return "rbm medium import-credentials --stdin";
 }
 
 /** `medium test-connection --candidate`: the wizard's step 3, proving a
@@ -71,7 +72,7 @@ export function importCredentialsCommand(): string {
  *  command printed under a button that says something else teaches the
  *  wrong word. */
 export function testConnectionCandidateCommand(spec: StorageMediumSpec): string {
-  return ["backup-manager medium test-connection --candidate", spec.id, ...specFlags(spec)].join(" ");
+  return ["rbm medium test-connection --candidate", spec.id, ...specFlags(spec)].join(" ");
 }
 
 /** `medium add`: the wizard's step 4. It takes the same flags the
@@ -79,13 +80,13 @@ export function testConnectionCandidateCommand(spec: StorageMediumSpec): string 
  *  the two lines can see that what was proven is what is about to be
  *  written. */
 export function addCommand(spec: StorageMediumSpec): string {
-  return ["backup-manager medium add", spec.id, ...specFlags(spec)].join(" ");
+  return ["rbm medium add", spec.id, ...specFlags(spec)].join(" ");
 }
 
 /** `medium edit`: the same flags again, against a destination that
  *  already exists. */
 export function editCommand(spec: StorageMediumSpec): string {
-  return ["backup-manager medium edit", spec.id, ...specFlags(spec)].join(" ");
+  return ["rbm medium edit", spec.id, ...specFlags(spec)].join(" ");
 }
 
 /** `medium test-connection <id>`: the Test connection button, on the
@@ -95,7 +96,7 @@ export function editCommand(spec: StorageMediumSpec): string {
  *  of #622's local entry: the destination an operator is most likely to
  *  be on is the one that used to have nothing to check. */
 export function testConnectionCommand(id: string): string {
-  return `backup-manager medium test-connection ${id}`;
+  return `rbm medium test-connection ${id}`;
 }
 
 /** `medium default <id>`: the Make default button.
@@ -104,7 +105,7 @@ export function testConnectionCommand(id: string): string {
  *  already the default, because a command that would change nothing is a
  *  command an operator learns nothing from. */
 export function setDefaultCommand(id: string): string {
-  return `backup-manager medium default ${id}`;
+  return `rbm medium default ${id}`;
 }
 
 /** `settings patch --tier-medium NAME=MEDIUM_ID`: the picker under a
@@ -122,7 +123,7 @@ export function setDefaultCommand(id: string): string {
  *  tier and leave the rest", so the command and the click produce the
  *  same request rather than merely the same outcome. */
 export function tierMediumCommand(tier: string, mediumId: string): string {
-  const parts = ["backup-manager settings patch --tier-medium", `${tier}=${mediumId}`];
+  const parts = ["rbm settings patch --tier-medium", `${tier}=${mediumId}`];
   if (mediumId !== LOCAL_DESTINATION_ID) parts.push("--acknowledge-medium-disclosure");
   return parts.join(" ");
 }
@@ -134,12 +135,12 @@ export function tierMediumCommand(tier: string, mediumId: string): string {
  *  destination, and a command that is only printed when it succeeds
  *  teaches the CLI as something that always works. */
 export function removeCommand(id: string): string {
-  return `backup-manager medium remove ${id}`;
+  return `rbm medium remove ${id}`;
 }
 
 /** `medium show <id>`: what the list's own row is a summary of. */
 export function showCommand(id: string): string {
-  return `backup-manager medium show ${id}`;
+  return `rbm medium show ${id}`;
 }
 
 /**
