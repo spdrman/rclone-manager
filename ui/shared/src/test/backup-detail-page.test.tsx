@@ -17,6 +17,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
+import { artifactPath } from "@shared/utilities/routes";
 import { BackupDetailPage } from "@shared/pages/BackupDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
 import type { BackupManagerApi } from "@shared/api/contracts";
@@ -24,12 +25,19 @@ import { BackupManagerError } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import type { BackupArtifact } from "@shared/types/backup";
 
+/* The route and the URL are both built the way the application builds
+ * them (App.tsx's /backups/:source/:set/:name, and artifactPath for the
+ * URL), because a test that declares its own route shape cannot disagree
+ * with the real one — and while it declared a single :artifactId it did
+ * not disagree with a route no real id could match, which is how #677
+ * survived five cases in this file. The path is spelled out rather than
+ * imported because it IS the assertion: change App.tsx and these fail. */
 function renderDetail(artifactId: string, api: BackupManagerApi) {
   return render(
-    <MemoryRouter initialEntries={["/backups/" + artifactId]}>
+    <MemoryRouter initialEntries={[artifactPath(artifactId)]}>
       <ApiProvider api={api}>
         <Routes>
-          <Route path="/backups/:artifactId" element={<BackupDetailPage />} />
+          <Route path="/backups/:source/:set/:name" element={<BackupDetailPage />} />
         </Routes>
       </ApiProvider>
     </MemoryRouter>
@@ -89,16 +97,16 @@ describe("backup detail page reads the artifact", () => {
       const navigate = useNavigate();
       return (
         <>
-          <button onClick={() => navigate("/backups/" + second.id)}>go to second</button>
+          <button onClick={() => navigate(artifactPath(second.id))}>go to second</button>
           <Routes>
-            <Route path="/backups/:artifactId" element={<BackupDetailPage />} />
+            <Route path="/backups/:source/:set/:name" element={<BackupDetailPage />} />
           </Routes>
         </>
       );
     }
 
     render(
-      <MemoryRouter initialEntries={["/backups/" + first.id]}>
+      <MemoryRouter initialEntries={[artifactPath(first.id)]}>
         <ApiProvider api={api}>
           <Harness />
         </ApiProvider>
@@ -148,7 +156,11 @@ describe("backup detail page reads the artifact", () => {
       new BackupManagerError({ code: "unknown", message: "That artifact no longer exists.", correlationId: "cid_test" })
     );
 
-    renderDetail("does-not-exist", api);
+    // Three parts, because a URL that is not three parts no longer
+    // reaches this page at all — the route would not match and there
+    // would be no error state to find. The id names a backup the fixture
+    // does not have, which is the case under test.
+    renderDetail("production/api-server/does-not-exist.dump", api);
 
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByText("That artifact no longer exists.")).toBeTruthy();

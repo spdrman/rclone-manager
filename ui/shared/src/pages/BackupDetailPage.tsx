@@ -28,7 +28,16 @@ import { bytes, stamp } from "@shared/utilities/format";
 import type { ArtifactRetentionPolicy } from "@shared/types/backup";
 
 export function BackupDetailPage() {
-  const { artifactId = "" } = useParams();
+  // The route is three segments (App.tsx: /backups/:source/:set/:name),
+  // matching what an artifact id is made of, so it arrives here in the
+  // three pieces core joins to build it and is joined back the same way
+  // (model.ArtifactID.String(), core/internal/model/ids.go) for the one
+  // thing that wants it whole: the API, whose own path is
+  // /backups/{source}/{set}/{name}. React Router has already unescaped
+  // each segment, which is why this joins the decoded parts rather than
+  // touching the raw path (issue #677).
+  const { source = "", set = "", name = "" } = useParams();
+  const artifactId = source + "/" + set + "/" + name;
   const api = useApi();
   const navigate = useNavigate();
   // Page-local, like the sibling BackupSetDetailPage (mandatory review on
@@ -36,7 +45,7 @@ export function BackupDetailPage() {
   // duplicate fetch to eliminate by putting it on the shared graph, and
   // going through App.tsx's app-wide resource mechanism actively hurt here
   // — this "resource" changes identity on every navigation to a different
-  // :artifactId, so the loading transition that correctly preserves stale
+  // artifact, so the loading transition that correctly preserves stale
   // data for a genuinely singleton resource instead let one artifact's
   // fields render under a different artifact's URL while the new fetch was
   // in flight.
