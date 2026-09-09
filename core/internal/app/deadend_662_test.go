@@ -641,3 +641,166 @@ func TestIssue662_RetryRefusesToRecordAByteCountItCouldNotMeasure(t *testing.T) 
 		t.Errorf("retry error = %q, want it to name the file it could not measure (%s)", retryErr, fx.final)
 	}
 }
+
+// differentPayload662 is 294 bytes, the same size as payload662, and
+// byte-for-byte different from it. The cases below need a file that is
+// wrong in the one way #662's own fixture never is: present, the right
+// size, and NOT the remote object.
+var differentPayload662 = func() []byte {
+	b := make([]byte, 294)
+	for i := range b {
+		b[i] = byte('z' - i%26)
+	}
+	return b
+}()
+
+// TestIssue662_MismatchedFinalNameContentIsNotReinstated is review finding
+// B's first case: the s.Transport.RemoteHash comparison in
+// completeIngestionInPlace is the only observation in the recovery path
+// the local file did not itself produce, and it is the one thing #662's
+// own regression suite never disturbed the file enough to exercise.
+//
+// The fixture reaches FAILED exactly as #662's operator did -- quarantine
+// retry, then a cycle meeting FR-12's collision guard on the artifact's
+// own durable copy, via walkToFailed662 -- and only after that does
+// something #662 never modeled: the bytes at the final name stop being
+// the remote object (a bad disk, a wrong file swapped in by hand,
+// anything other than what committed them). If the comparison is a
+// no-op, that difference is invisible and the artifact is trusted right
+// back into service on a file that is not its remote copy.
+func TestIssue662_MismatchedFinalNameContentIsNotReinstated(t *testing.T) {
+	fx := newDeadEndFixture(t, false)
+	walkToFailed662(t, fx)
+
+	// Swap the content at the final name for 294 different bytes, same
+	// size, so a size-only check could not tell the two apart.
+	mustWriteFile(t, fx.final, string(differentPayload662))
+	sum := sha256.Sum256(differentPayload662)
+	mismatchedHash := hex.EncodeToString(sum[:])
+	if strings.EqualFold(mismatchedHash, fx.diskHash) {
+		t.Fatal("precondition: the swapped-in bytes hash the same as the remote object; this case needs them to differ")
+	}
+
+	ctx := context.Background()
+	err := fx.svc.RetryFailedIngestion(ctx, fx.artifact, "issue #662: mismatched content probe")
+	if err != nil {
+		t.Fatalf("RetryFailedIngestion: %v (a mismatch must fall through to the ordinary retry, which succeeds)", err)
+	}
+
+	got := stateOf662(t, fx.journal, fx.artifact)
+	if got != string(lifecycle.Discovered) {
+		t.Fatalf(
+			"#662 review finding B: state = %s after a retry over a final name whose content does NOT match the "+
+				"remote object. Want DISCOVERED (the ordinary retry, falling through because the comparison "+
+				"failed) -- %s means the artifact was reinstated in place on a file that is not its remote copy.",
+			got, got)
+	}
+
+	after := mustRecord662(t, fx)
+	if after.Transfer != nil && after.Transfer.Checksummed {
+		t.Errorf("#662 review finding B: the row carries a content-verified placement (Checksummed=true) over a "+
+			"final name whose content does not match the remote object %s", fx.artifact)
+	}
+}
+
+// newStrayFileFixture is review finding B's second case: rec.LocalPath !=
+// final, the guard at quarantineactions.go's line 488, equally unwatched.
+//
+// Discovered -> Transferring -> Failed is a transient pre-commit failure
+// (FR-10's own table: machine.go's {From: Transferring, To: Failed}), so
+// no Committing -> Committed transition ever set LocalPath on this row.
+// A file that is byte-identical to the remote object is placed at the
+// artifact's final name anyway -- exactly what a stray file left over
+// from an unrelated write, or a name collision, looks like from the
+// outside. Only the durable commit is allowed to make that file this
+// artifact's own copy; matching content is not enough on its own,
+// which is the property this fixture isolates.
+func newStrayFileFixture(t *testing.T) deadEndFixture {
+	t.Helper()
+	ctx := context.Background()
+	localDir := t.TempDir()
+
+	bs := testBackupSet(t, localDir)
+	bs.Include = []string{"*.gz"}
+	bs.ReadOnly = true
+
+	source := transport.Source{ID: "662-nas"}
+	tr := newFakeTransport()
+	tr.put("dpkg.diversions.5.gz", string(payload662), epoch.Unix())
+
+	journal := openJournal(t)
+	rec := discoverOneRecord(t, ctx, journal, tr, source, bs)
+
+	svc := New(testConfig(t, testSource("production", bs)), journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	final, err := lifecycle.FinalArtifactPath(localDir, rec.Artifact)
+	if err != nil {
+		t.Fatalf("FinalArtifactPath: %v", err)
+	}
+	mustWriteFile(t, final, string(payload662))
+	sum := sha256.Sum256(payload662)
+	diskHash := hex.EncodeToString(sum[:])
+	diskSize := int64(len(payload662))
+
+	steps := []struct{ from, to lifecycle.State }{
+		{lifecycle.Discovered, lifecycle.Transferring},
+		{lifecycle.Transferring, lifecycle.Failed},
+	}
+	for i, s := range steps {
+		if _, err := journal.RecordTransition(ctx, state.Transition{
+			Artifact:   rec.Artifact,
+			Key:        fmt.Sprintf("stray-662-%d-%s", i, s.to),
+			From:       string(s.from),
+			To:         string(s.to),
+			Detail:     "issue #662 stray-file fixture: a transient pre-commit failure, no LocalPath ever recorded",
+			OccurredAt: epoch.Add(time.Duration(i) * time.Minute),
+		}); err != nil {
+			t.Fatalf("fixture: %s -> %s: %v", s.from, s.to, err)
+		}
+	}
+
+	if got := stateOf662(t, journal, rec.Artifact); got != string(lifecycle.Failed) {
+		t.Fatalf("precondition: fixture is %s, want FAILED", got)
+	}
+	fx := deadEndFixture{
+		svc: svc, journal: journal, artifact: rec.Artifact,
+		localDir: localDir, final: final, tr: tr, diskSize: diskSize, diskHash: diskHash,
+	}
+	if rec := mustRecord662(t, fx); rec.LocalPath == final {
+		t.Fatal("precondition: the row's local path is already the final name; this fixture needs them to differ")
+	}
+	return fx
+}
+
+// TestIssue662_StrayFileAtFinalNameIsNotTrustedAsTheArtifactsOwnCopy is
+// review finding B's second case: completeIngestionInPlace's
+// rec.LocalPath != final guard (quarantineactions.go:488) is equally
+// unwatched by #662's existing suite. A file that hashes to the remote
+// object sits at the final name, but the row never recorded committing to
+// it, so it must not be trusted as this artifact's durable copy.
+func TestIssue662_StrayFileAtFinalNameIsNotTrustedAsTheArtifactsOwnCopy(t *testing.T) {
+	fx := newStrayFileFixture(t)
+	ctx := context.Background()
+
+	err := fx.svc.RetryFailedIngestion(ctx, fx.artifact, "issue #662: stray-file probe")
+	if err != nil {
+		t.Fatalf("RetryFailedIngestion: %v (an unrecorded file at the final name must fall through to the ordinary retry, which succeeds)", err)
+	}
+
+	got := stateOf662(t, fx.journal, fx.artifact)
+	if got != string(lifecycle.Discovered) {
+		t.Fatalf(
+			"#662 review finding B: state = %s after a retry where the row never recorded committing to the "+
+				"file at the final name. Want DISCOVERED (the ordinary retry, falling through because "+
+				"rec.LocalPath != final) -- %s means content alone was enough to reinstate an artifact the row "+
+				"never claimed that file for.",
+			got, got)
+	}
+
+	after := mustRecord662(t, fx)
+	if after.Transfer != nil && after.Transfer.Checksummed {
+		t.Errorf("#662 review finding B: the row carries a content-verified placement (Checksummed=true) for %s "+
+			"although the row never recorded committing to the file at the final name", fx.artifact)
+	}
+}
