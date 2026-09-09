@@ -31,6 +31,7 @@ import {
 } from "@shared/components/ActivityDock";
 import type { DockEntry } from "@shared/components/ActivityDock";
 import { clearBrowserNoticesForTests, emitBrowserNotice } from "@shared/state/browserNotices";
+import { LEGACY_KEYS, STORAGE_KEYS } from "@shared/utilities/browserStorage";
 import { resetGraphForTests } from "@shared/state/graph";
 import type { BackupManagerApi } from "@shared/api/contracts";
 import type { DeploymentActivity, LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
@@ -534,6 +535,61 @@ describe("where the dock sits (issue #617)", () => {
     await waitFor(() =>
       expect(document.documentElement.style.getPropertyValue("--dock-height")).toBe(DOCK_BAR_HEIGHT + "px")
     );
+  });
+});
+
+/**
+ * The panel's chrome, as remembered before the 0.3.3 rename.
+ *
+ * utilities/browserStorage.test.ts asserts the adoption directly. These
+ * two assert it through the component that depends on it, which is a
+ * different claim: that the panel actually reads its geometry through the
+ * migrating reader rather than reaching for localStorage itself, and would
+ * therefore notice if somebody wired a raw getItem back in.
+ *
+ * The case above, "publishes the height it reserves", is the control that
+ * makes these mean something: with nothing stored the panel reserves
+ * dockReservedHeight(true, 240), so a 400 here can only have come from the
+ * old key.
+ */
+describe("preferences written before the 0.3.3 rename", () => {
+  beforeEach(() => {
+    try {
+      window.localStorage.clear();
+    } catch {
+      /* a browser with site data blocked */
+    }
+    document.documentElement.style.removeProperty("--dock-height");
+  });
+
+  it("opens at the height the old key remembers, and rewrites it under the new name", async () => {
+    window.localStorage.setItem(LEGACY_KEYS[STORAGE_KEYS.dockHeight], "400");
+
+    renderDock(dockApi([reading({ deployment: deployment([event(1, { scope: "deployment" })]) })]));
+    await screen.findByLabelText("Terminal");
+
+    await waitFor(() =>
+      expect(document.documentElement.style.getPropertyValue("--dock-height")).toBe(
+        dockReservedHeight(true, 400) + "px"
+      )
+    );
+    expect(window.localStorage.getItem(STORAGE_KEYS.dockHeight)).toBe("400");
+  });
+
+  // The one an upgrade would most visibly get wrong. A viewer who
+  // collapsed the panel has "0" stored, and "0" is exactly the value a
+  // truthiness check drops, so a broken migration reopens a panel somebody
+  // deliberately shut and does it on every reload.
+  it("stays collapsed when that is what the old key says", async () => {
+    window.localStorage.setItem(LEGACY_KEYS[STORAGE_KEYS.dockOpen], "0");
+
+    renderDock(dockApi([reading({ deployment: deployment([event(1, { scope: "deployment" })]) })]));
+    await screen.findByLabelText("Terminal");
+
+    await waitFor(() =>
+      expect(document.documentElement.style.getPropertyValue("--dock-height")).toBe(DOCK_BAR_HEIGHT + "px")
+    );
+    expect(window.localStorage.getItem(STORAGE_KEYS.dockOpen)).toBe("0");
   });
 });
 

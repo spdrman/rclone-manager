@@ -50,8 +50,7 @@ import { CatalogRecoveryPage } from "@shared/pages/CatalogRecoveryPage";
 import { ConfigurationSavedPage } from "@shared/pages/ConfigurationSavedPage";
 import { LoginPage } from "@shared/auth/LoginPage";
 import { EnrollmentPage } from "@shared/auth/EnrollmentPage";
-
-const THEME_KEY = "backup-manager.theme";
+import { STORAGE_KEYS, readStored, writeStored } from "@shared/utilities/browserStorage";
 
 export function App() {
   const api = useApi();
@@ -59,13 +58,13 @@ export function App() {
   const navigate = useNavigate();
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
-    const stored = window.localStorage.getItem(THEME_KEY);
+    const stored = readStored(STORAGE_KEYS.theme);
     return stored === "dark" ? "dark" : "light";
   });
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
-    window.localStorage.setItem(THEME_KEY, theme);
+    writeStored(STORAGE_KEYS.theme, theme);
   }, [theme]);
 
   // Issue #176: which mode this instance is in, asked before anything

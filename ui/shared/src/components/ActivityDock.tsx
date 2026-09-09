@@ -92,6 +92,7 @@ import { browserNoticesNode } from "@shared/state/browserNotices";
 import type { BrowserNotice } from "@shared/state/browserNotices";
 import type { LiveActivity, SetActivity, SetActivityEvent, UnfinishedAction } from "@shared/types/activity";
 import { clock } from "@shared/utilities/format";
+import { STORAGE_KEYS, readStored, writeStored } from "@shared/utilities/browserStorage";
 
 /** How many lines the dock holds.
  *
@@ -103,10 +104,13 @@ import { clock } from "@shared/utilities/format";
  * scrollback, and the durable record is the Activity page. */
 const DOCK_BUFFER = 1000;
 
+// The names, and the pre-0.3.3 adoption behind them, live in
+// utilities/browserStorage so the panel and the theme toggle cannot drift
+// apart about either.
 const STORAGE = {
-  open: "backup-manager.dock.open",
-  height: "backup-manager.dock.height",
-  filter: "backup-manager.dock.filter"
+  open: STORAGE_KEYS.dockOpen,
+  height: STORAGE_KEYS.dockHeight,
+  filter: STORAGE_KEYS.dockFilter
 } as const;
 
 const MIN_HEIGHT = 120;
@@ -464,25 +468,6 @@ export function dockText(entries: DockEntry[], viewer: string | null, preamble: 
   return (preamble === null ? lines : [preamble, ...lines]).join("\n");
 }
 
-function readStored(key: string): string | null {
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    // A browser with site data blocked is a browser where the panel opens
-    // at its default, not one where the panel throws into a page an
-    // operator is reading.
-    return null;
-  }
-}
-
-function writeStored(key: string, value: string): void {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    /* see readStored */
-  }
-}
-
 export function ActivityDock() {
   const { auth } = usePlatform();
   const viewer = auth?.username ?? null;
@@ -582,7 +567,7 @@ export function ActivityDock() {
     const anchor = document.createElement("a");
     anchor.href = url;
     // The deployment and the time, not a set id: this file is every set.
-    anchor.download = "backup-manager-terminal-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt";
+    anchor.download = "rclone-manager-terminal-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt";
     anchor.click();
     URL.revokeObjectURL(url);
   }, [shown, viewer, preamble]);
