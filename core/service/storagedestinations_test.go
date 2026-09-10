@@ -443,13 +443,12 @@ func TestCreateInitialConfig_SeedsExactlyOneConfiguredVerifiedDefaultDestination
 func TestCreateInitialConfig_MarksTheSeedUnprovenWhenTheOperatorOptedOut(t *testing.T) {
 	fr, configPath, _ := newTestFirstRun(t)
 	req := firstRunCreateReq(t, fr, "nightly")
-	// Created and then taken away, exactly as
-	// TestPreflightStorageMedium_LocalReportsAMissingPathDistinctly does:
-	// a NAS volume that failed to mount, not a path that was simply never
-	// there.
-	if err := os.RemoveAll(req.LocalPath); err != nil {
-		t.Fatalf("RemoveAll: %v", err)
-	}
+	// A volume that failed to mount, which since the seed creates the
+	// leaf it owns is now spelled with the MOUNT POINT missing rather
+	// than just the backup set's own subdirectory: one level of absence
+	// is a directory this product creates, and only the parent being
+	// gone is the condition an operator has to fix.
+	req.LocalPath = filepath.Join(t.TempDir(), "not-mounted", "vps")
 
 	if _, err := fr.CreateInitialConfig(context.Background(), req); err != nil {
 		t.Fatalf("CreateInitialConfig with --no-verify against a backup root that does not exist: %v", err)
