@@ -87,6 +87,26 @@ on:
   push:
     branches:
       - release
+    # A commit that ONLY records what the build above just produced --
+    # container/release-manifest.json's digests, canonical.json's
+    # published flag, the installer's CARRIED_RELEASE_DIGEST, and the
+    # provenance/ bundle those three feed -- must not trigger a second
+    # publish. It did, twice, before this existed: recording 0.4.0's
+    # digests pushed a metadata-only commit to `release`, which rebuilt
+    # and re-pushed under the same tag, producing a DIFFERENT digest
+    # (OCI image digests are not reproducible across separate buildx
+    # invocations on this project's toolchain, the same non-determinism
+    # verify-manifest-parity.sh's binary_sha256 check already found and
+    # scripts/release/record-release-hashes.sh already has to be re-run
+    # against), which then needed recording again, which would have
+    # triggered a third. Ignoring these paths on the push trigger is what
+    # actually stops that: a commit that touches only them settles here
+    # rather than looping.
+    paths-ignore:
+      - "container/release-manifest.json"
+      - "distribution/packaging/canonical.json"
+      - "provenance/**"
+      - "scripts/install/install_docker_host.py"
   workflow_dispatch:
     inputs:
       publish:
