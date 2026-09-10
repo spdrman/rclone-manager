@@ -353,6 +353,11 @@ describe("picking a destination under a retention tier (#622)", () => {
       within(screen.getByRole("group", { name: "Storage destination offsite_s3" }))
         .getByRole("button", { name: "Make default" })
     );
+    // The transfer is confirmed since #671, because it does two things
+    // and only one of them is the one that was clicked. The claim this
+    // case makes is unchanged: it is about what the OTHER card reads
+    // after the mark has moved.
+    fireEvent.click(await screen.findByRole("button", { name: /Make offsite_s3 the default/ }));
     await waitFor(() => expect(api.setDefaultStorageMedium).toHaveBeenCalled());
 
     fireEvent.click(screen.getByRole("button", { name: "Add tier" }));
@@ -482,18 +487,27 @@ describe("the storage destinations card (#622)", () => {
     expect(row(LOCAL_DESTINATION_ID).getByText(/\/srv\/backups/)).toBeTruthy();
   });
 
-  // The two controls that make no sense for an entry nothing declared.
-  // They are absent rather than disabled: a disabled Edit invites an
-  // operator to work out what would enable it, and nothing will.
-  it("offers no edit or remove on the local hard drive", async () => {
+  // Edit is the one control that stays ABSENT on the local drive, and
+  // the argument for that is unchanged: there is no editor for a
+  // destination whose location comes from the deployment's backup root,
+  // and no state an operator can reach that would produce one.
+  //
+  // Remove is a different case since #670 declared local like any other
+  // destination, and this case was updated with #671 rather than left
+  // as it was: it used to assert that Remove was absent here too, which
+  // made a destination the ENGINE removes on request permanently
+  // undeletable from the browser. It is present and disabled while this
+  // row holds the default, which is the reason the engine would give.
+  it("offers no edit on the local hard drive, and a Remove the default is holding shut", async () => {
     await renderSettings({ listStorageMediums: () => Promise.resolve([LOCAL, OFFSITE]) });
 
     await waitFor(() => expect(card().getByText(LOCAL_DESTINATION_ID)).toBeTruthy());
     expect(row(LOCAL_DESTINATION_ID).queryByRole("button", { name: "Edit" })).toBeNull();
-    expect(row(LOCAL_DESTINATION_ID).queryByRole("button", { name: "Remove" })).toBeNull();
-    // The positive control: a declared destination still has both.
+    expect(row(LOCAL_DESTINATION_ID).getByRole("button", { name: "Remove" })).toBeDisabled();
+    // The positive control: a declared destination that holds no mark
+    // has both, and its Remove is live.
     expect(row("offsite_s3").getByRole("button", { name: "Edit" })).toBeTruthy();
-    expect(row("offsite_s3").getByRole("button", { name: "Remove" })).toBeTruthy();
+    expect(row("offsite_s3").getByRole("button", { name: "Remove" })).toBeEnabled();
   });
 
   it("marks the default and offers to move it", async () => {
@@ -503,23 +517,35 @@ describe("the storage destinations card (#622)", () => {
 
     await waitFor(() => expect(card().getByText(LOCAL_DESTINATION_ID)).toBeTruthy());
     expect(row(LOCAL_DESTINATION_ID).getByText(/Default/)).toBeTruthy();
-    // The one that IS the default offers no button to make it the
-    // default, which would be a control that does nothing.
-    expect(row(LOCAL_DESTINATION_ID).queryByRole("button", { name: "Make default" })).toBeNull();
+    // The row that IS the default keeps the control, disabled (#671).
+    // This case used to assert it was absent, on the reasoning that a
+    // button doing nothing is worse than no button. #671 reverses that:
+    // this is the row an operator lands on when they cannot delete
+    // something, and a row with no Make default and no Remove tells them
+    // nothing about where the transfer lives. The full contract — the
+    // reason each control names, and the confirmation — is asserted in
+    // default-destination-transfer.test.tsx.
+    expect(row(LOCAL_DESTINATION_ID).getByRole("button", { name: "Make default" })).toBeDisabled();
 
     fireEvent.click(row("offsite_s3").getByRole("button", { name: "Make default" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Make offsite_s3 the default/ }));
     await waitFor(() => expect(setDefaultStorageMedium).toHaveBeenCalledWith("offsite_s3"));
   });
 
-  // The refusal is in the backend, and this is the courtesy in front of
-  // it: a Remove that would be refused is not offered.
-  it("does not offer to remove the default", async () => {
+  // The refusal is in the backend (ErrStorageMediumIsDefault) and this
+  // is the courtesy in front of it: a Remove that would be refused
+  // cannot be pressed. Present and off rather than gone, so the row says
+  // what it is refusing and what would lift it.
+  it("offers a Remove on the default that cannot be pressed, and says why", async () => {
     await renderSettings({
       listStorageMediums: () => Promise.resolve([{ ...LOCAL, isDefault: false }, { ...OFFSITE, isDefault: true }])
     });
 
     await waitFor(() => expect(card().getByText("offsite_s3")).toBeTruthy());
-    expect(row("offsite_s3").queryByRole("button", { name: "Remove" })).toBeNull();
+    const remove = row("offsite_s3").getByRole("button", { name: "Remove" });
+    expect(remove).toBeDisabled();
+    const said = document.getElementById(remove.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+    expect(said).toMatch(/cannot be removed while it carries the mark/i);
   });
 
   // The one that matters most on the local entry: the drive backups land

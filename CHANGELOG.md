@@ -103,6 +103,24 @@
   wired to the retry verb; the docked terminal no longer prints "no rbm
   equivalent yet" about an operation the same window has just handed the
   operator a command for (#662).
+- The Web UI's storage destinations list can hand the **default** from one
+  destination to another, and says what that costs before it does it (#671).
+  Every destination now carries **Make default**; the one that holds the mark
+  keeps the control and its **Remove**, both disabled, each pointing at the
+  sentence that says why it is off and what would turn it back on — a control
+  that is simply missing sends an operator hunting for a screen that does not
+  exist. The confirmation names both halves of what one click does, because
+  only one of them was asked for: the destination picked takes the mark and
+  stops being removable, and the one that had it becomes removable. It also
+  says what does not change — no tier is rewritten and no copy already
+  written is moved or deleted. A destination nobody has proven cannot take
+  the mark, and says so before the click rather than failing after it.
+- Removing the local destination is now reachable from the browser once
+  another destination holds the default (#670, #671). The list withheld
+  **Remove** from any entry flagged `isLocal`, which stopped being a proxy
+  for "not declared" when #670 made `local` a declared destination the engine
+  removes like any other; the button now follows the engine's own rule, which
+  is the default mark and nothing else.
 - The machine-tier end-to-end case for #662 (`--case empty-record`) asserts the
   fix instead of the defect, and its own `--help` no longer tells operators it
   is red on purpose. It was written to fail and said so in four places,

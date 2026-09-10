@@ -60,6 +60,7 @@ import type {
 import { useAsync } from "@shared/hooks/useAsync";
 import { Banner } from "@shared/components/Banner";
 import { ErrorState } from "@shared/components/EmptyState";
+import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { apiErrorOf, isNotConfigured } from "@shared/api/failure";
 import { AddDestinationWizard } from "@shared/pages/AddDestinationWizard";
 import { S3DestinationWizard } from "@shared/pages/S3DestinationWizard";
@@ -155,6 +156,7 @@ export function StorageDestinationsCard({
                   <DestinationRow
                     key={m.id}
                     medium={m}
+                    currentDefaultId={mediums.data?.find((d) => d.isDefault)?.id}
                     readOnly={readOnly}
                     onEdit={() => setEditing(m)}
                     onChanged={changed}
@@ -224,19 +226,47 @@ export function StorageDestinationsCard({
  * because a failed check has to be able to sit beside the destination it
  * is about while the operator reads what is affected.
  *
- * # Which controls a row gets, and why two of them are absent rather than disabled
+ * # Which controls a row gets, and which are disabled rather than absent
  *
- * The local hard drive has no Edit and no Remove (#622). It is not
- * declared in the configuration, so there is nothing to edit and nothing
- * to un-declare, and the backend refuses both. They are ABSENT rather
- * than disabled because a disabled control invites an operator to work
- * out what would enable it, and nothing will: this is not a permission
- * they lack or a state they can leave, it is a thing that does not exist.
+ * Absent is for a control that does not exist. Disabled-and-explained is
+ * for a control an operator could have, once the deployment is in a
+ * different state. Getting that distinction backwards is how a settings
+ * page sends somebody hunting: a missing button has no reason beside it,
+ * so the operator goes looking for the screen that has it, and there
+ * isn't one.
  *
- * The default destination has no Remove either, and that one IS a state
- * they can leave: move the default elsewhere and the button comes back.
- * The backend refuses it regardless (ErrStorageMediumIsDefault), so this
- * is a courtesy in front of a gate rather than the gate.
+ * Edit is ABSENT on the local drive (#622). There is no editor here for
+ * a destination whose location comes from the deployment's backup root,
+ * and no state the operator can reach that would produce one.
+ *
+ * Make default and Remove are both DISABLED with a reason on the row
+ * that holds the default (#671), never hidden. Those two are the pair
+ * that traps an operator: the destination they cannot remove is the one
+ * whose row used to offer neither the removal nor the way to earn it,
+ * while the control that earns it sits on the OTHER rows. So the mark's
+ * own row keeps both, says why each is off, and says what lifts them.
+ *
+ * Remove is keyed off `isDefault` and not off `isLocal`, which is the
+ * one that changed with #670. The local drive is a declared destination
+ * now (instance zero of the local_volume backend) and the backend
+ * removes it like any other once it no longer holds the mark; keying the
+ * button off `isLocal` made a real, removable destination permanently
+ * undeletable from the browser, which is exactly the hazard
+ * StorageMedium.isLocal's own doc warns about. A legacy configuration's
+ * SYNTHESISED local entry is not reachable in the removable state: it
+ * only exists while `default_storage_medium` is unset, which is to say
+ * only while it IS the default, so its Remove is always the disabled and
+ * explained one.
+ *
+ * # Moving the mark is confirmed, because two things change
+ *
+ * The transfer is not destructive — no backup moves, no tier is
+ * rewritten — so the confirmation is not a consent gate and carries no
+ * typed phrase. It exists because only ONE of the two things it does is
+ * the thing the operator clicked: the destination they picked takes the
+ * mark, and the one that had it becomes removable. An operator told only
+ * the half they asked for has been misled by omission, and the half they
+ * were not told is the one that makes a destination deletable.
  *
  * # "Test connection", not "Verify"
  *
@@ -248,11 +278,22 @@ export function StorageDestinationsCard({
  */
 function DestinationRow({
   medium,
+  currentDefaultId,
   readOnly,
   onEdit,
   onChanged
 }: {
   medium: StorageMedium;
+  /** The destination that holds the mark right now, which is the one
+   *  this row's transfer would take it FROM.
+   *
+   *  It comes from the card rather than from this row, because a row
+   *  knows only itself and the confirmation has to name the OTHER half
+   *  of what the click does. Optional: a list with no default at all is
+   *  a broken deployment the card already says so about, and the
+   *  confirmation degrades to naming the consequence without the name
+   *  rather than refusing to open. */
+  currentDefaultId?: string;
   readOnly: boolean;
   onEdit(): void;
   onChanged(): void;
@@ -262,6 +303,7 @@ function DestinationRow({
   const [usage, setUsage] = useState<StorageMediumUsage | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<ApiError | null>(null);
+  const [confirmingTransfer, setConfirmingTransfer] = useState(false);
 
   async function testConnection() {
     setBusy(true);
@@ -292,6 +334,10 @@ function DestinationRow({
   }
 
   async function makeDefault() {
+    // The dialog closes on confirm rather than on the answer. What it
+    // asked has been answered; leaving it up while the request is in
+    // flight would put the row's own failure banner behind a scrim.
+    setConfirmingTransfer(false);
     setBusy(true);
     setFailure(null);
     try {
@@ -328,6 +374,28 @@ function DestinationRow({
   }
 
   const failedVerification = report !== null && !report.ok;
+
+  // One id per sentence, and the disabled control points at the sentence
+  // that is about IT (aria-describedby). Not decoration: a disabled
+  // button announces nothing on its own, so without the association a
+  // screen reader reads "Remove, dimmed" and the reason further down the
+  // row is a paragraph that could be about anything. It also makes
+  // "explained" a thing a test can assert rather than infer from the row
+  // happening to contain prose.
+  const defaultReasonId = "destination-" + medium.id + "-holds-the-default";
+  const unprovenReasonId = "destination-" + medium.id + "-never-proven";
+
+  // A destination nobody has proven cannot take the mark (#671). Every
+  // tier that follows the default would then start somewhere no check
+  // has ever passed against, and the point of #636's mark is that this
+  // deployment knows the difference. The control is off BEFORE the click
+  // rather than failing after it, because "you cannot do that" is worth
+  // more before an operator has decided than after.
+  const transferBlockedBy = medium.isDefault
+    ? defaultReasonId
+    : medium.connectionUnverified
+      ? unprovenReasonId
+      : undefined;
 
   return (
     <div
@@ -372,35 +440,45 @@ function DestinationRow({
         <button className="btn" disabled={busy} onClick={testConnection}>
           {busy ? "Working…" : "Test connection"}
         </button>
-        {medium.isDefault ? null : (
-          <button className="btn" disabled={readOnly || busy} onClick={makeDefault}>
-            Make default
-          </button>
-        )}
+        <button
+          className="btn"
+          disabled={readOnly || busy || transferBlockedBy !== undefined}
+          aria-describedby={transferBlockedBy}
+          onClick={() => setConfirmingTransfer(true)}
+        >
+          Make default
+        </button>
         {medium.isLocal ? null : (
           <button className="btn" disabled={readOnly || busy} onClick={onEdit}>
             Edit
           </button>
         )}
-        {medium.isLocal || medium.isDefault ? null : (
-          <button className="btn" disabled={readOnly || busy} onClick={remove}>
-            Remove
-          </button>
-        )}
+        <button
+          className="btn"
+          disabled={readOnly || busy || medium.isDefault}
+          aria-describedby={medium.isDefault ? defaultReasonId : undefined}
+          onClick={remove}
+        >
+          Remove
+        </button>
       </div>
 
       {medium.isDefault ? (
-        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-3)", maxWidth: "74ch" }}>
-          A retention tier created from here on starts on this destination. Moving that mark moves
-          no backup and rewrites no tier: it decides where the NEXT tier begins. This destination
-          cannot be removed while it carries the mark.
+        <p
+          id={defaultReasonId}
+          style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-3)", maxWidth: "74ch" }}
+        >
+          This destination already carries the mark: a retention tier created from here on starts
+          here, which is why Make default is off on this row. It cannot be removed while it carries
+          the mark — give the mark to another destination and Remove comes back. Moving it moves no
+          backup and rewrites no tier: it decides where the NEXT tier begins.
         </p>
       ) : null}
       {medium.isLocal ? (
         <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-3)", maxWidth: "74ch" }}>
-          This is not something the configuration declares, so there is nothing here to edit and
-          nothing to remove. Every retention tier that names no other destination keeps its backups
-          here.
+          Every retention tier that names no other destination keeps its backups here. Where this
+          one writes comes from the deployment&rsquo;s backup root rather than from fields on this
+          list, so there is nothing here to edit.
         </p>
       ) : null}
       {/* Issue #636: a destination nobody ever proved, said out loud.
@@ -416,12 +494,44 @@ function DestinationRow({
           that clears this is already on the row, two lines up, and a
           second one would be two ways to do one thing. */}
       {medium.connectionUnverified ? (
-        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--warn)", maxWidth: "74ch" }}>
+        <p
+          id={unprovenReasonId}
+          style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--warn)", maxWidth: "74ch" }}
+        >
           This destination was declared without a check, so nothing has shown that its credential is
-          accepted, that the bucket is there, or that an object written here can be read back. Test
-          connection clears this when it passes.
+          accepted, that the bucket is there, or that an object written here can be read back. That
+          is also why it cannot be made the default: every tier that follows the default would start
+          somewhere nobody has ever proven. Test connection clears this when it passes.
         </p>
       ) : null}
+
+      <ConfirmationDialog
+        open={confirmingTransfer}
+        eyebrow="Two things change"
+        title={"Make " + medium.id + " the default destination?"}
+        confirmLabel={"Make " + medium.id + " the default"}
+        onConfirm={makeDefault}
+        onCancel={() => setConfirmingTransfer(false)}
+      >
+        <p style={{ margin: 0 }}>
+          <strong>{medium.id}</strong> becomes the default: a retention tier created from here on
+          starts here, and this destination cannot be removed while it carries the mark.
+        </p>
+        <p style={{ margin: 0 }}>
+          <strong>{currentDefaultId ?? "The destination that holds it now"}</strong> stops being the
+          default, and becomes removable. That is the half nobody clicked for, which is why it is
+          said here rather than discovered later.
+        </p>
+        <p style={{ margin: 0 }}>
+          Nothing already written moves. A tier that names a destination explicitly is untouched;
+          only a tier that follows the default starts somewhere new, and no copy already stored is
+          moved or deleted by this. Changing where new copies go is not a migration of the old ones.
+        </p>
+        <CommandEcho
+          label="the same thing from a terminal — one line, both halves"
+          commands={[setDefaultCommand(medium.id)]}
+        />
+      </ConfirmationDialog>
 
       <CommandEcho
         label="the same thing from a terminal"
@@ -570,16 +680,25 @@ function describeDestination(m: StorageMedium): string {
 /** The commands one row's controls are equivalent to, in the order the
  *  buttons above them sit in.
  *
- *  A row prints only the commands its own buttons offer. A `medium
- *  remove local` under an entry with no Remove button would teach a
- *  command that is refused, and a `medium default` under the destination
- *  that already carries the mark would be a line that changes nothing.
+ *  A row prints the commands its buttons can actually be USED for, which
+ *  is not the same as the buttons it shows. Since #671 the row that
+ *  holds the mark shows a disabled Make default and a disabled Remove,
+ *  and printing `medium default` under the destination that already
+ *  carries the mark, or `medium remove` under one the engine refuses to
+ *  remove, would teach two lines that do nothing but produce a refusal.
+ *  The reason each control is off is a sentence on the row; the command
+ *  list is not the place to repeat it.
+ *
+ *  `medium default` is also withheld from a destination nobody has
+ *  proven, for the same reason its button is off there: it is not a
+ *  transfer this deployment will make yet.
+ *
  *  EPIC G's rule is that what an operator can DO has an equivalent
  *  command, not that every verb appears under every row. */
 function commandsFor(m: StorageMedium): string[] {
   const out = [testConnectionCommand(m.id)];
-  if (!m.isDefault) out.push(setDefaultCommand(m.id));
+  if (!m.isDefault && !m.connectionUnverified) out.push(setDefaultCommand(m.id));
   if (!m.isLocal) out.push(showCommand(m.id));
-  if (!m.isLocal && !m.isDefault) out.push(removeCommand(m.id));
+  if (!m.isDefault) out.push(removeCommand(m.id));
   return out;
 }
