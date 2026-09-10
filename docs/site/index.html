@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="topbar.css">
   <script src="topbar.js" defer></script>
+  <script src="tooltip.js" defer></script>
 </head>
 <body>
 
@@ -136,18 +137,28 @@ python3 install_docker_host.py install</code></pre>
       docker compose -p rclone-manager ... logs rclone-manager | grep enroll
 
 <span class="cm">$ docker compose -p rclone-manager ... logs rclone-manager | grep enroll</span>
-rbm-web: no administrator account exists yet. Open <a class="tip-term" href="first-run.html#enrol">http://192.168.0.10:8080/enroll?token=<span class="tip-token">&lt;a long random string&gt;</span></a>
+rbm-web: no administrator account exists yet. Open <a class="tip-term" href="first-run.html#enrol">http://192.168.0.10:8080/enroll?token=<span class="tip-token">4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6</span></a>
 to create one (valid 30 minutes, single use).</code></pre>
       <aside class="tip-bubble">
+        <button type="button" class="tip-close" aria-label="Close this note">&times;</button>
         <span class="tip-heading">Attention &middot; this is the one-time link</span>
         <p>It claims the administrator account, and it is the only thing that can: reaching the port is deliberately not enough. The token proves you can read the container's own log, which is what somebody else on the network cannot do.</p>
-        <p><strong>Single use, and it expires in 30 minutes.</strong> The address is this machine's own, not <code>localhost</code>, so open it from whichever computer you are sitting at.</p>
+        <p><strong>Single use, and it expires in 30 minutes.</strong> The address is this machine's own, not <code>localhost</code>, so open it from whichever computer you are sitting at. Lapsed? Restart the engine and it prints a fresh one.</p>
         <p><a href="first-run.html#enrol">Creating the administrator, screen by screen &rarr;</a></p>
       </aside>
     </div>
 
     <p>That is the whole of it. The installer picks every path for you (<code>~/rclone-manager</code>, with <code>backups</code>, <code>state</code>, <code>config</code> and <code>secrets</code> under it), generates the SSH key the engine will use, pins the exact image it was built against, and refuses before it changes anything if the machine cannot run it. Nothing needs deciding up front, and everything it chose can be changed afterwards.</p>
     <p>It prints an enrolment link when it finishes, naming the address this machine is reachable at rather than <code>localhost</code>, because that link is meant to be opened from another machine on the same network. Open it, set an administrator password, and <a href="first-run.html">the first-run tutorial</a> picks up from there.</p>
+
+
+    <div class="note ok">
+      <span class="note-label">If the link has expired</span>
+      <p>The token lasts 30 minutes and works once. Nothing re-issues it while the engine keeps running, so if it lapses, restart the engine: a start with no administrator yet mints a fresh token and prints a fresh notice.</p>
+      <pre><code>docker compose -p rclone-manager ... restart rclone-manager
+docker compose -p rclone-manager ... logs --tail=50 rclone-manager | grep enroll</code></pre>
+      <p>The log keeps the old notices as well, so take the <strong>last</strong> line: the restart invalidated every link above it. This only works while enrolment is still open. Once an administrator exists the engine prints no link at all, which is not a fault: <a href="first-run.html#again">sign in</a> instead.</p>
+    </div>
 
     <h3 style="margin-top:2rem">Command line only, no web interface</h3>
     <p>Same two commands, one flag on the second one:</p>

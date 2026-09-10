@@ -179,6 +179,15 @@
     <h2 id="enrol">Create the administrator</h2>
     <p>Open the link. This account manages Backup Manager and nothing else. It is not your NAS operating-system account, and it is stored on the NAS as an Argon2id hash in <code>/data/state/local-auth.json</code>, in the same volume as the lifecycle journal, so it survives a container restart without a second volume.</p>
 
+
+    <div class="note ok">
+      <span class="note-label">If the link has expired before you get here</span>
+      <p>The token lasts 30 minutes and works once, and nothing re-issues it while the engine keeps running. Restart the engine and a fresh one is minted and printed, because a start with no administrator yet always issues one.</p>
+      <pre><code>docker compose -p rclone-manager ... restart rclone-manager
+docker compose -p rclone-manager ... logs --tail=50 rclone-manager | grep enroll</code></pre>
+      <p>Take the <strong>last</strong> line the log gives back. The earlier notices are still in it and the restart invalidated every one of them, which is the same reason an old link in your scrollback is dead even inside its 30 minutes.</p>
+    </div>
+
     <figure>
       <img src="screens/01-enrolment-empty.png" alt="The Create Backup Manager administrator form, empty, with Username, Password and Confirm password fields and a disabled Create administrator button" loading="lazy">
       <figcaption>The enrolment form as the link lands on it. The Create administrator button stays disabled until all three fields are valid, so there is no way to submit a half-filled form.</figcaption>

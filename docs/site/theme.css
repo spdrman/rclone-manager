@@ -421,18 +421,18 @@ footer p { color: var(--text-faint); margin-bottom: 0.3rem; }
 .io { position: relative; }
 
 .tip-term {
-  background: var(--warn-bg);
-  border-bottom: 1px dashed var(--warn);
+  background: var(--ok-bg);
+  border-bottom: 1px dashed var(--ok);
   border-radius: 3px;
   padding: 0 0.15em;
   color: inherit;
   text-decoration: none;
 }
-.tip-term:hover, .tip-term:focus { background: var(--warn); color: #fff; }
+.tip-term:hover, .tip-term:focus { background: var(--ok); color: #fff; }
 .tip-term::after {
   content: " \2139";           /* an information source, not an emoji */
   font-style: normal;
-  color: var(--warn);
+  color: var(--ok);
 }
 .tip-term:hover::after, .tip-term:focus::after { color: #fff; }
 .tip-token { font-weight: 600; }
@@ -445,8 +445,8 @@ footer p { color: var(--text-faint); margin-bottom: 0.3rem; }
   right: 0;
   top: calc(100% + 0.35rem);
   max-width: 46rem;
-  padding: 0.8rem 1rem;
-  border: 1px solid var(--warn);
+  padding: 0.8rem 2.1rem 0.8rem 1rem;
+  border: 1px solid var(--ok);
   border-left-width: 4px;
   border-radius: 6px;
   background: var(--surface, #fff);
@@ -463,11 +463,42 @@ footer p { color: var(--text-faint); margin-bottom: 0.3rem; }
   font-size: 0.7rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--warn);
+  color: var(--ok);
 }
-.io:has(.tip-term:hover) .tip-bubble,
-.io:has(.tip-term:focus) .tip-bubble,
-.io:has(.tip-bubble:hover) .tip-bubble { display: block; }
+
+/* Dismissible, so it needs a way to dismiss it. Sized to the 24px
+   minimum a pointer target wants rather than to the glyph. */
+.tip-close {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.35rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-2);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.tip-close:hover, .tip-close:focus { background: var(--ok-bg); color: var(--text); }
+
+/* With JavaScript, is-open is the ONLY thing that opens this, and that
+   is not tidiness. While CSS also opened it on :hover/:focus, the two
+   owners disagreed: the close control returns focus to the term so a
+   keyboard user is not dropped at the top of the document, the CSS focus
+   rule saw that focus, and the note reopened the instant it was
+   dismissed. Escape failed the same way. One owner, no argument.
+   
+   tooltip.js sets .tip-js on <html> before first paint, so the rules
+   below are what a reader with JavaScript off still gets: revealed on
+   hover and focus, just not sticky. */
+html:not(.tip-js) .io:has(.tip-term:hover) .tip-bubble,
+html:not(.tip-js) .io:has(.tip-term:focus) .tip-bubble,
+html:not(.tip-js) .io:has(.tip-bubble:hover) .tip-bubble,
+.tip-bubble.is-open { display: block; }
 
 /* Without :has() the bubble can never be revealed, so it stops being a
    bubble and becomes a note under the block. Worse placement, same
