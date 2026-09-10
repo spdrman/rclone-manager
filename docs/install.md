@@ -20,7 +20,7 @@ python3 scripts/install/install_docker_host.py install \
     --prefix /volume1/backup-manager \
     --ssh-key /volume1/backup-manager/secrets/id_ed25519 \
     --known-hosts /volume1/backup-manager/secrets/known_hosts \
-    --image ghcr.io/spdrman/backup-manager:0.3.3
+    --image ghcr.io/spdrman/backup-manager:0.4.0
 ```
 
 **One file, and no checkout.** Copy
@@ -211,7 +211,7 @@ and would start the UI before the engine was listening.
 carries:
 
 ```
-python3 install_docker_host.py install --release 0.3.0
+python3 install_docker_host.py install --release 0.3.3
 ```
 
 It fills the tag in `--image` and nothing else. It is not `--version`: that name
@@ -241,9 +241,9 @@ Preflight prints the reference it is about to install before anything is created
 and then proves it:
 
 ```
-  ok   installing ghcr.io/spdrman/backup-manager:0.3.3
-  ok   ghcr.io/spdrman/backup-manager:0.3.3 is sha256:..., the identity the release
-       manifest records for 0.3.3
+  ok   installing ghcr.io/spdrman/backup-manager:0.4.0
+  ok   ghcr.io/spdrman/backup-manager:0.4.0 is sha256:..., the identity the release
+       manifest records for 0.4.0
 ```
 
 A registry tag is a mutable pointer, which `scripts/release/publish-image.sh` says
@@ -260,18 +260,18 @@ is pushed, and in that window the manifest records `index_digest: null`, the ins
 carries no digest, and what preflight prints is this instead:
 
 ```
-  ok   installing ghcr.io/spdrman/backup-manager:0.3.3
-  !!   0.3.3 is cut and not pushed, so container/release-manifest.json records no
+  ok   installing ghcr.io/spdrman/backup-manager:0.4.0
+  !!   0.4.0 is cut and not pushed, so container/release-manifest.json records no
        identity for it and there is nothing here to hold
-       ghcr.io/spdrman/backup-manager:0.3.3 to.
+       ghcr.io/spdrman/backup-manager:0.4.0 to.
 ```
 
-That is 0.3.3 today. It is a warning and never a refusal, and the difference is the
-whole design: the alternative was to move the version and leave 0.3.0's digest behind,
-which compares a perfectly correct 0.3.3 image against the previous release's identity
+That is 0.4.0 today. It is a warning and never a refusal, and the difference is the
+whole design: the alternative was to move the version and leave 0.3.3's digest behind,
+which compares a perfectly correct 0.4.0 image against the previous release's identity
 and hands every operator exit 52 on a good install. The digest is filled in, and this
 installer reissued with it, when the release workflow has pushed and the digests are
-recorded back into the manifest. Until then, `--release 0.3.0` installs the last
+recorded back into the manifest. Until then, `--release 0.3.3` installs the last
 release this can prove, or `--image-archive` installs a build you made yourself.
 
 That proof only covers the release the installer carries, and a release cut after

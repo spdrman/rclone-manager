@@ -17,13 +17,12 @@ an operator can DO in the browser has an equivalent command, and that is a gate 
 an intention: a route with neither a command behind it nor a written reason there is none
 fails the build.
 
-**If you just want to run it:** [Installing it](#installing-it) is two containers and a
-Compose file, or one command from
+**If you just want to run it:** [Installing it](https://spdrman.github.io/rclone-manager/index.html#install)
+is two commands, or one command from
 [`scripts/install/install_docker_host.py`](scripts/install/install_docker_host.py) on a
 machine you have SSH on.
 
-**If you're here because a backup didn't arrive and it's 3am:** skip to
-[Recovery](#recovery-when-a-backup-did-not-arrive) below, or go straight to
+**If you're here because a backup didn't arrive and it's 3am:** go straight to
 [`docs/recovery.md`](docs/recovery.md).
 
 ## The rule everything else serves
@@ -54,15 +53,15 @@ connection to a source and the connection to a storage destination, and until 0.
 one of them was checked. Both are now proved before the product relies on them, both refuse
 on failure, both spell the escape hatch `--no-verify`, and both mark what was written under
 it as unverified until a passing check clears the mark. See
-[Proving a connection before anything depends on it](#proving-a-connection-before-anything-depends-on-it).
+[SSH and connections](https://spdrman.github.io/rclone-manager/ssh.html).
 
 **It says what it is doing while it does it.** Every operator-visible action reports a
 start and a completion carrying a real outcome, on one feed that the terminal docked to the
 browser window, each backup set's own page and `rbm activity --follow` are three readings
-of. See [What the browser actually gives you](#what-the-browser-actually-gives-you).
+of. See [the web interface in motion](https://spdrman.github.io/rclone-manager/web-ui.html).
 
-Every section below is either explaining how those rules are enforced or admitting where the
-enforcement doesn't exist yet.
+The published site at [spdrman.github.io/rclone-manager](https://spdrman.github.io/rclone-manager/)
+is where the rest of this is documented screen by screen and command by command.
 
 
 
