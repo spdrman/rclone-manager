@@ -20,7 +20,6 @@
   <script src="tooltip.js" defer></script>
 </head>
 <body>
-
 <header class="topbar is-hero" id="topbar">
   <div class="topbar-content">
     <a class="topbar-brand" href="index.html">
@@ -53,6 +52,14 @@
         <span class="nav-label nav-label-full">First-run tutorial</span>
         <span class="nav-label nav-label-short">First run</span>
       </a>
+      <a href="web-ui.html" class="nav-item">
+        <span class="nav-label nav-label-full">The web interface</span>
+        <span class="nav-label nav-label-short">Web UI</span>
+      </a>
+      <a href="ssh.html" class="nav-item">
+        <span class="nav-label nav-label-full">SSH &amp; connections</span>
+        <span class="nav-label nav-label-short">SSH</span>
+      </a>
 
       <a href="reference.html" class="nav-item">
         <span class="nav-label nav-label-full">Reference</span>
@@ -69,16 +76,10 @@
       <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">README</span>
       </a>
-
       <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Deployment</span>
         <span class="nav-label nav-label-short">Deploy</span>
       </a>
-
-      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/recovery.md" target="_blank" rel="noopener" class="nav-item">
-        <span class="nav-label nav-label-full">Recovery</span>
-      </a>
-
       <a href="https://github.com/spdrman/rclone-manager/issues" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Issues</span>
       </a>
@@ -196,7 +197,7 @@ rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?
 
   <a href="first-run.html" class="clipping">
     <span class="clipping-tag">Tutorial</span>
-    <p>Setting one up for the first time means an enrolment link printed to a container log, an administrator account that is not your NAS login, and a six-step wizard whose answers become a <code>config.yaml</code> you will live with. The first-run walkthrough shows every screen, with an example for every field and a sentence on what that entry actually causes the product to do, including the two places where the wizard shows you a control that is not yet wired to anything.</p>
+    <p>Setting one up for the first time means an enrolment link printed to a container log, an administrator account that is not your NAS login, and a six-step wizard whose answers become a <code>config.yaml</code> you will live with. The first-run walkthrough shows every screen, with an example for every field and a sentence on what that entry actually causes the product to do.</p>
     <span class="clipping-read">Walk the first run &rarr;</span>
   </a>
 
@@ -206,6 +207,30 @@ rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?
     <span class="clipping-read">Read the reference &rarr;</span>
   </a>
 
+
+  <section>
+    <h2 id="new">What 0.3.3 added</h2>
+    <p>0.3.3 is the release that came out of running 0.3.2 on real hardware, and it splits cleanly in two. The first half is what the deployment got wrong, and there is a thread running through all three: each of them read correctly in the arrangement it was built in and broke in the one an operator actually has. The terminal was fine on a short page. Dark mode was fine in light mode, where the browser's default happens to match. A banner is fine until you have read it. None of them would have been caught by looking harder at the code and all three were obvious within a minute of real use.</p>
+    <p>The second half is what it still could not do: a retention tier could not say where its copies go, the drive every backup lands on was not in the list of destinations, and a source connection was relied on without ever having been proven. The destinations, the tier pickers and the connection test behind them are enumerated on <a href="reference.html#web-destinations">the reference page</a>, screen by screen.</p>
+
+    <div class="cards">
+      <a href="web-ui.html" class="clipping">
+        <span class="clipping-tag">Moving pictures</span>
+        <p>The terminal docked to every page, run controls that report an outcome, per-backup-set activity, retention previews, edit mode and dark mode.</p>
+        <span class="clipping-read">Watch the interface &rarr;</span>
+      </a>
+      <a href="ssh.html" class="clipping">
+        <span class="clipping-tag">Moving pictures</span>
+        <p>The wizard that offers the keys your machine already has, and the six-step check a source has to pass before a set can be saved.</p>
+        <span class="clipping-read">Keys and connections &rarr;</span>
+      </a>
+    </div>
+
+    <div class="note">
+      <span class="note-label">The command is <code>rbm</code> now</span>
+      <p>It used to be <code>backup-manager</code>, and 0.3.3 retires that name rather than aliasing it, so anything already written against the old command has to move across when you upgrade. <a href="reference.html#cli">The reference page</a> has the whole surface.</p>
+    </div>
+  </section>
 
   <section>
     <h2 id="the-rule">The rule everything else serves</h2>
@@ -234,11 +259,12 @@ rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?
         </tbody>
       </table>
     </div>
+    <p>Where a copy goes after that, and how long it is kept, is the retention policy's business. <a href="reference.html#web-settings">The reference page</a> covers the destinations and the tiers that name them.</p>
   </section>
 
   <section>
     <h2 id="cli">The command line</h2>
-    <p>Everything the web interface does, and several things it does not, are reachable from <code>rbm</code>. Every command except <code>version</code> takes <code>--config</code>, defaulting to <code>/etc/backup-manager/config/config.yaml</code>.</p>
+    <p>Everything the web interface does, and several things it does not, are reachable from <code>rbm</code>. Every command except <code>version</code> takes <code>--config</code>, defaulting to <code>/etc/backup-manager/config/config.yaml</code>, which is a file inside the config directory rather than a file mounted on its own; pass the directory and it resolves <code>config.yaml</code> inside it.</p>
     <div class="scroll-x">
       <table>
         <thead>
@@ -250,12 +276,17 @@ rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?
           <tr><td><code>check</code></td><td>validate config and the state database, then exit</td></tr>
           <tr><td><code>status</code></td><td>report process and backup-set health, exiting non-zero unless every set is healthy</td></tr>
           <tr><td><code>sources</code></td><td>list configured sources and backup sets</td></tr>
+          <tr><td><code>backup-set</code></td><td>create, patch, remove and test-connection one backup set, and take or release the hold the web editor takes on it</td></tr>
+          <tr><td><code>activity</code></td><td>list recorded lifecycle events, or tail the live feed with <code>--follow</code></td></tr>
           <tr><td><code>artifacts</code></td><td>list journal artifacts, optionally filtered by source and backup set</td></tr>
           <tr><td><code>fetch</code></td><td>run one backup set's cycle on demand</td></tr>
-          <tr><td><code>retention</code></td><td>preview retention decisions, with per-run policy overrides</td></tr>
+          <tr><td><code>retention</code></td><td>preview retention decisions, with per-run policy overrides; <code>retention apply</code> carries a previewed plan out</td></tr>
+          <tr><td><code>medium</code></td><td>the storage destinations: list, show, add, edit, remove, default, import-credentials and test-connection</td></tr>
+          <tr><td><code>settings</code></td><td>read the deployment's retention and capacity settings, and patch them in place</td></tr>
           <tr><td><code>reconcile</code></td><td>reconcile the journal against what is actually on disk, for every backup set</td></tr>
-          <tr><td><code>validate</code></td><td>re-check one artifact&#39;s durable copy, wherever it is; <code>--content</code> downloads a copy on a storage medium and re-hashes it</td></tr>
+          <tr><td><code>validate</code></td><td>re-check one artifact's durable copy, wherever it is; <code>--content</code> downloads a copy on a storage medium and re-hashes it</td></tr>
           <tr><td><code>catalog</code></td><td><code>catalog rebuild</code> reconstructs a lost or corrupted state database from the sidecar recovery manifests</td></tr>
+          <tr><td><code>quarantine</code></td><td>revalidate, retry or reinstate one quarantined artifact</td></tr>
           <tr><td><code>version</code></td><td>report the binary, Go and embedded rclone versions</td></tr>
         </tbody>
       </table>
@@ -264,15 +295,14 @@ rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?
     <p><a href="reference.html#cli">The reference page</a> carries the same table with the subcommands and the interesting flags filled in, plus where a configuration change is written and what each exit code means. That copy is checked.</p>
   </section>
 
-
   <section>
     <h2 id="honest">What has not been proven</h2>
     <p>This section exists because the README has one, and a documentation site that quietly drops the uncomfortable half is worse than no site.</p>
     <ul>
       <li><strong>No acceptance procedure has been run on real hardware.</strong> The procedures for TrueNAS, Unraid, OpenMediaVault, Synology and Proxmox VE are written, reviewed and specific, and nobody working on the repository has one of those machines to execute them on. Every one of those platforms is build-supported and uncertified.</li>
-      <li><strong>There is no restore command and no restore endpoint.</strong> Restore execution is out of scope by design. Recovering a backup is a documented manual procedure, and that procedure is the whole of it.</li>
+      <li><strong>There is no restore execution.</strong> <code>rbm restore</code> asks a storage provider to make an archived copy readable again, which is a different thing. Getting a backup back onto a server is a documented manual procedure, and that procedure is the whole of it.</li>
       <li><strong>There is no metrics endpoint.</strong> A Prometheus renderer exists in the tree and nothing imports it. No listener serves <code>/metrics</code>.</li>
-      <li><strong>The screenshots on this site come from a mock.</strong> Every picture in <a href="first-run.html">the first-run tutorial</a> was taken against the development server's in-memory fixture API, not against a running engine. The layout, the copy and the flow are the real ones. The data is not, and that page says so beside each picture.</li>
+      <li><strong>Every picture on this site comes from a mock.</strong> Every screenshot and every clip was recorded against the development server's in-memory fixture API, not against a running engine. The layout, the copy, the flow and the interaction are the real ones. The data is not, and each page says so.</li>
     </ul>
   </section>
 
