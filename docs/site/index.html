@@ -30,7 +30,7 @@
     <div class="badges">
       <img src="https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go" alt="Go 1.27+">
       <img src="https://img.shields.io/badge/licence-Apache--2.0-blue" alt="Apache-2.0 licence">
-      <img src="https://img.shields.io/badge/image-unpublished-lightgrey" alt="Container image not yet published">
+      <img src="https://img.shields.io/badge/image-0.4.0%20cut%2C%20not%20pushed-lightgrey" alt="Container image 0.4.0 is cut and not pushed; 0.3.3 is the newest published image">
     </div>
   </div>
 
@@ -209,26 +209,31 @@ rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?
 
 
   <section>
-    <h2 id="new">What 0.3.3 added</h2>
-    <p>0.3.3 is the release that came out of running 0.3.2 on real hardware, and it splits cleanly in two. The first half is what the deployment got wrong, and there is a thread running through all three: each of them read correctly in the arrangement it was built in and broke in the one an operator actually has. The terminal was fine on a short page. Dark mode was fine in light mode, where the browser's default happens to match. A banner is fine until you have read it. None of them would have been caught by looking harder at the code and all three were obvious within a minute of real use.</p>
-    <p>The second half is what it still could not do: a retention tier could not say where its copies go, the drive every backup lands on was not in the list of destinations, and a source connection was relied on without ever having been proven. The destinations, the tier pickers and the connection test behind them are enumerated on <a href="reference.html#web-destinations">the reference page</a>, screen by screen.</p>
+    <h2 id="new">What 0.4.0 added</h2>
+    <p>0.4.0 is one idea and two corrections. The idea is that a destination is an <em>instance of a registered backend</em> rather than one of a fixed pair, and nearly everything new here follows from taking that seriously. The corrections are what running 0.3.3 on real hardware turned up, and the first of them is a reason to upgrade rather than a nicety.</p>
+    <p>A backend is described by a manifest the build carries &mdash; data, not code &mdash; and the manifest is what decides which fields a destination has, which steps its connection test runs, and what the steps it skips say instead. Two are registered: <code>local_volume</code>, a directory on a disk this machine can see, and <code>s3</code>, a bucket on Amazon's service or anything that speaks its API. The drive backups already land on is an instance too, seeded on a fresh install as a declared destination called <code>local</code>, so it is a row in the same list with the same controls rather than an unnamed default the interface had no way to talk about. A deployment can hold two volumes and two buckets now, and the list can tell them apart.</p>
+    <p>Two wizards come with it. <strong>Add a destination</strong> is three steps &mdash; choose a backend, name the instance, confirm &mdash; and writes nothing at all, which the confirm step says in as many words. The backends it offers come from <code>GET /api/v1/backends</code>, so there is no list of backend names anywhere in the page, and a backend this build understands with no manifest behind it is drawn and refused rather than quietly left out. <strong>Configure</strong> is the manifest-driven half: one renderer, not a form per backend, and nothing in the page knows what a local volume asks for. It fills in what the manifest declares, proves it, and only then writes. That order is enforced rather than advised &mdash; editing any field makes an earlier pass stale, the screen says so where the edit was made, and <strong>Save configuration</strong> stays out of reach until a check against the values now on screen has passed &mdash; and the consequence an operator can use is that no retention tier can be pointed at a destination nobody has proved.</p>
+    <p>Handing the <strong>Default</strong> mark from one destination to another is its own confirmation, because only one of the two things it does is the thing that was clicked: the destination taking the mark stops being removable, and the one giving it up becomes removable. Nothing already written moves. Declaring a destination moves nothing either; backups arrive somewhere only once a retention tier names it, which stays a separate decision.</p>
+    <p>The first correction is <a href="https://github.com/spdrman/rclone-manager/issues/662">#662</a>, measured on 0.3.3 on the NAS this installer was proven on. A completed local copy could be recorded as zero bytes: whatever the backend reported for the read-back went into the journal and into the sidecar recovery manifest &mdash; the record a catalog rebuild trusts when the journal is gone &mdash; without ever being checked against the file. Reconciliation then found two journal fields disagreeing with each other and quarantined the intact file over it, without reading the file. And there was no way back out: <code>retry</code> and <code>fetch</code> looped, the artifact was re-discovered as already known, and the refusal named no verb that would resolve it. Commit now records the bytes it actually made durable, a transfer that reports less than its object does not carry the zero forward, a disagreement between two records is treated as a fault in the records rather than as a verdict about a file, and from a deployment already in that state some documented verb ends with the artifact at a durable restore point.</p>
+    <p>The second is the surface that reported it. The activity feed keyed a run's severity on the destination it was writing to, so a real failure could read as ordinary; it keys on the transition now, and a FAILED backup has a control that reaches a recovery verb instead of a message recommending a command the same window called nonexistent.</p>
+    <p>The last piece is the first ten minutes. What the installer prints is transcribed from the installer on every run of the gate rather than written beside it (<a href="https://github.com/spdrman/rclone-manager/issues/714">#714</a>), so the output blocks above are the real ones; and the enrolment link names this machine's own address rather than <code>localhost</code>, which on a laptop reading the log over SSH is the laptop (<a href="https://github.com/spdrman/rclone-manager/issues/688">#688</a>). <code>enroll-link</code> reissues one when the thirty minutes have passed.</p>
 
     <div class="cards">
-      <a href="web-ui.html" class="clipping">
-        <span class="clipping-tag">Moving pictures</span>
-        <p>The terminal docked to every page, run controls that report an outcome, per-backup-set activity, retention previews, edit mode and dark mode.</p>
-        <span class="clipping-read">Watch the interface &rarr;</span>
+      <a href="reference.html#web-destinations" class="clipping">
+        <span class="clipping-tag">Reference</span>
+        <p>The destinations card, its four controls with what each one costs, and the three chips that are each a claim about something different.</p>
+        <span class="clipping-read">Read the destinations &rarr;</span>
       </a>
-      <a href="ssh.html" class="clipping">
-        <span class="clipping-tag">Moving pictures</span>
-        <p>The wizard that offers the keys your machine already has, and the six-step check a source has to pass before a set can be saved.</p>
-        <span class="clipping-read">Keys and connections &rarr;</span>
+      <a href="reference.html#web-destination-configure" class="clipping">
+        <span class="clipping-tag">Reference</span>
+        <p>The manifest-driven configure wizard field by field, and the probe as a step list with the manifest's own reason printed beside every step this backend skips.</p>
+        <span class="clipping-read">Prove it before you write it &rarr;</span>
       </a>
     </div>
 
-    <div class="note">
-      <span class="note-label">The command is <code>rbm</code> now</span>
-      <p>It used to be <code>backup-manager</code>, and 0.3.3 retires that name rather than aliasing it, so anything already written against the old command has to move across when you upgrade. <a href="reference.html#cli">The reference page</a> has the whole surface.</p>
+    <div class="note danger">
+      <span class="note-label">If you are running 0.3.3, this is the upgrade</span>
+      <p>The zero-byte record above is not cosmetic. The file on disk was intact and both records that describe it said it was empty, which is the pair a rebuild would have to choose between. 0.4.0 stops producing that state and leaves a way out of one already reached; 0.3.3 has neither.</p>
     </div>
   </section>
 
@@ -287,6 +292,9 @@ rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?
           <tr><td><code>validate</code></td><td>re-check one artifact's durable copy, wherever it is; <code>--content</code> downloads a copy on a storage medium and re-hashes it</td></tr>
           <tr><td><code>catalog</code></td><td><code>catalog rebuild</code> reconstructs a lost or corrupted state database from the sidecar recovery manifests</td></tr>
           <tr><td><code>quarantine</code></td><td>revalidate, retry or reinstate one quarantined artifact</td></tr>
+          <tr><td><code>retry</code></td><td>put one FAILED artifact back into the pipeline; failed is not quarantined, so it is its own verb and nothing does it automatically</td></tr>
+          <tr><td><code>unconfigured</code></td><td>list the backup sets the journal remembers and the configuration no longer names, and what they still occupy; <code>unconfigured clear</code> ends those rows and removes the <code>.partial</code> residue a removal stranded</td></tr>
+          <tr><td><code>restore</code></td><td>ask the storage provider to make one archived copy readable again; billed and slow, so <code>--acknowledge</code> is required</td></tr>
           <tr><td><code>version</code></td><td>report the binary, Go and embedded rclone versions</td></tr>
         </tbody>
       </table>
@@ -299,6 +307,8 @@ rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?
     <h2 id="honest">What has not been proven</h2>
     <p>This section exists because the README has one, and a documentation site that quietly drops the uncomfortable half is worse than no site.</p>
     <ul>
+      <li><strong>Nothing destructive can be done over HTTP, in any deployment that exists.</strong> The API's destructive operations are behind a deployment-level gate, and the only implementation of that gate this repository ships is <code>NotYetImplementedGate</code>, whose <code>Passed()</code> returns false unconditionally (<code>apps/common/webhost/gate.go:114</code>). There is no flag, environment variable or constructor argument that makes it true. So every destructive route fails closed everywhere, by construction rather than by configuration, until issue #92 supplies a real gate.</li>
+      <li><strong>The 0.4.0 image is not on the registry.</strong> This release is cut and not pushed: <code>canonical.json</code> records <code>image.published: false</code> and the release manifest records a null digest per architecture, which are held together so neither can move alone. <code>0.3.3</code> is the newest tag that resolves, and it is signed. Until 0.4.0 is pushed, install it by building the image yourself or side-loading one.</li>
       <li><strong>No acceptance procedure has been run on real hardware.</strong> The procedures for TrueNAS, Unraid, OpenMediaVault, Synology and Proxmox VE are written, reviewed and specific, and nobody working on the repository has one of those machines to execute them on. Every one of those platforms is build-supported and uncertified.</li>
       <li><strong>There is no restore execution.</strong> <code>rbm restore</code> asks a storage provider to make an archived copy readable again, which is a different thing. Getting a backup back onto a server is a documented manual procedure, and that procedure is the whole of it.</li>
       <li><strong>There is no metrics endpoint.</strong> A Prometheus renderer exists in the tree and nothing imports it. No listener serves <code>/metrics</code>.</li>

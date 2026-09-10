@@ -321,13 +321,11 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 COPY --from=build /out/rbm /rbm
 COPY --from=build-web /out/rbm-web /rbm-web
 
-# `/rbm` and `/rbm-web`, as links to the two lines
-# above. The directory is copied rather than the two links by name, which
-# is the shape that keeps them links: `COPY --from=<stage> <dir>/ /`
-# reproduces a dangling symlink as a symlink, and execve follows it, so
-# `docker run <image> /rbm status` runs /rbm with argv[0] of
-# /rbm and every compose file written before the rename keeps
-# working unchanged.
+# Those two lines are the whole of what this image carries as commands.
+# 0.3.3 retired `backup-manager` rather than aliasing it, so there is no
+# link under the old name beside either binary and nothing here creates
+# one: a compose file, cron entry or healthcheck written against the old
+# spelling has to be moved across to `/rbm`.
 
 # The licence, the notices and the machine-readable inventory the other
 # two point at, at a fixed path a recipient can find without a shell
@@ -411,11 +409,10 @@ EXPOSE 8080
 # running: `status` is a fresh, read-only check against the same shared
 # state database file either way.
 #
-# The real binary, not the `/rbm` link beside it, and that is a
-# choice rather than a detail. A HEALTHCHECK is baked into the image and
-# re-read by the daemon on every interval for the life of every container
-# anyone ever starts from it, so it is the one caller here that gains
-# nothing from a name that moves, so it names the binary directly
-# were ever dropped.
+# It names `/rbm` by absolute path rather than relying on anything on a
+# PATH, and that is a choice rather than a detail. A HEALTHCHECK is baked
+# into the image and re-read by the daemon on every interval for the life
+# of every container anyone ever starts from it, and this base image has
+# no shell to resolve a name through in the first place.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD ["/rbm", "status"]

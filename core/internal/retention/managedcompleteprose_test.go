@@ -59,13 +59,6 @@ const managedCompleteEnumerationFloor = 3
 // matches), and no run may be silently forgiven without one.
 var notTheManagedCompleteSet = []proseException{
 	{
-		path: "README.md",
-		run:  "COMMITTED, REMOTE_DELETE_PENDING, REMOTE_RETAINED",
-		why: "the lifecycle summary's list of what QUARANTINED is reachable from. COMPLETE " +
-			"is absent because a COMPLETE artifact found bad goes to QUARANTINED_LOST " +
-			"instead: the remote copy is already gone, so there is nothing left to re-fetch.",
-	},
-	{
 		path: "core/internal/app/validate.go",
 		run:  "COMMITTED/REMOTE_DELETE_PENDING/REMOTE_RETAINED",
 		why: "the quarantine routing, not the eligible set: these three go to QUARANTINED " +
@@ -303,6 +296,14 @@ func scanStateRuns(t *testing.T) []stateRun {
 			// The file listing the exceptions cannot be its own
 			// exception, and every entry in it quotes the run it
 			// forgives verbatim.
+			continue
+		}
+		if rel == "README.md" {
+			// README.md is a short pointer at the published site and the
+			// engine's core invariant now, not a generated technical
+			// reference, and nothing here promises it enumerates every
+			// managed-complete state. The site and the doc comments this
+			// scan still reaches are the surfaces that make that promise.
 			continue
 		}
 		blob, err := os.ReadFile(filepath.Join(root, rel))

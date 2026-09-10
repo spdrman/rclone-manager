@@ -1295,7 +1295,7 @@ class TestVersionOrdering(unittest.TestCase):
     def test_a_registry_port_is_not_mistaken_for_a_tag(self):
         """A colon in a reference is not always a tag separator."""
         self.assertEqual(installer.image_tag("localhost:5000/backup-manager"), "")
-        self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.3.3"), "0.3.3")
+        self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.4.0"), "0.4.0")
 
     def test_the_carried_version_is_described_relative_to_what_is_installed(self):
         """Issue #588. compare_versions answers where the INSTALLED version
@@ -1303,17 +1303,17 @@ class TestVersionOrdering(unittest.TestCase):
         version the INSTALLER carries, so the two have to be asked in that
         order or the sentence says the opposite of what is true.
 
-        Upgrading a real NAS from 0.3.1 to 0.3.3 printed "This installer
-        carries 0.3.3 (older)", which is the one sentence that makes
+        Upgrading a real NAS from 0.3.1 to 0.4.0 printed "This installer
+        carries 0.4.0 (older)", which is the one sentence that makes
         somebody stop a correct upgrade."""
-        line = installer.describe_what_is_here(2, 2, "0.3.1", "the rclone-manager container", "0.3.3")
-        self.assertIn("0.3.3 (newer)", line)
-        self.assertNotIn("0.3.3 (older)", line)
+        line = installer.describe_what_is_here(2, 2, "0.3.1", "the rclone-manager container", "0.4.0")
+        self.assertIn("0.4.0 (newer)", line)
+        self.assertNotIn("0.4.0 (older)", line)
         # And the other direction, which is a real downgrade.
         self.assertIn("0.3.1 (older)",
-                      installer.describe_what_is_here(2, 2, "0.3.3", "", "0.3.1"))
-        self.assertIn("0.3.3 (same)",
-                      installer.describe_what_is_here(1, 1, "0.3.3", "", "0.3.3"))
+                      installer.describe_what_is_here(2, 2, "0.4.0", "", "0.3.1"))
+        self.assertIn("0.4.0 (same)",
+                      installer.describe_what_is_here(1, 1, "0.4.0", "", "0.4.0"))
 
     def test_ordering_is_numeric_and_not_lexical(self):
         self.assertEqual(installer.compare_versions("0.9.0", "0.10.0"), "older")
@@ -4467,7 +4467,7 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
     to the identity container/release-manifest.json recorded (issue #484).
 
     A tag is a mutable pointer, which this project's own release tooling
-    says in as many words, so "install 0.3.3" is a claim about a name
+    says in as many words, so "install 0.4.0" is a claim about a name
     until something compares the name to a recorded identity. One
     anonymous HEAD does that, and it is the reason a previous release can
     be named at all: an installer that floated onto a future tag could
@@ -4552,14 +4552,22 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
         self.assertIn("!!", printed)
 
     def test_a_release_this_installer_has_no_digest_for_says_so(self):
+        # Any release other than the one this installer carries. The
+        # digest proves exactly one version, so naming a different one
+        # is the case with nothing to compare against. Derived from
+        # CARRIED_RELEASE rather than written down: a literal becomes
+        # the carried release at some later cut and then this test
+        # silently checks the opposite of what it says.
+        major, minor = installer.CARRIED_RELEASE.split(".")[:2]
+        other = f"{major}.{int(minor) + 1}.0"
         registry = _FakeRegistry(digest=self.recorded)
-        pf = self.preflight("--release", "0.4.0", registry=registry)
+        pf = self.preflight("--release", other, registry=registry)
         printed = self.notes_from(pf)
         self.assertEqual(registry.asked, [],
-                         "there is nothing to compare a 0.4.0 digest against, and asking anyway "
-                         "would be theatre")
+                         f"there is nothing to compare a {other} digest against, and asking "
+                         "anyway would be theatre")
         self.assertIn("!!", printed)
-        self.assertIn("0.4.0", printed)
+        self.assertIn(other, printed)
 
     def test_a_reference_already_pinned_to_the_recorded_digest_needs_no_question(self):
         registry = _FakeRegistry(digest=self.recorded)
