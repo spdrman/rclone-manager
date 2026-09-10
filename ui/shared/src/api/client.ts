@@ -1324,12 +1324,54 @@ function quarantineReasonFor(a: WireArtifact): QuarantineReason {
  * API has no business deciding that a transfer completing is "ok" while a
  * discovery is "info".
  *
- * A transition this table does not name still appears in the feed, as an
+ * A transition neither table names still appears in the feed, as an
  * "info" event captioned with the states themselves. Dropping it would be
  * worse than showing it plainly: an unexplained gap in an audit trail is
  * indistinguishable from nothing having happened.
  */
-const ACTIVITY_BY_STATE: Record<string, { type: ActivityEventType; severity: Severity; text: string }> = {
+type ActivityCaption = { type: ActivityEventType; severity: Severity; text: string };
+
+/**
+ * The moves whose DESTINATION alone misdescribes them (issue #663).
+ *
+ * Keyed on the edge, and consulted before the destination table below,
+ * because the origin is the discriminator: it is what the state machine
+ * itself keys on ("the origin decides what may follow: QUARANTINED is
+ * the clearest case", core/lifecycle machine.go), and it is already on
+ * the wire, so nothing has to be fetched or joined to read it.
+ *
+ * Both entries here are one SUCCESSFUL in-place recovery (#662).
+ * `completeIngestionInPlace` re-stamps the artifact where it stands once
+ * the durable copy has been matched against the remote object, and then
+ * passes through the quarantine waypoint that the reinstatement edge has
+ * to start from, before committing. Read off the destination those are
+ * amber "Attempt failed" and red "Quarantined for review": two failures
+ * reported for a recovery that worked, and two rows an operator asking
+ * for errors is handed.
+ *
+ * Every OTHER origin into QUARANTINED is deliberately absent, so it
+ * keeps the red badge below. That is the `validate` origin, and there it
+ * is a true statement about a record that really is broken.
+ *
+ * The captions and severities are agreed verbatim with
+ * core/cmd/backup-manager/activity.go's own table, which derives the
+ * same severity for `rbm activity --severity`; "ok" and "info" are the
+ * one rank there, as they are to anyone filtering here. Issue #625 was
+ * the last time those two drifted apart.
+ *
+ * The key type is a pattern rather than plain `string` so a key written
+ * without the separator does not compile into a row that can never be
+ * hit. It cannot check the STATE names: the wire types them as `string`
+ * (generated/contract.ts), and this app declares no closed lifecycle
+ * vocabulary to check them against.
+ */
+const ACTIVITY_BY_TRANSITION: Record<`${string}>${string}`, ActivityCaption> = {
+  "FAILED>FAILED": { type: "verification-passed", severity: "ok", text: "Durable copy matched the remote object" },
+  "FAILED>QUARANTINED": { type: "validation-failed", severity: "info", text: "Held for the reinstatement judgement" }
+};
+
+/** Where a transition ended, for the moves that origin does not change. */
+const ACTIVITY_BY_STATE: Record<string, ActivityCaption> = {
   DISCOVERED: { type: "backup-discovered", severity: "info", text: "Backup discovered on the source" },
   TRANSFERRING: { type: "transfer-started", severity: "info", text: "Transfer started" },
   TRANSFERRED: { type: "transfer-complete", severity: "ok", text: "Transfer complete" },
@@ -1342,7 +1384,11 @@ const ACTIVITY_BY_STATE: Record<string, { type: ActivityEventType; severity: Sev
 };
 
 function fromWireActivityEvent(e: WireActivityEvent): ActivityEvent {
-  const known = ACTIVITY_BY_STATE[e.to];
+  // Edge first, destination second, plain default third. The fallbacks
+  // are the point as much as the lookup is: an edge nobody named still
+  // reads as the state it reached, and a state nobody named still shows
+  // up under its own name.
+  const known = (e.from ? ACTIVITY_BY_TRANSITION[`${e.from}>${e.to}`] : undefined) ?? ACTIVITY_BY_STATE[e.to];
   return {
     // The transition log has no id column of its own on the wire, and one
     // artifact legitimately appears many times, so the key is the artifact
