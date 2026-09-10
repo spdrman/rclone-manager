@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
 // H2.2 (#622): the local hard drive as a first-class storage destination,
@@ -414,12 +416,31 @@ func TestCreateInitialConfig_SeedsExactlyOneConfiguredVerifiedDefaultDestination
 	}
 }
 
-// TestCreateInitialConfig_RefusesWhenTheBackupRootFailsItsOwnProbe is the
-// negative control for "verified without anybody pressing anything": the
-// mark has to be EARNED. A backup root that cannot be written to fails
-// the whole first-run write rather than seeding a destination nothing
-// proved.
-func TestCreateInitialConfig_RefusesWhenTheBackupRootFailsItsOwnProbe(t *testing.T) {
+// TestCreateInitialConfig_MarksTheSeedUnprovenWhenTheOperatorOptedOut is
+// the negative control for "verified without anybody pressing anything":
+// the mark has to be EARNED. A backup root that fails its own probe must
+// never produce a destination this deployment claims to have proven.
+//
+// It used to assert that such a root failed the WHOLE first-run write.
+// That was right about the mark and wrong about the refusal: this
+// fixture, like every fixture on this surface, carries
+// SkipConnectionCheck because example.internal answers nothing — and
+// `--no-verify` means "write it, say it is unproven" everywhere else in
+// this product. Wired as an unconditional refusal, the seed's probe
+// turned the flag into something different here and made
+// `backup-set create --no-verify` unable to write a first configuration
+// at all on a host whose backup root is not mounted yet, which is
+// exactly the situation the flag exists for. So this now asserts the
+// half that survives at this level: the write happens, and the file
+// tells the truth about it.
+//
+// The refusal itself did not go away; it moved to where it can be
+// reached. With the opt-out OFF, the SSH check refuses before the seed
+// is ever consulted, so no test on this surface could exercise the
+// seed's own verdict; firstrun_test.go's
+// TestSeedLocalStorageMedium_StillRefusesWhenNobodyOptedOut calls it
+// directly and pins both branches.
+func TestCreateInitialConfig_MarksTheSeedUnprovenWhenTheOperatorOptedOut(t *testing.T) {
 	fr, configPath, _ := newTestFirstRun(t)
 	req := firstRunCreateReq(t, fr, "nightly")
 	// Created and then taken away, exactly as
@@ -430,11 +451,28 @@ func TestCreateInitialConfig_RefusesWhenTheBackupRootFailsItsOwnProbe(t *testing
 		t.Fatalf("RemoveAll: %v", err)
 	}
 
-	if _, err := fr.CreateInitialConfig(context.Background(), req); err == nil {
-		t.Fatal("CreateInitialConfig succeeded against a backup root that does not exist")
+	if _, err := fr.CreateInitialConfig(context.Background(), req); err != nil {
+		t.Fatalf("CreateInitialConfig with --no-verify against a backup root that does not exist: %v", err)
 	}
-	if _, err := os.Stat(configPath); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("a refused first boot left a config file behind at %s (stat err = %v)", configPath, err)
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	seeded := -1
+	for i, m := range cfg.StorageMediums {
+		if m.ID == config.MediumLocal {
+			seeded = i
+		}
+	}
+	if seeded < 0 {
+		t.Fatalf("the first configuration declares no local destination: %+v", cfg.StorageMediums)
+	}
+	if cfg.StorageMediums[seeded].Path != req.LocalPath {
+		t.Errorf("the seeded destination's path is %q, want the backup root %q", cfg.StorageMediums[seeded].Path, req.LocalPath)
+	}
+	if !cfg.StorageMediums[seeded].ConnectionUnverified {
+		t.Error("the seeded destination is not marked unverified, though its probe did not pass: the file claims a check nobody ran")
 	}
 }
 

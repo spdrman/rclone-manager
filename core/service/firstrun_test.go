@@ -751,3 +751,57 @@ func TestFirstRun_RefusesToWriteIntoASealedConfigDirectory(t *testing.T) {
 		}
 	})
 }
+
+// The verdict is the PROBE's, not the flag's.
+//
+// An opt-out that stamped "unverified" unconditionally would be the same
+// untrue statement in the other direction: on a host where the root is
+// mounted and writable, the probe ran and passed, and a mark saying
+// otherwise would put a "never proven" badge on a destination this
+// deployment did prove.
+func TestCreateInitialConfig_NoVerifyStillRecordsAProbeThatPassed(t *testing.T) {
+	fr, configPath, _ := newTestFirstRun(t)
+	// firstRunCreateReq's LocalPath exists, so the probe passes.
+	req := firstRunCreateReq(t, fr, "nightly")
+	req.SkipConnectionCheck = true
+
+	if _, err := fr.CreateInitialConfig(context.Background(), req); err != nil {
+		t.Fatalf("CreateInitialConfig: %v", err)
+	}
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, m := range cfg.StorageMediums {
+		if m.ID == config.MediumLocal && m.ConnectionUnverified {
+			t.Error("a seeded destination whose probe PASSED is marked unverified, so #636's badge would appear on a destination this deployment proved")
+		}
+	}
+}
+
+// And the refusal itself is intact for the ordinary install, which is
+// #670's own acceptance: verified without anybody pressing anything.
+// Called directly rather than through CreateInitialConfig because with
+// the opt-out off the SSH check refuses first, and this case is about
+// the seed's own verdict.
+func TestSeedLocalStorageMedium_StillRefusesWhenNobodyOptedOut(t *testing.T) {
+	absent := filepath.Join(t.TempDir(), "not-mounted-yet")
+	cfg := &config.Config{Capacity: config.Capacity{BackupRoot: absent}}
+
+	if _, err := seedLocalStorageMedium(context.Background(), cfg, false); !errors.Is(err, ErrConnectionNotProven) {
+		t.Fatalf("seedLocalStorageMedium(optedOut=false) against an absent root: err = %v, want one matching ErrConnectionNotProven", err)
+	}
+
+	// The same call with the opt-out on writes the medium instead, and
+	// says out loud that nothing proved it.
+	medium, err := seedLocalStorageMedium(context.Background(), cfg, true)
+	if err != nil {
+		t.Fatalf("seedLocalStorageMedium(optedOut=true): %v", err)
+	}
+	if !medium.ConnectionUnverified {
+		t.Error("the medium seeded past a failed probe is not marked unverified")
+	}
+	if medium.Path != absent {
+		t.Errorf("medium.Path = %q, want the backup root %q", medium.Path, absent)
+	}
+}
