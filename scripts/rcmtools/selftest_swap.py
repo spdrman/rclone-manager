@@ -14,16 +14,24 @@ the same anchor-matching and stale-verdict bookkeeping, diverging from the
 moment they land. So this is the ONE port, consumed by every one of this
 programme's selftests that plants an anchored mutation:
 `scripts/rcmtools/conformance/selftest.py`,
-`scripts/rcmtools/race/selftest.py`, `scripts/rcmtools/retention/selftest.py`
-and `scripts/rcmtools/docs/selftest.py`. `scripts/compat/selftest.sh`'s own
-port consumes it too, once that lands.
+`scripts/rcmtools/compat/selftest.py`, `scripts/rcmtools/race/selftest.py`,
+`scripts/rcmtools/retention/selftest.py` and
+`scripts/rcmtools/docs/selftest.py`.
 
-`scripts/lib/selftest-swap.sh` stays exactly where it is and exactly what
-it is until `scripts/compat/selftest.sh` -- its last bash caller -- is
-itself ported: a bash library, SOURCED, whose whole reason for existing is
-this same anchor discipline, so removing it out from under a caller still
-naming it would strand that caller exactly the way #672's own rule for
-shims forbids.
+`scripts/lib/selftest-swap.sh` is GONE (#672, this port). It stayed
+exactly where it was and exactly what it was until `scripts/compat/
+selftest.sh` -- its last bash caller -- was itself ported: a bash
+library, SOURCED, whose whole reason for existing was this same anchor
+discipline, so removing it out from under a caller still naming it would
+have stranded that caller exactly the way #672's own rule for shims
+forbids. `scripts/compat/selftest.sh` now execs
+`scripts/rcmtools/compat/selftest.py`, the whole tree was grepped
+(`.github/workflows/`, `.husky/`, every Makefile-shaped file, `docs/`,
+and every Go file for a subprocess shelling out to it -- `perf`'s own
+port found `hostid.sh` sourced directly by a Go test, which is exactly
+the shape a grep this narrow exists to catch) for any remaining `source`
+or `. scripts/lib/selftest-swap.sh`, none was found, and the file was
+deleted rather than left as a second shim nothing runs.
 
 Every plant is anchored to a verbatim copy of product source, tabs and
 all, in a module the author of the product change never opens. A refactor
