@@ -518,10 +518,24 @@ func (s *Service) completeIngestionInPlace(
 	// hash that describe the bytes at the final name, replacing the empty
 	// read-back's answer, which is also what stops the next reconciliation
 	// pass condemning the file on it.
-	size := int64(0)
-	if info, statErr := os.Stat(final); statErr == nil {
-		size = info.Size()
+	//
+	// A stat that fails here is a hard failure, not one of the quiet
+	// declines above. Those mean "this is not the in-place case" and are
+	// right to write nothing and say nothing; this one means the case IS
+	// the in-place one and the measurement broke, on a file this same
+	// call read end to end a moment ago. Substituting a zero would put a
+	// byte count nothing measured beside a content hash with the
+	// checksummed flag set -- issue #662's own record, written by the
+	// code that exists to repair it, after which reconciliation condemns
+	// the file on it exactly as the issue describes. An operator can
+	// repeat a refusal; they cannot un-write a journal row.
+	info, statErr := os.Stat(final)
+	if statErr != nil {
+		return "", fmt.Errorf(
+			"app: retry failed ingestion: %s hashed clean a moment ago but measuring it failed: %w; "+
+				"refusing to record a byte count this manager did not measure (issue #662)", final, statErr)
 	}
+	size := info.Size()
 	if _, err := lifecycle.Advance(ctx, s.lifecycleDeps(), state.Transition{
 		Artifact: id,
 		Key:      fmt.Sprintf("app:retry-failed-in-place:%s:%s", id, s.now().Format(time.RFC3339Nano)),

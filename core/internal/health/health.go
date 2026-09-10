@@ -279,6 +279,12 @@ type BackupSetHealth struct {
 	// It is reported and never fed back into the verdict: evidence's
 	// hasStuckFailure is what decideState reads, and this is the display
 	// half, exactly like Failures and CurrentTransfers beside it.
+	//
+	// It reaches `rbm status` only. core/service's toServiceBackupSetHealth
+	// does not copy it into the API's BackupSetHealth, so it is absent
+	// from the contract and from every Web UI surface built on it; a
+	// caller checking this expecting an HTTP-served answer will not find
+	// one (issue #663 review finding E).
 	StuckFailures []model.ArtifactID
 
 	// QuarantinedCount counts every artifact currently quarantined,

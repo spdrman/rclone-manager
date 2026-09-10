@@ -85,10 +85,13 @@ func cmdStatus(args []string) int {
 		//
 		// The verbs live in this file rather than in the health reason
 		// because `rbm` command names are this binary's vocabulary and
-		// not FR-24's: the same report is rendered by a Web UI that has
-		// no shell. Which artifacts is the other way round, and travels
-		// on the report (health.BackupSetHealth.StuckFailures), because
-		// it is a fact about the deployment that every surface needs.
+		// not FR-24's. Which artifacts travels on the report instead
+		// (health.BackupSetHealth.StuckFailures) rather than being
+		// recomputed here, but that is CLI-only today: core/service's
+		// toServiceBackupSetHealth does not copy the field into the API's
+		// BackupSetHealth, so it never reaches the contract, and a Web UI
+		// asking the same question has no field to read it from (issue
+		// #663 review finding E).
 		if len(bs.StuckFailures) > 0 {
 			fmt.Printf("  needs intervention: %d artifact(s), no retry scheduled\n", len(bs.StuckFailures))
 			for _, a := range bs.StuckFailures {
