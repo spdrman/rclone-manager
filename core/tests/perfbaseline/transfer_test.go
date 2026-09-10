@@ -70,7 +70,7 @@ type transferRecord struct {
 
 func TestCaptureTransferBaseline(t *testing.T) {
 	if os.Getenv("PERF_BASELINE") != "1" {
-		t.Skip("perf baseline harness: set PERF_BASELINE=1 to run it (scripts/perf/capture-baseline.sh does)")
+		t.Skip("perf baseline harness: set PERF_BASELINE=1 to run it (python3 scripts/rcmtools/perf/capture_baseline.py does)")
 	}
 
 	ctx := context.Background()

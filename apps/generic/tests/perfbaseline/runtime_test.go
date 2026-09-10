@@ -10,7 +10,7 @@
 // elsewhere because they are not properties of this process:
 // core/tests/perfbaseline measures transfer throughput through the
 // transport adapter (which is core's, not this app's), and
-// scripts/perf/capture-baseline.sh measures the OCI image size by
+// python3 scripts/rcmtools/perf/capture_baseline.py measures the OCI image size by
 // building it.
 //
 // Image size is now also ENFORCED somewhere none of the above is, and the
@@ -28,7 +28,7 @@
 //
 // This is a harness, not a gate. It is skipped unless PERF_BASELINE=1, so
 // an ordinary `go test ./...` (and every CI job that runs one) never pays
-// for it and never goes red on a noisy number. scripts/perf/capture-baseline.sh
+// for it and never goes red on a noisy number. python3 scripts/rcmtools/perf/capture_baseline.py
 // is the supported way to run it; docs/perf/README.md defines the host,
 // the workload and the threshold the recorded numbers are compared
 // against.
@@ -108,7 +108,7 @@ const (
 	startupTimeout = 60 * time.Second
 )
 
-// runtimeRecord is the JSON this harness prints. scripts/perf/capture-baseline.sh
+// runtimeRecord is the JSON this harness prints. python3 scripts/rcmtools/perf/capture_baseline.py
 // merges it with the other two harnesses' records into one baseline file.
 type runtimeRecord struct {
 	Workload             string  `json:"workload"`
@@ -154,7 +154,7 @@ type latencySet struct {
 
 func TestCaptureRuntimeBaseline(t *testing.T) {
 	if os.Getenv("PERF_BASELINE") != "1" {
-		t.Skip("perf baseline harness: set PERF_BASELINE=1 to run it (scripts/perf/capture-baseline.sh does)")
+		t.Skip("perf baseline harness: set PERF_BASELINE=1 to run it (python3 scripts/rcmtools/perf/capture_baseline.py does)")
 	}
 
 	repoRoot := repoRoot(t)
