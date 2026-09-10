@@ -46,11 +46,12 @@ import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
+from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import embed_compose  # noqa: E402
-import install_docker_host as installer  # noqa: E402
+import embed_compose
+import install_docker_host as installer
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CANONICAL_COMPOSE = REPO_ROOT / "container" / "compose.yaml"
@@ -449,13 +450,13 @@ class TestTheSourcePortIsAnInputAndNothingInfersOne(unittest.TestCase):
                   "--known-hosts", str(fx.known), "--compose-file", str(CANONICAL_COMPOSE)]
         stderr = io.StringIO()
         with source_port_in_the_environment(None), contextlib.redirect_stderr(stderr):
-            code = installer.main(prefix + ["--source-port", ""])
+            code = installer.main([*prefix, "--source-port", ""])
         self.assertEqual(code, installer.EXIT_PREREQ_CREDENTIALS)
         self.assertIn("no value", stderr.getvalue())
 
         stderr = io.StringIO()
         with source_port_in_the_environment(None), contextlib.redirect_stderr(stderr):
-            code = installer.main(prefix + ["--source-port", "not-a-port"])
+            code = installer.main([*prefix, "--source-port", "not-a-port"])
         self.assertEqual(code, installer.EXIT_PREREQ_CREDENTIALS)
         self.assertNotIn("not-a-port", stderr.getvalue(),
                          "even a wrong value is a value the operator typed, and it is not echoed")
@@ -1036,8 +1037,8 @@ class TestARunningCheckoutIsNotSilentlyIgnored(unittest.TestCase):
             copy.write_bytes(Path(installer.__file__).read_bytes())
             proc = installer.subprocess.run(
                 [sys.executable, "-c",
-                 "import sys; sys.path.insert(0, %r); import install_docker_host as i; "
-                 "print(i.checkout_compose_beside_this_installer())" % tmp],
+                 f"import sys; sys.path.insert(0, {tmp!r}); import install_docker_host as i; "
+                 "print(i.checkout_compose_beside_this_installer())"],
                 capture_output=True, text=True, timeout=120)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(proc.stdout.strip(), "None",
@@ -1771,9 +1772,10 @@ class TestAnUpgradeThatDiesHalfWayLeavesAWorkingInstall(unittest.TestCase):
         """Every file the deployment needs to start, by content, so a
         truncated or emptied one is as visible as a missing one."""
         seen = {}
-        for p in installer.archive_plan(args) + [args.prefix / "compose.yaml",
-                                                 args.prefix / "compose.image.yaml",
-                                                 args.prefix / ".env"]:
+        for p in [*installer.archive_plan(args),
+                  args.prefix / "compose.yaml",
+                  args.prefix / "compose.image.yaml",
+                  args.prefix / ".env"]:
             if p.is_file():
                 seen[str(p)] = p.read_bytes()
             elif p.is_dir():
@@ -2071,13 +2073,13 @@ class TestDestroyPreview(unittest.TestCase):
         args.state_dir.mkdir(parents=True, exist_ok=True)
         (args.state_dir / "local-auth.json").write_text('{"username":"rom"}')
         lines = installer.destroy_preview(args)
-        self.assertTrue(any("administrator" in l.lower() for l in lines),
+        self.assertTrue(any("administrator" in line.lower() for line in lines),
                         f"the administrator record has to be named: {lines}")
 
     def test_it_says_plainly_when_there_is_nothing_to_destroy(self):
         fx = Fixture(self)
         lines = installer.destroy_preview(fx.args(command="install"))
-        self.assertTrue(any("nothing" in l.lower() for l in lines), lines)
+        self.assertTrue(any("nothing" in line.lower() for line in lines), lines)
 
     def test_it_never_claims_the_retained_artifacts_are_destroyed(self):
         """factory-reset drops the catalog, not the backups themselves.
@@ -2887,7 +2889,8 @@ class TestPersistenceVerification(unittest.TestCase):
     printing "Fixed, and proven"; these pin its verdict directly, without
     needing a real systemd to produce the state it is reading."""
 
-    GOOD = dict(service_unit="rclone-manager-bridge.service", service_state="enabled",
+    GOOD: ClassVar[dict[str, str]] = dict(
+               service_unit="rclone-manager-bridge.service", service_state="enabled",
                service_active="inactive", timer_unit="rclone-manager-bridge.timer",
                timer_state="enabled", timer_active="active",
                timer_listed="Thu 2026-09-03 rclone-manager-bridge.timer")
@@ -3155,9 +3158,13 @@ class TestFixNetworkVocabulary(unittest.TestCase):
                 args = fx.args("--fix-network", mode, command="install")
                 calls = []
 
+                # `calls` and `installed` are bound as default arguments for the
+                # same reason the cleanups below are: both are rebound on every
+                # iteration of this loop, and a bare closure over either reads
+                # whichever list the LAST iteration made.
                 class RecordingSudo(installer.Sudo):
-                    def run_script(self, script, *, purpose, timeout=300):
-                        calls.append(purpose)
+                    def run_script(self, script, *, purpose, timeout=300, _calls=calls):
+                        _calls.append(purpose)
                         class P:
                             stdout = ""
                         return P()
@@ -3169,7 +3176,7 @@ class TestFixNetworkVocabulary(unittest.TestCase):
                     "gateway": True, "egress": True, "gateway_ip": "172.17.0.1", "raw": ""}
                 installer.BridgeDoctor.ensure_probe_image = lambda self: None
                 installed = []
-                installer.install_persistence = lambda d, a: installed.append(True)
+                installer.install_persistence = lambda d, a, _seen=installed: _seen.append(True)
                 # Bound as default arguments, not closed over bare: this is inside a
                 # `for mode in (...)` loop, so real_probe/real_image/real_install are
                 # reassigned every iteration and a bare closure reads whatever they
@@ -3591,7 +3598,7 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         """
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        prefix, key, known, env = self._installed(tmp)
+        prefix, key, _known, env = self._installed(tmp)
         args = installer.resolve(installer.build_parser().parse_args(
             ["preflight", "--prefix", str(prefix)]))
         out = io.StringIO()
@@ -3709,7 +3716,7 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         compose.yaml mounts it with `:?` anyway, so the stack cannot start."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        prefix, key, known, env = self._installed(tmp)
+        prefix, key, _known, env = self._installed(tmp)
         key.unlink()
 
         again = self._rerun(prefix)
@@ -3724,7 +3731,7 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         real operation; doing it without saying so is not."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        prefix, key, known, env = self._installed(tmp)
+        prefix, key, _known, env = self._installed(tmp)
         rotated = Path(tmp.name) / "home" / ".ssh" / "rotated_ed25519"
         rotated.write_text("the new key\n")
         os.chmod(rotated, 0o600)
@@ -3953,7 +3960,7 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
     # line, which is a different question about a different kind of
     # string, and it is named here rather than left looking like an
     # oversight.
-    MAY_SPLIT_ON_A_COLON = {"image_tag", "image_name", "_image_from_override"}
+    MAY_SPLIT_ON_A_COLON: ClassVar[set[str]] = {"image_tag", "image_name", "_image_from_override"}
 
     @staticmethod
     def _splits_on_a_colon(node) -> bool:
@@ -4341,7 +4348,7 @@ class _FakeRegistry:
     behaviour is a stub that can reach the network by accident.
     """
 
-    def __init__(self, *, digest: str = "", versions=(), fails: Exception = None) -> None:
+    def __init__(self, *, digest: str = "", versions=(), fails: Exception | None = None) -> None:
         self.digest = digest
         self.versions = list(versions)
         self.fails = fails
@@ -4382,7 +4389,7 @@ class TestTheRegistryClientSpeaksTheProtocol(unittest.TestCase):
         methods = {url.split("/v2/")[-1]: method for method, url, _, _ in http.requests if "/v2/" in url}
         self.assertEqual(list(methods.values()), ["HEAD"],
                          "a GET here drags whole manifests over the wire for a header")
-        manifest = [r for r in http.requests if "/manifests/" in r[1]][0]
+        manifest = next(r for r in http.requests if "/manifests/" in r[1])
         self.assertIn("image.index", manifest[2].get("Accept", ""),
                       "without an Accept a registry may convert the manifest, and a converted "
                       "manifest has a different and perfectly correct digest")
@@ -4831,7 +4838,7 @@ class TestTheEnrolmentLinkNamesAnAddressSomebodyElseCanOpen(unittest.TestCase):
         for local in ("127.0.0.1", "127.0.1.1", "0.0.0.0"):
             with self.subTest(local=local):
                 fake = _FakeUDPSocket(local)
-                with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: fake):
+                with unittest.mock.patch.object(installer.socket, "socket", lambda *a, _fake=fake, **k: _fake):
                     self.assertIsNone(installer.primary_lan_address())
 
     def test_a_routable_answer_is_kept(self):
@@ -5109,6 +5116,112 @@ class TestARestartLoopIsNotAnInstall(unittest.TestCase):
         answer = self.settled(["exited"] * 60)
         self.assertNotEqual(answer, "running")
         self.assertIn("exited", answer, "the operator needs the state to know which log to read")
+
+
+class TestTheInstallerStillTravelsAlone(unittest.TestCase):
+    """One file, copied onto a NAS, run there with nothing beside it.
+
+    This is the installer's oldest shipped property (issue #262) and the
+    reason its own docblock argues for a 3.8 floor: "a NAS appliance may
+    not let you install anything, so a script with its own dependencies
+    is a script that cannot run." Until this class existed, nothing
+    checked it. `test_an_installer_that_is_not_in_a_checkout_answers_
+    rather_than_raising` comes closest and does not: it copies the file
+    to a temp directory but runs `python3 -c` with this suite's own
+    directory still first on sys.path, so a repo-relative import would
+    have resolved and the case would still have passed. It also calls
+    exactly one function rather than running the program.
+
+    So the isolation here is deliberate on every axis:
+
+      * the copy is the only file in its directory;
+      * `-I` (isolated) drops PYTHONPATH, the user site directory and the
+        implicit path entry, so nothing but the standard library and the
+        real site-packages is reachable;
+      * cwd is the temp directory, so a relative path out to the checkout
+        cannot resolve either.
+
+    EPIC I / #672 folded twelve script domains onto scripts/rcmtools by
+    making them import a shared harness. This file is the one that cannot
+    be folded that way, and this is what says so in a form that fails.
+    """
+
+    def _alone(self):
+        """The installer, by itself, in an empty directory."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        copy = Path(tmp.name) / "install_docker_host.py"
+        copy.write_bytes(Path(installer.__file__).read_bytes())
+        self.assertEqual([p.name for p in Path(tmp.name).iterdir()], ["install_docker_host.py"],
+                         "the point of this fixture is that nothing else is there")
+        return copy
+
+    def _run(self, copy, *argv):
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        return subprocess.run([sys.executable, "-I", str(copy), *argv],
+                              capture_output=True, text=True, timeout=120,
+                              cwd=str(copy.parent), env=env)
+
+    def test_it_runs_at_all_with_nothing_beside_it(self):
+        """Import time and parser construction, which is where a
+        repo-relative import would land."""
+        proc = self._run(self._alone(), "--help")
+        self.assertEqual(proc.returncode, 0,
+                         f"the installer did not survive being copied out of the checkout:\n"
+                         f"{proc.stderr}")
+        self.assertIn("Install rclone-manager on a Docker host", proc.stdout)
+        for command in ("preflight", "install", "status", "uninstall"):
+            self.assertIn(command, proc.stdout, "every subcommand has to still be reachable")
+
+    def test_a_refusal_still_fires_with_nothing_beside_it(self):
+        """--help alone would also pass for a module that imports fine and
+        does nothing afterwards. This drives a real coded refusal through
+        argparse, the Refusal type and main()'s exit translation."""
+        copy = self._alone()
+        proc = self._run(copy, "install", "--if-installed", "converge",
+                         "--prefix", str(copy.parent / "prefix"),
+                         "--ssh-key", str(copy.parent / "key"),
+                         "--known-hosts", str(copy.parent / "known_hosts"))
+        self.assertEqual(proc.returncode, installer.EXIT_USAGE,
+                         f"stdout={proc.stdout}\nstderr={proc.stderr}")
+        self.assertIn("--if-installed was removed", proc.stdout + proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr,
+                         "a refusal, not an exception: an import that only fails at use time "
+                         "would surface exactly here")
+
+    def test_it_imports_nothing_outside_the_standard_library(self):
+        """The other half of the claim, and not implied by the two above:
+        `-I` still leaves the real site-packages reachable, so an
+        `import yaml` added to this file would pass both of them on a
+        developer's machine and fail on the appliance. This names every
+        distribution package the module pulls in, and there must be none.
+        """
+        copy = self._alone()
+        probe = (
+            "import sys\n"
+            "if not hasattr(sys, 'stdlib_module_names'):\n"
+            "    print('NO-CHECK'); raise SystemExit(0)\n"
+            "before = set(sys.modules)\n"
+            "sys.path.insert(0, " + repr(str(copy.parent)) + ")\n"
+            "import install_docker_host\n"
+            "roots = {m.split('.')[0] for m in set(sys.modules) - before}\n"
+            "print(','.join(sorted(r for r in roots\n"
+            "                      if r not in sys.stdlib_module_names\n"
+            "                      and r != 'install_docker_host')))\n"
+        )
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        proc = subprocess.run([sys.executable, "-I", "-c", probe],
+                              capture_output=True, text=True, timeout=120,
+                              cwd=str(copy.parent), env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        answer = proc.stdout.strip()
+        if answer == "NO-CHECK":
+            self.skipTest("sys.stdlib_module_names arrived in 3.10; the two cases above still ran")
+        self.assertEqual(answer, "",
+                         "the installer is copied to a NAS on its own (#262) and may import only "
+                         "the standard library; these are not standard library modules")
 
 
 if __name__ == "__main__":

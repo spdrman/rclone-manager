@@ -413,8 +413,17 @@ make_full_tree() {
   # quietly skips itself when its own file is missing is #160's silent skip
   # wearing a different hat.
   mkdir -p "$tree/scripts/install"
-  printf 'import unittest\n\n\nclass Stub(unittest.TestCase):\n    def test_stub(self):\n        pass\n' \
+  # `-> None` on the stub, because scripts/install is inside the tree the
+  # lint step now walks and mypy --strict rejects an unannotated def.
+  printf 'import unittest\n\n\nclass Stub(unittest.TestCase):\n    def test_stub(self) -> None:\n        pass\n' \
     >"$tree/scripts/install/test_install_docker_host.py"
+
+  # scripts/deploy's unit tests (#82/B4.1), wired into the gate by #672.
+  # Stubbed for the identical reason as the block above, and it is the same
+  # `cd` into a directory this fixture does not have.
+  mkdir -p "$tree/scripts/deploy"
+  printf 'import unittest\n\n\nclass Stub(unittest.TestCase):\n    def test_stub(self) -> None:\n        pass\n' \
+    >"$tree/scripts/deploy/test_deploy_generic.py"
 
   # The browser e2e step (#158, #197). Same reason as every stub above, and
   # the same failure mode without it, which this suite has now been bitten
@@ -441,26 +450,37 @@ make_full_tree() {
   printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$TWO_MACHINE_STUB" \
     >"$tree/scripts/e2e/two-machine-backup.sh"
 
-  # The scripts/rcmtools lint step (EPIC I, I1.6 / #672), and this is the
-  # SEVENTH time the lesson above has had to be written down here. The step
-  # runs `ruff check scripts/rcmtools` and `mypy --strict ... scripts/rcmtools`;
-  # a synthetic tree has neither the package nor a reason to have it, so ruff
-  # exits 2 on a path that is not there, the gate runs under `set -e`, and
-  # every full-tree case below dies for a reason that has nothing to do with
-  # what it measures. That is precisely what happened when the step landed.
+  # The Python lint step (EPIC I, I1.6 / #672), and this is the SEVENTH time
+  # the lesson above has had to be written down here. The step runs
+  # `ruff check --config scripts/rcmtools/pyproject.toml scripts` and
+  # `mypy --strict --config-file ... scripts/rcmtools scripts/deploy
+  # scripts/install/embed_compose.py`; a synthetic tree has none of that and
+  # no reason to have it, so a tool exits 2 on a path that is not there, the
+  # gate runs under `set -e`, and every full-tree case below dies for a
+  # reason that has nothing to do with what it measures. That is precisely
+  # what happened when the step landed.
   #
-  # Two halves, and both are needed. The DIRECTORY, so there is something to
-  # lint, and the TOOLS, stubbed on the tree's own PATH the same way `docker`
-  # is and for the same reason: whether a developer has ruff and mypy
-  # installed is a property of the machine, and every case here is about what
-  # the gate DOES, so measuring the host would make D1 pass or fail depending
-  # on who ran it. In the real tree the step ledgers when a tool is missing,
-  # which is the "the gate performed less than it was asked to" verdict, and
-  # a ledger entry is exactly what D1 asserts the absence of -- so without
-  # these stubs D1 would go red on every machine without both tools.
+  # THREE halves now, and the third is here because the second turned out
+  # not to work. The TOOLS are stubbed on the tree's own PATH the same way
+  # `docker` is -- whether a developer has ruff and mypy installed is a
+  # property of the machine, and in the real tree the step ledgers when a
+  # tool is missing, which is exactly what D1 asserts the absence of. But
+  # ci-local.sh prepends /opt/homebrew/bin to PATH ahead of everything, so a
+  # Homebrew-installed ruff SHADOWS the stub and runs for real. It ran for
+  # real the whole time this step was `ruff check scripts/rcmtools`, and
+  # passed only because that path happened to hold one clean file with no
+  # configuration to find.
+  #
+  # So the tree is made honest instead of made quiet: the real configuration
+  # is copied in, the stub package and the two stub suites are written to be
+  # clean under it, and the paths the step names all exist. Whichever ruff
+  # wins the PATH race now measures the same thing.
   mkdir -p "$tree/scripts/rcmtools"
   printf '"""A stub package, so the lint step has a directory to point at."""\n' \
     >"$tree/scripts/rcmtools/__init__.py"
+  cp "$SCRIPTS_DIR/rcmtools/pyproject.toml" "$tree/scripts/rcmtools/pyproject.toml"
+  printf '"""A stub module, so the mypy half of the step has a file to point at."""\n' \
+    >"$tree/scripts/install/embed_compose.py"
   printf '#!/bin/sh\nexit 0\n' >"$tree/bin/ruff"
   printf '#!/bin/sh\nexit 0\n' >"$tree/bin/mypy"
   chmod +x "$tree/bin/ruff" "$tree/bin/mypy"
