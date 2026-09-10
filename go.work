@@ -4,6 +4,7 @@ use (
 	./apps/common
 	./apps/generic
 	./apps/synology
+	./apps/ugos/backend
 	./core
 	./distribution
 )

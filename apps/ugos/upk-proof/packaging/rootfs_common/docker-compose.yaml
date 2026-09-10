@@ -1,0 +1,15 @@
+services:
+  backup-manager-upk-proof:
+    image: backup-manager-upk-proof:0.1.0-amd64
+    restart: always
+
+    ports:
+      - "127.0.0.1:29090:8080"
+
+    read_only: true
+
+    tmpfs:
+      - /tmp
+
+    security_opt:
+      - no-new-privileges:true

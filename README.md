@@ -1042,6 +1042,71 @@ fail if they were not: `apps/portainer/` is an App Template plus its Compose sta
 [conformance matrix's](#what-has-actually-been-exercised-on-real-hardware) business, not
 this section's.
 
+## Installing the current UGOS build from a `.UPK` package
+
+This is issue #91's hardware-acceptance package, not the finished product: the backend
+inside it answers `GET /health/live` and nothing else. What it proves is that the packaging
+and installation path onto a real UGREEN NAS actually works, before any real functionality
+gets wired behind it. Treat everything below as a developer/proof-of-concept install, not
+a release.
+
+**This has to happen through UGOS Web (the browser-based desktop at the NAS's own address),
+not through any UGREEN mobile or desktop companion app.** Those apps don't expose App
+Center's manual/developer install path at all.
+
+1. Build the package (from a Debian 12 environment with a pinned `ugcli`, which is normally
+   the NAS itself over SSH — see `apps/ugos/docs/upk-proof-procedure.md` for the full
+   procedure and `tools/ugcli-install/` for getting `ugcli` onto the NAS safely):
+   ```sh
+   cd apps/ugos/upk-proof
+   ugcli check
+   ugcli pack --arch amd64 --build 1
+   ```
+   This produces a signed `.upk` file under `build_dir/pkgs/upk/`.
+2. Get that file somewhere your browser can select it from. If you built it over SSH on the
+   NAS itself, either copy it to a share your NAS's file browser can reach (e.g. a
+   `Downloads` folder under your own account's home directory) and download it from there,
+   or `scp`/`sftp` it straight to your own machine.
+3. Open UGOS Web in a browser, sign in, and open **App Center**.
+4. Look for the manual/developer install option (this is usually a small entry point rather
+   than a prominent button — a settings/developer menu, or an icon near the top of the App
+   Center screen — since UGOS doesn't want casual users side-loading packages). Select the
+   `.upk` file from step 2.
+5. If the install fails with a signature/security error, see
+   [Troubleshooting](#troubleshooting-upk-install) below before assuming the package itself
+   is broken.
+
+Once installed, the app's icon should appear in the installed-app list and open as an inner
+UGOS desktop window (`open_type: inner`), and its `/health/live` endpoint should answer
+`{"status":"ok"}`. None of that means backups are actually running yet — see the Status
+section above for what's real today.
+
+### Troubleshooting UPK install
+
+**"Please check the device (or app package) security signature"**: this is a device
+authorization problem, not a broken package. `ugcli pack` always development-signs a
+package; UGOS Pro only accepts that signature on a NAS UGREEN has explicitly authorized for
+development, and that authorization is per-device, expires, and does not come with any
+local "allow untrusted packages" toggle:
+
+1. Find your NAS's serial number and MAC address (Control Panel > About).
+2. Email UGREEN developer support (`developers_bd@ugreen.com`, per their developer portal
+   at `developer.ugnas.com`) with the serial number, MAC address, and the admin username
+   you'll install under.
+3. UGREEN sends back an authorization file. Rename it exactly `ugdev.sig` and upload it to
+   that same admin account's Personal Folder on the NAS.
+4. On UGOS Pro 1.16.0.0000 and later, that alone isn't enough: also go to **App Center >
+   Settings > App Development Settings** and click **Authorize**. This step was added at
+   1.16; a firmware update past that version can silently break a previously-working
+   `ugdev.sig`-only setup.
+5. If it previously worked and stopped, the authorization has likely expired, or a firmware
+   update crossed the 1.16 line, or something about the bound identity (admin username,
+   network identity) changed. Re-upload a fresh `ugdev.sig` and re-authorize.
+
+There is no developer-account certificate or paid tier involved, just this per-device email
+exchange. The alternative that needs none of this is running the same image as a plain
+Docker container through UGOS's built-in Docker app instead of an App Center package.
+
 ## Who owns what
 
 rclone owns the data plane: the SFTP, local and s3 backends, listing, copying, hashing,
@@ -2573,9 +2638,10 @@ naming the proof it could not perform. Reporting `ok` for a backup nobody proved
 the worst version of the failure this whole ledger exists to prevent.
 
 A component that is not in the tree at all is not a skip: its checks are inapplicable, and
-the run can still be `ok`. Today `apps/ugos/backend` and `apps/ugos/frontend/upk-proof`
-are the absent ones; `apps/generic` and `apps/synology` are present and are built, vetted,
-tested and linted on every run.
+the run can still be `ok`. Nothing is absent today: `apps/generic`, `apps/synology` and
+`apps/ugos/backend` are all present and are built, vetted, tested and linted on every run,
+and `apps/ugos/frontend/upk-proof` is type-checked and built alongside the other JS
+workspaces once its dependencies are installed.
 
 ## How this document is kept honest
 

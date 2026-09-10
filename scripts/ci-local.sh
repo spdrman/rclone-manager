@@ -23,7 +23,7 @@
 # always ends INCOMPLETE; never rely on it before a merge.
 #
 # The JS workspaces (ui/shared, apps/common/tests, and
-# apps/ugos/frontend/upk-proof where it exists) need their dependencies
+# apps/ugos/frontend/upk-proof) need their dependencies
 # installed before this script can check them. node_modules/ is gitignored,
 # so a fresh clone or a new `git worktree` has none, and until issue #160 a
 # full run quietly skipped every check that needed them and still finished
@@ -112,9 +112,10 @@
 #
 # A workspace that is not in the tree at all is a different thing from an
 # uninstalled one, and is never a failure. apps/ugos/backend and
-# apps/ugos/frontend/upk-proof are optional components that are not in this
-# tree today; when a component is absent its checks are inapplicable, not
-# skipped, and the run can still legitimately be ok.
+# apps/ugos/frontend/upk-proof are optional components, guarded here so a
+# tree without them still runs; both are in the tree today. When a
+# component is absent its checks are inapplicable, not skipped, and the run
+# can still legitimately be ok.
 
 set -e
 

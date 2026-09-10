@@ -191,8 +191,8 @@ why.
 
 | Capability | Outcome | Why |
 |---|---|---|
-| Provider package metadata present | BLOCKED | #83 — Work package 4.2's UPK was moved out of this EPIC into EPIC D and is still open as #83. apps/ugos/ contains the frontend bridge and nothing else: no project.yaml, no compose, no icon, no image tar. Until #83 lands, UGOS is the one Phase 4 Exit Gate provider with no package in this repository. |
-| Uses the exact canonical image | BLOCKED | #83 — Nothing in apps/ugos/ references an image yet, so there is no reference to compare. |
+| Provider package metadata present | BLOCKED | #83 — Work package 4.2's UPK was moved out of this EPIC into EPIC D and is still open as #83. There is a project.yaml, a compose file and an icon under apps/ugos/upk-proof/packaging/ now, but they are #91's hardware proof rather than the shipped package (see this column's _upk_proof_comment in conformance.json), so until #83 lands UGOS is still the one Phase 4 Exit Gate provider with no package in this repository. |
+| Uses the exact canonical image | BLOCKED | #83 — The only image apps/ugos/ references is backup-manager-upk-proof, built by #91's proof from its own two-stage Dockerfile. That is a standalone liveness probe, not the canonical release image, so there is still no reference here to compare against the manifest. The comparison this row wants arrives with #83. |
 | Core binary hash parity (this provider's own shipped bytes) | BLOCKED | #83 — The UPK is what would carry the architecture image tars (section 41), and there is no UPK, so there is no shipped byte to hash. Unlike the six providers that consume the OCI image by reference, this one is not not-applicable: UGOS is meant to ship its own artifact, so the cell stays blocked until #83 produces one. |
 | This provider's own architecture claim matches the build | BLOCKED | #83 — The UPK declares the architecture image tars (section 41); no UPK, no claim of its own to check. |
 | State path persists outside the container | BLOCKED | #83 — The UPK's compose declares the storage mapping (section 22); it does not exist yet. |

@@ -1,0 +1,24 @@
+{
+  "name": "@backup-manager/ugos-upk-proof",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Standalone minimal React/JSSDK frontend for issue #91 (B1.2): proves a packaged UGOS Docker App can boot, talk to the real @ugreen-nas/core JSSDK, and reach the bare backend's /health/live. Deliberately not wired into ui/shared's provider-neutral build (see apps/ugos/docs/upk-proof-procedure.md) or the shared PlatformBridge contract from B1.1 — this is throwaway packaging-proof code, not the real UGOS provider app (#83).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@ugreen-nas/core": "1.7.19",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.0"
+  }
+}
