@@ -11,7 +11,7 @@
         "rbm-web": "90180bf71b929e27d6cb4aeb23c0eafb7303c151c07af30d7c22d964fef3c0c1"
       },
       "local_image_id_sha256": "c0e45ba266a338d07063dbda5e0704649e0ed77d9ec473f492c24f14e7d46ef4",
-      "registry_digest": "sha256:c698b442490048188c9e480606bcf09a9640a7f703f840d114795a641219ef71"
+      "registry_digest": "sha256:33b92cb6814de347f0c8847f7f41b9ac5666b9ffcfd7dbeb71f1a1bc94ad6226"
     },
     {
       "architecture": "arm64",
@@ -20,8 +20,8 @@
         "rbm-web": "cc3bd1a7be26b67315de8d6edfa5927c80348f9e149bb74e34664d8867163cbb"
       },
       "local_image_id_sha256": "a0ec8ec8c19b7f9d339522977efd754e41b6d3f3d455092e55976acb3522131e",
-      "registry_digest": "sha256:23da2c764e560f99db15901d5a5a5697a72b48f052cd4e3fea766b705ce696ae"
+      "registry_digest": "sha256:87de6e415e2a6bb08a85eb2c747f9e3055ff05701e49026eaace020528d55da9"
     }
   ],
-  "index_digest": "sha256:394ec10b495978a6c59831745a3bd6c9a875ee2d62d0fac6a0206f14768c4a71"
+  "index_digest": "sha256:54f90be7b19e964ae883d6c9206d773930c4d2705ac2832ab61a6fb0137929d6"
 }
