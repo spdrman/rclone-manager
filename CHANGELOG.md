@@ -4,6 +4,30 @@
 
 ### Fixed
 
+- **`backup-set create --no-verify` can write a first configuration again**
+  (#670). Seeding the local hard drive as a declared destination at first boot
+  proves the backup root first, which is right — but the probe was wired as a
+  refusal rather than as a verdict, so it failed the whole first-run write even
+  when the operator had explicitly asked not to verify. On a host whose backup
+  root is not mounted yet, that made the first configuration unwritable by the
+  one flag that exists for the situation: the same command printed
+  &ldquo;`--no-verify` was given, so nothing was resolved&rdquo; for the SSH half and
+  then refused for this one. The probe now runs either way and its answer is
+  recorded either way — the seeded destination carries
+  `connection_unverified: true` when it did not pass, which the destinations
+  card already shows as **never proven** and which a passing test connection
+  clears. Only the refusal is conditional: an install nobody opted out of still
+  has to prove its backup root before anything is written.
+
+- **`rbm medium remove local` explains itself with the reason it actually
+  has** (#670). The CLI test still demanded the words &ldquo;cannot be
+  un-declared&rdquo;, the local-specific refusal deleted when `local` became a
+  declared destination; the engine had been answering the generic
+  is-default refusal, correctly, and the assertion had outlived the
+  behaviour. Retargeted, and strengthened to prove the refusal is about the
+  mark rather than the name: move the default elsewhere and the reason goes
+  away.
+
 - **A completed local copy is no longer recorded as zero bytes** (#662). The
   durable commit measured the file it had just linked into place and then wrote
   the transfer's own reported numbers instead, so a local read-back that came
