@@ -144,9 +144,11 @@ func TestNothingPrintsANameThisBinaryDoesNotHave(t *testing.T) {
 	}
 
 	// A walk that reaches nothing passes, and a walk whose roots have
-	// moved reaches nothing. These two files are the ones this check was
-	// written for, one per module, so naming them turns "found no
-	// problems" into a claim that something was actually read.
+	// moved reaches nothing. These three files are the ones this check was
+	// written for, so naming them turns "found no problems" into a claim
+	// that something was actually read. Two of them are in the other
+	// module, which is also the half of the walk most likely to be the one
+	// that quietly stops happening.
 	for _, want := range []string{
 		"main.go",
 		"../../../common/webhost/serve/run.go",
@@ -208,17 +210,25 @@ func namesAnotherProgram(s string) bool {
 	}
 }
 
-// excerpt shows the offending line of a literal rather than the whole of
+// excerpt shows the offending lines of a literal rather than the whole of
 // it. One of these literals is the entire usage block, and a failure
 // message that prints a hundred and fifty lines of help text to say that
 // one word in it is wrong is a message nobody reads to the end.
+//
+// Every matching line rather than the first, because that block spelled
+// the name three times in three different senses and a reader who fixes
+// the one they were shown would come straight back.
 func excerpt(s, needle string) string {
+	var found []string
 	for _, line := range strings.Split(s, "\n") {
 		if strings.Contains(line, needle) {
-			return "\t" + strings.TrimSpace(line)
+			found = append(found, "\t"+strings.TrimSpace(line))
 		}
 	}
-	return "\t" + s
+	if len(found) == 0 {
+		return "\t" + s
+	}
+	return strings.Join(found, "\n")
 }
 
 // TestUsageIntroducesThisBinaryByName is the half the walk above cannot
