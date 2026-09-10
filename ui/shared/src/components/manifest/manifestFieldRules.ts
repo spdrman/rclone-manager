@@ -139,6 +139,65 @@ export function manifestProblems(
 }
 
 /**
+ * The `values` a configuration request carries, from what the form
+ * collected.
+ *
+ * Two rules, and both of them are refusals rather than repairs.
+ *
+ * An entry the manifest does not declare THROWS, naming the field id.
+ * The engine refuses the same thing on the way in
+ * (`Registry.ValidateInstance` walks the bag and refuses a key no field
+ * declares), and the browser could instead have quietly dropped it - but
+ * a bag with a stale key in it means the form and the manifest have come
+ * apart, which happens when a manifest changes under a page that was
+ * already open. Dropping it saves something the operator did not
+ * describe and the review screen did not show, which is the "verifies
+ * green, then saves something slightly different" defect
+ * StorageMediumSpec's own docblock says it exists to prevent. So it is
+ * loud, and it stays loud even now that the wire can carry every
+ * declared field: it costs nothing and it is what catches the next field
+ * somebody adds to a manifest and forgets to plumb.
+ *
+ * An UNSET optional field is omitted rather than sent as an empty
+ * string. `unset_means` is resolved by an accessor at read time, so
+ * sending the resolved value would freeze a product default into the
+ * operator's file at the next save (#294), and sending "" would be a
+ * caller asserting emptiness where it means "nobody said".
+ *
+ * A bool goes out as "true" or "false", which is what
+ * `backend.validateFieldValue`'s KindBool case reads, and a credential
+ * field contributes nothing: material travels in its own reference
+ * object and never in this bag.
+ */
+export function configurationValues(
+  manifest: BackendManifest,
+  values: ManifestFieldValues
+): Record<string, string> {
+  const declared: Record<string, true> = {};
+  for (const field of manifest.fields) declared[field.id] = true;
+  for (const key of Object.keys(values)) {
+    if (!declared[key]) {
+      throw new Error(
+        `the ${manifest.id} backend declares no field ${key}, so this configuration cannot be sent; ` +
+          "reload the page to pick up the manifest this manager is running"
+      );
+    }
+  }
+
+  const out: Record<string, string> = {};
+  for (const field of manifest.fields) {
+    if (field.kind === "credential") continue;
+    const value = values[field.id];
+    if (field.kind === "bool") {
+      out[field.id] = value === true ? "true" : "false";
+      continue;
+    }
+    if (typeof value === "string" && value !== "") out[field.id] = value;
+  }
+  return out;
+}
+
+/**
  * `filepath.IsAbs` plus `filepath.Clean` equality plus the no-dot-segment
  * rule, which is validate.go:253's three checks and its one sentence.
  *
