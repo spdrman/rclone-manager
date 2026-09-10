@@ -66,7 +66,6 @@ const CATALOG: BackendCatalog = {
       label: "Local volume",
       summary: "A directory on a filesystem this host can see.",
       role: "local_volume",
-      rcloneBackend: "local",
       fields: [
         { id: "path", label: "Directory", kind: "path", required: true },
         { id: "prefix", label: "Key prefix", kind: "key_prefix", required: false }
@@ -78,7 +77,6 @@ const CATALOG: BackendCatalog = {
       label: "S3 bucket",
       summary: "A remote object store addressed by a bucket and a key.",
       role: "object_store",
-      rcloneBackend: "s3",
       fields: [
         { id: "bucket", label: "Bucket", kind: "string", required: true },
         { id: "credentials", label: "Credentials", kind: "credential", required: true }
@@ -90,12 +88,11 @@ const CATALOG: BackendCatalog = {
       label: "Object lake",
       summary: "A backend this build does not bundle, served by the fixture.",
       role: "object_store",
-      rcloneBackend: "s3",
       fields: [{ id: "bucket", label: "Bucket", kind: "string", required: true }],
       probe: { steps: [] }
     }
   ],
-  unregistered: [{ rcloneBackend: "sftp" }],
+  unregistered: [{ transport: "sftp" }],
   instanceIdPattern: "^[a-z][a-z0-9_]*$",
   reservedInstanceId: "local"
 };

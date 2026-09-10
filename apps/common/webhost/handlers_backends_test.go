@@ -34,12 +34,11 @@ func getBackends(t *testing.T, router http.Handler) *httptest.ResponseRecorder {
 // the implementation.
 type backendsBody struct {
 	Backends []struct {
-		ID            string `json:"id"`
-		Label         string `json:"label"`
-		Summary       string `json:"summary"`
-		Role          string `json:"role"`
-		RcloneBackend string `json:"rclone_backend"`
-		Fields        []struct {
+		ID      string `json:"id"`
+		Label   string `json:"label"`
+		Summary string `json:"summary"`
+		Role    string `json:"role"`
+		Fields  []struct {
 			ID         string `json:"id"`
 			Label      string `json:"label"`
 			Help       string `json:"help"`
@@ -61,7 +60,7 @@ type backendsBody struct {
 		} `json:"probe"`
 	} `json:"backends"`
 	Unregistered []struct {
-		RcloneBackend string `json:"rclone_backend"`
+		Transport string `json:"transport"`
 	} `json:"unregistered"`
 	InstanceIDPattern  string `json:"instance_id_pattern"`
 	ReservedInstanceID string `json:"reserved_instance_id"`
@@ -103,9 +102,6 @@ func TestListBackends_ReturnsTheRegistry(t *testing.T) {
 		}
 		if got.Role != want.Role {
 			t.Errorf("backends[%d].role = %q, want %q", i, got.Role, want.Role)
-		}
-		if got.RcloneBackend != want.RcloneBackend {
-			t.Errorf("backends[%d].rclone_backend = %q, want %q", i, got.RcloneBackend, want.RcloneBackend)
 		}
 		if len(got.Fields) != len(want.Fields) {
 			t.Fatalf("backends[%d] (%s) declares %d fields, want %d; a projection that drops one is a manifest format with two spellings", i, want.ID, len(got.Fields), len(want.Fields))
@@ -172,19 +168,24 @@ func TestListBackends_ReportsAnUnderstoodButUnregisteredBackend(t *testing.T) {
 	if len(body.Unregistered) != len(catalog.Unregistered) {
 		t.Fatalf("returned %d unregistered backends, want %d", len(body.Unregistered), len(catalog.Unregistered))
 	}
-	// The set is a subtraction, so no name may appear on both sides: a
-	// backend that is both registered and not is a catalogue an operator
-	// cannot read.
-	registered := map[string]bool{}
-	for _, b := range body.Backends {
-		registered[b.RcloneBackend] = true
+	// The set is a subtraction, so no transport may appear on both
+	// sides: a backend that is both registered and not is a catalogue an
+	// operator cannot read.
+	//
+	// Claimed is built from service.RegisteredBackends rather than from
+	// the response, because #81 took the transport off the wire and the
+	// subtraction happens in core/service anyway. Asserting it against
+	// the service is asserting it where it is computed.
+	claimed := map[string]bool{}
+	for _, b := range catalog.Backends {
+		claimed[b.RcloneBackend] = true
 	}
 	for i, u := range body.Unregistered {
-		if u.RcloneBackend == "" {
+		if u.Transport == "" {
 			t.Errorf("unregistered[%d] has no name", i)
 		}
-		if registered[u.RcloneBackend] {
-			t.Errorf("unregistered[%d] = %q, which a manifest already claims", i, u.RcloneBackend)
+		if claimed[u.Transport] {
+			t.Errorf("unregistered[%d] = %q, which a manifest already claims", i, u.Transport)
 		}
 	}
 }
