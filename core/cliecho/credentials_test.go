@@ -1,9 +1,13 @@
 package cliecho
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/apicontract"
+	"github.com/spdrman/rclone-manager/core/internal/backend"
 )
 
 // The mechanical form of "a command never carries a key, a password or a
@@ -290,5 +294,75 @@ func TestTheCredentialSearchWouldCatchOne(t *testing.T) {
 	sort.Strings(missing)
 	if len(missing) > 0 {
 		t.Errorf("the generated corpus carries no %v field at all, so the property test never drives the fields the hard-coded one did", missing)
+	}
+}
+
+// TestTheManifestsCredentialFieldRoutesThroughTheSafeSpellings is issue
+// #665's C2: the s3 manifest (core/internal/backend) names
+// "credentials" as its one KindCredential field, and this boundary
+// accepts that field's value under four wire spellings
+// (StorageMediumCredentialsReference: credentials_id, file, env,
+// command). Three of those name a REFERENCE - an id this deployment
+// already minted, a path, an environment variable NAME - and echoing
+// them is correct and intentional (flagsThatEchoWhatTheRequestSaid
+// documents why for each). The fourth, command, is the caller's own
+// words and can genuinely BE credential material
+// (TestACredentialsCommandIsNamedAndNeverPrinted already proves it is
+// masked). This test drives all four spellings through the real POST
+// /storage-mediums route with the canary in the credential slot each
+// way, and asserts the reference spellings print the canary (a
+// positive control proving the request reaches the line at all) while
+// the command spelling never does - so the one manifest field
+// #665 marks KindCredential is proven routed correctly on every wire
+// shape it can arrive in, not merely on the one this package already
+// had a dedicated test for.
+func TestTheManifestsCredentialFieldRoutesThroughTheSafeSpellings(t *testing.T) {
+	reg, err := backend.Bundled()
+	if err != nil {
+		t.Fatalf("backend.Bundled(): %v", err)
+	}
+	s3, err := reg.Backend("s3")
+	if err != nil {
+		t.Fatalf("backend.Backend(\"s3\"): %v", err)
+	}
+	credField, ok := s3.CredentialField()
+	if !ok {
+		t.Fatal("the s3 manifest declares no credential field, so this test checks nothing")
+	}
+	if credField.ID != "credentials" {
+		t.Fatalf("the s3 manifest's credential field id is %q; this test assumes it is \"credentials\", "+
+			"the id StorageMediumCredentialsReference's wire spellings are built for", credField.ID)
+	}
+
+	echo := func(ref apicontract.StorageMediumCredentialsReference) string {
+		body, err := json.Marshal(apicontract.StorageMediumRequest{ID: "offsite_s3", Type: "s3", Bucket: "acme", Credentials: ref})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		line := Echo(Action{Method: "POST", Route: "/storage-mediums", Body: body})
+		if len(line.Command) == 0 {
+			t.Fatal("POST /storage-mediums built no command, so this test checks nothing")
+		}
+		return line.Shell()
+	}
+
+	const idCanary = "cliechoCANARYcredid"
+	if rendered := echo(apicontract.StorageMediumCredentialsReference{CredentialsID: idCanary}); !strings.Contains(rendered, idCanary) {
+		t.Errorf("credentials_id (a minted reference) should echo and did not: %s", rendered)
+	}
+
+	const fileCanary = "cliechoCANARYcredfile"
+	if rendered := echo(apicontract.StorageMediumCredentialsReference{File: fileCanary}); !strings.Contains(rendered, fileCanary) {
+		t.Errorf("credentials.file (a path, never contents) should echo and did not: %s", rendered)
+	}
+
+	const envCanary = "cliechoCANARYcredenv"
+	if rendered := echo(apicontract.StorageMediumCredentialsReference{Env: envCanary}); !strings.Contains(rendered, envCanary) {
+		t.Errorf("credentials.env (a variable NAME, never its value) should echo and did not: %s", rendered)
+	}
+
+	const commandCanary = "cliechoCANARYcredcmd"
+	if rendered := echo(apicontract.StorageMediumCredentialsReference{Command: []string{"printf", commandCanary}}); strings.Contains(rendered, commandCanary) {
+		t.Errorf("credentials.command (the caller's own words, which CAN be material) reached the line: %s", rendered)
 	}
 }
