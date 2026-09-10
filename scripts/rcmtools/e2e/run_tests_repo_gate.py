@@ -14,7 +14,12 @@ refuses the commit. It does two things:
 
   1. the CLI smoke slice (55 of Suite A's 60 cases) against a
      rbm built from THIS working tree;
-  2. the browser suite against THIS working tree's ui/shared.
+  2. the browser suite against a real deployment built from THIS
+     working tree, over the wire, through
+     scripts/e2e/three-machine-web-ui.sh (#687: this used to start
+     ui/shared's own Vite dev server over createMockApi and drive it
+     through RM_UI_DIR, until the tests repository dropped RM_UI_DIR
+     and moved Suite B onto RM_BASE_URL against a real deployment).
 
 Both come from spdrman/rclone-manager-tests at the sha in tests-repo.pin,
 so the tests are versioned independently of the product and a new test
@@ -29,13 +34,14 @@ clones the tests repository and installs its Playwright, which is a minute
 or two, once per pin.
 
 Capability refusals follow gate_require_docker's shape rather than
-inventing a new one: a missing browser is a hard failure that names the
-command that fixes it, and CI_LOCAL_SKIP_E2E=1 is the out-loud opt-out
-that ledgers the skip in ci-local.sh so the run ends INCOMPLETE and cannot
-be merge evidence. That answers #197's first open question with this
-repository's own precedent: Docker is the higher-consequence capability
-and it is refuse-by-default with a ledgered opt-out, so a browser gets the
-same shape and not a weaker one.
+inventing a new one: a missing capability the rig itself discovers (most
+often Docker) is a hard failure that names it, by way of
+three-machine-web-ui.sh's own output, and CI_LOCAL_SKIP_E2E=1 is the
+out-loud opt-out that ledgers the skip in ci-local.sh so the run ends
+INCOMPLETE and cannot be merge evidence. That answers #197's first open
+question with this repository's own precedent: Docker is the
+higher-consequence capability and it is refuse-by-default with a
+ledgered opt-out, so a browser gets the same shape and not a weaker one.
 
 # The port (#672, EPIC I / #662)
 
@@ -81,29 +87,6 @@ SKIP_CODA = (
     "Fix it, or choose the skip out loud with CI_LOCAL_SKIP_E2E=1. A run that",
     "skips it ends INCOMPLETE and is not merge evidence.",
 )
-
-# The browser probe, byte for byte what the bash ran. It has to run from
-# inside the pinned checkout's suites/web-ui so `require` resolves
-# playwright-core out of THAT node_modules rather than out of anything
-# this repository happens to have installed.
-BROWSER_PROBE = """
-const { chromium } = require("playwright-core");
-require("node:fs").accessSync(chromium.executablePath());
-"""
-
-# One free port, obtained the way the bash obtained it: from node, in the
-# runtime that is about to bind it. Kept as node rather than rewritten
-# with Python's socket module because the guard below ("printed nothing
-# and exited 0") is only a check while something can still do that.
-FREE_PORT_PROBE = """
-const { createServer } = require("node:net");
-const s = createServer();
-s.on("error", () => process.exit(1));
-s.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => {
-  const port = s.address().port;
-  s.close(() => process.stdout.write(String(port)));
-});
-"""
 
 
 def refuse(message: str, *details: str) -> NoReturn:
@@ -302,72 +285,50 @@ def smoke_slice(root: Path, checkout: Path, build: dict[str, str]) -> None:
 def browser_half(root: Path, checkout: Path) -> None:
     web_ui = checkout / "suites" / "web-ui"
 
-    # ui/shared has to be installed, which ci-local.sh's own preflight already
-    # refuses without, so reaching here with it missing means this script was run
-    # standalone. Say so rather than letting `npm run dev` fail sixty seconds
-    # later inside a webServer timeout.
-    if not (root / "ui" / "shared" / "node_modules").is_dir():
-        refuse(
-            "ui/shared has no installed dependencies, so its dev server cannot start.",
-            "Fix it with: cd ui/shared && npm ci",
-        )
-
-    # A browser this machine does not have is the one capability question #197
-    # left open. Refuse, name the fix, and let ci-local.sh ledger the opt-out.
-    #
-    # harness.sh_ok would be the shape for this and takes no cwd, and the
-    # cwd is the whole point: the probe has to resolve playwright-core out
-    # of the pinned checkout. check=False plus a returncode read is the
-    # explicit form of the same tolerance.
-    probed = harness.sh(["node", "-e", BROWSER_PROBE], check=False, cwd=web_ui)
-    if probed.returncode != 0:
-        refuse(
-            "Playwright has no installed Chromium on this machine, so the browser suite cannot run.",
-            f"Fix it with: cd {web_ui} && npx playwright install chromium",
-        )
-
-    # The suite's own unit test of its port helper comes with it. In the old
-    # home ui/shared's vitest ran it; nothing else does now, and it is the
-    # thing that stops an E2E_PORT typo becoming port 0 or NaN.
+    # The suite's own unit test comes with it, and needs nothing this
+    # rewrite touches: no browser, no rig, just node and the checkout.
     harness.step("the browser suite's own unit tests")
     harness.sh(["npm", "run", "--silent", "unit"], capture=False, cwd=web_ui)
 
-    # One port, chosen here, and handed to the suite through E2E_PORT.
+    # #687: this used to start ui/shared's own Vite dev server over
+    # createMockApi and drive it through RM_UI_DIR, so a case's pass or
+    # fail was a claim about a component rendering given a fixture and
+    # not about the path an operator meets (browser -> serve-ui ->
+    # reverse proxy -> serve -> SQLite). The tests repository retired
+    # RM_UI_DIR along with that suite (rclone-manager-tests#65) in
+    # favour of RM_BASE_URL against a real deployment, and
+    # scripts/e2e/three-machine-web-ui.sh is that deployment: three
+    # private Docker networks, the product's own two containers built
+    # from this working tree, a real sshd standing in for the machine
+    # being backed up, and a client container carrying the browser and
+    # the Playwright runner together. #197's host-Chromium probe and the
+    # free-port picking above it are both gone with the Vite server they
+    # served: the browser now lives inside a container this step builds,
+    # not on this machine, and RM_BASE_URL is a container name the rig
+    # hands the suite rather than a port this process has to pick.
     #
-    # Not decoration, and not the same thing as letting the suite derive its
-    # own. Playwright re-evaluates playwright.config.ts inside every worker
-    # process, so anything the config COMPUTES has to come out the same in the
-    # runner and in each worker. The suite's default derivation probes for a
-    # free port, and by the time a worker probes, the runner's own Vite is
-    # already holding the one the runner picked, so the worker can walk to the
-    # next slot and end up with a baseURL nothing is listening on. That is
-    # exactly what happened on the first full gate run here: the runner said
-    # 5930 and one worker navigated to 5931 and got ERR_CONNECTION_REFUSED, one
-    # test out of 165.
-    #
-    # E2E_PORT is read from the environment rather than computed, so the runner
-    # and every worker read the same number. The residual race (something else
-    # grabs the port between this probe and Vite's bind) is loud rather than
-    # silent: --strictPort makes Vite refuse to slide, and reuseExistingServer
-    # is false, so a lost race fails to start instead of testing somebody
-    # else's server.
-    e2e_port = harness.sh_out(["node", "-e", FREE_PORT_PROBE])
-    if not e2e_port:
-        refuse("could not obtain a free port for the browser suite.")
-
+    # The rig's own exit code carries the same three-outcome vocabulary
+    # this harness uses: 0 passed, 3 is CANNOT RUN (a capability this
+    # machine does not have, most often no reachable Docker daemon),
+    # anything else failed. harness.finish's rule is that an unguarded 3
+    # is reported as a failure rather than borrowed as this gate's own
+    # verdict (see the PORTED-CHECK HAZARD NOTE below), so it is caught
+    # here and turned into a named refusal instead of the generic
+    # "exited 3" message, which would have been true but would not have
+    # said what to fix.
     harness.step(
-        f"Suite B browser suite on port {e2e_port}, against this working tree's ui/shared"
+        "Suite B browser suite, against a real deployment built from this working tree, over the wire"
     )
-    harness.sh(
-        ["npm", "run", "--silent", "e2e"],
-        capture=False,
-        cwd=web_ui,
-        env=dict(
-            os.environ,
-            RM_UI_DIR=str(root / "ui" / "shared"),
-            E2E_PORT=e2e_port,
-        ),
-    )
+    rig = root / "scripts" / "e2e" / "three-machine-web-ui.sh"
+    try:
+        harness.sh(["bash", str(rig), "--suite", str(web_ui)], capture=False)
+    except harness.CommandFailed as failed:
+        if failed.status == 3:
+            refuse(
+                "three-machine-web-ui.sh could not perform the proof on this machine (exit 3).",
+                "Its own output above names the missing capability, most likely Docker.",
+            )
+        raise
 
 
 def body(root: Path) -> int:
@@ -536,38 +497,39 @@ if __name__ == "__main__":
 #   held by:          harness.finish, and after the port a stand-in `go`
 #                     exiting 3, which makes this gate exit 1.
 #
-# node's free-port probe is a port and not an empty string
-#   hazard in bash:   `e2e_port="$(node -e ...)"` -- an assignment IS the
-#                     command, so `set -e` caught node exiting 1, and the
-#                     `[ -n ... ]` guard caught the other case: exit 0
-#                     with nothing printed.
-#   hazard in python: STILL EXISTS, both halves. sh_out's default
-#                     check=True raises on a non-zero node, and the
-#                     `if not e2e_port` refusal catches a silent success.
-#                     The probe stays a node program for this reason: a
-#                     Python socket bind cannot return an empty port, so
-#                     rewriting it would have made the second half of this
-#                     check unable to fail.
-#   held by:          sh_out(check=True) and browser_half's `if not
-#                     e2e_port` refusal.
+# #687: the browser suite is a real deployment now, not this process's
+# own Vite dev server, so the free-port probe, the RM_UI_DIR node_modules
+# preflight and the host-Chromium probe above them are gone rather than
+# ported: nothing here binds a port, starts a dev server or launches a
+# browser on THIS machine any more, so there was nothing left in any of
+# the three to translate. What replaced them is one new hazard.
 #
-# a machine with no browser is refused with the fix named
-#   hazard in bash:   a missing Chromium otherwise surfaces as a
-#                     Playwright timeout sixty seconds in, with no remedy.
-#   hazard in python: STILL EXISTS. Same probe, same message, same exit 1
-#                     -- and it stays exit 1 rather than becoming
-#                     cannot_run, because the ledgered opt-out for this is
-#                     CI_LOCAL_SKIP_E2E=1 in ci-local.sh and #197's answer
-#                     was one opt-out, chosen out loud, not two.
-#   held by:          browser_half's probe branch; proven after the port by
-#                     making the capability absent (a stand-in `node` that
-#                     fails the probe) rather than by reading the code.
-#
-# ui/shared is installed before its dev server is asked for
-#   hazard in bash:   without it `npm run dev` fails inside a webServer
-#                     timeout a minute later.
-#   hazard in python: STILL EXISTS: same directory test, same refusal.
-#   held by:          browser_half's node_modules branch.
+# three-machine-web-ui.sh's own exit 3 does not become this gate's
+# INCOMPLETE
+#   hazard in bash:   the rig's `finish()` translates its internal
+#                     EXIT_CANNOT_RUN into exit 3, the same number
+#                     scripts/lib/ci-local-gate.sh reads as INCOMPLETE,
+#                     and the old bash gate ran it under `set -e`: an
+#                     unguarded 3 would have propagated as this script's
+#                     own status and been ledgered as a skip rather than
+#                     reported as the failure a "cannot run" verdict
+#                     borrowed from a subprocess actually is.
+#   hazard in python: the same shape, one level up: harness.sh(check=True)
+#                     raises CommandFailed on the rig's exit 3 exactly as
+#                     it would on any other nonzero, and finish()'s own
+#                     rule (see the row above) reports an untranslated 3
+#                     as a generic "exited 3" failure -- true, but naming
+#                     nothing an operator could fix.
+#   held by:          browser_half's own try/except CommandFailed,
+#                     which catches status == 3 before it reaches
+#                     finish() and turns it into a named refusal quoting
+#                     the rig's own output; proven by requiring
+#                     `three-machine-web-ui.sh could not perform the
+#                     proof` on this machine and a plain exit 1, not 3
+#                     nor the generic message, and re-verified after this
+#                     port by two full runs against real Docker on this
+#                     machine, both `191 passed, 69 skipped, 8 expected
+#                     failures, exit 0`.
 #
 # pipefail
 #   hazard in bash:   `set -o pipefail` was on, so a pipeline's first

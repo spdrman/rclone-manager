@@ -1444,3 +1444,44 @@ func readmeSection(readme, heading string) (string, int) {
 	}
 	return "", 0
 }
+
+// TestTheComplianceDocsNameTheCurrentAppID is the check issue #687 asks
+// for. The rename moved project.appId from com.iasbuilt.backupmanager to
+// com.iasbuilt.rclonemanager (#685), and source-offer.md and
+// privacy-policy.md are store-submitted prose repeating the old id: the
+// blanket rewrite reached compliance.json's own field and its
+// mustMention lists but never touched the doc bodies, because nothing
+// compared what they said to it. mustMention only ever asks "does this
+// phrase appear somewhere", so a doc that kept the old id alongside a
+// coincidentally-present new one would still pass it; this test reads
+// every com.iasbuilt.* id a doc actually names and refuses one that
+// disagrees with the declared appId. support.md carried the identical
+// stale id and #687 never named it; the sweep below reaches it too
+// rather than leaving a third copy of the same defect unguarded.
+func TestTheComplianceDocsNameTheCurrentAppID(t *testing.T) {
+	c := MustLoadCompliance()
+	if c.Project.AppID == "" {
+		t.Fatal("compliance.json declares no project.appId, so there is nothing to hold these docs to")
+	}
+	appIDPattern := regexp.MustCompile(`com\.iasbuilt\.[a-zA-Z0-9]+`)
+	for _, linkID := range []string{"source-offer", "privacy", "support"} {
+		link, ok := c.Link(linkID)
+		if !ok || link.RepoPath == "" {
+			t.Fatalf("compliance.json declares no %q link with a repository path", linkID)
+		}
+		data, err := os.ReadFile(Path(link.RepoPath))
+		if err != nil {
+			t.Fatalf("cannot read %s: %v", link.RepoPath, err)
+		}
+		found := appIDPattern.FindAllString(string(data), -1)
+		if len(found) == 0 {
+			t.Errorf("%s never names an app id (com.iasbuilt.*), so it does not identify which product it is talking about", link.RepoPath)
+			continue
+		}
+		for _, id := range found {
+			if id != c.Project.AppID {
+				t.Errorf("%s names %q, but compliance.json's project.appId is %q; this file is submitted to app stores under that id", link.RepoPath, id, c.Project.AppID)
+			}
+		}
+	}
+}
