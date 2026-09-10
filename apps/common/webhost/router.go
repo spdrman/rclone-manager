@@ -489,6 +489,18 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(requireCSRF).Put("/storage-mediums/{id}/default", h.setDefaultStorageMedium)
 		r.Get("/storage-mediums/{id}/usage", h.getStorageMediumUsage)
 
+		// The configuration routes (I2.2, issue #669), which speak in
+		// manifest field ids. Gated exactly as their spec-shaped
+		// neighbours above are, and for the identical reasons: the read
+		// is a read, and the two writes carry CSRF and not the
+		// destructive gate because nothing they can reach touches a
+		// backup - the probe writes and deletes only the object it
+		// generated a key for, and the configure write changes a
+		// declaration.
+		r.Get("/storage-mediums/{id}/configuration", h.getStorageMediumConfiguration)
+		r.With(requireCSRF).Post("/storage-mediums/{id}/configuration/preflight", h.preflightStorageMediumConfiguration)
+		r.With(requireCSRF).Put("/storage-mediums/{id}/configuration", h.configureStorageMedium)
+
 		// Issue #211: FR-9 catalog recovery, the API expression of
 		// `rbm catalog rebuild` and its --dry-run. Rebuild only
 		// ever adds records whose recovery manifests are already on disk

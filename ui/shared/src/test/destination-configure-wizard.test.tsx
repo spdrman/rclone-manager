@@ -516,7 +516,12 @@ describe("the review step", () => {
 describe("the assertions #594 made about the add path, on the manifest renderer", () => {
   it("writes nothing until the destination has been proven", async () => {
     const configure = vi.fn(() => Promise.resolve({ ...LOCKER, connectionUnverified: false }));
-    const { promise, resolve } = Promise.withResolvers<MediumPreflight>();
+    // A held-open promise. `Promise.withResolvers` is the shape this
+    // would take, and this workspace's lib target predates it.
+    let resolve: (report: MediumPreflight) => void = () => {};
+    const promise = new Promise<MediumPreflight>((r) => {
+      resolve = r;
+    });
     await openWizard({
       importStorageCredentials: vi.fn(() => Promise.resolve("cred-669")),
       preflightStorageMediumConfiguration: vi.fn(() => promise),

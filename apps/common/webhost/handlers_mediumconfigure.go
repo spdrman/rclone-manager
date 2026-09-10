@@ -88,9 +88,9 @@ type mediumConfigurationRequest struct {
 	// the id is not declared yet; see
 	// service.StorageMediumConfiguration.Backend for why there is
 	// nothing to derive it from at that moment (P2, issue #669).
-	Backend     string                             `json:"backend,omitempty"`
-	Fields      []mediumFieldValue                 `json:"fields"`
-	Credentials *storageMediumCredentialsReference `json:"credentials,omitempty"`
+	Backend     string                            `json:"backend"`
+	Fields      []mediumFieldValue                `json:"fields"`
+	Credentials storageMediumCredentialsReference `json:"credentials"`
 }
 
 // mediumConfigurationResponse is GET
@@ -232,16 +232,21 @@ func (h *handlers) decodeMediumConfiguration(
 		fields[pair.Field] = pair.Value
 	}
 
-	cfg := service.StorageMediumConfiguration{Backend: body.Backend, Fields: fields}
-	if body.Credentials != nil {
-		cfg.Credentials = service.StorageMediumCredentials{
+	// A credentials block naming nothing is how a caller says "keep the
+	// one already configured", which is why this is a value rather than
+	// a pointer: an absent block and an empty one mean the same thing
+	// here, and two spellings for one instruction is one of them
+	// eventually meaning something else.
+	return service.StorageMediumConfiguration{
+		Backend: body.Backend,
+		Fields:  fields,
+		Credentials: service.StorageMediumCredentials{
 			ID:      body.Credentials.CredentialsID,
 			File:    body.Credentials.File,
 			Env:     body.Credentials.Env,
 			Command: body.Credentials.Command,
-		}
-	}
-	return cfg, true
+		},
+	}, true
 }
 
 // toMediumFieldValues sorts by field id, so one configuration has one

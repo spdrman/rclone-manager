@@ -112,7 +112,13 @@ export function DestinationConfigureWizard({
   // and a save from that frame would unset fields the operator never
   // touched: this flow sends the whole declared set, so an empty form is
   // not a neutral starting point.
-  const [values, setValues] = useState<ManifestFieldValues | null>(null);
+  // Seeded straight away when there is nothing to read, which is the
+  // create: an empty form IS the neutral starting point in that one
+  // case, and doing it here rather than in the effect below keeps the
+  // effect to the thing it is for - talking to something outside React.
+  const [values, setValues] = useState<ManifestFieldValues | null>(
+    destination === null ? emptyValues(manifest) : null
+  );
   const [credentialConfigured, setCredentialConfigured] = useState(false);
   const [credential, setCredential] = useState<ManifestCredentialDraft>(NO_CREDENTIAL);
   const [credentialsId, setCredentialsId] = useState<string | null>(null);
@@ -127,13 +133,9 @@ export function DestinationConfigureWizard({
   useEffect(() => {
     let live = true;
     // Nothing to read when nothing is declared, and asking would be
-    // asking about a destination that does not exist. An empty form IS
-    // the neutral starting point in that case, which is the one case it
-    // is.
-    if (destination === null) {
-      setValues(emptyValues(manifest));
-      return;
-    }
+    // asking about a destination that does not exist - the answer would
+    // be a 404 rendered as a failure on a form that is working.
+    if (destination === null) return;
     api
       .getStorageMediumConfiguration(destination.id)
       .then((current) => {
@@ -234,7 +236,7 @@ export function DestinationConfigureWizard({
     } finally {
       setBusy(false);
     }
-  }, [api, credential, credentialTyped, credentialsId, instanceId, manifest, values]);
+  }, [api, credential, credentialTyped, credentialsId, destination, instanceId, manifest, values]);
 
   const toTestStep = useCallback(() => {
     setStep("test");
@@ -266,7 +268,7 @@ export function DestinationConfigureWizard({
     } finally {
       setBusy(false);
     }
-  }, [api, credentialsId, instanceId, makeDefault, manifest, onSaved, values]);
+  }, [api, credentialsId, destination, instanceId, makeDefault, manifest, onSaved, values]);
 
   const echo = useMemo(() => {
     if (values === null) return { command: "", fieldsWithNoFlag: [] as string[] };
@@ -276,7 +278,7 @@ export function DestinationConfigureWizard({
       configurationValues(manifest, values),
       destination === null
     );
-  }, [instanceId, manifest, values]);
+  }, [destination, instanceId, manifest, values]);
 
   return (
     <div

@@ -75,6 +75,7 @@ import type {
   WireListBackendsResponse,
   WireListStorageMediumsResponse,
   WireMediumPreflightResponse,
+  WireMediumConfigurationResponse,
   WireStorageMediumSummary,
   WireStorageMediumUsageResponse,
   WireOperation,
@@ -101,6 +102,7 @@ import type {
   CatalogScanPreview,
   ConnectionTestOutcome,
   StorageMedium,
+  StorageMediumConfiguration,
   StorageMediumSpec,
   ConnectionTestParams,
   CreateBackupSetRequest,
@@ -897,6 +899,58 @@ function toWireStorageMedium(spec: StorageMediumSpec): Record<string, unknown> {
   // wizard cannot save until its own check has passed.
   if (spec.skipConnectionCheck) body.skip_connection_check = true;
   const c = spec.credentials;
+  if (c && (c.credentialsId || c.file || c.env || (c.command && c.command.length > 0))) {
+    body.credentials = {
+      ...(c.credentialsId ? { credentials_id: c.credentialsId } : {}),
+      ...(c.file ? { file: c.file } : {}),
+      ...(c.env ? { env: c.env } : {}),
+      ...(c.command && c.command.length > 0 ? { command: c.command } : {})
+    };
+  }
+  return body;
+}
+
+/**
+ * The body both configuration operations take (issue #669).
+ *
+ * `values` is keyed by MANIFEST FIELD ID and carries the operator's
+ * values as the strings the engine validates - a bool as "true" or
+ * "false", which is what `backend.validateFieldValue`'s KindBool case
+ * reads. There is no key here per S3 field and there is deliberately no
+ * `bucket`: that is the difference between this body and
+ * toWireStorageMedium above, which is a hand-transcribed copy of
+ * s3.json's field ids and therefore cannot carry a local volume's
+ * `path`.
+ *
+ * `credentials` stays its own reference object rather than an entry in
+ * `values`, and that is the load-bearing part. A credential is not a
+ * value: it is a reference this deployment minted, it is validated by a
+ * different rule, and a value bag that could hold one is a value bag
+ * something will eventually put material into. Keeping it separate is
+ * what makes #665's C1-C5 true by construction on this path too.
+ */
+function toWireMediumConfiguration(config: StorageMediumConfiguration): Record<string, unknown> {
+  // Sorted, and the sort is not tidiness: an unordered pair list makes
+  // the request body and the echoed command line differ run to run for
+  // no reason, and a test asserting on a body then depends on
+  // object-key insertion order. The same three lines live in
+  // toWireStorageMedium; they stay duplicated rather than extracted
+  // because a two-call-site sort-and-map does not earn a frozen
+  // signature (#668's own call).
+  //
+  // The key is always present, even when there is nothing in it. An
+  // EMPTY list means "this instance carries no values" and an absent one
+  // would mean "I have nothing to say about values", and those must not
+  // share a spelling: this operation sends the whole declared field set,
+  // so empty is a real instruction and not a shrug.
+  const values = config.fields;
+  const body: Record<string, unknown> = {
+    fields: Object.keys(values)
+      .sort()
+      .map((field) => ({ field, value: values[field] }))
+  };
+  if (config.backend) body.backend = config.backend;
+  const c = config.credentials;
   if (c && (c.credentialsId || c.file || c.env || (c.command && c.command.length > 0))) {
     body.credentials = {
       ...(c.credentialsId ? { credentials_id: c.credentialsId } : {}),
@@ -2198,6 +2252,34 @@ export const httpApi: BackupManagerApi = {
     request<WireStorageMediumSummary>(
       "/storage-mediums/" + encodeURIComponent(mediumId),
       { method: "PUT", body: JSON.stringify(toWireStorageMedium(spec)) }
+    ).then(fromWireStorageMedium),
+
+  // Issue #669: the three operations that speak in manifest field ids.
+  // The read exists because this flow sends the whole declared field
+  // set, so a form cannot start empty: see StorageMediumConfigurationState.
+  getStorageMediumConfiguration: (mediumId) =>
+    request<WireMediumConfigurationResponse>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/configuration"
+    ).then((r) => ({
+      fields: Object.fromEntries((r.fields ?? []).map((pair) => [pair.field, pair.value])),
+      credentialConfigured: r.credential_configured
+    })),
+
+  // The write pair takes the id in the path and the collected values in
+  // the body, and the preflight writes nothing whatever it answers - the
+  // same property preflightStorageMediumCandidate above has, and for the
+  // same reason: a destination that does not work is what an operator
+  // configured, not a request that broke, so it resolves with `ok` false.
+  preflightStorageMediumConfiguration: (mediumId, config) =>
+    request<WireMediumPreflightResponse>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/configuration/preflight",
+      { method: "POST", body: JSON.stringify(toWireMediumConfiguration(config)) }
+    ).then(fromWireMediumPreflight),
+
+  configureStorageMedium: (mediumId, config) =>
+    request<WireStorageMediumSummary>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/configuration",
+      { method: "PUT", body: JSON.stringify(toWireMediumConfiguration(config)) }
     ).then(fromWireStorageMedium),
 
   removeStorageMedium: (mediumId) =>

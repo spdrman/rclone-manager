@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { BACKEND_FIELD_KINDS } from "@shared/api/contracts";
 import type { BackendManifest, BackendManifestField } from "@shared/api/contracts";
 import { ManifestFields } from "@shared/components/manifest/ManifestFields";
+import manifestFieldsSource from "@shared/components/manifest/ManifestFields.tsx?raw";
+import manifestFieldRulesSource from "@shared/components/manifest/manifestFieldRules.ts?raw";
+import manifestProbeStepsSource from "@shared/components/manifest/ManifestProbeSteps.tsx?raw";
+import manifestReviewSource from "@shared/components/manifest/ManifestReview.tsx?raw";
 import { fieldProblem, manifestProblems, emptyValues } from "@shared/components/manifest/manifestFieldRules";
 import type { ManifestFieldValues } from "@shared/components/manifest/manifestFieldRules";
 
@@ -375,12 +377,16 @@ describe("validating a value against its declared kind", () => {
  * control proves the scan can still fail, so the day the pattern stops
  * matching anything the test says so instead of passing quietly.
  */
-const RENDERER_SOURCES = [
-  "src/components/manifest/ManifestFields.tsx",
-  "src/components/manifest/manifestFieldRules.ts",
-  "src/components/manifest/ManifestProbeSteps.tsx",
-  "src/components/manifest/ManifestReview.tsx"
-];
+// Through Vite's `?raw` rather than node:fs, for the reason
+// dark-mode-contrast.test.ts gives: `?raw` is typed by vite/client,
+// which this workspace already has, and node's own types are not a
+// dependency of the frontend.
+const RENDERER_SOURCES: Record<string, string> = {
+  "ManifestFields.tsx": manifestFieldsSource,
+  "manifestFieldRules.ts": manifestFieldRulesSource,
+  "ManifestProbeSteps.tsx": manifestProbeStepsSource,
+  "ManifestReview.tsx": manifestReviewSource
+};
 
 /** A backend id, or an rclone backend name, used as a value to compare
  *  against. Deliberately not a search for the WORD: `s3.json` is named
@@ -394,9 +400,8 @@ function backendComparisons(source: string): string[] {
 
 describe("the renderer names no backend", () => {
   it("compares nothing against a backend id", () => {
-    for (const relative of RENDERER_SOURCES) {
-      const source = readFileSync(resolve(__dirname, "..", "..", relative), "utf8");
-      expect(backendComparisons(source), `${relative} compares against a backend id`).toEqual([]);
+    for (const [name, source] of Object.entries(RENDERER_SOURCES)) {
+      expect(backendComparisons(source), `${name} compares against a backend id`).toEqual([]);
     }
   });
 

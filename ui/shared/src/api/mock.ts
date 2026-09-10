@@ -14,6 +14,7 @@ import type {
   MediumPreflight,
   MediumPreflightCheck,
   StorageMedium,
+  StorageMediumConfiguration,
   StorageMediumSpec,
   StorageMediumUsage,
   RetentionOverride,
@@ -2280,6 +2281,77 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       return delay(structuredClone(medium), 400);
     },
 
+    // Issue #669. The projection is the inverse of `mediumConfigured`
+    // below and lives beside it, so this fixture cannot report a
+    // configuration it would not accept back. An unset field is ABSENT
+    // rather than present as its unset_means value (#294), which is what
+    // makes a form able to show "unset - read as STANDARD" instead of
+    // claiming STANDARD was chosen.
+    getStorageMediumConfiguration: (mediumId) => {
+      const medium = settings.mediums.find((m) => m.id === mediumId);
+      if (!medium) return Promise.reject(mediumNotFound());
+      const fields: Record<string, string> = {};
+      if (medium.bucket) fields.bucket = medium.bucket;
+      if (medium.region) fields.region = medium.region;
+      if (medium.endpoint) fields.endpoint = medium.endpoint;
+      if (medium.prefix) fields.prefix = medium.prefix;
+      if (medium.storageClass) fields.storage_class = medium.storageClass;
+      if (medium.uploadVerification) fields.upload_verification = medium.uploadVerification;
+      // A local destination reads no credential, which is a fact about
+      // the manifest and not about this fixture's data: a boolean here
+      // is the most that may be said either way (FR-33).
+      return delay({ fields, credentialConfigured: !medium.isLocal }, 200);
+    },
+
+    // Issue #669. The values map is applied through the same projection
+    // the real service uses in spirit - one field id to one named field -
+    // so this fixture cannot be configured into a state the engine would
+    // describe differently. `mediumConfigured` is where that mapping
+    // lives, once, for both operations.
+    preflightStorageMediumConfiguration: (mediumId, config) => {
+      const at = settings.mediums.findIndex((m) => m.id === mediumId);
+      if (at < 0) return Promise.reject(mediumNotFound());
+      return delay(
+        mockPreflightFor({
+          ...mediumConfigured(settings.mediums[at], config),
+          // A probe writes nothing whatever it answers, so it never
+          // carries the mark: the mark is what a WRITE records about the
+          // check it did not run.
+          connectionUnverified: false
+        }),
+        700
+      );
+    },
+
+    configureStorageMedium: (mediumId, config) => {
+      const at = settings.mediums.findIndex((m) => m.id === mediumId);
+      // Create-or-replace, because a destination cannot exist
+      // unconfigured (P2, #669). An id this fixture does not hold is the
+      // create, and the request has to have named a backend for it.
+      if (at < 0) {
+        if (!config.backend) return Promise.reject(mediumNotFound());
+        const created = mediumConfigured(
+          {
+            id: mediumId,
+            type: config.backend,
+            bucket: "",
+            storageClass: "STANDARD",
+            uploadVerification: "readback",
+            readsRequireRestore: false,
+            isLocal: false,
+            isDefault: false,
+            connectionUnverified: false
+          },
+          config
+        );
+        settings.mediums.push(created);
+        return delay(structuredClone(created), 400);
+      }
+      const medium = mediumConfigured(settings.mediums[at], config);
+      settings.mediums[at] = medium;
+      return delay(structuredClone(medium), 400);
+    },
+
     // FR-30: refused while any copy names it, with the count and the sets
     // in the message, because "148 copies affected" with nothing listed is
     // a number rather than a report.
@@ -2525,6 +2597,47 @@ function mockMediumOf(spec: StorageMediumSpec): StorageMedium {
     // check has passed, so a destination declared through this fixture is
     // always a proven one.
     connectionUnverified: spec.skipConnectionCheck === true
+  };
+}
+
+/**
+ * One destination with a manifest-shaped configuration applied (issue
+ * #669).
+ *
+ * The switch is on FIELD ID and not on backend: `config.StorageMedium`
+ * keeps its named typed fields because #664's own compatibility pin
+ * requires the on-disk schema to stay byte-for-byte what it was, so the
+ * translation between a manifest's vocabulary and those named fields has
+ * to happen somewhere, and the real service does it in exactly one
+ * place too. What matters is that no branch here asks WHICH backend is
+ * being configured - `path` and `bucket` are both just field ids, and a
+ * manifest declaring one and not the other needs no code.
+ *
+ * A field the fixture cannot place is left alone rather than guessed at,
+ * and the wizard's own mapper refuses before it ever gets here: a
+ * configuration that verifies green and saves something slightly
+ * different is the defect StorageMediumSpec's docblock says it exists to
+ * prevent.
+ */
+function mediumConfigured(
+  medium: StorageMedium,
+  config: StorageMediumConfiguration
+): StorageMedium {
+  const values = config.fields;
+  const storageClass = values.storage_class || medium.storageClass;
+  return {
+    ...medium,
+    bucket: values.bucket ?? medium.bucket,
+    region: values.region ?? medium.region,
+    endpoint: values.endpoint ?? medium.endpoint,
+    prefix: values.prefix ?? medium.prefix,
+    storageClass,
+    uploadVerification: values.upload_verification || medium.uploadVerification,
+    readsRequireRestore: storageClass === "GLACIER" || storageClass === "DEEP_ARCHIVE",
+    // A configuration that passed its check is a proven one, which is
+    // what the engine records: the mark exists for the write that
+    // skipped the check, and this path cannot skip it.
+    connectionUnverified: false
   };
 }
 

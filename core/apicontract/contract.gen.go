@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "ad99bcfe63437b219ab61c84b1e69ee7d0ded504a543e34fae7367e30d988e40"
+const ContractSHA256 = "f08ab42ee75da18e8a8be2fab0611c9f41c8ff754dd241df73281c0660e0a8dc"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -809,6 +809,38 @@ var Endpoints = []Endpoint{
 			404: {ErrorCodeMediumNotFound, ErrorCodeStorageCredentialNotFound},
 			409: {ErrorCodeMediumConnectionNotProven},
 			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "getStorageMediumConfiguration", Method: "GET", Path: "/storage-mediums/{id}/configuration",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "MediumConfigurationResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeMediumNotFound},
+		},
+	},
+	{
+		ID: "configureStorageMedium", Method: "PUT", Path: "/storage-mediums/{id}/configuration",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "MediumConfigurationRequest", ResponseSchema: "StorageMediumSummary", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeMediumNotFound},
+			409: {ErrorCodeMediumConnectionNotProven},
+		},
+	},
+	{
+		ID: "preflightStorageMediumConfiguration", Method: "POST", Path: "/storage-mediums/{id}/configuration/preflight",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "MediumConfigurationRequest", ResponseSchema: "MediumPreflightResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeMediumNotFound},
 		},
 	},
 	{
@@ -1652,6 +1684,49 @@ type ManagerStorage struct {
 	WarningFreeBytes  uint64 `json:"warning_free_bytes"`
 }
 
+// MediumConfigurationRequest is one destination's configuration, in the vocabulary its backend's
+// manifest declares (#669). This is what StorageMediumRequest cannot
+// be: that one enumerates S3's fields, so bucket is required and
+// there is no path, and a local volume - the only destination a
+// fresh install has (#670) - cannot be described in it. credentials
+// stays its own reference object because a credential is not a
+// value: it is checked by a different rule, and a value bag that
+// could hold one is a value bag something eventually puts material
+// into (#665's C1-C5).
+type MediumConfigurationRequest struct {
+	Backend     string                            `json:"backend"`
+	Credentials StorageMediumCredentialsReference `json:"credentials"`
+	Fields      []MediumFieldValue                `json:"fields"`
+}
+
+// MediumConfigurationResponse is what one destination has configured right now, in its backend's
+// vocabulary. credential_configured is a boolean and never the
+// reference: whether a credential exists is what a form needs - it
+// decides whether the credential pair may be left empty - and it is
+// not material, not a path and not a variable name, which is the
+// most that may be said about it either way (FR-33, #665's C3).
+type MediumConfigurationResponse struct {
+	CredentialConfigured bool               `json:"credential_configured"`
+	Fields               []MediumFieldValue `json:"fields"`
+}
+
+// MediumFieldValue is one manifest-declared value, as a pair. A pair list rather than an
+// object keyed by field id, because no schema in this contract is a
+// map and the generator models additionalProperties as a bool only,
+// so a keyed object would arrive in both languages as an untyped
+// blob. An unset optional field is ABSENT from the list rather than
+// present with an empty value: absent is what a manifest's
+// unset_means resolves at read time, and an empty value written back
+// is a product default frozen into the operator's file by the next
+// save (#294). An EMPTY list is meaningful and is not the same as an
+// absent one - these writes replace the whole declared field set, so
+// empty means "this instance carries no values". The list is sorted
+// by field, so one configuration has one body.
+type MediumFieldValue struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
+}
+
 // MediumPreflightCheck is one step of a storage-medium preflight. There is deliberately no
 // field here for key material of any kind, and there never will be
 // (FR-33): `detail` is one of the engine's own sentences, never the
@@ -2355,6 +2430,9 @@ var SchemaTypes = map[string]any{
 	"LiveActivityResponse":              LiveActivityResponse{},
 	"LiveActivitySet":                   LiveActivitySet{},
 	"ManagerStorage":                    ManagerStorage{},
+	"MediumConfigurationRequest":        MediumConfigurationRequest{},
+	"MediumConfigurationResponse":       MediumConfigurationResponse{},
+	"MediumFieldValue":                  MediumFieldValue{},
 	"MediumPreflightCheck":              MediumPreflightCheck{},
 	"MediumPreflightResponse":           MediumPreflightResponse{},
 	"Operation":                         Operation{},
