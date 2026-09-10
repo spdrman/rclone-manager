@@ -80,15 +80,24 @@ type BackendProbeStep struct {
 	Reason string
 }
 
-// Backend is one registered backend as a client sees it.
+// Backend is one registered backend, projected out of its manifest.
 type Backend struct {
-	ID            string
-	Label         string
-	Summary       string
-	Role          string
+	ID      string
+	Label   string
+	Summary string
+	Role    string
+
+	// RcloneBackend is the transport the manifest declares, and it stops
+	// here: apps/common/webhost does not put it on /api/v1, because #81's
+	// standing constraint forbids naming an implementation in the public
+	// schema. It stays on this type because the catalogue's Unregistered
+	// set is computed as a subtraction against it, and a caller checking
+	// that the two sides of that subtraction are disjoint has to be able
+	// to read both.
 	RcloneBackend string
-	Fields        []BackendField
-	Probe         []BackendProbeStep
+
+	Fields []BackendField
+	Probe  []BackendProbeStep
 }
 
 // BackendCatalog is every backend an instance may be declared on, plus the

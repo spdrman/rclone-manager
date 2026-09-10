@@ -1053,31 +1053,30 @@ export interface BackendProbeStep {
  * and says nothing whatever about any particular destination.
  */
 export interface BackendManifest {
-  /** The backend's name, and what a create request names. It is NOT
-   *  `rcloneBackend` below, and the two are separate because a future
-   *  second local-ish backend would dial the same rclone backend as the
-   *  first. */
+  /** The backend's name, what a create request names, and the value the
+   *  CLI's `medium add --type` takes. */
   id: string;
   label: string;
   summary: string;
   role: BackendRole;
-  /** Which rclone backend an instance of this is dialed through,
-   *  reported for an operator's benefit. Constrained by the engine to
-   *  backends the build actually registers (FR-4). */
-  rcloneBackend: string;
   fields: BackendManifestField[];
   probe: { steps: BackendProbeStep[] };
 }
 
-/** A backend the engine understands and no manifest declares, so no
- *  instance of one can exist.
+/** A storage shape the engine understands and no manifest declares, so
+ *  no instance of one can exist.
  *
  *  Rendered, dimmed, rather than hidden. Somebody who came looking for
  *  SFTP learns nothing from a menu that never mentions it and asks again
  *  next month; a row saying the shape is understood and is not registered
  *  is a real answer. Nothing about it can be submitted. */
 export interface UnregisteredBackend {
-  rcloneBackend: string;
+  /** How bytes would reach a destination of this shape - a protocol
+   *  name such as `sftp`. A registered manifest reports no transport
+   *  (#81 keeps implementation names off /api/v1, and `role` is the
+   *  product answer); this one has to be named by something, and having
+   *  no manifest is precisely what it means, so there is no id. */
+  transport: string;
 }
 
 /**

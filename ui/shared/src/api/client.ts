@@ -859,7 +859,6 @@ function fromWireBackendManifest(m: WireBackendManifest): BackendManifest {
     label: m.label,
     summary: m.summary,
     role: m.role,
-    rcloneBackend: m.rclone_backend,
     fields: (m.fields ?? []).map((f) => ({
       id: f.id,
       label: f.label,
@@ -2227,7 +2226,7 @@ export const httpApi: BackupManagerApi = {
   listBackends: () =>
     request<WireListBackendsResponse>("/backends").then((r) => ({
       registered: (r.backends ?? []).map(fromWireBackendManifest),
-      unregistered: (r.unregistered ?? []).map((u) => ({ rcloneBackend: u.rclone_backend })),
+      unregistered: (r.unregistered ?? []).map((u) => ({ transport: u.transport })),
       instanceIdPattern: r.instance_id_pattern,
       reservedInstanceId: r.reserved_instance_id
     })),
