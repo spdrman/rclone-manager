@@ -117,7 +117,7 @@ function report(ok: boolean): MediumPreflight {
 /** A fresh instance: declared by #668, nothing configured yet, no
  *  credential. That is the state this flow is entered from. */
 function unconfigured() {
-  return vi.fn(() => Promise.resolve({ values: {}, credentialConfigured: false }));
+  return vi.fn(() => Promise.resolve({ fields: {}, credentialConfigured: false }));
 }
 
 async function openWizard(overrides: Partial<BackupManagerApi>) {
@@ -218,7 +218,7 @@ describe("the check", () => {
       // Keyed by field id, with the unset optional enum ABSENT rather
       // than sent as its unset_means value: a default resolved at read
       // time must not travel as though somebody chose it (#294).
-      values: { path: "/mnt/lockers", prefix: "widgets/2026" },
+      fields: { path: "/mnt/lockers", prefix: "widgets/2026" },
       credentials: { credentialsId: "cred-669" }
     });
 
@@ -393,7 +393,7 @@ describe("the review step", () => {
     await waitFor(() => expect(configure).toHaveBeenCalled());
 
     expect(configure).toHaveBeenCalledWith("locker_one", {
-      values: { path: "/mnt/lockers", prefix: "widgets/2026" },
+      fields: { path: "/mnt/lockers", prefix: "widgets/2026" },
       credentials: { credentialsId: "cred-669" }
     });
     // Not asked for, so not done. Never a side effect of saving (#669).
@@ -482,3 +482,216 @@ describe("the review step", () => {
     expect(onSaved).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * #594's five add-path assertions, on the manifest renderer (issue
+ * #669, paired with #668).
+ *
+ * These are not new tests. They are the five in
+ * s3-destination-wizard.test.tsx that drove `StorageDestinationsCard`'s
+ * "Add a destination" button into `S3DestinationWizard`'s create mode.
+ * #668 repoints that button at the manifest-driven add wizard, which
+ * leaves those five exercising a path nothing can reach, and every one
+ * of them is asserting something that still has to be true - one of them
+ * is a credential-leak assertion in the same family as #665's C1-C5.
+ *
+ * So they move here rather than going away, and the wording of each
+ * `it` below deliberately echoes the original so the two can be matched
+ * up in a review. What changed is the flow underneath: an S3-shaped form
+ * with a hardcoded field list became a renderer for whatever the
+ * manifest declares, so the assertions are made against a backend that
+ * does not exist, which is strictly stronger than making them against
+ * the one backend the old form knew.
+ *
+ * Each was checked by planting the defect it was written for. The four
+ * defects, and what they broke: sending the material on the probe
+ * (canary found in a later payload), enabling the save without a pass
+ * (the write happened unproven), rendering only the failed step (the
+ * skipped rows disappeared), and interpolating the secret into the
+ * echoed command (canary found in the printed line).
+ */
+describe("the assertions #594 made about the add path, on the manifest renderer", () => {
+  it("writes nothing until the destination has been proven", async () => {
+    const configure = vi.fn(() => Promise.resolve({ ...LOCKER, connectionUnverified: false }));
+    const { promise, resolve } = Promise.withResolvers<MediumPreflight>();
+    await openWizard({
+      importStorageCredentials: vi.fn(() => Promise.resolve("cred-669")),
+      preflightStorageMediumConfiguration: vi.fn(() => promise),
+      configureStorageMedium: configure
+    });
+
+    await describeTheLocker();
+    press("Next: test connection");
+
+    // Mid-flight: the check is the only thing that has happened, and
+    // nothing has been written. Before #594 there was no way to reach
+    // this state at all, because the only preflight took an id out of
+    // config.yaml; before #669 there was no way to reach it for a
+    // backend whose fields this product does not hold a list of.
+    await waitFor(() => expect(screen.getByTestId("probe-elapsed")).toBeInTheDocument());
+    expect(configure).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Next: review" })).toBeDisabled();
+
+    resolve(report(true));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next: review" })).toBeEnabled());
+    expect(configure).not.toHaveBeenCalled();
+  });
+
+  it("submits the secret once and never sends it again", async () => {
+    const importCredentials = vi.fn<(id: string, secret: string) => Promise<string>>(() =>
+      Promise.resolve("cred-669")
+    );
+    const preflight = vi.fn(() => Promise.resolve(report(true)));
+    const configure = vi.fn(() => Promise.resolve({ ...LOCKER, connectionUnverified: false }));
+    await openWizard({
+      importStorageCredentials: importCredentials,
+      preflightStorageMediumConfiguration: preflight,
+      configureStorageMedium: configure
+    });
+
+    await describeTheLocker();
+    press("Next: test connection");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next: review" })).toBeEnabled());
+    press("Next: review");
+    press("Save configuration");
+    await waitFor(() => expect(configure).toHaveBeenCalled());
+
+    // The positive control, kept verbatim in intent: the canary really
+    // did reach the import, so "it is nowhere else" is a statement about
+    // a code path rather than about a form that carried nothing.
+    expect(importCredentials).toHaveBeenCalledTimes(1);
+    expect(importCredentials.mock.calls[0]?.[1]).toBe(CANARY_SECRET);
+
+    const later = JSON.stringify([preflight.mock.calls, configure.mock.calls]);
+    expect(later).not.toContain(CANARY_SECRET);
+    expect(later).not.toContain(PLACEHOLDER_KEY_ID);
+  });
+
+  it("keeps the save out of reach while the destination cannot be proven, and renders every step", async () => {
+    const configure = vi.fn();
+    await openWizard({
+      importStorageCredentials: vi.fn(() => Promise.resolve("cred-669")),
+      preflightStorageMediumConfiguration: vi.fn(() => Promise.resolve(reportFailingAtReach())),
+      configureStorageMedium: configure
+    });
+
+    await describeTheLocker();
+    press("Next: test connection");
+    await waitFor(() => expect(screen.getByTestId("probe-step-row-reach")).toBeInTheDocument());
+
+    expect(screen.getByRole("button", { name: "Next: review" })).toBeDisabled();
+    expect(configure).not.toHaveBeenCalled();
+
+    // Every step, always, including the six that never ran. A surface
+    // that dropped them would show an operator a shorter list on a
+    // failure than on a success, which is the one moment the full list
+    // matters most. The list itself now comes off the manifest, so this
+    // also asserts the eight it declared and no others.
+    const group = screen.getByRole("group", { name: "Configure locker_one" });
+    for (const step of [
+      "credentials",
+      "reach",
+      "deliverable",
+      "write",
+      "read_back",
+      "storage_class",
+      "verification",
+      "delete"
+    ]) {
+      expect(within(group).getByTestId(`probe-step-row-${step}`)).toBeTruthy();
+    }
+    expect(within(group).getAllByText("skipped").length).toBe(6);
+    // The category is the machine-readable half and belongs beside the
+    // outcome, because an operator scanning that column is deciding
+    // whose problem it is. It is its own element here rather than
+    // "failed(configuration)" in one string, which is the same
+    // information and one fewer thing to parse.
+    expect(within(group).getByTestId("probe-step-category")).toHaveTextContent("configuration");
+  });
+
+  it("shows what is about to be written, with the credential as a reference and no secret in it", async () => {
+    await openWizard({
+      importStorageCredentials: vi.fn(() => Promise.resolve("cred-669")),
+      preflightStorageMediumConfiguration: vi.fn(() => Promise.resolve(report(true)))
+    });
+
+    await describeTheLocker();
+    press("Next: test connection");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next: review" })).toBeEnabled());
+    press("Next: review");
+
+    // The old version asserted on a YAML preview, which was the honest
+    // rendering while one screen knew every key a medium has. A review
+    // of manifest-declared fields cannot render YAML without holding a
+    // second copy of the config schema, so it renders the fields and
+    // their values - and the property under test is unchanged: what is
+    // about to be written is visible, the credential appears as a
+    // reference and not as material, and neither half of the key is on
+    // screen.
+    const group = screen.getByRole("group", { name: "Configure locker_one" });
+    const shown = group.textContent ?? "";
+    expect(shown).toContain("/mnt/lockers");
+    expect(shown).toContain("stored, and never shown again");
+    expect(shown).not.toContain(CANARY_SECRET);
+    expect(shown).not.toContain(PLACEHOLDER_KEY_ID);
+  });
+
+  it("prints the equivalent rbm command, and it carries no secret", async () => {
+    await openWizard({
+      importStorageCredentials: vi.fn(() => Promise.resolve("cred-669")),
+      preflightStorageMediumConfiguration: vi.fn(() => Promise.resolve(report(true)))
+    });
+
+    // On the step where the material is typed, before it has been, which
+    // is possible because this CLI has no flag that takes a secret: the
+    // material only ever arrives on stdin.
+    expect(screen.getByText("rbm medium import-credentials --stdin")).toBeTruthy();
+
+    await describeTheLocker();
+
+    // Still on the step where the material now sits in a box, which is
+    // the only moment an echoed line could carry it. The printed
+    // command is the one that actually works, byte for byte, with
+    // nothing starred out - and that is safe precisely because there is
+    // nothing in it to redact.
+    expect(
+      screen.getByRole("group", { name: "Configure locker_one" }).textContent ?? ""
+    ).not.toContain(CANARY_SECRET);
+
+    press("Next: test connection");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next: review" })).toBeEnabled());
+    press("Next: review");
+
+    const group = screen.getByRole("group", { name: "Configure locker_one" });
+    const shown = group.textContent ?? "";
+    expect(shown).toContain("rbm medium edit locker_one");
+    expect(shown).not.toContain("--secret-access-key");
+    expect(shown).not.toContain(CANARY_SECRET);
+    expect(shown).not.toContain(PLACEHOLDER_KEY_ID);
+  });
+});
+
+/** #594's fail-at-reach report, in this manifest's vocabulary: the
+ *  credential was obtained, the endpoint did not answer for this
+ *  configuration, and the six steps behind it were never tried. */
+function reportFailingAtReach(): MediumPreflight {
+  return {
+    medium: "locker_one",
+    ok: false,
+    checks: [
+      { step: "credentials", outcome: "passed", detail: "the key was obtained" },
+      {
+        step: "reach",
+        outcome: "failed",
+        category: "configuration",
+        detail: "the endpoint answered but does not hold this container"
+      },
+      { step: "deliverable", outcome: "skipped", detail: "this check did not run" },
+      { step: "write", outcome: "skipped", detail: "this check did not run" },
+      { step: "read_back", outcome: "skipped", detail: "this check did not run" },
+      { step: "storage_class", outcome: "skipped", detail: "this check did not run" },
+      { step: "verification", outcome: "skipped", detail: "this check did not run" },
+      { step: "delete", outcome: "skipped", detail: "this check did not run" }
+    ]
+  };
+}
