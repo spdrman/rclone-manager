@@ -102,7 +102,7 @@ declare -a mounts=(
 # inside as root:root 0660, so the group bit is the way in without being
 # root. Docker Desktop maps writes on the bind mount back to the host
 # user whatever uid makes them, so the repository stays owned by you.
-mounts+=(--user "$ci_uid:$ci_gid" --group-add 0)
+as_user=(--user "$ci_uid:$ci_gid" --group-add 0)
 [ -n "$git_common" ] && [ -d "$git_common" ] && mounts+=(-v "$git_common:$git_common")
 
 # node_modules never comes from the host, and this is not an
@@ -112,9 +112,11 @@ mounts+=(--user "$ci_uid:$ci_gid" --group-add 0)
 # linux install of the same lockfile, and leaves the host's alone for
 # whatever the developer runs outside this.
 declare -a js_workspaces=("ui/shared" "apps/common/tests")
+declare -a nm_paths=()
 for ws in "${js_workspaces[@]}"; do
   [ -d "$repo/$ws" ] || continue
   mounts+=(-v "${vol_prefix}-nm-$(printf '%s' "$ws" | tr '/' '-'):$repo/$ws/node_modules")
+  nm_paths+=("$repo/$ws/node_modules")
 done
 
 say() { printf '==> ci-docker: %s\n' "$*"; }
@@ -127,6 +129,25 @@ if ! docker image inspect "$image" >/dev/null 2>&1; then
 else
   say "toolchain image $image is already built"
 fi
+
+# A named volume that shadows a path the IMAGE does not have is created
+# empty and owned by root, and this runs as the host user, so npm's first
+# mkdir under ui/shared/node_modules fails with EACCES. The go and npm
+# caches are the same story. One root container fixes the ownership of
+# each mount point before anything else touches them.
+#
+# Guarded by a stat rather than chowned unconditionally: on a warm run
+# the Go cache is thousands of files already owned correctly, and walking
+# it every time would add more than the runner saves.
+prepare='
+set -eu
+for d in /ci/.cache/go-build /ci/go/pkg/mod /ci/.npm /ci/.cache/rclone-manager-tests-gate '"$(printf '%s ' "${nm_paths[@]}")"'; do
+  [ -d "$d" ] || continue
+  if [ "$(stat -c %u "$d")" != "'"$ci_uid"'" ]; then
+    chown "'"$ci_uid:$ci_gid"'" "$d"
+  fi
+done
+'
 
 # npm ci inside the container, and only when the lockfile it was last run
 # for has changed. The stamp lives in the volume rather than beside the
@@ -154,8 +175,12 @@ case "${1:-}" in
   --shell)
     shift
     say "a shell in $image ($platform)"
-    exec docker run --rm -it --platform "$platform" "${mounts[@]}" -w "$repo" "$image" bash
+    exec docker run --rm -it --platform "$platform" "${mounts[@]}" "${as_user[@]}" -w "$repo" "$image" bash
     ;;
+  --exec|--deps|--shell)
+    docker run --rm --platform "$platform" "${mounts[@]}" --user 0:0 -w "$repo" "$image" \
+      bash -c "$prepare"
+    ;;&
   --exec)
     # Deliberately NOT preceded by the dependency bootstrap. --exec is for
     # one command, `go test` and `python3 -m unittest` are most of them,
@@ -164,20 +189,22 @@ case "${1:-}" in
     # --deps when the command does need them.
     shift
     [ "$#" -gt 0 ] || { echo "ci-docker: --exec needs a command" >&2; exit 2; }
-    exec docker run --rm --platform "$platform" "${mounts[@]}" -w "$repo" "$image" "$@"
+    exec docker run --rm --platform "$platform" "${mounts[@]}" "${as_user[@]}" -w "$repo" "$image" "$@"
     ;;
   --deps)
     shift
     say "installing dependencies if the lockfiles moved"
-    docker run --rm --platform "$platform" "${mounts[@]}" -w "$repo" "$image" bash -c "$bootstrap"
+    docker run --rm --platform "$platform" "${mounts[@]}" "${as_user[@]}" -w "$repo" "$image" bash -c "$bootstrap"
     [ "$#" -gt 0 ] || exit 0
-    exec docker run --rm --platform "$platform" "${mounts[@]}" -w "$repo" "$image" "$@"
+    exec docker run --rm --platform "$platform" "${mounts[@]}" "${as_user[@]}" -w "$repo" "$image" "$@"
     ;;
 esac
 
+docker run --rm --platform "$platform" "${mounts[@]}" --user 0:0 -w "$repo" "$image" bash -c "$prepare"
+
 say "installing dependencies if the lockfiles moved"
-docker run --rm --platform "$platform" "${mounts[@]}" -w "$repo" "$image" bash -c "$bootstrap"
+docker run --rm --platform "$platform" "${mounts[@]}" "${as_user[@]}" -w "$repo" "$image" bash -c "$bootstrap"
 
 say "running scripts/ci-local.sh in $image ($platform)"
-exec docker run --rm --platform "$platform" "${mounts[@]}" -w "$repo" "$image" \
+exec docker run --rm --platform "$platform" "${mounts[@]}" "${as_user[@]}" -w "$repo" "$image" \
   bash scripts/ci-local.sh "$@"
