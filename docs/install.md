@@ -33,6 +33,37 @@ definition itself (see [It derives from the canonical
 definition](#it-derives-from-the-canonical-definition-it-does-not-restate-it) below for
 what keeps the copy honest).
 
+### `enroll-link`: a fresh enrollment link when the old one lapsed
+
+```
+python3 scripts/install/install_docker_host.py enroll-link
+```
+
+The link an install prints lasts 30 minutes and works once. Nothing reissues it
+while the engine keeps running, so the way back from a lapsed one is to restart
+the engine: it issues a token during startup whenever no administrator exists
+yet. This does that and prints the notice it produced.
+
+It reads back the **last** notice in the log rather than the first, and that is
+the reason this exists as a command instead of as two lines of documentation. A
+container keeps its log across a restart, so afterwards there are two notices in
+it and the dead one comes first. Telling an operator to eyeball that is how
+somebody pastes an invalidated link into a browser and reads a refusal that does
+not explain itself.
+
+Three refusals, each with its own exit code, because they call for different
+reactions:
+
+- Nothing installed at `--prefix` (19). There is no engine to restart.
+- No engine container (30). Bring the deployment up first; the refusal prints the
+  command.
+- **An administrator already exists (53).** Enrollment is a one-time door and it
+  closed when that account was created. Sign in instead. If the password is lost,
+  `install --mode factory-reset` archives the administrator record, the catalog and
+  the configuration and reopens enrollment, leaving the retained backups on disk.
+  Its own exit code because retrying will never change the answer, where retrying
+  a 30 is reasonable.
+
 ### `--cli-only`: the command line, and no web host at all
 
 ```
@@ -105,12 +136,12 @@ group- or world-writable, since anyone holding that bit can replace the key what
 key file's own mode says. Ancestors *above* `--prefix` belong to whoever set the machine
 up, so those are named in a warning with the exact `chmod go-w` rather than changed.
 
-Six subcommands: `preflight` checks and creates nothing, `install` checks then
-installs, `status` reports, `uninstall` removes what the installer made,
-`network-doctor` diagnoses (and, asked to, repairs) Docker bridge networking, and
-`network-undo` removes exactly what a repair added. See
-[Known-good, and known-bad](#known-good-and-known-bad) below for what the last two
-are for.
+Seven subcommands: `preflight` checks and creates nothing, `install` checks then
+installs, `status` reports, `enroll-link` mints a fresh enrollment link,
+`uninstall` removes what the installer made, `network-doctor` diagnoses (and,
+asked to, repairs) Docker bridge networking, and `network-undo` removes exactly
+what a repair added. See [Known-good, and known-bad](#known-good-and-known-bad)
+below for what the last two are for.
 
 Flags are scoped to the subcommand that reads them, so `<subcommand> --help` lists only
 what that subcommand actually uses. A flag valid on one is not necessarily valid on

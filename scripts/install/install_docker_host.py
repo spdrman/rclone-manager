@@ -179,6 +179,13 @@ EXIT_RELEASE_CONFLICT = 50
 EXIT_RELEASE_OFFLINE = 51
 EXIT_RELEASE_TOO_OLD = 52
 
+# Asking for an enrollment link on a deployment that already has an
+# administrator. Its own code because the answer is not "try again": the
+# door this reissues is the one that closes permanently the first time
+# somebody walks through it, and a script that keeps retrying a 30 is
+# right to, where one retrying this would loop for ever.
+EXIT_ENROLLMENT_CLOSED = 53
+
 # The release that renamed the binaries inside the image. The embedded
 # compose runs /rbm-web, which exists from here onwards and in no image
 # published before it, so --release cannot honestly go lower.
@@ -4999,6 +5006,122 @@ def cmd_network_undo(args) -> int:
     return EXIT_OK
 
 
+ENROLL_NOTICE_MARKER = "no administrator account exists yet"
+
+# How long to wait for the restarted engine to print its notice. A
+# constant rather than a flag: the only thing being waited for is one
+# process reaching the line it prints during startup, and a deployment
+# where that takes longer than this has a problem no flag would fix.
+ENROLL_NOTICE_WAIT = 90
+
+
+def _newest_enrollment_notice(args):
+    """The last enrollment notice in the engine's log, or "".
+
+    The LAST one, and that is the whole reason this exists rather than a
+    grep in the documentation. A container keeps its log across a
+    restart, so after reissuing there are two notices in it and the dead
+    one is first. Telling an operator to eyeball that is how somebody
+    pastes an invalidated link into a browser and reads a refusal that
+    does not explain itself.
+    """
+    proc = run(compose_argv(args) + ["logs", "--tail", "400", ENGINE_SERVICE],
+               check=False, timeout=60, cwd=str(args.prefix))
+    if proc.returncode != 0:
+        return ""
+    found = ""
+    for line in (proc.stdout + proc.stderr).splitlines():
+        if ENROLL_NOTICE_MARKER in line:
+            found = line.strip()
+    return found
+
+
+def cmd_enroll_link(args) -> int:
+    """Mint a fresh enrollment link and print it.
+
+    The link the install prints lasts 30 minutes and works once, and
+    nothing reissues it while the engine keeps running. Until this
+    existed, the documented way back from a lapsed one was two raw
+    `docker compose` invocations plus an instruction to read the last
+    matching line, which is a lot of machinery to hand somebody whose
+    actual problem is that they went to make a cup of tea.
+
+    A restart is what mints one: the service issues a token during
+    startup whenever no administrator exists yet. So this restarts the
+    engine and reads back the notice, and it refuses in the one case
+    where a restart would accomplish nothing.
+    """
+    payload, containers, _env = detect_existing(args)
+    if not payload:
+        raise Refusal(
+            EXIT_PREREQ_PAYLOAD,
+            f"nothing is installed at {args.prefix}, so there is no engine to reissue a link for.",
+            "Point --prefix at the deployment, or install one first.",
+        )
+
+    admin = args.state_dir / "local-auth.json"
+    if admin.is_file():
+        raise Refusal(
+            EXIT_ENROLLMENT_CLOSED,
+            "an administrator account already exists on this deployment, so there is no "
+            "enrollment link to issue.",
+            "Enrollment is the one-time door onto a deployment that has nobody on it yet, and it "
+            "closed when that account was created. Sign in with it instead. If the password is "
+            "lost, `install --mode factory-reset` archives the administrator record, the catalog "
+            "and the configuration and reopens enrollment; it leaves the retained backups on "
+            "disk, and it is not something to reach for to save a browser refresh.",
+        )
+
+    if not [c for c in containers if str(c.get("Service", "")) == ENGINE_SERVICE]:
+        raise Refusal(
+            EXIT_RUNTIME,
+            f"this deployment has no {ENGINE_SERVICE} container, so nothing can mint a token.",
+            f"Bring it up first:\n  {' '.join(compose_argv(args))} up -d --no-build {ENGINE_SERVICE}",
+        )
+
+    # Captured BEFORE the restart so the wait below can tell the new
+    # notice from the old one by content. Timestamps would be the other
+    # way, and they would depend on the host clock agreeing with the
+    # container's; two tokens never collide.
+    previous = _newest_enrollment_notice(args)
+
+    say(f"==> Restarting {ENGINE_SERVICE}, which is what mints a token")
+    restart = run(compose_argv(args) + ["restart", ENGINE_SERVICE],
+                  check=False, timeout=300, cwd=str(args.prefix))
+    if restart.returncode != 0:
+        raise Refusal(
+            EXIT_RUNTIME,
+            f"could not restart {ENGINE_SERVICE}:\n" + (restart.stderr or restart.stdout).strip(),
+            "Nothing was reissued, so the link you already had is still whatever it was.",
+        )
+
+    say(f"==> Waiting up to {ENROLL_NOTICE_WAIT}s for the new notice")
+    deadline = time.time() + ENROLL_NOTICE_WAIT
+    notice = ""
+    while time.time() < deadline:
+        notice = _newest_enrollment_notice(args)
+        if notice and notice != previous:
+            break
+        time.sleep(2)
+
+    if not notice or notice == previous:
+        raise Refusal(
+            EXIT_VERIFY,
+            f"{ENGINE_SERVICE} restarted and printed no new enrollment notice within "
+            f"{ENROLL_NOTICE_WAIT}s.",
+            "The engine only issues a token while no administrator exists, so the usual cause is "
+            "that one was created between the check above and now. Read the log directly:\n"
+            f"  {' '.join(compose_argv(args))} logs --tail=50 {ENGINE_SERVICE}",
+        )
+
+    say("")
+    say(notice)
+    say("")
+    say("    Valid 30 minutes, and it works once. Every link printed before this one is now dead,")
+    say("    including any still in your scrollback.")
+    return EXIT_OK
+
+
 def cmd_status(args) -> int:
     """What is installed here, what is running, and can it still talk.
 
@@ -5437,6 +5560,21 @@ def build_parser() -> argparse.ArgumentParser:
                             "a fix.")
     _add_probe_flags(sp_status)
 
+    sp_enroll = subparsers.add_parser(
+        "enroll-link", formatter_class=_HelpFormatter,
+        help="Mint a fresh enrollment link and print it. Restarts the engine, which is what "
+             "issues a token.",
+        epilog=(
+            "The link an install prints lasts 30 minutes and works once, and nothing reissues\n"
+            "it while the engine keeps running. This restarts the engine, which issues a token\n"
+            "whenever no administrator exists yet, and prints the notice it produced.\n"
+            "\n"
+            "It refuses on a deployment that already has an administrator: enrollment is a\n"
+            "one-time door and it closed when that account was created.\n"
+        ),
+    )
+    _add_shared_groups(sp_enroll)
+
     sp_uninstall = subparsers.add_parser(
         "uninstall", formatter_class=_HelpFormatter,
         help="Remove what install created (docker compose down), and nothing else.")
@@ -5717,6 +5855,7 @@ def main(argv) -> int:
         "install": cmd_install,
         "status": cmd_status,
         "uninstall": cmd_uninstall,
+        "enroll-link": cmd_enroll_link,
         "network-doctor": cmd_network_doctor,
         "network-undo": cmd_network_undo,
     }
