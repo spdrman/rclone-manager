@@ -345,6 +345,13 @@ func configWritePaths() []configWritePath {
 			if err != nil {
 				return err
 			}
+			localPath := filepath.Join(t.TempDir(), "mount-shape-first-run")
+			// #670: CreateInitialConfig now proves the backup root before
+			// writing, so this fixture needs a real directory the same
+			// way firstRunCreateReq's does.
+			if err := os.MkdirAll(localPath, 0o755); err != nil {
+				return err
+			}
 			_, err = fr.CreateInitialConfig(context.Background(), CreateBackupSetRequest{
 				Name:           "mount-shape-first-run",
 				Host:           "example.internal",
@@ -358,7 +365,7 @@ func configWritePaths() []configWritePath {
 				// connection before the write this case is about.
 				SkipConnectionCheck: true,
 				RemotePath:          "/backups/mount-shape-first-run",
-				LocalPath:           filepath.Join(t.TempDir(), "mount-shape-first-run"),
+				LocalPath:           localPath,
 				Include:             []string{"*.dump"},
 				CompletionStrategy:  "marker",
 			})
