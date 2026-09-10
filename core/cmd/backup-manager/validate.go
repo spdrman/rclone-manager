@@ -7,7 +7,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
 
-// cmdValidate is `backup-manager validate <source/backup-set/artifact>`:
+// cmdValidate is `rbm validate <source/backup-set/artifact>`:
 // an on-demand re-check of one already-committed artifact's durable copy,
 // wherever that copy actually is. See internal/app.ValidateArtifact's doc
 // for exactly what it checks and why a failure quarantines the artifact

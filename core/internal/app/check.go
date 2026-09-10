@@ -19,7 +19,7 @@ import (
 // the database is usable, formed after something had already started using
 // it.
 
-// Check is the `backup-manager check` use case: a pre-flight answer to "can
+// Check is the `rbm check` use case: a pre-flight answer to "can
 // this deployment actually start", checked before anything is asked to
 // process a single artifact.
 //
@@ -49,8 +49,8 @@ import (
 // source is a materially different, slower and credential-dependent check
 // than "is this config and this database usable", and conflating the two
 // would make Check's failure mode ambiguous (a bad password and a typo in
-// local_path would look identical). `backup-manager reconcile` and
-// `backup-manager fetch` are what exercise real connectivity.
+// local_path would look identical). `rbm reconcile` and
+// `rbm fetch` are what exercise real connectivity.
 //
 // The returned *config.Config is the same up-to-date result LoadAndValidate
 // produced, so a caller (cmd/backup-manager's `check` command) can print a

@@ -848,7 +848,7 @@ func prepareTrustChange(configPath, sourceName, setName string, current, edited 
 // the host key a known_hosts line carries, in the same form ProbeHostKey
 // answers with and `ssh-keygen -lf` prints.
 //
-// It is exported for one caller: `backup-manager backup-set patch`, which
+// It is exported for one caller: `rbm backup-set patch`, which
 // has to be able to say which host key it just pinned. printBackupSet's
 // own doc makes the rule that a command able to change a field and then
 // printing a set without it leaves an operator unable to confirm what it

@@ -489,8 +489,20 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(requireCSRF).Put("/storage-mediums/{id}/default", h.setDefaultStorageMedium)
 		r.Get("/storage-mediums/{id}/usage", h.getStorageMediumUsage)
 
+		// The configuration routes (I2.2, issue #669), which speak in
+		// manifest field ids. Gated exactly as their spec-shaped
+		// neighbours above are, and for the identical reasons: the read
+		// is a read, and the two writes carry CSRF and not the
+		// destructive gate because nothing they can reach touches a
+		// backup - the probe writes and deletes only the object it
+		// generated a key for, and the configure write changes a
+		// declaration.
+		r.Get("/storage-mediums/{id}/configuration", h.getStorageMediumConfiguration)
+		r.With(requireCSRF).Post("/storage-mediums/{id}/configuration/preflight", h.preflightStorageMediumConfiguration)
+		r.With(requireCSRF).Put("/storage-mediums/{id}/configuration", h.configureStorageMedium)
+
 		// Issue #211: FR-9 catalog recovery, the API expression of
-		// `backup-manager catalog rebuild` and its --dry-run. Rebuild only
+		// `rbm catalog rebuild` and its --dry-run. Rebuild only
 		// ever adds records whose recovery manifests are already on disk
 		// and never removes or overwrites one, so it carries CSRF but not
 		// the destructive gate; see handlers_catalog.go for the argument
@@ -506,6 +518,17 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Step 5 forbids. Registered as a static path, so it can never
 		// be shadowed by the "/backup-sets/*" catch-all above.
 		r.Get("/validators", h.listValidators)
+
+		// EPIC I (#664): the registered-backend catalogue #668's
+		// add-a-destination picker renders, and the naming rules its
+		// name field refuses against. Read-only for the route above's
+		// reason one step further on — a manifest decides what a
+		// destination may BE, including which rclone backend it dials,
+		// so a client-extensible catalogue would put FR-4's gate on the
+		// far side of the network from the binary it constrains. Static
+		// path, so the "/backup-sets/*" catch-all above cannot shadow
+		// it.
+		r.Get("/backends", h.listBackends)
 
 		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
 		// The other way to end up holding a key reference (#592):

@@ -48,7 +48,7 @@ func keyPermissionsRefusal() error {
 
 // haltReasonOf reads one backup set's halt reason back through
 // BuildHealthReport, which is the read path GET /system/health and
-// `backup-manager status` both go through. Reading it through the report
+// `rbm status` both go through. Reading it through the report
 // rather than out of the journal directly is the point: a fact nothing
 // reports is the defect this issue is about.
 func haltReasonOf(t *testing.T, svc *Service, set model.BackupSetID) string {

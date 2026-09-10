@@ -48,17 +48,13 @@
         <span class="nav-label nav-label-full">The web interface</span>
         <span class="nav-label nav-label-short">Web UI</span>
       </a>
-      <a href="storage.html" class="nav-item">
-        <span class="nav-label nav-label-full">Storage &amp; retention</span>
-        <span class="nav-label nav-label-short">Storage</span>
-      </a>
       <a href="ssh.html" class="nav-item">
         <span class="nav-label nav-label-full">SSH &amp; connections</span>
         <span class="nav-label nav-label-short">SSH</span>
       </a>
-      <a href="cli.html" class="nav-item">
-        <span class="nav-label nav-label-full">Commands</span>
-        <span class="nav-label nav-label-short">Commands</span>
+      <a href="reference.html" class="nav-item">
+        <span class="nav-label nav-label-full">Reference</span>
+        <span class="nav-label nav-label-short">Ref</span>
       </a>
 
       <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
@@ -103,12 +99,6 @@
     <h2 id="top" style="font-size:1.75rem;border:none;padding-bottom:0;margin-bottom:0.5rem;">The web interface, in motion</h2>
     <p>Most of what 0.3.3 added is a thing that happens rather than a thing that sits still, so most of this page moves. A terminal that stays put while the page scrolls, a filter that takes lines away, a theme that changes a whole window at once and a button that says what it did are all claims about behaviour, and a screenshot of any of them is a screenshot of the moment before or the moment after.</p>
 
-    <div class="note">
-      <span class="note-label">Where these pictures came from</span>
-      <p>Every clip below drives <code>ui/shared</code>'s development server, whose API is the in-memory fixture in <code>src/api/mock.ts</code>. The component tree, the layout, the copy and the interaction are the real product's. The <em>data</em> is not: hostnames, fingerprints, sizes and counts are fixtures.</p>
-      <p>They are deliberately never recorded against a running deployment, and that constraint is older than the clips. A capture script presses real buttons, and some of these buttons remove a storage destination or start a backup run. There is no address for these to point at, by design. <a href="#recording">How they are recorded</a> is at the bottom.</p>
-    </div>
-
     <div class="cards">
       <a href="#terminal" class="clipping">
         <span class="clipping-tag">Clip</span>
@@ -150,7 +140,7 @@
     <figcaption><span class="clip-tag">clip</span>The same buffer under four filters. Under <em>Commands only</em> what is left is a transcript: the summary of what was done, the equivalent command, and where there is no equivalent command yet, a line saying so and why.</figcaption>
   </figure>
 
-    <p>The chip row is a strip that scrolls rather than a row that wraps, which is why it slides sideways in the clip when a chip near the end is picked. The bar is a fixed 32px because the content column reserves exactly that much under itself, so letting the bar grow would push the last row of a long table back behind the terminal, which is the defect the pinning fixed arriving again from the other side. A chip out of view is reached by wheel, by trackpad, or by tabbing to it.</p>
+    <p>The chip row is a strip that scrolls rather than a row that wraps, which is why it slides sideways in the clip when a chip near the end is picked. The bar is a fixed 32px because the content column reserves exactly that much under itself, so letting the bar grow would push the last row of a long table back behind the terminal, which is the defect the pinning fixed arriving again from the other side. A chip out of view is reached by shift+wheel, by a trackpad swipe, or by tabbing to it, and the row draws a 4&nbsp;px scrollbar rather than hiding one, because a plain vertical wheel moves a row that only overflows sideways nothing at all and none of the three ways across announces itself.</p>
     <p><strong>This browser</strong> is the one worth knowing about. A run you started, or a refusal that never reached the engine at all, is something this tab knows and the NAS may not, so those lines are marked as the browser's and this chip is what leaves only them. Both of those are facts about your session rather than evidence about the machine, and keeping the two apart is the whole reason the mark exists. <a href="#runs">The run clip below</a> shows one arriving.</p>
   </section>
 
@@ -208,10 +198,8 @@
   </section>
 
   <section>
-    <h2 id="recording">How these were recorded</h2>
-    <p>Every clip on this site comes out of <code>docs/site/tools/</code>, and one command re-records a page's worth:</p>
-    <pre><code>node docs/site/tools/capture-web-ui.mjs</code></pre>
-    <p>A clip is not a video of a browser. It is a list of frames with how long to hold each one, captured between real interactions with the running application. That is a deliberate choice and it buys three things. A video samples at a fixed rate, so how many frames a step gets depends on how fast the machine ran it, and the same script produces a different file every time. A video spends most of its frames on nothing happening, which is most of its bytes. And a video gives a reader no time on the frame that matters, because these interactions happen at typing speed and are being read by somebody trying to see what changed.</p>
+    <h2 id="recording">Why these are clips and not videos</h2>
+    <p>A clip here is not a video of a browser. It is a list of frames with how long to hold each one, captured between real interactions with the running application. That is a deliberate choice and it buys three things. A video samples at a fixed rate, so how many frames a step gets depends on how fast the machine ran it, and the same script produces a different file every time. A video spends most of its frames on nothing happening, which is most of its bytes. And a video gives a reader no time on the frame that matters, because these interactions happen at typing speed and are being read by somebody trying to see what changed.</p>
     <p>So the same script produces the same frame count with the same durations on any machine, and a re-record differs only where the application's own rendering differs. The clock, the timezone, the locale and the port the development server runs on are all pinned for the same reason: every time on screen goes through <code>toLocaleTimeString</code> and the terminal's first line is built from the address the page was loaded from, so without pinning them a re-record differs in every frame carrying a stamp or an address.</p>
     <p>That is not the same as pixel-identical, and I would rather name the exception than claim otherwise: a panel the application animates on its own, such as the spinner and progress bar on a running backup set, is caught at whatever phase it happened to be in. Those clips move by a few kilobytes between runs. Everything that was moving for no reason has stopped.</p>
     <div class="note">
@@ -224,7 +212,7 @@
 
 <footer>
   <p>rclone-manager is Apache-2.0 licensed. <a href="https://github.com/spdrman/rclone-manager">View on GitHub</a></p>
-  <p>Not affiliated with the rclone project. rclone is embedded as a pinned Go library under its own licence.</p>
+  <p>Pictures taken against the development fixture API. No picture or clip on this page is evidence about a running engine.</p>
 </footer>
 
 </body>

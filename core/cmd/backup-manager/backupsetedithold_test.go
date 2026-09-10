@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// `backup-manager backup-set edit-hold`, against a real route.
+// `rbm backup-set edit-hold`, against a real route.
 //
 // The three edit-hold routes have existed since #350 and nothing outside
 // a browser could reach one, so a hold taken by accident could be given

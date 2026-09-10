@@ -112,14 +112,16 @@ func (c StorageMediumCredentials) namesNothing() bool {
 // something slightly different.
 type StorageMediumSpec struct {
 	// ID is the medium id a retention tier names: lower_snake_case, and
-	// not "local", which is reserved. config.Validate is what enforces
-	// that, over the whole configuration, so nothing here second-guesses
-	// it.
+	// not "local" on a CREATE, which is reserved for this deployment's
+	// own seeded local destination (#670). writeStorageMedium refuses it
+	// itself rather than leaving the refusal to config.Validate, because
+	// #670's seed writes exactly this id and config.Validate has to go on
+	// accepting it at every later boot.
 	ID string
 
-	// Type names the backend. "s3" is the only value; the set is closed
-	// in config and this passes it through so the refusal for anything
-	// else is config's own.
+	// Type names the backend: a registered id from core/internal/backend
+	// (e.g. "s3", "local_volume"), gated against the registry rather than
+	// a Go-level closed set.
 	Type string
 
 	// Region, Endpoint, Bucket, Prefix, StorageClass and
@@ -135,6 +137,11 @@ type StorageMediumSpec struct {
 	Prefix             string
 	StorageClass       string
 	UploadVerification string
+
+	// Path is a local_volume medium's directory: config.StorageMedium's
+	// field, unchanged. Meaningless (and refused by config.Validate) on
+	// any other type, issue #666.
+	Path string
 
 	// Credentials is where this medium's credentials come from.
 	Credentials StorageMediumCredentials
@@ -224,7 +231,7 @@ type StorageMediumUsageBySet struct {
 // It exists beside Settings.Mediums rather than instead of it because the
 // two are asked by different screens for different reasons: a settings
 // page reads the whole policy at once, and a destinations page (and
-// `backup-manager medium list`) asks only this. Both project through
+// `rbm medium list`) asks only this. Both project through
 // toStorageMediumSummaries, so they cannot drift.
 func (b *BackupService) ListStorageMediums(_ context.Context) ([]StorageMediumSummary, error) {
 	return toStorageMediumSummaries(b.state.Load().inner.Config), nil
@@ -379,10 +386,9 @@ func (b *BackupService) UpdateStorageMedium(ctx context.Context, spec StorageMed
 	return b.writeStorageMedium(ctx, spec, true)
 }
 
-// RemoveStorageMedium un-declares a destination, and refuses in three
-// cases: while any copy names it (FR-30), when it is the local hard drive,
-// and when it is the destination a newly created tier starts on (H2.2,
-// issue #622).
+// RemoveStorageMedium un-declares a destination, and refuses in two
+// cases: while any copy names it (FR-30), and when it is the destination
+// a newly created tier starts on (H2.2, issue #622).
 //
 // The FR-30 refusal is not a nicety. Today a removed medium leaves
 // ErrMediumNotDeclared behind for every surface that touches the copies
@@ -391,19 +397,31 @@ func (b *BackupService) UpdateStorageMedium(ctx context.Context, spec StorageMed
 // accident from a list. The refusal carries the count and the backup
 // sets, so what comes back is something to act on rather than a "no".
 //
-// The other two are #622's invariants, and they are ADDITIONAL refusals
-// rather than a replacement: a destination that is both in use and the
-// default is refused for whichever is asked first, and the FR-30 answer
-// goes first because it is the one that names affected backups.
+// The second is #622's invariant, and it is an ADDITIONAL refusal rather
+// than a replacement: a destination that is both in use and the default
+// is refused for whichever is asked first, and the FR-30 answer goes
+// first because it is the one that names affected backups.
 //
-// The local hard drive cannot be un-declared because it was never
-// declared. It is synthesised from the configuration on every read
-// (localStorageMediumSummary), it is where every tier that names no
-// destination puts its backups, and a deployment without it is not a
-// deployment this product can describe. Refusing it here is what makes
-// #622's "there is never zero destinations" invariant hold against a
-// caller that goes straight to the API rather than through a list that
-// hides the button.
+// # There is deliberately no third, local-shaped refusal here (#670)
+//
+// The local hard drive used to be un-removable because it was never
+// declared at all — synthesised on every read, with no row in
+// storage_mediums a removal could act on. Since #670 it IS a declared
+// destination (config.MediumLocal, instance zero of the local_volume
+// backend; see seedLocalStorageMedium's own doc), and its
+// undeletability now has to fall out of the two rules above rather than
+// being asserted by id: it is undeletable exactly when, and because, it
+// is the default, which #622's third invariant (normalizeDefaultStorageMedium)
+// guarantees is true of whichever destination is the LAST one left. A
+// deployment with a second destination made default MAY remove the
+// local one, and that is not a regression: local is one instance of a
+// registered backend among others now, not a rival to the model #666
+// built.
+//
+// A legacy configuration that never declared local at all (every config
+// written before #670) reports ErrMediumNotFound for it here, same as
+// any other id nothing declares — which is the honest answer, since
+// there is no row to remove.
 //
 // A tier still naming the medium is refused too, by config.Validate over
 // the whole configuration, which is where that rule already lives.
@@ -413,10 +431,6 @@ func (b *BackupService) RemoveStorageMedium(ctx context.Context, id string) erro
 	}
 	if id == "" {
 		return fmt.Errorf("%w: a storage medium id is required", ErrInvalidRequest)
-	}
-	if id == StorageMediumLocalID {
-		return fmt.Errorf("%w: %s is the drive this deployment's backups land on. It is not declared in the configuration and cannot be un-declared: every retention tier that names no destination means this one, and a deployment with no destination at all is not a state this product can be in",
-			ErrStorageMediumIsDefault, id)
 	}
 
 	// Asked BEFORE the file is re-read, encoded or written, so a refused
@@ -485,9 +499,29 @@ func (b *BackupService) RemoveStorageMedium(ctx context.Context, id string) erro
 // (resolution, the fold, the encode-before-validate, the write, the
 // reload) has to be identical or a medium could be creatable in a shape
 // it could not be edited into.
+//
+// # The one thing a create may never spell, said here rather than left to config.Validate
+//
+// config.MediumLocal is refused on a CREATE unconditionally, by this
+// function itself rather than only by the config-level shape check.
+// #670's seed writes exactly this id at first boot (seedLocalStorageMedium),
+// which means config.Validate now has to ACCEPT it — a file with a
+// seeded local destination has to keep loading on every later boot, and
+// Validate is the one function both paths share. So the reservation an
+// operator meets has to live here instead, independent of what the
+// config layer now permits: an API caller, the CLI and the wizard can
+// never manufacture the seed's own id, on a create, no matter what shape
+// config.Validate would allow it to take. An EDIT of the seeded entry is
+// not blocked here: #670 means for an operator to be able to repoint or
+// otherwise edit it, and UpdateStorageMedium can only ever replace a
+// record whose id already exists, so it cannot manufacture "local" out
+// of a different medium either.
 func (b *BackupService) writeStorageMedium(ctx context.Context, spec StorageMediumSpec, mustExist bool) (StorageMediumSummary, error) {
 	if b.configPath == "" {
 		return StorageMediumSummary{}, ErrConfigNotFileBacked
+	}
+	if !mustExist && spec.ID == config.MediumLocal {
+		return StorageMediumSummary{}, fmt.Errorf("%w: %s is reserved for this deployment's own seeded local destination and cannot be declared by a request", ErrInvalidRequest, config.MediumLocal)
 	}
 	// An edit may name no credential source, and then it keeps the one
 	// the medium already has (UpdateStorageMedium's own doc). A CREATE
@@ -689,7 +723,18 @@ func (b *BackupService) mediumFromSpec(spec StorageMediumSpec, inheritCredential
 			ErrInvalidRequest, StorageMediumLocalID)
 	}
 	var creds config.MediumCredentials
-	if !inheritCredentials {
+	switch {
+	case spec.Type == config.StorageMediumTypeLocalVolume:
+		// A local_volume medium reads no credential at all (its manifest
+		// declares none), so a spec naming one is a caller's mistake
+		// rather than something to resolve, and inheritCredentials never
+		// applies here: there is nothing on file to carry forward either.
+		if !spec.Credentials.namesNothing() {
+			return config.StorageMedium{}, fmt.Errorf(
+				"%w: a local_volume medium has no credential to declare; a directory on this machine authenticates with nothing",
+				ErrInvalidRequest)
+		}
+	case !inheritCredentials:
 		var err error
 		creds, err = b.resolveSpecCredentials(spec.Credentials)
 		if err != nil {
@@ -702,6 +747,7 @@ func (b *BackupService) mediumFromSpec(spec StorageMediumSpec, inheritCredential
 		Region:             spec.Region,
 		Endpoint:           spec.Endpoint,
 		Bucket:             spec.Bucket,
+		Path:               spec.Path,
 		Prefix:             spec.Prefix,
 		StorageClass:       spec.StorageClass,
 		UploadVerification: spec.UploadVerification,

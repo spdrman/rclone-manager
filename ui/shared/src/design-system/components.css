@@ -302,8 +302,27 @@ input, select, textarea, button {
    this bar is 32 with 24px buttons in it, so drawing one would clip the
    chips it exists to rescue. The row still scrolls by wheel and trackpad,
    and tabbing to a chip scrolls it into view. */
-.activity-toolbar__filters { scrollbar-width: none; -ms-overflow-style: none; }
-.activity-toolbar__filters::-webkit-scrollbar { display: none; }
+/* The chip row scrolls sideways inside a 32px bar, so it clips vertically.
+   Two consequences, both measured in Chromium rather than reasoned about.
+
+   The shared :focus-visible ring in typography.css draws at outline-offset
+   2px, and the chip's border box is exactly the strip's content box, so the
+   ring landed entirely outside the clip and vanished. That matters more here
+   than usual: once the row overflows, keyboard is very nearly the only way to
+   reach the chips past the fold, and it was the one modality whose indicator
+   disappeared. Same fix and same reason as .password-field__toggle above,
+   draw it inside.
+
+   And the scrollbar stays visible. Hiding it left a plain vertical wheel with
+   no route at all (measured: 0px of movement, against 100px on a vertically
+   scrollable control), so the only ways across were shift+wheel, a trackpad
+   swipe, or tabbing, none of which announce themselves. 4px of a 32px bar is
+   affordable, and on macOS overlay scrollbars it costs no layout at all. */
+.activity-toolbar__filters { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.activity-toolbar__filters::-webkit-scrollbar { height: 4px; }
+.activity-toolbar__filters::-webkit-scrollbar-track { background: transparent; }
+.activity-toolbar__filters::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+.activity-toolbar__filters .activity-toolbar__button:focus-visible { outline-offset: -2px; }
 
 .activity-spinner {
   width: 11px; height: 11px; flex: none;

@@ -219,7 +219,7 @@ describe("the cursor the dock actually sends", () => {
     vi.useFakeTimers();
     const first = reading({
       sets: [],
-      deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "backup-manager starting" })], {
+      deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "rbm starting" })], {
         latestSequence: 1
       })
     });
@@ -230,7 +230,7 @@ describe("the cursor the dock actually sends", () => {
     // findBy* polls on a timer, and the timers here are fake, so the
     // reading is awaited by flushing the microtask queue instead.
     await act(async () => {});
-    expect(screen.getByText(/backup-manager starting/)).toBeInTheDocument();
+    expect(screen.getByText(/rbm starting/)).toBeInTheDocument();
     await act(async () => {
       vi.advanceTimersByTime(1100);
     });

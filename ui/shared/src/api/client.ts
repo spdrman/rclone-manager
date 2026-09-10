@@ -71,8 +71,11 @@ import type {
   WireListStorageStatusResponse,
   WireManagerStorage,
   WireImportStorageCredentialsResponse,
+  WireBackendManifest,
+  WireListBackendsResponse,
   WireListStorageMediumsResponse,
   WireMediumPreflightResponse,
+  WireMediumConfigurationResponse,
   WireStorageMediumSummary,
   WireStorageMediumUsageResponse,
   WireOperation,
@@ -91,6 +94,7 @@ import type {
 import type {
   ApiError,
   AppSettings,
+  BackendManifest,
   BackupManagerApi,
   BackupSetRetention,
   BackupSetPatch,
@@ -98,6 +102,7 @@ import type {
   CatalogScanPreview,
   ConnectionTestOutcome,
   StorageMedium,
+  StorageMediumConfiguration,
   StorageMediumSpec,
   ConnectionTestParams,
   CreateBackupSetRequest,
@@ -835,6 +840,41 @@ function fromWireStorageMedium(m: WireStorageMediumSummary): StorageMedium {
   };
 }
 
+/**
+ * The backend catalogue's wire form, camelCased (EPIC I, #664).
+ *
+ * Every optional string is passed through as-is rather than defaulted:
+ * absent and empty mean different things for all three. An absent
+ * `unset_means` says the field has no resolved-at-read-time value, and an
+ * empty one would read as "it resolves to the empty string", which is a
+ * different claim about the engine's behaviour.
+ *
+ * The one place a default IS applied is the arrays, because a manifest
+ * with no enum choices omits `values` entirely and a caller iterating it
+ * should not have to ask.
+ */
+function fromWireBackendManifest(m: WireBackendManifest): BackendManifest {
+  return {
+    id: m.id,
+    label: m.label,
+    summary: m.summary,
+    role: m.role,
+    fields: (m.fields ?? []).map((f) => ({
+      id: f.id,
+      label: f.label,
+      help: f.help,
+      kind: f.kind,
+      required: f.required,
+      values: f.values ? f.values.map((v) => ({ value: v.value, label: v.label })) : undefined,
+      pattern: f.pattern,
+      unsetMeans: f.unset_means
+    })),
+    probe: {
+      steps: (m.probe?.steps ?? []).map((s) => ({ step: s.step, run: s.run, reason: s.reason }))
+    }
+  };
+}
+
 // toWireStorageMedium is the write direction, and the omissions are the
 // interesting part. An absent credentials block is sent as an absent
 // credentials block, never as an empty object: on an edit the backend
@@ -858,6 +898,58 @@ function toWireStorageMedium(spec: StorageMediumSpec): Record<string, unknown> {
   // wizard cannot save until its own check has passed.
   if (spec.skipConnectionCheck) body.skip_connection_check = true;
   const c = spec.credentials;
+  if (c && (c.credentialsId || c.file || c.env || (c.command && c.command.length > 0))) {
+    body.credentials = {
+      ...(c.credentialsId ? { credentials_id: c.credentialsId } : {}),
+      ...(c.file ? { file: c.file } : {}),
+      ...(c.env ? { env: c.env } : {}),
+      ...(c.command && c.command.length > 0 ? { command: c.command } : {})
+    };
+  }
+  return body;
+}
+
+/**
+ * The body both configuration operations take (issue #669).
+ *
+ * `values` is keyed by MANIFEST FIELD ID and carries the operator's
+ * values as the strings the engine validates - a bool as "true" or
+ * "false", which is what `backend.validateFieldValue`'s KindBool case
+ * reads. There is no key here per S3 field and there is deliberately no
+ * `bucket`: that is the difference between this body and
+ * toWireStorageMedium above, which is a hand-transcribed copy of
+ * s3.json's field ids and therefore cannot carry a local volume's
+ * `path`.
+ *
+ * `credentials` stays its own reference object rather than an entry in
+ * `values`, and that is the load-bearing part. A credential is not a
+ * value: it is a reference this deployment minted, it is validated by a
+ * different rule, and a value bag that could hold one is a value bag
+ * something will eventually put material into. Keeping it separate is
+ * what makes #665's C1-C5 true by construction on this path too.
+ */
+function toWireMediumConfiguration(config: StorageMediumConfiguration): Record<string, unknown> {
+  // Sorted, and the sort is not tidiness: an unordered pair list makes
+  // the request body and the echoed command line differ run to run for
+  // no reason, and a test asserting on a body then depends on
+  // object-key insertion order. The same three lines live in
+  // toWireStorageMedium; they stay duplicated rather than extracted
+  // because a two-call-site sort-and-map does not earn a frozen
+  // signature (#668's own call).
+  //
+  // The key is always present, even when there is nothing in it. An
+  // EMPTY list means "this instance carries no values" and an absent one
+  // would mean "I have nothing to say about values", and those must not
+  // share a spelling: this operation sends the whole declared field set,
+  // so empty is a real instruction and not a shrug.
+  const values = config.fields;
+  const body: Record<string, unknown> = {
+    fields: Object.keys(values)
+      .sort()
+      .map((field) => ({ field, value: values[field] }))
+  };
+  if (config.backend) body.backend = config.backend;
+  const c = config.credentials;
   if (c && (c.credentialsId || c.file || c.env || (c.command && c.command.length > 0))) {
     body.credentials = {
       ...(c.credentialsId ? { credentials_id: c.credentialsId } : {}),
@@ -1193,6 +1285,13 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
     sizeBytes: a.size_bytes,
     checksum: a.checksum ?? "",
     checksumAlgorithm: a.checksum_algorithm ?? "",
+    // Carried, not dropped (#662). Until this line the mapper read both
+    // verdict fields and threw the lifecycle state away, and the two
+    // verdicts cannot express "this backup failed an attempt and stopped":
+    // nothing on that path records a validation verdict, so `validation`
+    // below is "pending", and a FAILED row is not quarantined, so
+    // `quarantine` is null. The state is the only field that says it.
+    state: a.state,
     validation:
       a.validation === "passed" ? "verified" : a.validation === "failed" ? "failed" : "pending",
     // The backend records which retention tier last selected an artifact,
@@ -1317,12 +1416,54 @@ function quarantineReasonFor(a: WireArtifact): QuarantineReason {
  * API has no business deciding that a transfer completing is "ok" while a
  * discovery is "info".
  *
- * A transition this table does not name still appears in the feed, as an
+ * A transition neither table names still appears in the feed, as an
  * "info" event captioned with the states themselves. Dropping it would be
  * worse than showing it plainly: an unexplained gap in an audit trail is
  * indistinguishable from nothing having happened.
  */
-const ACTIVITY_BY_STATE: Record<string, { type: ActivityEventType; severity: Severity; text: string }> = {
+type ActivityCaption = { type: ActivityEventType; severity: Severity; text: string };
+
+/**
+ * The moves whose DESTINATION alone misdescribes them (issue #663).
+ *
+ * Keyed on the edge, and consulted before the destination table below,
+ * because the origin is the discriminator: it is what the state machine
+ * itself keys on ("the origin decides what may follow: QUARANTINED is
+ * the clearest case", core/lifecycle machine.go), and it is already on
+ * the wire, so nothing has to be fetched or joined to read it.
+ *
+ * Both entries here are one SUCCESSFUL in-place recovery (#662).
+ * `completeIngestionInPlace` re-stamps the artifact where it stands once
+ * the durable copy has been matched against the remote object, and then
+ * passes through the quarantine waypoint that the reinstatement edge has
+ * to start from, before committing. Read off the destination those are
+ * amber "Attempt failed" and red "Quarantined for review": two failures
+ * reported for a recovery that worked, and two rows an operator asking
+ * for errors is handed.
+ *
+ * Every OTHER origin into QUARANTINED is deliberately absent, so it
+ * keeps the red badge below. That is the `validate` origin, and there it
+ * is a true statement about a record that really is broken.
+ *
+ * The captions and severities are agreed verbatim with
+ * core/cmd/backup-manager/activity.go's own table, which derives the
+ * same severity for `rbm activity --severity`; "ok" and "info" are the
+ * one rank there, as they are to anyone filtering here. Issue #625 was
+ * the last time those two drifted apart.
+ *
+ * The key type is a pattern rather than plain `string` so a key written
+ * without the separator does not compile into a row that can never be
+ * hit. It cannot check the STATE names: the wire types them as `string`
+ * (generated/contract.ts), and this app declares no closed lifecycle
+ * vocabulary to check them against.
+ */
+const ACTIVITY_BY_TRANSITION: Record<`${string}>${string}`, ActivityCaption> = {
+  "FAILED>FAILED": { type: "verification-passed", severity: "ok", text: "Durable copy matched the remote object" },
+  "FAILED>QUARANTINED": { type: "validation-failed", severity: "info", text: "Held for the reinstatement judgement" }
+};
+
+/** Where a transition ended, for the moves that origin does not change. */
+const ACTIVITY_BY_STATE: Record<string, ActivityCaption> = {
   DISCOVERED: { type: "backup-discovered", severity: "info", text: "Backup discovered on the source" },
   TRANSFERRING: { type: "transfer-started", severity: "info", text: "Transfer started" },
   TRANSFERRED: { type: "transfer-complete", severity: "ok", text: "Transfer complete" },
@@ -1335,7 +1476,11 @@ const ACTIVITY_BY_STATE: Record<string, { type: ActivityEventType; severity: Sev
 };
 
 function fromWireActivityEvent(e: WireActivityEvent): ActivityEvent {
-  const known = ACTIVITY_BY_STATE[e.to];
+  // Edge first, destination second, plain default third. The fallbacks
+  // are the point as much as the lookup is: an edge nobody named still
+  // reads as the state it reached, and a state nobody named still shows
+  // up under its own name.
+  const known = (e.from ? ACTIVITY_BY_TRANSITION[`${e.from}>${e.to}`] : undefined) ?? ACTIVITY_BY_STATE[e.to];
   return {
     // The transition log has no id column of its own on the wire, and one
     // artifact legitimately appears many times, so the key is the artifact
@@ -2078,6 +2223,14 @@ export const httpApi: BackupManagerApi = {
       }))
     })),
 
+  listBackends: () =>
+    request<WireListBackendsResponse>("/backends").then((r) => ({
+      registered: (r.backends ?? []).map(fromWireBackendManifest),
+      unregistered: (r.unregistered ?? []).map((u) => ({ transport: u.transport })),
+      instanceIdPattern: r.instance_id_pattern,
+      reservedInstanceId: r.reserved_instance_id
+    })),
+
   // Verify before save. It writes nothing whatever the report says, and
   // it resolves rather than rejects on a destination that does not work,
   // for the reason preflightStorageMedium does: a bucket that is not
@@ -2098,6 +2251,34 @@ export const httpApi: BackupManagerApi = {
     request<WireStorageMediumSummary>(
       "/storage-mediums/" + encodeURIComponent(mediumId),
       { method: "PUT", body: JSON.stringify(toWireStorageMedium(spec)) }
+    ).then(fromWireStorageMedium),
+
+  // Issue #669: the three operations that speak in manifest field ids.
+  // The read exists because this flow sends the whole declared field
+  // set, so a form cannot start empty: see StorageMediumConfigurationState.
+  getStorageMediumConfiguration: (mediumId) =>
+    request<WireMediumConfigurationResponse>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/configuration"
+    ).then((r) => ({
+      fields: Object.fromEntries((r.fields ?? []).map((pair) => [pair.field, pair.value])),
+      credentialConfigured: r.credential_configured
+    })),
+
+  // The write pair takes the id in the path and the collected values in
+  // the body, and the preflight writes nothing whatever it answers - the
+  // same property preflightStorageMediumCandidate above has, and for the
+  // same reason: a destination that does not work is what an operator
+  // configured, not a request that broke, so it resolves with `ok` false.
+  preflightStorageMediumConfiguration: (mediumId, config) =>
+    request<WireMediumPreflightResponse>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/configuration/preflight",
+      { method: "POST", body: JSON.stringify(toWireMediumConfiguration(config)) }
+    ).then(fromWireMediumPreflight),
+
+  configureStorageMedium: (mediumId, config) =>
+    request<WireStorageMediumSummary>(
+      "/storage-mediums/" + encodeURIComponent(mediumId) + "/configuration",
+      { method: "PUT", body: JSON.stringify(toWireMediumConfiguration(config)) }
     ).then(fromWireStorageMedium),
 
   removeStorageMedium: (mediumId) =>

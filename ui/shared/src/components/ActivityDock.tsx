@@ -442,6 +442,61 @@ export function environmentPreamble(origin: string, viewer: string | null): stri
   return "export BACKUP_MANAGER_API_URL=" + url + " BACKUP_MANAGER_API_USERNAME=" + user + " BACKUP_MANAGER_API_PASSWORD=<your password>";
 }
 
+/**
+ * The window with any command gap that the window itself contradicts
+ * resolved into the one sentence about it that is true (issue #662).
+ *
+ * # The window an operator reported
+ *
+ *   [you] [browser] This deployment will not start a backup run.
+ *     ... Run rbm fetch --backup-set cicd-pipeline/var-backups from a
+ *     shell on this host instead.
+ *   $ rbm fetch --backup-set cicd-pipeline/var-backups
+ *   [you] post /operations refused: DESTRUCTIVE_OPERATIONS_DISABLED
+ *   # no rbm equivalent yet · POST /api/v1/operations
+ *
+ * Two statements about one command, four lines apart. The advice is
+ * sound — the operator ran that command and it repaired the set — and the
+ * gap line then tells them the operation they were just given a command
+ * for has no `rbm` equivalent. A remedy a message offers has to be
+ * runnable where it is offered, or the surface must not contradict it.
+ *
+ * # Why the short form is the half that goes
+ *
+ * Both halves come from the engine and only one of them is wrong here.
+ * "no rbm equivalent yet" is a claim about the ROUTE, and on a screen
+ * that has just named a command it reads as a claim about the command.
+ * The detail beside it is already the precise truth ("`rbm fetch` starts
+ * a cycle in your own shell, not in this engine"), so the detail is
+ * promoted to the line and the short claim is dropped. Nothing is
+ * invented here and nothing is hidden: the route is still named, and a
+ * window with no remedy in it still gets the gap line exactly as before,
+ * which is what the control case beside this pins.
+ *
+ * # Why this is the window's decision and not activityLine's
+ *
+ * activityLine sees one event. The contradiction does not exist in either
+ * line; it exists in their being on one screen, so it can only be
+ * answered where the screen is assembled. It is applied to the entries
+ * rather than to the rendering so that the panel, the clipboard and the
+ * saved file all say the same words, which is the argument logText makes
+ * about itself. It is idempotent, so applying it on both the panel's own
+ * window and inside dockText costs nothing and cannot drift.
+ */
+export function withoutContradictedGaps(entries: DockEntry[]): DockEntry[] {
+  const remedyOnScreen = entries.some((e) => e.kind === "notice" && (e.notice.command ?? "") !== "");
+  if (!remedyOnScreen) return entries;
+  return entries.map((entry) => {
+    if (entry.kind !== "event") return entry;
+    const f = entry.event.fields;
+    if (!f.command_gap || f.command) return entry;
+    return {
+      kind: "event",
+      event: { ...entry.event, fields: { ...f, command_gap: f.command_gap_detail ?? "", command_gap_detail: "" } }
+    };
+  });
+}
+
 /** The dock's text, for the clipboard and for the saved file, honouring
  *  whatever filter is on.
  *
@@ -453,7 +508,7 @@ export function environmentPreamble(origin: string, viewer: string | null): stri
  * the same reason it is the first line on screen: the commands under it
  * are only runnable with it said once above them. */
 export function dockText(entries: DockEntry[], viewer: string | null, preamble: string | null = null): string {
-  const lines = entries.map((entry, i) => {
+  const lines = withoutContradictedGaps(entries).map((entry, i) => {
     if (entry.kind === "restart") return restartRule(entry.at);
     const event = entryEvent(entry, i);
     const prefix = dockPrefix(event, viewer);
@@ -546,7 +601,7 @@ export function ActivityDock() {
   // on every poll.
   const sets = useMemo(() => (feed.reading?.sets ?? []).map((s) => s.setId), [feed.reading]);
   const all = useMemo(
-    () => foldBrowserNotices(dockEntries(history, held), notices),
+    () => withoutContradictedGaps(foldBrowserNotices(dockEntries(history, held), notices)),
     [history, held, notices]
   );
   const shown = useMemo(() => all.filter((e) => passesFilter(e, filter, viewer)), [all, filter, viewer]);
@@ -660,13 +715,14 @@ export function ActivityDock() {
            * `minWidth: 0` is what actually makes it shrink. A flex
            * child's default min-width is its content, so `flex: 1` on a
            * row of eight chips does not shrink at all and overflows its
-           * parent no matter what overflow says. The scrollbar chrome is
-           * hidden by the class rather than shown, because a classic
-           * horizontal scrollbar is about 15px and the bar is 32 with
-           * 24px buttons in it: drawing one would clip the chips it was
-           * there to rescue. The row still scrolls by wheel and trackpad,
-           * and tabbing to a chip scrolls it into view, so every chip
-           * stays reachable by both. */
+           * parent no matter what overflow says. The class draws a 4px
+           * scrollbar rather than hiding it. Hiding it read better and
+           * measured worse: a plain vertical wheel moves this row 0px,
+           * because it only overflows horizontally, so the ways across
+           * were shift+wheel, a trackpad swipe or tabbing, and none of
+           * those tells you there is anything to reach. 4px of a 32px bar
+           * still clears the 24px buttons, and on macOS overlay
+           * scrollbars it takes no layout space at all. */
           <span
             role="group"
             aria-label="Filter the terminal"

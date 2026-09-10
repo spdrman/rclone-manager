@@ -60,6 +60,39 @@ export function importCredentialsCommand(): string {
   return "rbm medium import-credentials --stdin";
 }
 
+/**
+ * Why #668's confirm step prints no command, stated where a reader looks
+ * for the one it expects to find.
+ *
+ * There was a `declareCommand` here that rendered
+ * `rbm medium add <id> --backend <backend>`, and it was wrong twice over.
+ *
+ * **`medium` has no `--backend` flag.** Its whole set is json, stdin,
+ * candidate, no-verify, type, region, endpoint, bucket, prefix,
+ * storage-class, upload-verification and the four credential spellings
+ * (`core/cmd/backup-manager/medium.go:183`). The line failed on execution
+ * with `flag provided but not defined: -backend`, which is exactly what
+ * EPIC G's rule exists to prevent: a printed command that looks right and
+ * does not work is worse than no command, because an operator only finds
+ * out after pasting it. Found by #81's author while taking rclone names
+ * off the contract, and reported rather than swapped for `--type`.
+ *
+ * **And `--type` would not have saved it.** The confirm step writes
+ * nothing: an instance carrying no values is refused by
+ * backend.Registry.ValidateInstance (`validate.go:228-233`), which
+ * config.Validate delegates every per-field rule to, and both bundled
+ * manifests declare required fields. So there is no `medium add` this
+ * screen is equivalent to at ANY spelling, because it is equivalent to no
+ * command at all — it collects two answers and hands them on.
+ *
+ * The honest answer is the one core/cliecho already uses for a route with
+ * no verb: name the gap rather than invent a line. The whole flow's
+ * equivalent command is `medium add` with the values it needs, and the
+ * configure step is what prints it, because that is the step that writes.
+ * AddDestinationWizard's confirm pane says so in prose where the
+ * CommandEcho used to be.
+ */
+
 /** `medium test-connection --candidate`: the wizard's step 3, proving a
  *  destination that has not been saved. It writes nothing whatever the
  *  report says, which is why it is safe to offer as a copy-pasteable line

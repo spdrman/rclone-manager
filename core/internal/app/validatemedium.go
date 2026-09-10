@@ -14,7 +14,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
-// This file is issue #435: what `backup-manager validate <id>` does about
+// This file is issue #435: what `rbm validate <id>` does about
 // an artifact whose durable copies are all on storage mediums.
 //
 // # Why it is here at all

@@ -6,13 +6,14 @@ import (
 	"os"
 	"strings"
 
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/retention"
 )
 
-// cmdRetention is `backup-manager retention` / `backup-manager retention
+// cmdRetention is `rbm retention` / `rbm retention
 // --dry-run`: FR-20's mandatory dry-run, wired to internal/retention's
 // classification (GFS + last-known-good) via internal/app.
 //
@@ -311,7 +312,7 @@ func cmdRetention(args []string) int {
 		for _, u := range unconfigured {
 			fmt.Printf("  %s: %d artifact(s), %d retained, %d byte(s) on storage; this backup set's configuration was removed,\n", u.Set, u.Artifacts, u.Retained, u.Bytes)
 			fmt.Println("    so no retention chain selects or expires these and nothing here will ever delete them.")
-			fmt.Printf("    Create %s again to put them back under a policy: `backup-manager unconfigured` explains the rest.\n", u.Set)
+			fmt.Printf("    Create %s again to put them back under a policy: `"+cliecho.Binary+" unconfigured` explains the rest.\n", u.Set)
 		}
 	}
 
@@ -336,10 +337,10 @@ func cmdRetention(args []string) int {
 		return fail(err)
 	}
 	if ungoverned > 0 {
-		fmt.Printf("\nthis preview is about one backup set, so it leaves out %d backup set(s) whose configuration was removed and which no retention policy governs at all. `backup-manager retention` with no argument lists those (issue #418).\n", ungoverned)
+		fmt.Printf("\nthis preview is about one backup set, so it leaves out %d backup set(s) whose configuration was removed and which no retention policy governs at all. `"+cliecho.Binary+" retention` with no argument lists those (issue #418).\n", ungoverned)
 	}
 	if !*dryRun {
-		fmt.Println("\nnote: this command only previews. It deletes nothing in either mode, so --dry-run changes nothing here. FR-20 deletion runs through the API's retention preview/apply pair, which will not delete without the plan_id of a plan an administrator reviewed, and from a terminal through `backup-manager retention apply <source/backup-set> --acknowledge`, which applies against a plan it prints first (#602).")
+		fmt.Println("\nnote: this command only previews. It deletes nothing in either mode, so --dry-run changes nothing here. FR-20 deletion runs through the API's retention preview/apply pair, which will not delete without the plan_id of a plan an administrator reviewed, and from a terminal through `" + cliecho.Binary + " retention apply <source/backup-set> --acknowledge`, which applies against a plan it prints first (#602).")
 	}
 	return 0
 }

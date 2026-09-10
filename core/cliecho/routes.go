@@ -42,9 +42,9 @@ import (
 // sentence that could differ between those two would be a sentence the
 // guard in core/cmd/backup-manager checks a copy of.
 const (
-	gapRunCycle = "`backup-manager run` starts a cycle in your own shell, not in this engine, so it is a different act against a different process"
+	gapRunCycle = "`" + Binary + " run` starts a cycle in your own shell, not in this engine, so it is a different act against a different process"
 
-	gapRunBackupSet = "`backup-manager fetch --backup-set <source/backup-set>` runs that set's cycle in your own shell, not in this engine, so it is a different act against a different process"
+	gapRunBackupSet = "`" + Binary + " fetch --backup-set <source/backup-set>` runs that set's cycle in your own shell, not in this engine, so it is a different act against a different process"
 
 	gapDeploymentScope = "there is no flag that narrows `activity --follow` to the deployment's own events: --backup-set names one set, and naming none already means every set"
 
@@ -54,7 +54,27 @@ const (
 	// values exist nowhere, so the command would have to carry all of
 	// them, and the moment they are worth carrying is the create, which
 	// proves the connection before it writes anything.
-	gapCandidateConnection = "there is no verb that checks a source that is not saved yet: `backup-manager backup-set create` proves the connection before it writes, and `backup-manager backup-set test-connection <source/backup-set>` re-checks one that exists"
+	gapCandidateConnection = "there is no verb that checks a source that is not saved yet: `" + Binary + " backup-set create` proves the connection before it writes, and `" + Binary + " backup-set test-connection <source/backup-set>` re-checks one that exists"
+
+	// I2.2 (issue #669). Two gaps, and both are real rather than
+	// oversights, which is the distinction this table exists to make.
+	//
+	// `medium add` and `medium edit` take the flags they were written
+	// with - --type, --region, --endpoint, --bucket, --prefix,
+	// --storage-class, --upload-verification and the four credential
+	// spellings - and a manifest can declare a field none of them names.
+	// local_volume's `path` is exactly that, so a local volume cannot be
+	// configured from a terminal at all. Printing --path anyway would
+	// read correctly and fail on execution, which is worse than printing
+	// nothing: the entire reason these lines exist is that an operator
+	// can copy them.
+	gapConfigureMedium = "there is no verb that writes a destination's configuration in its backend's own field names: `" + Binary + " medium add` and `" + Binary + " medium edit` carry one flag per S3 field and have no --path, so a local volume cannot be configured from a terminal until they take a manifest's field ids"
+
+	// And a configuration that has not been written cannot be checked by
+	// id, because there is no id yet. `medium test-connection` checks
+	// what is SAVED, which is a different question and the one an
+	// operator would get a misleading answer to.
+	gapPreflightMediumConfiguration = "there is no verb that checks a destination's configuration before it is written: `" + Binary + " medium test-connection <medium-id>` checks the one already saved, and `" + Binary + " medium add` proves a destination as it declares it"
 )
 
 // positiveQuery reads a query parameter that is a count, and reports 0
@@ -120,7 +140,7 @@ var routes = map[string]entry{
 		// of the three and never was: the client sends restore_placement
 		// and run_backup_set, so NO real request matched that arm. Every
 		// restore and every per-set run fell through to a default whose
-		// sentence is about `backup-manager run`, a different verb for a
+		// sentence is about `rbm run`, a different verb for a
 		// different act, and the example body said "restore" too, so the
 		// dispatcher-driven parse test certified a branch production
 		// never reaches. A constant spelled in one place cannot be wrong
@@ -158,12 +178,12 @@ var routes = map[string]entry{
 				return newCmd().refuse(gapRunBackupSet)
 			default:
 				// The gap the issue names, and the one a lazier
-				// implementation gets wrong. `backup-manager run`
+				// implementation gets wrong. `rbm run`
 				// exists and is NOT this: usage() puts it among the
 				// commands that are "ordinary beside a running engine",
 				// so it opens the service in the operator's own process
 				// and runs a cycle there. This asks the SERVING engine
-				// to run one. Printing `backup-manager run` would print
+				// to run one. Printing `rbm run` would print
 				// a command that does something different to a
 				// different process.
 				return newCmd().refuse(gapRunCycle)
@@ -714,6 +734,25 @@ var routes = map[string]entry{
 		build:    func(a Action) *cmd { return newCmd("medium", "test-connection", a.Params["id"]) },
 		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}, {Params: map[string]string{"id": "local"}}},
 	},
+	key("GET", "/storage-mediums/{id}/configuration"): {
+		// `medium show` again, for /usage's reason: there is no
+		// configuration-read verb and there does not need to be, because
+		// what `medium show` prints IS the destination's fields. Two
+		// routes answering to one command is the honest line.
+		build:    func(a Action) *cmd { return newCmd("medium", "show", a.Params["id"]) },
+		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}},
+	},
+	key("POST", "/storage-mediums/{id}/configuration/preflight"): {
+		// A whole-route gap and not a builder that refuses: there is no
+		// request on this route that HAS an equivalent, so the honest
+		// shape is no builder at all.
+		why:               gapPreflightMediumConfiguration,
+		namesShippedVerbs: []string{"medium"},
+	},
+	key("PUT", "/storage-mediums/{id}/configuration"): {
+		why:               gapConfigureMedium,
+		namesShippedVerbs: []string{"medium"},
+	},
 	key("PUT", "/storage-mediums/{id}/default"): {
 		// Moving the destination a newly created retention tier starts on
 		// (#622). One verb, one operand, and no flags: the whole content
@@ -760,6 +799,21 @@ var routes = map[string]entry{
 		namesShippedVerbs: []string{"backup-set"},
 	},
 
+	// ------------------------------------------------------- backends ---
+	// EPIC I (#664). A gap entry rather than a command, and the gap is
+	// real: there is no verb that lists the registered backends at all.
+	// `medium add --backend <id>` takes one and refuses an id no manifest
+	// declares, so a terminal operator learns the set from a refusal
+	// rather than from a listing. Naming the missing verb here is the
+	// point of this table: a parity gap that is written down is a
+	// decision, and inventing a `medium backends` verb to satisfy this
+	// test would invert the rule, which exists so a missing verb is
+	// VISIBLE rather than absent.
+	key("GET", "/backends"): {
+		why:               "there is no verb that lists the registered backends; on a terminal one is named on `medium add --backend <id>` and refused if no manifest declares it",
+		namesShippedVerbs: []string{"medium"},
+	},
+
 	// ------------------------------------------------------------- ssh ---
 	key("POST", "/ssh-keys"): {
 		// Never a command, and the reason is the interesting half. This
@@ -777,7 +831,7 @@ var routes = map[string]entry{
 	// selected candidate has an opaque id that would sit on one
 	// perfectly well, and the only thing missing is a verb that takes it.
 	key("POST", "/ssh-keys/from-candidate"): {
-		why: "there is no verb that imports a key this machine already holds; the id is an opaque handle that would sit on a command line perfectly well, and `backup-manager ssh-key import --candidate ID` would be it",
+		why: "there is no verb that imports a key this machine already holds; the id is an opaque handle that would sit on a command line perfectly well, and `" + Binary + " ssh-key import --candidate ID` would be it",
 	},
 	key("POST", "/ssh/host-key-probe"): {
 		why: "there is no verb that probes a host key on its own; a terminal settles it with --trust-host-key or --known-hosts-line while creating or patching a set",
@@ -796,11 +850,11 @@ var routes = map[string]entry{
 	// pastes and gets exit 2 from, which the dispatcher-driven parity
 	// test in core/cmd/backup-manager catches on purpose.
 	key("GET", "/ssh-keys"): {
-		why:               "there is no verb that lists the key store, which is why `backup-set patch --ssh-key-id ID` currently takes an id nothing will print for you. `backup-manager ssh-key list` would be it",
+		why:               "there is no verb that lists the key store, which is why `backup-set patch --ssh-key-id ID` currently takes an id nothing will print for you. `" + Binary + " ssh-key list` would be it",
 		namesShippedVerbs: []string{"backup-set"},
 	},
 	key("GET", "/ssh/key-candidates"): {
-		why: "there is no verb that scans this machine for keys it can offer, so the key the installer generated and mounted is reachable from the browser and not from a terminal. `backup-manager ssh-key discover` would be it",
+		why: "there is no verb that scans this machine for keys it can offer, so the key the installer generated and mounted is reachable from the browser and not from a terminal. `" + Binary + " ssh-key discover` would be it",
 	},
 
 	// -------------------------------------------------------- settings ---

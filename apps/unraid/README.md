@@ -38,8 +38,8 @@ No state or backup data moves.
 ## Two templates, and why
 
 An Unraid Docker template describes exactly one container. The canonical image
-needs two: `/backup-manager-web serve` (the engine: API, scheduler, local
-authentication, no published port) and `/backup-manager-web serve-ui` (the static
+needs two: `/rbm-web serve` (the engine: API, scheduler, local
+authentication, no published port) and `/rbm-web serve-ui` (the static
 UI plus a reverse proxy, the only published port). There is no single command that
 does both, by design, so this package ships two templates.
 
@@ -134,10 +134,10 @@ and nothing that would need a shell the distroless image does not have.
 
 ## The Web UI container has no healthcheck
 
-Deliberately. The image bakes in `HEALTHCHECK /backup-manager status`, which needs
+Deliberately. The image bakes in `HEALTHCHECK /rbm status`, which needs
 a config file and a state database that container does not have, so left inherited
 it would report unhealthy forever while working perfectly. The compose profiles
-override the test with `/backup-manager-web healthcheck`. Unraid's only seam is
+override the test with `/rbm-web healthcheck`. Unraid's only seam is
 `docker run`'s health-cmd flag, which is shell form, and the runtime image is
 distroless with no shell, so an override there would be a healthcheck that can
 never pass. Turning it off is honest; a permanently failing one is not.
@@ -145,7 +145,7 @@ never pass. Turning it off is honest; a permanently failing one is not.
 The engine container keeps the image's baked-in healthcheck, and here that is the
 right answer rather than the same limitation twice. On the compose profiles the
 engine has to override it, because their Web UI will not start until the engine
-reports healthy and `backup-manager status` is non-zero on a fresh install by
+reports healthy and `rbm status` is non-zero on a fresh install by
 design. An Unraid template declares no start-ordering dependency at all, so
 nothing here waits on that verdict and the badge Unraid shows for the engine is
 exactly the backup-freshness report FR-24 means it to be: red until the first

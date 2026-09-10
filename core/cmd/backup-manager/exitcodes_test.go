@@ -156,7 +156,7 @@ func TestADaemonThatCannotLoadItsConfigurationStillExitsOne(t *testing.T) {
 	}
 }
 
-// runDaemonChild re-executes this test binary as `backup-manager daemon
+// runDaemonChild re-executes this test binary as `rbm daemon
 // --config configPath` and returns the status it exited with, plus
 // everything it printed.
 //

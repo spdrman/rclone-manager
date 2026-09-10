@@ -110,7 +110,7 @@ func TestEveryAPIRouteNamesItsCLIEquivalentOrTheGap(t *testing.T) {
 		method, path, _ := strings.Cut(route, " ")
 		checked++
 		if !answered[method+" "+path] {
-			t.Errorf("%s /api/v1%s has no answer in core/cliecho.\nEvery route this router registers must either build a `backup-manager` command or carry an explicit entry saying there is none and what verb would have to exist. That is what turns EPIC G's CLI parity rule from a promise into something that fails visibly: a UI action with no command to name is a gap that shows up the first time anybody uses the feature, instead of at an audit nobody runs.",
+			t.Errorf("%s /api/v1%s has no answer in core/cliecho.\nEvery route this router registers must either build a `"+cliecho.Binary+"` command or carry an explicit entry saying there is none and what verb would have to exist. That is what turns EPIC G's CLI parity rule from a promise into something that fails visibly: a UI action with no command to name is a gap that shows up the first time anybody uses the feature, instead of at an audit nobody runs.",
 				method, path)
 			continue
 		}
@@ -202,7 +202,7 @@ func TestAnAPIActionIsRecordedWithItsActorAndItsCommand(t *testing.T) {
 	// Bare, with no prompt: this is what reaches the journal, and a script
 	// reading it wants a command it can hand to a shell. The "$ " is the
 	// terminal's to draw, the same way it draws "# " in front of a gap.
-	if want := "backup-manager backup-set patch production/postgres-primary --stale-after 48h"; got.Command != want {
+	if want := cliecho.Binary + " backup-set patch production/postgres-primary --stale-after 48h"; got.Command != want {
 		t.Errorf("the action echoes\n  %s\nwant\n  %s", got.Command, want)
 	}
 	if got.Status != http.StatusOK {
@@ -252,12 +252,12 @@ func TestARefusalIsRecordedWithItsReason(t *testing.T) {
 	if got.Route != "/operations" {
 		t.Errorf("the refusal names route %q", got.Route)
 	}
-	// And it is the named gap, not a misleading `backup-manager run`.
+	// And it is the named gap, not a misleading `rbm run`.
 	if got.Command != "" {
-		t.Errorf("run_cycle echoed the command %q; `backup-manager run` opens the service in the operator's own process and runs a cycle THERE", got.Command)
+		t.Errorf("run_cycle echoed the command %q; `rbm run` opens the service in the operator's own process and runs a cycle THERE", got.Command)
 	}
 	if !strings.Contains(got.GapDetail, "not in this engine") {
-		t.Errorf("the gap does not say why `backup-manager run` is not the answer: %q", got.GapDetail)
+		t.Errorf("the gap does not say why `rbm run` is not the answer: %q", got.GapDetail)
 	}
 }
 

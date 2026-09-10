@@ -1,5 +1,11 @@
-// Command backup-manager is the entry point for every execution mode this
-// project supports (FR-1, FR-26). It is deliberately thin: every command
+// Command rbm is the entry point for every execution mode this project
+// supports (FR-1, FR-26). It is `rbm` to an operator and this directory is
+// still cmd/backup-manager, because the image symlinks the old name beside
+// the new one and a Go package path is not something anybody types; the
+// constant that decides what this binary prints itself as, and the whole
+// of that argument, are in core/cliecho/cliname.go.
+//
+// It is deliberately thin: every command
 // below does nothing but parse its own flags, reach exactly one use case,
 // and format the result for a terminal. Most reach it by building (or
 // reusing) an internal/app.Service; the configuration writes go through
@@ -14,6 +20,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/spdrman/rclone-manager/core/cliecho"
 )
 
 // Set at build time with -ldflags (see container/Dockerfile).
@@ -40,7 +48,7 @@ func run(args []string) int {
 	name, rest := args[0], args[1:]
 	cmd, ok := commands[name]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "backup-manager: unknown command %q\n\n", name)
+		fmt.Fprintf(os.Stderr, cliecho.Binary+": unknown command %q\n\n", name)
 		usage()
 		return exitUsage
 	}
@@ -109,8 +117,16 @@ var commands = map[string]func([]string) int{
 // a status a wrapper script branches on is a contract, and a contract read
 // off setup.go by whoever thought to look is not one.
 func usage() {
-	fmt.Fprint(os.Stderr, `usage: backup-manager <command> [flags]
-
+	// The first line names the command and is therefore the one line of
+	// this block that is not a literal. It is printed on its own rather
+	// than spliced into the raw string below, so that the index of
+	// commands stays one uninterrupted backticked chunk: readers of this
+	// file include distribution/packaging's README-parity test, which
+	// pulls the command list straight out of the source, and a raw string
+	// broken in half by a concatenation is a list it silently reads as
+	// empty.
+	fmt.Fprintf(os.Stderr, "usage: %s <command> [flags]\n", cliecho.Binary)
+	fmt.Fprint(os.Stderr, `
 commands:
   run                                            perform one processing cycle and exit
   daemon                                         repeat the processing cycle at poll_interval. One engine per
@@ -309,7 +325,10 @@ commands:
                                                   same thing as quarantine, so this is its own command and not a
                                                   fourth quarantine verb. Nothing does this automatically: a blind
                                                   re-transfer for a cause nothing has classified is a cost this
-                                                  manager does not take on its own (#419)
+                                                  manager does not take on its own (#419). When the artifact's own
+                                                  durable local copy is still intact this completes it in place
+                                                  instead of re-fetching, and that also forfeits any future remote
+                                                  delete, the same as quarantine reinstate (#662)
   restore <source/backup-set/artifact> --medium M [--days N] --acknowledge
                                                   ask the storage provider to make one archived copy readable again
                                                   (EPIC E, FR-34). --acknowledge is required rather than a --force
@@ -422,7 +441,7 @@ to print:
       does not have is only wrong here (#569)
   3   another process is serving this deployment, so nothing was done: a configuration write
       refused because it would never reach that process, or a daemon refused rather than
-      started beside one. backup-manager-web serve answers the same way for the same
+      started beside one. `+cliecho.WebBinary+` serve answers the same way for the same
       reason, which matters because that is the binary this deployment's compose file
       runs, so a supervisor reads one code from either (#557). Read the sentence beside
       it before retrying in a loop. A

@@ -47,6 +47,7 @@ function artifact(over: Partial<BackupArtifact> = {}): BackupArtifact {
     sizeBytes: 4096,
     checksum: "deadbeef",
     checksumAlgorithm: "sha256",
+    state: "COMPLETE",
     validation: "verified",
     retentionClasses: ["daily"],
     retentionPolicy: "configured",

@@ -26,7 +26,7 @@ import (
 // meet a different message from the other.
 
 // retentionFlags holds the flag.FlagSet variables backing the FR-18/FR-19
-// retention override flags `backup-manager retention` accepts (issue #111,
+// retention override flags `rbm retention` accepts (issue #111,
 // B3.6, extended by #156, B3.8). Each one is optional: an operator who
 // passes none of them gets exactly today's behavior, the loaded config
 // file's own resolved retention policy, untouched.

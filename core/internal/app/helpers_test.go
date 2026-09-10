@@ -149,6 +149,19 @@ type fakeTransport struct {
 	// cannot compute a hash) through an otherwise-successful transfer.
 	remoteHashErr error
 
+	// afterRemoteHash, when non-nil, runs at the end of a successful
+	// RemoteHash. It is the only window in which a test can act between
+	// completeIngestionInPlace's read of the local file and its
+	// measurement of that same file, which is where issue #662's review
+	// finding A lives: the two observations are separated by exactly one
+	// remote round trip, and a fault that lands in that window is what
+	// used to make the repair record a byte count it never took.
+	//
+	// It is its own field for the reason the whole type is: one hook per
+	// method. beforeCopy and afterCopyToLocal bracket the transfer step,
+	// and neither is reachable from a verb that copies nothing.
+	afterRemoteHash func()
+
 	// afterCopyToLocal, when non-nil, runs at the end of a successful
 	// CopyToLocal with the .partial path it just wrote. It exists so a
 	// test can change the local directory between lifecycle.Transfer's
@@ -237,7 +250,11 @@ func (f *fakeTransport) RemoteHash(ctx context.Context, source transport.Source,
 	if !ok {
 		return "", transport.NewError(transport.NotFound, "remote_hash", errors.New("not found"))
 	}
-	return f.hash(obj), nil
+	h := f.hash(obj)
+	if f.afterRemoteHash != nil {
+		f.afterRemoteHash()
+	}
+	return h, nil
 }
 
 func (f *fakeTransport) DeleteRemote(ctx context.Context, source transport.Source, remotePath string) error {

@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { ApiProvider } from "@shared/api/ApiContext";
 import type { MediumPreflight, MediumPreflightCheck, StorageMediumSpec } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
-import { StorageDestinationsCard } from "@shared/pages/StorageDestinationsCard";
+import { S3DestinationWizard } from "@shared/pages/S3DestinationWizard";
 import { resetGraphForTests } from "@shared/state/graph";
 
 /**
@@ -217,6 +217,24 @@ describe("the fixture's candidate check reads the upload verification it was han
  * that answered backwards survived: the surface was proven against a
  * report the test wrote and never against the report dev and e2e see.
  */
+/**
+ * Driven through the EDIT pane since #669 (I2.2).
+ *
+ * These three used to reach S3DestinationWizard's create mode through
+ * the card's "Add a destination" button. That button now opens the
+ * manifest-driven add wizard and hands off to the manifest-driven
+ * configure step, so the create mode is not reachable from the card at
+ * all - and #669's own tests cover that flow, against a backend that
+ * does not exist.
+ *
+ * What these three are about is not the create: it is that THE FIXTURE
+ * answers a candidate check the way a real endpoint would, and that Save
+ * stays out of reach when it refuses. The edit pane runs the same
+ * candidate check against the same fixture and gates Save on the same
+ * report, so every assertion below is unchanged and only the preamble
+ * moved. Repointed rather than deleted for exactly that reason: the
+ * property is still true and still worth a test.
+ */
 describe("the S3 destination wizard driven against the unmodified fixture", () => {
   beforeEach(() => resetGraphForTests());
   afterEach(() => {
@@ -226,28 +244,41 @@ describe("the S3 destination wizard driven against the unmodified fixture", () =
 
   async function wizardOnStorageClass(storageClass: string, uploadVerification = "readback") {
     const api = createMockApi();
+    // A destination with a BUCKET, which is what this pane edits and what
+    // a candidate check needs a class and a credential for. It used to be
+    // `!m.isLocal`, and that stopped meaning "a bucket" when EPIC I
+    // (#664) made a declared local volume an ordinary destination: those
+    // are not the reserved entry either, so the first match became a
+    // directory and this pane was handed one to type a bucket into.
+    // Branching on the place a destination carries rather than on which
+    // one is reserved is the same rule describeDestination follows.
+    const existing = (await api.listStorageMediums()).find((m) => m.bucket);
+    if (!existing) throw new Error("the fixture declares no destination with a bucket to edit");
     render(
       <ApiProvider api={api}>
-        <StorageDestinationsCard readOnly={false} />
+        <S3DestinationWizard editing={existing} onClose={() => {}} onSaved={() => {}} />
       </ApiProvider>
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add a destination" }));
-    await screen.findByRole("group", { name: "Add a destination" });
+    await screen.findByRole("group", { name: `Edit destination ${existing.id}` });
 
-    fireEvent.change(screen.getByLabelText("Destination id"), { target: { value: "candidate_s3" } });
     fireEvent.change(screen.getByLabelText("Region"), { target: { value: "us-east-1" } });
     fireEvent.change(screen.getByLabelText("Bucket"), { target: { value: "nas-backups" } });
     fireEvent.change(screen.getByLabelText("Storage class"), { target: { value: storageClass } });
     fireEvent.change(screen.getByLabelText("Upload verification"), { target: { value: uploadVerification } });
     fireEvent.click(screen.getByRole("button", { name: "Next: credentials" }));
 
+    // The edit pane defaults to keeping the credential already
+    // configured, which is right for an edit and is the one thing these
+    // three do not want: what they are checking is a candidate report,
+    // and that needs a credential this page can actually name.
+    fireEvent.click(await screen.findByRole("radio", { name: /Paste a key/ }));
     fireEvent.change(await screen.findByLabelText("Access key id"), { target: { value: PLACEHOLDER_KEY_ID } });
     fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: PLACEHOLDER_SECRET } });
     fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
 
     const next = await screen.findByRole("button", { name: "Next: save" }, { timeout: 5000 });
-    const group = screen.getByRole("group", { name: "Add a destination" });
+    const group = screen.getByRole("group", { name: `Edit destination ${existing.id}` });
 
     // Waiting for the report itself and not only for the pane. Save is
     // disabled while the check is in flight too, so an assertion made
@@ -256,11 +287,11 @@ describe("the S3 destination wizard driven against the unmodified fixture", () =
     // import is 400ms and its preflight another 700, both well outside
     // testing-library's default one second, so the window is wide.
     await waitFor(() => expect(within(group).getByText("delete")).toBeTruthy(), { timeout: 5000 });
-    return { api, next, group };
+    return { api, next, group, edited: existing.id };
   }
 
   it("lets an ordinary destination be saved, which is the flow the fixture exists to serve", async () => {
-    const { api, next, group } = await wizardOnStorageClass("STANDARD");
+    const { api, next, group, edited } = await wizardOnStorageClass("STANDARD");
 
     await waitFor(() => expect(next).toBeEnabled(), { timeout: 5000 });
     // All eight, and no skips. A report that stopped short would still
@@ -270,14 +301,18 @@ describe("the S3 destination wizard driven against the unmodified fixture", () =
     expect(within(group).queryAllByText("skipped").length).toBe(0);
 
     fireEvent.click(next);
-    fireEvent.click(await screen.findByRole("button", { name: "Save destination" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Save changes" }));
 
-    // Saved means saved: the fixture keeps what it is given (#594), so the
-    // destination has to come back out of the list rather than only having
-    // been accepted by a call that returned.
+    // Saved means saved: the fixture keeps what it is given (#594), so
+    // what was submitted has to come back out of the LIST rather than
+    // only having been accepted by a call that returned. Through the
+    // edit pane that is the class this pass set, on the destination it
+    // was set on - the same assertion about the same property, keyed on
+    // a destination that exists rather than on one this pane no longer
+    // creates.
     await waitFor(async () => {
       const mediums = await api.listStorageMediums();
-      expect(mediums.map((m) => m.id)).toContain("candidate_s3");
+      expect(mediums.find((m) => m.id === edited)?.storageClass).toBe("STANDARD");
     }, { timeout: 5000 });
   }, 15000);
 

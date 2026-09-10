@@ -1578,6 +1578,118 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
     expect(got[1].severity).toBe("info");
   });
 
+  /**
+   * Issue #663. One SUCCESSFUL in-place recovery reaches this feed as
+   * three rows, and keyed on the destination state alone the first two
+   * are false. `completeIngestionInPlace` re-stamps the artifact where it
+   * stands (FAILED -> FAILED) once the durable copy has been matched
+   * against the remote object, and then passes through the quarantine
+   * waypoint (FAILED -> QUARANTINED) that the reinstatement edge has to
+   * start from, before COMMITTED. Rendered off `to`, that reads as amber
+   * "Attempt failed" and red "Quarantined for review": two failures
+   * reported for a recovery that worked, and two rows an operator asking
+   * for errors is handed.
+   *
+   * The origin is the discriminator, which is what the state machine
+   * itself keys on (core/lifecycle machine.go: "the origin decides what
+   * may follow"), and it is already on the wire. So the feed keys on the
+   * edge as well, and only for these two: every other transition into
+   * QUARANTINED is the `validate` origin, which is a true statement about
+   * a record that really is broken.
+   *
+   * The captions and the ranks here are agreed verbatim with
+   * core/cmd/backup-manager/activity.go's table, which derives the same
+   * severity for `rbm activity --severity`. Issue #625 was the last time
+   * those two drifted.
+   */
+  it("reads a successful in-place recovery as two calm rows, not as an attempt that failed and a quarantine", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      events: [
+        {
+          artifact_id: "a/one/x.tar", backup_set_id: "a/one", source_name: "a",
+          set_name: "one", artifact_name: "x.tar",
+          from: "FAILED", to: "FAILED", occurred_at: "2026-08-30T09:00:00Z"
+        },
+        {
+          artifact_id: "a/one/x.tar", backup_set_id: "a/one", source_name: "a",
+          set_name: "one", artifact_name: "x.tar",
+          from: "FAILED", to: "QUARANTINED", occurred_at: "2026-08-30T09:00:01Z"
+        }
+      ]
+    }));
+
+    const got = await httpApi.listActivity();
+
+    // Both rows, because there are two false ones today and fixing only
+    // the red one would leave the amber one claiming the attempt failed.
+    expect(got[0].text).toBe("Durable copy matched the remote object");
+    expect(got[0].severity).toBe("ok");
+    expect(got[1].text).toBe("Held for the reinstatement judgement");
+    expect(got[1].severity).toBe("info");
+  });
+
+  it("keeps the red quarantine badge on every other origin, which is the validate finding and is true", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      events: [
+        {
+          artifact_id: "a/one/x.tar", backup_set_id: "a/one", source_name: "a",
+          set_name: "one", artifact_name: "x.tar",
+          from: "COMMITTED", to: "QUARANTINED", occurred_at: "2026-08-30T09:00:00Z"
+        },
+        {
+          artifact_id: "a/one/y.tar", backup_set_id: "a/one", source_name: "a",
+          set_name: "one", artifact_name: "y.tar",
+          from: "REMOTE_RETAINED", to: "QUARANTINED", occurred_at: "2026-08-30T09:00:01Z"
+        }
+      ]
+    }));
+
+    const got = await httpApi.listActivity();
+
+    for (const e of got) {
+      expect(e.text).toBe("Quarantined for review");
+      expect(e.severity).toBe("error");
+    }
+  });
+
+  /** The regression an edge-keyed table invites: a transition the edge
+   *  table does not name must still fall through to the destination it
+   *  always used, and a destination nothing names must still fall through
+   *  to the plain default, rather than either one vanishing. */
+  it("falls through the edge table to the destination, and then to the state's own name", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      events: [
+        {
+          artifact_id: "a/one/x.tar", backup_set_id: "a/one", source_name: "a",
+          set_name: "one", artifact_name: "x.tar",
+          from: "QUARANTINED", to: "COMMITTED", occurred_at: "2026-08-30T09:00:02Z"
+        },
+        {
+          artifact_id: "a/one/x.tar", backup_set_id: "a/one", source_name: "a",
+          set_name: "one", artifact_name: "x.tar",
+          from: "FAILED", to: "SOMETHING_NEW", occurred_at: "2026-08-30T09:00:01Z"
+        },
+        {
+          artifact_id: "a/one/x.tar", backup_set_id: "a/one", source_name: "a",
+          set_name: "one", artifact_name: "x.tar",
+          to: "TRANSFERRING", occurred_at: "2026-08-30T09:00:00Z"
+        }
+      ]
+    }));
+
+    const got = await httpApi.listActivity();
+
+    // An unnamed edge into a named state still reads as that state.
+    expect(got[0].text).toBe("Backup committed");
+    expect(got[0].severity).toBe("ok");
+    // An unnamed edge into an unnamed state still appears, plainly.
+    expect(got[1].text).toBe("SOMETHING_NEW");
+    expect(got[1].severity).toBe("info");
+    // And an event carrying no origin at all is unchanged.
+    expect(got[2].text).toBe("Transfer started");
+    expect(got[2].severity).toBe("info");
+  });
+
   it("reports no progress at all for an operation the service sent none for, running or finished", async () => {
     vi.stubGlobal("fetch", mockFetchOk({
       operations: [

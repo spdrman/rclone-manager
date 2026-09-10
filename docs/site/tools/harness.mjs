@@ -55,18 +55,22 @@
 // polls. The instant is the same one the fixtures are written around.
 
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -106,19 +110,7 @@ export const EXAMPLE = {
   // Obviously not a key. It is never photographed: the paste field is
   // captured empty, and this only exists so the Import button can be
   // clicked and the imported-fingerprint state reached.
-  fakeKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nEXAMPLE-PLACEHOLDER-NOT-A-KEY\n-----END OPENSSH PRIVATE KEY-----\n",
-  // For the storage-destination wizard. The access key is the literal
-  // string the AWS documentation uses for an example and the secret is
-  // typed into a password field that renders as dots, but both are also
-  // never sent anywhere: the API on the other end is an in-memory object.
-  s3: {
-    name: "offsite-b2",
-    endpoint: "https://s3.us-west-002.backblazeb2.com",
-    region: "us-west-002",
-    bucket: "nas-offsite-archive",
-    accessKey: "EXAMPLE-ACCESS-KEY-ID",
-    secretKey: "EXAMPLE-SECRET-not-a-real-one"
-  }
+  fakeKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nEXAMPLE-PLACEHOLDER-NOT-A-KEY\n-----END OPENSSH PRIVATE KEY-----\n"
 };
 
 function readPin() {
@@ -128,19 +120,97 @@ function readPin() {
   return sha[1];
 }
 
-export function loadPlaywright() {
+/** `page.clock.setFixedTime`, which every capture depends on for a stable
+ *  timestamp, arrived in Playwright 1.45. An older borrowed copy fails
+ *  with "cannot read properties of undefined", a hundred lines into a
+ *  recording, which is not a sentence anybody can act on. */
+const PLAYWRIGHT_MIN = [1, 45];
+
+/**
+ * Where Playwright comes from, in the order it is looked for.
+ *
+ * The pinned gate checkout first, because that is the copy this repository
+ * already maintains and the one the browser suite runs against. Then any
+ * other populated gate checkout, newest first: `scripts/e2e/tests-repo.pin`
+ * moves whenever the specs move, and on the day it does every cached
+ * checkout on the machine is suddenly at the wrong sha through no fault of
+ * the person trying to re-record a picture. Then `ui/shared`'s own
+ * node_modules, which has Playwright on any machine that has run the unit
+ * tests.
+ *
+ * None of that changes what issue #158 decided. Nothing here adds a
+ * dependency to anything; every candidate is a copy that already exists
+ * for its own reasons, and this only declines to be the one script that
+ * breaks because a pin moved.
+ */
+function playwrightCandidates() {
   const cacheRoot = resolve(
     process.env.XDG_CACHE_HOME ?? resolve(process.env.HOME ?? "", ".cache"),
     "rclone-manager-tests-gate"
   );
-  const suite = resolve(cacheRoot, readPin(), "suites/web-ui");
-  if (!existsSync(resolve(suite, "node_modules/playwright-core"))) {
+  const pinned = readPin();
+  const out = [{ why: "the pinned gate checkout " + pinned.slice(0, 12), dir: resolve(cacheRoot, pinned, "suites/web-ui") }];
+
+  if (existsSync(cacheRoot)) {
+    const others = readdirSync(cacheRoot)
+      .filter((sha) => sha !== pinned && /^[0-9a-f]{40}$/.test(sha))
+      .map((sha) => ({ sha, dir: resolve(cacheRoot, sha, "suites/web-ui") }))
+      .filter((c) => existsSync(resolve(c.dir, "node_modules/playwright-core")))
+      .map((c) => ({ ...c, at: statSync(resolve(c.dir, "node_modules/playwright-core")).mtimeMs }))
+      .sort((a, b) => b.at - a.at);
+    for (const c of others) {
+      out.push({ why: "an unpinned gate checkout " + c.sha.slice(0, 12) + ", because the pinned one is not populated", dir: c.dir });
+    }
+  }
+
+  out.push({ why: "ui/shared's own node_modules", dir: UI_DIR });
+  return out;
+}
+
+export function loadPlaywright() {
+  const tried = [];
+  for (const candidate of playwrightCandidates()) {
+    const pkg = resolve(candidate.dir, "package.json");
+    const mod = resolve(candidate.dir, "node_modules/playwright-core");
+    if (!existsSync(mod) || !existsSync(pkg)) {
+      tried.push(candidate.dir);
+      continue;
+    }
+    const require = createRequire(pkg);
+    const version = require("playwright-core/package.json").version;
+    const [major, minor] = version.split(".").map(Number);
+    if (major < PLAYWRIGHT_MIN[0] || (major === PLAYWRIGHT_MIN[0] && minor < PLAYWRIGHT_MIN[1])) {
+      throw new Error(
+        "Playwright " + version + " in " + candidate.dir + " is too old.\n" +
+          "These captures pin the clock with page.clock.setFixedTime, which needs " +
+          PLAYWRIGHT_MIN.join(".") + " or newer. Without it every recording carries a different time."
+      );
+    }
+    console.log("using Playwright " + version + " from " + candidate.why);
+    return require("playwright-core");
+  }
+  throw new Error(
+    "no Playwright to borrow. Looked in:\n  " + tried.join("\n  ") + "\n" +
+      "Run the e2e gate once (scripts/e2e/run-tests-repo-gate.sh) so it populates the pinned checkout,\n" +
+      "or `cd " + UI_DIR + " && npm ci`, then re-run this."
+  );
+}
+
+/** A launch failure is almost always a missing browser BINARY rather than
+ *  a missing package, and the two are different installs: playwright-core
+ *  is the one package that deliberately does not manage them. Saying which
+ *  command fixes it turns a stack trace into an instruction. */
+async function launchChromium(chromium) {
+  try {
+    return await chromium.launch();
+  } catch (e) {
     throw new Error(
-      "no Playwright to borrow: " + suite + " has no node_modules.\n" +
-        "Run the e2e gate once (scripts/e2e/run-tests-repo-gate.sh) so it populates that checkout, then re-run this."
+      "Chromium would not launch, which usually means the browser binary is not installed.\n" +
+        "playwright-core does not download one. Install it with:\n" +
+        "  npx playwright install chromium\n\n" +
+        String(e && e.message ? e.message : e)
     );
   }
-  return createRequire(resolve(suite, "package.json"))("playwright-core");
 }
 
 /**
@@ -182,6 +252,10 @@ function assertPortFree(port) {
 async function waitForServer(url, child) {
   const deadline = Date.now() + 90_000;
   for (;;) {
+    // Both, because a child killed by a signal leaves exitCode null and a
+    // check on exitCode alone spins to the deadline saying the server did
+    // not answer, which is true and is not the reason.
+    if (child.signalCode !== null) throw new Error("the dev server was killed by " + child.signalCode);
     if (child.exitCode !== null) throw new Error("the dev server exited with code " + child.exitCode);
     try {
       const res = await fetch(url, { redirect: "manual" });
@@ -207,6 +281,17 @@ async function waitForServer(url, child) {
  * no `pkill` anywhere near this file: the one thing worse than a leaked
  * dev server is a pattern kill that also takes out the editor's language
  * server.
+ *
+ * # Ctrl-C has to reach the teardown too
+ *
+ * A `finally` covers a throw and covers nothing else. A SIGTERM or a
+ * Ctrl-C kills this process where it stands, `finally` never runs, and
+ * the dev server it spawned goes on holding port 8080 after the script
+ * that started it is gone, which is exactly the state the next run
+ * refuses to start in. So the teardown is registered as a signal handler
+ * as well, and the handler re-raises the signal afterwards so this process
+ * still dies of what killed it rather than reporting a tidy exit code
+ * nobody asked for.
  */
 export async function withDevServer(body) {
   if (!existsSync(resolve(UI_DIR, "node_modules"))) {
@@ -226,13 +311,50 @@ export async function withDevServer(body) {
 
   const { chromium } = loadPlaywright();
   let browser;
+
+  /** Kills the server FIRST and closes the browser second, each on its
+   *  own, because the previous order let a throwing browser.close() skip
+   *  the kill and leak the port. Idempotent, because both the finally
+   *  below and a signal handler can reach it. */
+  let torn = false;
+  const teardown = async () => {
+    if (torn) return;
+    torn = true;
+    try {
+      if (dev.exitCode === null && dev.signalCode === null) {
+        dev.kill("SIGTERM");
+        // Wait for it to actually go. Returning while the child is still
+        // shutting down leaves the port held for a moment, and the next
+        // run's assertPortFree is what trips over it.
+        await Promise.race([once(dev, "exit"), new Promise((r) => setTimeout(r, 5000))]);
+      }
+    } catch {
+      // Nothing useful to do about a kill that failed, and it must not
+      // stop the browser being closed.
+    }
+    try {
+      if (browser) await browser.close();
+    } catch {
+      // Same.
+    }
+  };
+
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
+  const onSignal = (signal) => {
+    void teardown().then(() => {
+      for (const s of signals) process.removeListener(s, onSignal);
+      process.kill(process.pid, signal);
+    });
+  };
+  for (const s of signals) process.once(s, onSignal);
+
   try {
     await waitForServer(base + "/", dev);
-    browser = await chromium.launch();
+    browser = await launchChromium(chromium);
     return await body({ base, browser });
   } finally {
-    if (browser) await browser.close();
-    dev.kill("SIGTERM");
+    for (const s of signals) process.removeListener(s, onSignal);
+    await teardown();
   }
 }
 
@@ -346,11 +468,17 @@ async function clipRect(page, clipSel, pad) {
     }
     if (!box) throw new Error("nothing matched " + selectors.join(", "));
     const viewport = page.viewportSize();
+    const x = Math.max(0, Math.round(box.x - pad));
+    const y = Math.max(0, Math.round(box.y - pad));
+    // Clamped against what is left of the viewport from x and y, not
+    // against its full width and height. A box near the right edge with a
+    // pad on it overhangs, and Playwright truncates the capture without
+    // saying so, which is a picture quietly missing a strip of itself.
     return {
-      x: Math.max(0, Math.round(box.x - pad)),
-      y: Math.max(0, Math.round(box.y - pad)),
-      width: Math.min(viewport.width, Math.round(box.width + pad * 2)),
-      height: Math.min(viewport.height, Math.round(box.height + pad * 2))
+      x,
+      y,
+      width: Math.min(viewport.width - x, Math.round(box.width + pad * 2)),
+      height: Math.min(viewport.height - y, Math.round(box.height + pad * 2))
     };
   }
   const viewport = page.viewportSize();
@@ -384,8 +512,17 @@ export function optimise(names) {
   for (const name of names) {
     const file = resolve(SCREENS, name + ".png");
     before += statSync(file).size;
-    const r = spawnSync("magick", [file, "-strip", "-dither", "None", "-colors", "256", "PNG8:" + file], { stdio: "inherit" });
-    if (r.status !== 0) throw new Error("magick failed on " + file);
+    // Through a temporary and then a rename, rather than reading and
+    // writing the same path. These are committed binaries, and a crash
+    // halfway through an in-place rewrite leaves a corrupt one in the
+    // working tree looking like a change somebody made on purpose.
+    const tmp = file + ".tmp";
+    const r = spawnSync("magick", [file, "-strip", "-dither", "None", "-colors", "256", "PNG8:" + tmp], { stdio: "inherit" });
+    if (r.status !== 0) {
+      rmSync(tmp, { force: true });
+      throw new Error("magick failed on " + file);
+    }
+    renameSync(tmp, file);
     after += statSync(file).size;
   }
   console.log(
@@ -396,7 +533,49 @@ export function optimise(names) {
 
 // ----------------------------------------------------------------- GIFs
 
-const FFMPEG = process.env.FFMPEG ?? "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg";
+/**
+ * Where ffmpeg is, decided by asking rather than by assuming.
+ *
+ * This used to be one hard-coded Apple Silicon Homebrew path, which is a
+ * statement about the machine it was written on and about nothing else:
+ * on a Linux box, an Intel Mac, or a Mac where ffmpeg came from anywhere
+ * but that formula, every capture script failed at the encode with a path
+ * that had never existed there.
+ *
+ * PATH first, because a machine that has ffmpeg on PATH has the one its
+ * owner chose. The Homebrew paths are a fallback for a shell that has not
+ * picked them up, and FFMPEG overrides both. Which one was taken is
+ * printed with the first clip, so a surprising encode is one line away
+ * from being explained.
+ */
+function findFfmpeg() {
+  const candidates = process.env.FFMPEG
+    ? [process.env.FFMPEG]
+    : [
+        "ffmpeg",
+        "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg",
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg"
+      ];
+  for (const c of candidates) {
+    const r = spawnSync(c, ["-version"], { stdio: "ignore" });
+    if (!r.error && r.status === 0) return c;
+  }
+  throw new Error(
+    "no ffmpeg. Looked for: " + candidates.join(", ") + "\n" +
+      "Install it, or set FFMPEG to its path and re-run."
+  );
+}
+
+let ffmpegPath = null;
+function ffmpeg() {
+  if (ffmpegPath === null) {
+    ffmpegPath = findFfmpeg();
+    console.log("encoding with " + ffmpegPath);
+  }
+  return ffmpegPath;
+}
 
 /**
  * A GIF, recorded as a scripted sequence of held frames rather than as a
@@ -454,6 +633,17 @@ export class Clip {
    * @param {number=} opts.pad padding around the crop selector
    */
   constructor(page, name, { clip = null, width = 900, pad = 0, colors = 64 } = {}) {
+    // Validated, because `name` decides a path. It used to be concatenated
+    // into a directory under docs/site/screens/ which the constructor then
+    // deleted, so `new Clip(page, "../..")` resolved to docs/site and
+    // removed the site. It is a file name, it is only ever a file name,
+    // and now it has to look like one.
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+      throw new Error(
+        "clip name " + JSON.stringify(name) + " is not a file name. " +
+          "Lower case letters, digits and hyphens, because it becomes docs/site/screens/<name>.gif."
+      );
+    }
     this.page = page;
     this.name = name;
     this.clipSel = clip;
@@ -461,12 +651,13 @@ export class Clip {
     this.pad = pad;
     this.colors = colors;
     this.frames = [];
-    this.dir = resolve(SCREENS, ".frames-" + name);
-    // A frames directory left behind by a failed run would otherwise be
-    // concatenated into the next one. Inside the repository's own output
-    // directory, named by this clip, and created by this class.
-    rmSync(this.dir, { recursive: true, force: true });
-    mkdirSync(this.dir, { recursive: true });
+    // Frames go to a fresh temporary directory OUTSIDE the repository.
+    // They used to be written to a dot-directory inside
+    // docs/site/screens/, which is a tracked directory of committed
+    // binaries that ignores nothing by that name, and every failure path
+    // in write() throws before the cleanup, so a bad run left loose PNGs
+    // in it looking like something somebody meant to add.
+    this.dir = mkdtempSync(join(tmpdir(), "rcm-site-clip-" + name + "-"));
   }
 
   /**
@@ -479,18 +670,59 @@ export class Clip {
   async frame(hold = 0.55, { settleFor = 120 } = {}) {
     await this.page.evaluate(() => document.fonts.ready);
     await this.page.waitForTimeout(settleFor);
-    // Measured once and then locked for the rest of the clip. Every frame
-    // of a GIF has to be the same size, and a card that grows when a
-    // report lands in it does not: measuring per frame produced a clip
-    // whose frames were 618px and 1326px tall, which ffmpeg squashed into
-    // one canvas. Locking also means the crop cannot drift by a pixel
-    // between two runs, which is half of what makes a re-record diffable.
-    if (!this.rect) this.rect = await clipRect(this.page, this.clipSel, this.pad);
-    const clip = this.rect;
+    const clip = await this.rectFor();
     const file = resolve(this.dir, String(this.frames.length).padStart(4, "0") + ".png");
     await this.page.screenshot({ path: file, animations: "disabled", ...(clip ? { clip } : {}) });
     this.frames.push({ file, hold });
     return this;
+  }
+
+  /**
+   * The rectangle to photograph, the same size every frame and in the
+   * right place on this one.
+   *
+   * The SIZE is measured once and locked. Every frame of a GIF has to be
+   * the same size, and a card that grows when a report lands in it is
+   * not: measuring per frame produced a clip whose frames were 618px and
+   * 1326px tall, which ffmpeg squashed onto one canvas.
+   *
+   * The POSITION is not locked, and that is the correction to the first
+   * version of this. A bounding box is relative to the viewport, so a
+   * rectangle locked at frame 0 and reused after the page has scrolled
+   * photographs a different part of the document while looking exactly as
+   * intended. Two clips here scroll mid-recording. So the anchor is kept
+   * in document coordinates and converted back per frame, which means the
+   * crop follows the thing it is a crop of.
+   *
+   * A region that has left the viewport entirely is a failure and not a
+   * clamp: a picture of the wrong place is worse than a script that
+   * stops.
+   */
+  async rectFor() {
+    if (this.clipSel === null || this.clipSel === undefined) {
+      if (!this.rect) this.rect = await clipRect(this.page, this.clipSel, this.pad);
+      return this.rect;
+    }
+    if (typeof this.clipSel === "object" && !Array.isArray(this.clipSel)) return this.clipSel;
+
+    const here = await clipRect(this.page, this.clipSel, this.pad);
+    const scrollY = await this.page.evaluate(() => window.scrollY);
+    if (!this.anchor) {
+      this.anchor = { x: here.x, docY: here.y + scrollY, width: here.width, height: here.height };
+      return { x: here.x, y: here.y, width: here.width, height: here.height };
+    }
+
+    const y = Math.round(this.anchor.docY - scrollY);
+    const viewport = this.page.viewportSize();
+    if (y < 0 || y + this.anchor.height > viewport.height) {
+      throw new Error(
+        this.name + " frame " + this.frames.length + ": the region this clip is of has scrolled " +
+          (y < 0 ? "above" : "below") + " the window (y " + y + ", height " + this.anchor.height +
+          ", viewport " + viewport.height + "). Scroll it back into view before this frame, or " +
+          "start a second clip, rather than photographing whatever is there instead."
+      );
+    }
+    return { x: this.anchor.x, y, width: this.anchor.width, height: this.anchor.height };
   }
 
   /** Hold the frame already captured for longer, without taking another

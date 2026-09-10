@@ -152,6 +152,57 @@ func TestCreateStorageMedium_WritesTheDeclarationAndNoSecret(t *testing.T) {
 	}
 }
 
+// TestCreateStorageMedium_CredentialsFileIsAPathUnderTheCredentialsDirectory
+// is issue #665's C1, second half: creating a medium from an imported
+// credential reference and reading the written config.yaml back AS
+// BYTES must show neither canary anywhere in the file, and the
+// credentials.file value it does carry must be a path under
+// mediumCredentialsDirName ("s3_credentials/") - never the material
+// itself, and never a path this deployment did not mint.
+// TestCreateStorageMedium_WritesTheDeclarationAndNoSecret already proves
+// the first half; this names the second explicitly, the way #665's own
+// credential-canary table asks for.
+func TestCreateStorageMedium_CredentialsFileIsAPathUnderTheCredentialsDirectory(t *testing.T) {
+	svc, configPath := openTestService(t)
+	ref, err := svc.ImportStorageCredentials(context.Background(), testCanaryAccessKeyID, testCanarySecret, "")
+	if err != nil {
+		t.Fatalf("ImportStorageCredentials: %v", err)
+	}
+	if _, err := svc.CreateStorageMedium(context.Background(), StorageMediumSpec{
+		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Bucket: "nas-backups",
+		Credentials:         StorageMediumCredentials{ID: ref.ID},
+		SkipConnectionCheck: true,
+	}); err != nil {
+		t.Fatalf("CreateStorageMedium: %v", err)
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	text := string(raw)
+	for _, canary := range []string{testCanarySecret, testCanaryAccessKeyID} {
+		if strings.Contains(text, canary) {
+			t.Fatalf("config.yaml carries the credential canary %q:\n%s", canary, text)
+		}
+	}
+
+	found := false
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "file:") || !strings.Contains(trimmed, mediumCredentialsDirName) {
+			continue
+		}
+		found = true
+		if !strings.HasSuffix(trimmed, ref.ID) {
+			t.Errorf("credentials.file line %q does not end with the minted reference id %q", trimmed, ref.ID)
+		}
+	}
+	if !found {
+		t.Fatalf("config.yaml has no credentials.file line under %q:\n%s", mediumCredentialsDirName, text)
+	}
+}
+
 // TestCreateStorageMedium_RefusesADuplicateIdAndWritesNothing keeps the
 // "refuse, never partially apply" rule this package's settings write
 // already holds.

@@ -18,7 +18,7 @@
 // recomputing ConfigRevision — so the change is visible to every other
 // method on this BackupService (ListBackupSets, GetBackupSet,
 // SubmitRunCycle) immediately, without an operator restarting the
-// process, and visible to `backup-manager sources`/any other CLI
+// process, and visible to `rbm sources`/any other CLI
 // invocation the next time one runs, since that command already reads
 // the same file fresh on every invocation (core/cmd/backup-manager/
 // sources.go).
@@ -582,7 +582,7 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	defer b.configMu.Unlock()
 
 	// Re-read from disk, not b.state.Load().inner.Config: this is the same "always
-	// read fresh" discipline `backup-manager sources` already uses
+	// read fresh" discipline `rbm sources` already uses
 	// (core/cmd/backup-manager/sources.go), and it is what makes this
 	// method safe even if configPath was edited by hand (or by a second
 	// process) since this BackupService last loaded it — the write below

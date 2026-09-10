@@ -6,10 +6,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 )
 
-// cmdFetch is `backup-manager fetch --source S --backup-set B [--dry-run]`:
+// cmdFetch is `rbm fetch --source S --backup-set B [--dry-run]`:
 // an operator-triggered, on-demand run of exactly one configured backup
 // set's cycle share. See internal/app.Service.Fetch's doc for exactly what
 // --dry-run does and does not do (it never touches the journal at all;
@@ -92,14 +94,35 @@ func cmdFetch(args []string) int {
 	}
 
 	if result.DryRun {
+		stuck := 0
 		for _, p := range result.Preview {
 			known := ""
 			if p.Known {
 				known = "  (already known)"
+				// Issue #662: "(already known)" is true of a settled
+				// object and of one whose artifact this run will never
+				// touch again, and it was the only thing said about
+				// either. The state is the difference, and an operator
+				// who has just been told the set is FAILING is reading
+				// this line to find out why running it does nothing.
+				//
+				// The marker itself is left exactly as it was and the
+				// state is appended, so anything reading this line for
+				// that phrase still finds it and what is added is only
+				// the part that was missing.
+				if lifecycle.IsExceptionalState(lifecycle.State(p.State)) {
+					known += " " + p.State + ": this run will not re-attempt it"
+					stuck++
+				}
 			}
 			fmt.Printf("%-60s %12d bytes%s\n", p.RemotePath, p.Size, known)
 		}
 		fmt.Printf("%d object(s) on the remote\n", len(result.Preview))
+		if stuck > 0 {
+			fmt.Printf("%d of them belong to artifacts a cycle will not attempt again: a real run would transfer nothing for these.\n", stuck)
+			fmt.Println("`" + cliecho.Binary + " status` names them and what to run; `" + cliecho.Binary +
+				" retry <artifact-id>` puts one back in the pipeline.")
+		}
 		return 0
 	}
 

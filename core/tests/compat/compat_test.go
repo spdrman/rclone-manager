@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/cliecho"
 )
 
 // The gate itself: capture every FR-35 surface from this working tree and
@@ -409,7 +411,7 @@ func TestSaveRoundTripsWhatItWasGiven(t *testing.T) {
 // leave every other field on it, including the two that a corpus is
 // supposed to go red over, the build's version and the embedded rclone's.
 func TestNormalizeEventTimeTakesTheClockAndNothingElse(t *testing.T) {
-	const line = `{"time":"2026-09-06T19:49:05.212202Z","level":"INFO","msg":"backup-manager starting","event":"startup","version":"dev","commit":"none","go_version":"go1.24.0"}`
+	const line = `{"time":"2026-09-06T19:49:05.212202Z","level":"INFO","msg":"rbm starting","event":"startup","version":"dev","commit":"none","go_version":"go1.24.0"}`
 
 	got := normalizeEventTime(line)
 	if strings.Contains(got, "2026-09-06T19:49:05") {
@@ -424,7 +426,7 @@ func TestNormalizeEventTimeTakesTheClockAndNothingElse(t *testing.T) {
 	// A timestamp that is not the event line's own field is left alone: a
 	// product that started printing one in a message would be a change
 	// this corpus has to notice.
-	const inProse = `  err| backup-manager: last run at 2026-09-06T19:49:05Z did not finish`
+	const inProse = `  err| ` + cliecho.Binary + `: last run at 2026-09-06T19:49:05Z did not finish`
 	if normalizeEventTime(inProse) != inProse {
 		t.Errorf("a timestamp in an ordinary sentence was normalized away:\n%s", normalizeEventTime(inProse))
 	}

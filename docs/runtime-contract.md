@@ -93,9 +93,9 @@ A runtime profile is how one executable changes host-dependent behaviour
 without becoming a second build.
 
 ```
-backup-manager-web serve    --profile=generic
-backup-manager-web serve    --profile=ugos --trusted-upstream=172.19.0.2/32
-backup-manager-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 \
+rbm-web serve    --profile=generic
+rbm-web serve    --profile=ugos --trusted-upstream=172.19.0.2/32
+rbm-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 \
                             --ui-root=/usr/share/backup-manager/ui
 ```
 
@@ -373,7 +373,7 @@ had changed, for three work packages, with every suite green.
 The engine's check is a liveness question. Every adapter's web UI declares
 `depends_on: <engine>: condition: service_healthy`, so whatever it asks stands
 between an operator and the only LAN-facing container in the deployment.
-`backup-manager status` is FR-24's verdict and exits non-zero on a fresh
+`rbm status` is FR-24's verdict and exits non-zero on a fresh
 install by design, which made "install the app" and "reach the app" mutually
 exclusive on all nine adapters.
 
@@ -515,7 +515,7 @@ second proxy would double a cost that is already about half the read.
 ## Performance evidence for this change
 
 All seven metrics EPIC B #81's performance contract names, measured with
-`scripts/perf/capture-baseline.sh --repeat 5` on the designated benchmark host
+`python3 scripts/rcmtools/perf/capture_baseline.py --repeat 5` on the designated benchmark host
 `darwin-arm64-mac17-2`, workload `phase6-baseline-v1`, and compared against
 #165's committed baseline with `scripts/perf/check-baseline.sh --compare`.
 Nothing was re-baselined.
@@ -549,7 +549,7 @@ the two-service topology leaking into the direct path.
 
 **`image_size_bytes` grew by 65,536 bytes.** That is the profile table, the
 gateway authenticator and the bundle resolver compiled into
-`/backup-manager-web`. It is 0.15% of the image against a 5% budget, and it is
+`/rbm-web`. It is 0.15% of the image against a 5% budget, and it is
 real growth rather than noise: #165 recorded that two independent builds of the
 same commit produced byte-identical image sizes, so there is no noise here to
 hide in and no reason to describe 64 KiB as anything but 64 KiB.
@@ -570,7 +570,7 @@ working with no change. What is new is additive:
 | `--profile=${RUNTIME_PROFILE:-generic}` on both commands | none; `generic` is what the previous build did |
 | `TZ: ${TZ:-UTC}` | none; UTC is what the image defaulted to |
 | `stop_grace_period` | the engine now gets 30s instead of Docker's 10s default, so a shutdown during a journal write is less likely to be killed mid-write |
-| explicit `healthcheck` on the engine | the engine's compose healthcheck is now `/health/live` rather than the image's `backup-manager status`, so a DEGRADED or unconfigured instance no longer keeps `web-ui` from starting. Backup freshness stays the image's own HEALTHCHECK, the alerts block, and `docker compose exec rclone-manager /backup-manager status` |
+| explicit `healthcheck` on the engine | the engine's compose healthcheck is now `/health/live` rather than the image's `rbm status`, so a DEGRADED or unconfigured instance no longer keeps `web-ui` from starting. Backup freshness stays the image's own HEALTHCHECK, the alerts block, and `docker compose exec rclone-manager /rbm status` |
 | `UI_DIR` / `UI_ROOT` on `web-ui` | none when unset, which is the default |
 | `x-canonical-runtime` | none at runtime; compose ignores unknown `x-` keys |
 

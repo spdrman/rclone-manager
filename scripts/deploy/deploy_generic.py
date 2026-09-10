@@ -148,9 +148,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     set_group.add_argument("--backup-set-id", default="primary",
                             help="This backup set's own id within --source-id (config.yaml's backup_sets[].id).")
     set_group.add_argument("--stale-after", default="24h",
-                            help="Duration (e.g. 24h) after which a backup set with no successful cycle is reported STALE.")
+                            help="Duration (e.g. 24h) after which a backup set with no successful cycle "
+                                 "is reported STALE.")
     set_group.add_argument("--poll-interval", default="1h",
-                            help="Duration (e.g. 1h) between scheduled run_cycle passes (config.yaml's top-level poll_interval).")
+                            help="Duration (e.g. 1h) between scheduled run_cycle passes "
+                                 "(config.yaml's top-level poll_interval).")
 
     paths_group = parser.add_argument_group("Host paths")
     paths_group.add_argument(
@@ -163,7 +165,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     deploy_group = parser.add_argument_group("Deployment")
     deploy_group.add_argument("--listen-port", default=DEFAULT_LISTEN_PORT,
-                               help="Host port web-ui's HTTP listener is published on (container/.env.example's own LISTEN_PORT).")
+                               help="Host port web-ui's HTTP listener is published on "
+                                    "(container/.env.example's own LISTEN_PORT).")
     deploy_group.add_argument("--puid", default=DEFAULT_PUID,
                                help="Host uid the containers run as - must already own --state-dir/--backup-dir.")
     deploy_group.add_argument("--pgid", default=DEFAULT_PGID,

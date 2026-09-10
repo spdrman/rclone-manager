@@ -230,7 +230,7 @@ the manifest is a claim about what the registry holds.
 ## Version parity
 
 `container/release-manifest.json`'s `version` is the `VERSION` build argument the
-binaries were stamped with, which is what `/backup-manager version` answers.
+binaries were stamped with, which is what `/rbm version` answers.
 `canonical.json`'s `image.tag` is the semantic version every provider package
 advertises. Those have to be the same string in a real release, and now they are:
 both record `0.3.3`, the tag cut for this release rather than the generator's

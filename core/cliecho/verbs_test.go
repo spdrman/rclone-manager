@@ -27,41 +27,41 @@ func TestTheRoutesWhoseVerbsNowExistNameThem(t *testing.T) {
 		{
 			name:   "the durable journal",
 			action: Action{Method: "GET", Route: "/activity"},
-			want:   "backup-manager activity",
+			want:   Binary + " activity",
 		},
 		{
 			name:   "the durable journal, with a limit",
 			action: Action{Method: "GET", Route: "/activity", Query: mustQuery("limit=50")},
-			want:   "backup-manager activity --limit 50",
+			want:   Binary + " activity --limit 50",
 		},
 		{
 			name:   "the live feed",
 			action: Action{Method: "GET", Route: "/activity/live"},
-			want:   "backup-manager activity --follow",
+			want:   Binary + " activity --follow",
 		},
 		{
 			name:   "the live feed for one set",
 			action: Action{Method: "GET", Route: "/activity/live", Query: mustQuery("backup_set=api-server%2Fvar-backups&limit=25")},
-			want:   "backup-manager activity --follow --backup-set api-server/var-backups --limit 25",
+			want:   Binary + " activity --follow --backup-set api-server/var-backups --limit 25",
 		},
 		{
 			name: "applying a retention plan",
 			action: Action{Method: "POST", Route: "/backup-sets/{source}/{set}/retention/apply",
 				Params: map[string]string{"source": "api-server", "set": "var-backups"},
 				Body:   []byte(`{"plan_id":"plan_01HX"}`)},
-			want: "backup-manager retention apply api-server/var-backups --acknowledge",
+			want: Binary + " retention apply api-server/var-backups --acknowledge",
 		},
 		{
 			name: "reading an edit hold",
 			action: Action{Method: "GET", Route: "/backup-sets/{source}/{set}/edit-hold",
 				Params: map[string]string{"source": "api-server", "set": "var-backups"}},
-			want: "backup-manager backup-set edit-hold api-server/var-backups",
+			want: Binary + " backup-set edit-hold api-server/var-backups",
 		},
 		{
 			name: "releasing an edit hold",
 			action: Action{Method: "POST", Route: "/backup-sets/{source}/{set}/edit-hold/release",
 				Params: map[string]string{"source": "api-server", "set": "var-backups"}},
-			want: "backup-manager backup-set edit-hold api-server/var-backups --release",
+			want: Binary + " backup-set edit-hold api-server/var-backups --release",
 		},
 		{
 			// The scalars this request also carried are in the block
@@ -71,20 +71,20 @@ func TestTheRoutesWhoseVerbsNowExistNameThem(t *testing.T) {
 			name: "replacing the deployment's tier chain",
 			action: Action{Method: "PATCH", Route: "/settings",
 				Body: []byte(`{"retention":{"tiers":[{"name":"daily","granularity":"day","keep":7}],"timezone":"Europe/Berlin"},"acknowledge_medium_disclosure":true}`)},
-			want: "backup-manager settings patch --policy-file <a file holding this retention: block> --acknowledge-medium-disclosure",
+			want: Binary + " settings patch --policy-file <a file holding this retention: block> --acknowledge-medium-disclosure",
 		},
 		{
 			name: "a tier chain beside a capacity setting, which may share a line",
 			action: Action{Method: "PATCH", Route: "/settings",
 				Body: []byte(`{"retention":{"tiers":[{"name":"daily","granularity":"day","keep":7}]},"capacity":{"cap_bytes":1099511627776}}`)},
-			want: "backup-manager settings patch --policy-file <a file holding this retention: block> --cap-bytes 1099511627776",
+			want: Binary + " settings patch --policy-file <a file holding this retention: block> --cap-bytes 1099511627776",
 		},
 		{
 			name: "a backup set's own tier chain",
 			action: Action{Method: "PUT", Route: "/backup-sets/{source}/{set}/retention",
 				Params: map[string]string{"source": "api-server", "set": "var-backups"},
 				Body:   []byte(`{"tiers":[{"name":"daily","granularity":"day","keep":7}],"timezone":"Europe/Berlin","acknowledge_medium_disclosure":true}`)},
-			want: "backup-manager backup-set retention api-server/var-backups --policy-file <a file holding this whole retention: block> --acknowledge-medium-disclosure",
+			want: Binary + " backup-set retention api-server/var-backups --policy-file <a file holding this whole retention: block> --acknowledge-medium-disclosure",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,7 +113,7 @@ func TestTheRoutesWhoseVerbsNowExistNameThem(t *testing.T) {
 // one of the three values the contract defines and not one any client has
 // ever sent. So no real request matched that arm: every restore and every
 // per-set run fell through to a default whose sentence is about
-// `backup-manager run`, a different verb for a different act. The
+// `rbm run`, a different verb for a different act. The
 // example body said "restore" too, so the end-to-end parse test certified
 // a branch production never reaches.
 //
@@ -122,7 +122,7 @@ func TestTheRoutesWhoseVerbsNowExistNameThem(t *testing.T) {
 func TestOperationsReadsTheActionsTheContractDefines(t *testing.T) {
 	restore := Echo(Action{Method: "POST", Route: "/operations",
 		Body: []byte(`{"action":"` + apicontract.ActionRestorePlacement + `","config_revision":"r1","restore":{"artifact_id":"api-server/var-backups/dump.tar","medium":"offsite_s3","window_days":7,"acknowledged":true}}`)})
-	if got, want := restore.Shell(), "backup-manager restore api-server/var-backups/dump.tar --medium offsite_s3 --days 7 --acknowledge"; got != want {
+	if got, want := restore.Shell(), Binary+" restore api-server/var-backups/dump.tar --medium offsite_s3 --days 7 --acknowledge"; got != want {
 		t.Errorf("a %s prints\n  %s\nwant\n  %s", apicontract.ActionRestorePlacement, got, want)
 	}
 
@@ -143,7 +143,7 @@ func TestOperationsReadsTheActionsTheContractDefines(t *testing.T) {
 			apicontract.ActionRunBackupSet, perSet.GapDetail)
 	}
 	if len(cycle.Command) != 0 {
-		t.Errorf("%s printed the command %v; `backup-manager run` opens the service in the operator's own process and runs a cycle THERE", apicontract.ActionRunCycle, cycle.Command)
+		t.Errorf("%s printed the command %v; `"+Binary+" run` opens the service in the operator's own process and runs a cycle THERE", apicontract.ActionRunCycle, cycle.Command)
 	}
 
 	// And the examples drive all three, because an arm no example visits

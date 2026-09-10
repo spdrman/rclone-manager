@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/backend"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -103,19 +105,28 @@ func parseFlagsAroundOperands(fs *flag.FlagSet, args []string) ([]string, error)
 // The returned cleanup func closes the journal; callers should always
 // `defer cleanup()` immediately.
 func openService(ctx context.Context, configPath string, withTransport bool) (*app.Service, *config.Config, func(), error) {
+	// Issue #665: same refusal Open (core/service/service.go) makes for
+	// the web host, applied to every CLI subcommand that opens a
+	// service. Nothing reads the result yet; the whole effect today is
+	// refusing loudly on a malformed manifest, before this binary's own
+	// config or journal are even opened.
+	if _, err := backend.Bundled(); err != nil {
+		return nil, nil, func() {}, fmt.Errorf("%s: loading the bundled backend manifests: %w", cliecho.Binary, err)
+	}
+
 	cfg, journal, releaseJournal, err := service.OpenConfigAndJournal(ctx, configPath)
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
 	cleanup := func() {
 		if err := journal.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": closing state database: %v\n", err)
 		}
 		// Only after the journal handle is closed: the shared journal lock
 		// is what keeps another process from migrating this journal while
 		// this command still has it open (see core/service's startup.go).
 		if err := releaseJournal(); err != nil {
-			fmt.Fprintf(os.Stderr, "backup-manager: releasing the state database lock: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": releasing the state database lock: %v\n", err)
 		}
 	}
 
@@ -254,7 +265,7 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 	}
 	cleanup := func() {
 		if err := closeFn(); err != nil {
-			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": closing state database: %v\n", err)
 		}
 	}
 	if intent == readsConfig {
@@ -292,7 +303,7 @@ func openBackupService(ctx context.Context, configPath string, intent configInte
 		// turning a successful change into a non-zero exit over a lock
 		// file that could not be closed would be the wrong trade.
 		if err := guard.Release(); err != nil {
-			fmt.Fprintf(os.Stderr, "backup-manager: releasing this deployment's configuration-write claim: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": releasing this deployment's configuration-write claim: %v\n", err)
 		}
 	}, nil
 }
@@ -342,7 +353,7 @@ func openConfigWriteRoute(ctx context.Context, configPath string) (configWriteRo
 	}
 	closeLocal := func() {
 		if err := closeFn(); err != nil {
-			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": closing state database: %v\n", err)
 		}
 	}
 
@@ -355,7 +366,7 @@ func openConfigWriteRoute(ctx context.Context, configPath string) (configWriteRo
 		// Reported and not fatal, exactly as on the direct path: the
 		// change has already happened by the time this runs.
 		if err := write.guard.Release(); err != nil {
-			fmt.Fprintf(os.Stderr, "backup-manager: releasing this deployment's configuration-write claim: %v\n", err)
+			fmt.Fprintf(os.Stderr, cliecho.Binary+": releasing this deployment's configuration-write claim: %v\n", err)
 		}
 	}
 
@@ -459,7 +470,7 @@ func cycleExit(w io.Writer, verdicts ...app.CycleVerdict) int {
 			// binary prints: a write to stderr failing cannot change the
 			// verdict that is being reported, and swallowing the verdict
 			// because the terminal went away would be the worse answer.
-			_, _ = fmt.Fprintf(w, "backup-manager: %s backed nothing up this cycle: %d walked, %d got through\n",
+			_, _ = fmt.Fprintf(w, cliecho.Binary+": %s backed nothing up this cycle: %d walked, %d got through\n",
 				v.Set, v.Progress.Walked, v.Progress.Durable)
 		}
 	}
@@ -506,14 +517,14 @@ func moveExit(w io.Writer, report app.CycleReport) int {
 	code := 0
 	if report.MovesErr != nil {
 		code = 1
-		_, _ = fmt.Fprintf(w, "backup-manager: this deployment declares a storage medium and could not run its move pass at all: %v\n", report.MovesErr)
+		_, _ = fmt.Fprintf(w, cliecho.Binary+": this deployment declares a storage medium and could not run its move pass at all: %v\n", report.MovesErr)
 	}
 	if p := report.MoveProgress(); p.NothingMoved() {
 		code = 1
 		if p.Reason == "" {
-			_, _ = fmt.Fprintf(w, "backup-manager: this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived\n", p.Attempted)
+			_, _ = fmt.Fprintf(w, cliecho.Binary+": this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived\n", p.Attempted)
 		} else {
-			_, _ = fmt.Fprintf(w, "backup-manager: this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived; the first refusal was: %s\n",
+			_, _ = fmt.Fprintf(w, cliecho.Binary+": this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived; the first refusal was: %s\n",
 				p.Attempted, p.Reason)
 		}
 	}
@@ -597,7 +608,7 @@ const (
 	// The second half is not an accident somebody should fix quietly.
 	// Every subcommand parses with flag.ContinueOnError and returns this
 	// for whatever fs.Parse hands back, and flag.ErrHelp is one of those,
-	// so `backup-manager check -h` is a correct command line, a request
+	// so `rbm check -h` is a correct command line, a request
 	// this binary answered, and a 2. That predates #551 and did not
 	// matter while the codes were an implementation detail; publishing
 	// them as a contract is what made it a promise, so the promise says
@@ -649,7 +660,7 @@ const (
 // exit code is what a script is supposed to branch on so that nothing has
 // to parse the prose.
 func fail(err error) int {
-	fmt.Fprintln(os.Stderr, "backup-manager:", err)
+	fmt.Fprintln(os.Stderr, cliecho.Binary+":", err)
 	if errors.Is(err, errEngineHoldsDeployment) {
 		return exitEngineHoldsDeployment
 	}
@@ -662,6 +673,6 @@ func fail(err error) int {
 // missing required flag or a wrong argument count) and returns the
 // argument-error exit code.
 func usageError(format string, args ...any) int {
-	fmt.Fprintf(os.Stderr, "backup-manager: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, cliecho.Binary+": "+format+"\n", args...)
 	return exitUsage
 }

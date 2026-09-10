@@ -16,6 +16,8 @@
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="topbar.css">
   <script src="topbar.js" defer></script>
+  <script src="copy.js" defer></script>
+  <script src="tooltip.js" defer></script>
 </head>
 <body>
 <header class="topbar is-hero" id="topbar">
@@ -54,17 +56,14 @@
         <span class="nav-label nav-label-full">The web interface</span>
         <span class="nav-label nav-label-short">Web UI</span>
       </a>
-      <a href="storage.html" class="nav-item">
-        <span class="nav-label nav-label-full">Storage &amp; retention</span>
-        <span class="nav-label nav-label-short">Storage</span>
-      </a>
       <a href="ssh.html" class="nav-item">
         <span class="nav-label nav-label-full">SSH &amp; connections</span>
         <span class="nav-label nav-label-short">SSH</span>
       </a>
-      <a href="cli.html" class="nav-item">
-        <span class="nav-label nav-label-full">Commands</span>
-        <span class="nav-label nav-label-short">Commands</span>
+
+      <a href="reference.html" class="nav-item">
+        <span class="nav-label nav-label-full">Reference</span>
+        <span class="nav-label nav-label-short">Ref</span>
       </a>
 
       <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
@@ -109,27 +108,116 @@
     <p>It is a standalone Go binary that embeds pinned rclone Go packages. It does not fork rclone, and it does not shell out to the <code>rclone</code> command line for normal data movement.</p>
   </section>
 
+  <section class="install-hero">
+    <h2 id="install">Installing it</h2>
+    <p>Two commands, no arguments, on any machine with Docker:</p>
+    <pre class="cmd-primary"><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py</code></pre>
+    <pre class="cmd-primary"><code>python3 install_docker_host.py install</code></pre>
+
+    <p class="io-label">Output</p>
+    <pre class="io-out"><code><!-- BEGIN INSTALL-OUTPUT -->==&gt; Installed.
+    Web UI:  http://10.0.0.10:8080
+    Compose: docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml
+
+    No config.yaml was written, on purpose. Issue #176 shipped a first-run setup flow
+    precisely so that a fresh install does not need one hand-written before it starts.
+    Open the Web UI and follow it. The enrollment link is in the engine's log:
+      docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml logs rclone-manager | grep enroll<!-- END INSTALL-OUTPUT --></code></pre>
+
+    <p>That is the whole of it. The installer picks every path for you (<code>~/rclone-manager</code>, with <code>backups</code>, <code>state</code>, <code>config</code> and <code>secrets</code> under it), generates the SSH key the engine will use, pins the exact image it was built against, and refuses before it changes anything if the machine cannot run it. Nothing needs deciding up front, and everything it chose can be changed afterwards.</p>
+    <p>That last line is a command rather than a result, and it is the one that matters. The installer does not print the enrolment link itself: the engine mints the token during startup and writes the notice to its own log, so the epilog prints the line that fetches it back out. Run it &mdash; every path in it is the one the install just chose:</p>
+    <pre><code><!-- BEGIN ENROL-COMMAND -->docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml logs rclone-manager | grep enroll<!-- END ENROL-COMMAND --></code></pre>
+
+    <p class="io-label">Output</p>
+    <div class="io">
+      <pre class="io-out"><code><!-- BEGIN ENROL-LOG-LINE -->rbm-web: no administrator account exists yet. Open
+<a class="tip-term" href="first-run.html#enrol">http://10.0.0.10:8080/enroll?token=<span class="tip-token">4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6</span></a>
+to create one (valid 30 minutes, single use).<!-- END ENROL-LOG-LINE --></code></pre>
+      <aside class="tip-bubble">
+        <button type="button" class="tip-close" aria-label="Close this note">&times;</button>
+        <span class="tip-heading">Attention &middot; this is the one-time link</span>
+        <p>It claims the administrator account, and it is the only thing that can: reaching the port is deliberately not enough. The token proves you can read the container's own log, which is what somebody else on the network cannot do.</p>
+        <p><strong>Single use, and it expires in 30 minutes.</strong> The address is this machine's own, not <code>localhost</code>, so open it from whichever computer you are sitting at. Lapsed? Restart the engine and it prints a fresh one.</p>
+        <p><a href="first-run.html#enrol">Creating the administrator, screen by screen &rarr;</a></p>
+      </aside>
+    </div>
+    <p>The address in it is this machine's own rather than <code>localhost</code>, because the link is read from another machine on the same network: <code>localhost</code> over SSH on a laptop is the laptop, which is <a href="https://github.com/spdrman/rclone-manager/issues/688">what the installer used to print</a>. Open it, set an administrator password, and <a href="first-run.html">the first-run tutorial</a> picks up from there.</p>
+
+
+    <div class="note ok">
+      <span class="note-label">If the link has expired</span>
+      <p>The token lasts 30 minutes and works once, and nothing re-issues it while the engine keeps running. One command mints a fresh one:</p>
+      <pre><code>python3 install_docker_host.py enroll-link</code></pre>
+      <p class="io-label">Output</p>
+      <pre class="io-out"><code><!-- BEGIN ENROLL-LINK-OUTPUT -->==&gt; Restarting rclone-manager, which is what mints a token
+==&gt; Waiting up to 90s for the new notice
+
+rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?token=jdurSlionp6jyoHTzP_5fHYfLy3Kk6tq to create one (valid 30 minutes, single use).
+
+    Valid 30 minutes, and it works once. Every link printed before this one is now dead,
+    including any still in your scrollback.<!-- END ENROLL-LINK-OUTPUT --></code></pre>
+      <p>It reads back the <strong>newest</strong> notice rather than the first, because the container keeps its log across the restart and the earlier link is the one that restart just killed. On a deployment that already has an administrator it refuses instead, with its own exit code: enrolment is a one-time door and it closed when that account was created, so <a href="first-run.html#again">sign in</a>.</p>
+    </div>
+
+    <h3 id="install-cli-only" style="margin-top:2rem">Command line only, no web interface</h3>
+    <p>Same two commands, one flag on the second one:</p>
+    <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py</code></pre>
+    <pre><code>python3 install_docker_host.py install --cli-only</code></pre>
+
+    <p class="io-label">Output</p>
+    <pre class="io-out"><code><!-- BEGIN INSTALL-OUTPUT-CLI-ONLY -->==&gt; Installed. Nothing is running yet, and that is what --cli-only means here:
+    `rbm daemon` is refused rather than started without a config.yaml, and a CLI-only
+    install has no first-run wizard to write one. Creating the first backup set writes
+    the first config.yaml with it:
+      /home/you/rclone-manager/bin/rbm backup-set create &lt;source&gt;/&lt;backup-set&gt; \
+          --host HOST --user USER --remote-path /remote/path --local-path /backups/path \
+          --ssh-key-file /etc/rclone-manager/id_ed25519 --trust-host-key \
+          --completion-strategy stable
+
+    Then start the scheduler:
+      docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml up -d --no-build rclone-manager
+
+    CLI:     /home/you/rclone-manager/bin/rbm
+    Compose: docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml<!-- END INSTALL-OUTPUT-CLI-ONLY --></code></pre>
+    <p>No enrolment link there, and nothing to click: a CLI-only deployment has no Web UI to enrol into.</p>
+    <p>That runs the engine as <code>rbm daemon</code> rather than <code>rbm-web serve</code>, never starts the <code>web-ui</code> container, and publishes no port on this host at all, so nothing in the deployment serves HTTP and the <code>rbm-web</code> binary is never executed. What you drive it with is the <code>rbm</code> wrapper the installer writes to <code>~/rclone-manager/bin/rbm</code>, which takes every command in <a href="#cli">the table below</a>.</p>
+    <p>There is no first-run wizard either, which is why a fresh CLI-only host stages everything, starts nothing, and prints the one command that writes the first configuration: creating the first backup set writes the first <code>config.yaml</code> along with it. Re-running the installer later with no flags keeps the deployment this shape, and <code>--no-cli-only</code> converts it to the full stack.</p>
+
+    <p>If you would rather see what either of those would do before it does it, <code>python3 install_docker_host.py preflight</code> runs every check and installs nothing.</p>
+
+    <h3 style="margin-top:2rem">What it sets up</h3>
+    <p>There is one product here, not eleven. Every supported platform wraps the same multi-architecture image and the same Compose topology, and the differences between them are host paths and metadata formats.</p>
+    <p>Two services, one image. <code>rclone-manager</code> runs the engine, the scheduler, local authentication and <code>/api/v1</code> in one process, with no published port at all. <code>web-ui</code> serves the static interface and reverse-proxies the API to it, and it is the only service with a LAN-facing port. They meet on a private project-scoped bridge network, which is what makes the engine's isolation a topology rather than a convention.</p>
+    <div class="note warn">
+      <span class="note-label">Only if you are writing the Compose file yourself</span>
+      <p>The installer above already does this. If you are standing the stack up by hand instead: the runtime image is distroless and has no root step, and a bind mount does not chown its source, so create the host directories and chown them to the container's uid and gid before the first <code>docker compose up</code>, or the engine will not be able to write its own configuration, keys or journal.</p>
+    </div>
+    <p>The configuration directory in particular is mounted writable, as a directory rather than a single file, because a directory is the only shape that can honestly be empty. That is what makes an install that has never been configured reach the setup screen instead of refusing to start. <a href="first-run.html">The first-run tutorial</a> picks up from there.</p>
+  </section>
+
   <a href="first-run.html" class="clipping">
     <span class="clipping-tag">Tutorial</span>
     <p>Setting one up for the first time means an enrolment link printed to a container log, an administrator account that is not your NAS login, and a six-step wizard whose answers become a <code>config.yaml</code> you will live with. The first-run walkthrough shows every screen, with an example for every field and a sentence on what that entry actually causes the product to do.</p>
     <span class="clipping-read">Walk the first run &rarr;</span>
   </a>
 
+  <a href="reference.html" class="clipping">
+    <span class="clipping-tag">Reference</span>
+    <p>Every screen of the web interface with a picture and a table of what each control does, every one of the twenty <code>rbm</code> commands, and every subcommand and flag of the installer with its default. The command table and the flag table are both checked against the code on every run of the gate, so a command or a flag that lands without a row fails the build rather than going quietly stale.</p>
+    <span class="clipping-read">Read the reference &rarr;</span>
+  </a>
+
+
   <section>
     <h2 id="new">What 0.3.3 added</h2>
     <p>0.3.3 is the release that came out of running 0.3.2 on real hardware, and it splits cleanly in two. The first half is what the deployment got wrong, and there is a thread running through all three: each of them read correctly in the arrangement it was built in and broke in the one an operator actually has. The terminal was fine on a short page. Dark mode was fine in light mode, where the browser's default happens to match. A banner is fine until you have read it. None of them would have been caught by looking harder at the code and all three were obvious within a minute of real use.</p>
-    <p>The second half is what it still could not do: a retention tier could not say where its copies go, the drive every backup lands on was not in the list of destinations, and a source connection was relied on without ever having been proven.</p>
+    <p>The second half is what it still could not do: a retention tier could not say where its copies go, the drive every backup lands on was not in the list of destinations, and a source connection was relied on without ever having been proven. The destinations, the tier pickers and the connection test behind them are enumerated on <a href="reference.html#web-destinations">the reference page</a>, screen by screen.</p>
 
     <div class="cards">
       <a href="web-ui.html" class="clipping">
         <span class="clipping-tag">Moving pictures</span>
         <p>The terminal docked to every page, run controls that report an outcome, per-backup-set activity, retention previews, edit mode and dark mode.</p>
         <span class="clipping-read">Watch the interface &rarr;</span>
-      </a>
-      <a href="storage.html" class="clipping">
-        <span class="clipping-tag">Moving pictures</span>
-        <p>The local drive as a real destination, declaring an S3 one and proving it in eight named steps, and binding a retention tier to it.</p>
-        <span class="clipping-read">Where backups go &rarr;</span>
       </a>
       <a href="ssh.html" class="clipping">
         <span class="clipping-tag">Moving pictures</span>
@@ -140,7 +228,7 @@
 
     <div class="note">
       <span class="note-label">The command is <code>rbm</code> now</span>
-      <p>It used to be <code>backup-manager</code>. <code>backup-manager</code> still works as an alias, so nothing already written stops running, and every command on this site is spelled the new way. <a href="cli.html">The commands page</a> has the whole surface and the rest of the story.</p>
+      <p>It used to be <code>backup-manager</code>, and 0.3.3 retires that name rather than aliasing it, so anything already written against the old command has to move across when you upgrade. <a href="reference.html#cli">The reference page</a> has the whole surface.</p>
     </div>
   </section>
 
@@ -171,7 +259,7 @@
         </tbody>
       </table>
     </div>
-    <p>Where a copy goes after that, and how long it is kept, is the retention policy's business. <a href="storage.html">Storage and retention</a> covers the destinations and the tiers that name them.</p>
+    <p>Where a copy goes after that, and how long it is kept, is the retention policy's business. <a href="reference.html#web-settings">The reference page</a> covers the destinations and the tiers that name them.</p>
   </section>
 
   <section>
@@ -203,27 +291,15 @@
         </tbody>
       </table>
     </div>
-    <p><a href="cli.html">The commands page</a> has the full table, the rename, and the rule that makes every button in the web interface name the command it is equivalent to. The <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md">README</a>'s copy is checked against the binary's own dispatch table on every run of the repository's gate. This site's copies are checked against the same table for their <em>shape</em>, by <code>docs/site/tools/check-cli-table.mjs</code>, and not for what any command does, so on a disagreement about behaviour the README is right.</p>
-  </section>
-
-  <section>
-    <h2 id="install">Installing it</h2>
-    <p>There is one product here, not eleven. Every supported platform wraps the same multi-architecture image and the same Compose topology, and the differences between them are host paths and metadata formats.</p>
-    <p>Two services, one image. <code>rclone-manager</code> runs the engine, the scheduler, local authentication and <code>/api/v1</code> in one process, with no published port at all. <code>web-ui</code> serves the static interface and reverse-proxies the API to it, and it is the only service with a LAN-facing port. They meet on a private project-scoped bridge network, which is what makes the engine's isolation a topology rather than a convention.</p>
-    <div class="note warn">
-      <span class="note-label">Before the first start</span>
-      <p>The runtime image is distroless and has no root step, and a bind mount does not chown its source. Create the host directories yourself and chown them to the container's uid and gid before the first <code>docker compose up</code>, or the engine will not be able to write its own configuration, keys or journal.</p>
-    </div>
-    <p>The configuration directory in particular is mounted writable, as a directory rather than a single file, because a directory is the only shape that can honestly be empty. That is what makes an install that has never been configured reach the setup screen instead of refusing to start. <a href="first-run.html">The first-run tutorial</a> picks up from there.</p>
-    <p>The interface carries its own typeface and its own icons rather than fetching them, so a deployment on a network with no route out looks the way it was designed to look instead of silently falling back to whatever the browser has.</p>
+    <p>The <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md">README</a>'s copy of this table is checked against the binary's own dispatch table on every run of the repository's gate, so it cannot quietly go stale. The copy above is a transcription of it and is not checked, so if the two ever disagree, the README is right.</p>
+    <p><a href="reference.html#cli">The reference page</a> carries the same table with the subcommands and the interesting flags filled in, plus where a configuration change is written and what each exit code means. That copy is checked.</p>
   </section>
 
   <section>
     <h2 id="honest">What has not been proven</h2>
     <p>This section exists because the README has one, and a documentation site that quietly drops the uncomfortable half is worse than no site.</p>
     <ul>
-      <li><strong>No acceptance procedure has been run on real hardware.</strong> The procedures for TrueNAS, Unraid, OpenMediaVault, Synology and Proxmox VE are written, reviewed and specific, and nobody working on the repository has one of those machines to execute them on. Every one of those platforms is build-supported and uncertified. The exception is the UGREEN NAS that generic Docker deployment ran on, which is where every defect 0.3.3 fixes came from.</li>
-      <li><strong>The container image has never been published.</strong> <code>ghcr.io/spdrman/backup-manager</code> is the settled target and the packaging metadata records it as unpublished, so that reference resolves to nothing today.</li>
+      <li><strong>No acceptance procedure has been run on real hardware.</strong> The procedures for TrueNAS, Unraid, OpenMediaVault, Synology and Proxmox VE are written, reviewed and specific, and nobody working on the repository has one of those machines to execute them on. Every one of those platforms is build-supported and uncertified.</li>
       <li><strong>There is no restore execution.</strong> <code>rbm restore</code> asks a storage provider to make an archived copy readable again, which is a different thing. Getting a backup back onto a server is a documented manual procedure, and that procedure is the whole of it.</li>
       <li><strong>There is no metrics endpoint.</strong> A Prometheus renderer exists in the tree and nothing imports it. No listener serves <code>/metrics</code>.</li>
       <li><strong>Every picture on this site comes from a mock.</strong> Every screenshot and every clip was recorded against the development server's in-memory fixture API, not against a running engine. The layout, the copy, the flow and the interaction are the real ones. The data is not, and each page says so.</li>

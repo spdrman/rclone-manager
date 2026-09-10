@@ -413,8 +413,17 @@ make_full_tree() {
   # quietly skips itself when its own file is missing is #160's silent skip
   # wearing a different hat.
   mkdir -p "$tree/scripts/install"
-  printf 'import unittest\n\n\nclass Stub(unittest.TestCase):\n    def test_stub(self):\n        pass\n' \
+  # `-> None` on the stub, because scripts/install is inside the tree the
+  # lint step now walks and mypy --strict rejects an unannotated def.
+  printf 'import unittest\n\n\nclass Stub(unittest.TestCase):\n    def test_stub(self) -> None:\n        pass\n' \
     >"$tree/scripts/install/test_install_docker_host.py"
+
+  # scripts/deploy's unit tests (#82/B4.1), wired into the gate by #672.
+  # Stubbed for the identical reason as the block above, and it is the same
+  # `cd` into a directory this fixture does not have.
+  mkdir -p "$tree/scripts/deploy"
+  printf 'import unittest\n\n\nclass Stub(unittest.TestCase):\n    def test_stub(self) -> None:\n        pass\n' \
+    >"$tree/scripts/deploy/test_deploy_generic.py"
 
   # The browser e2e step (#158, #197). Same reason as every stub above, and
   # the same failure mode without it, which this suite has now been bitten
@@ -440,6 +449,41 @@ make_full_tree() {
   # stands up two containers on a temporary network.
   printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$TWO_MACHINE_STUB" \
     >"$tree/scripts/e2e/two-machine-backup.sh"
+
+  # The Python lint step (EPIC I, I1.6 / #672), and this is the SEVENTH time
+  # the lesson above has had to be written down here. The step runs
+  # `ruff check --config scripts/rcmtools/pyproject.toml scripts` and
+  # `mypy --strict --config-file ... scripts/rcmtools scripts/deploy
+  # scripts/install/embed_compose.py`; a synthetic tree has none of that and
+  # no reason to have it, so a tool exits 2 on a path that is not there, the
+  # gate runs under `set -e`, and every full-tree case below dies for a
+  # reason that has nothing to do with what it measures. That is precisely
+  # what happened when the step landed.
+  #
+  # THREE halves now, and the third is here because the second turned out
+  # not to work. The TOOLS are stubbed on the tree's own PATH the same way
+  # `docker` is -- whether a developer has ruff and mypy installed is a
+  # property of the machine, and in the real tree the step ledgers when a
+  # tool is missing, which is exactly what D1 asserts the absence of. But
+  # ci-local.sh prepends /opt/homebrew/bin to PATH ahead of everything, so a
+  # Homebrew-installed ruff SHADOWS the stub and runs for real. It ran for
+  # real the whole time this step was `ruff check scripts/rcmtools`, and
+  # passed only because that path happened to hold one clean file with no
+  # configuration to find.
+  #
+  # So the tree is made honest instead of made quiet: the real configuration
+  # is copied in, the stub package and the two stub suites are written to be
+  # clean under it, and the paths the step names all exist. Whichever ruff
+  # wins the PATH race now measures the same thing.
+  mkdir -p "$tree/scripts/rcmtools"
+  printf '"""A stub package, so the lint step has a directory to point at."""\n' \
+    >"$tree/scripts/rcmtools/__init__.py"
+  cp "$SCRIPTS_DIR/rcmtools/pyproject.toml" "$tree/scripts/rcmtools/pyproject.toml"
+  printf '"""A stub module, so the mypy half of the step has a file to point at."""\n' \
+    >"$tree/scripts/install/embed_compose.py"
+  printf '#!/bin/sh\nexit 0\n' >"$tree/bin/ruff"
+  printf '#!/bin/sh\nexit 0\n' >"$tree/bin/mypy"
+  chmod +x "$tree/bin/ruff" "$tree/bin/mypy"
 
   printf '%s\n' "$tree"
 }
@@ -1021,14 +1065,39 @@ fi
 # Asserted on the source rather than by running a case, because running
 # one costs a container image build and this has to hold for a removal
 # site somebody adds later, not only for the two that exist today.
-proof_script="$(dirname "$0")/../e2e/two-machine-backup.sh"
+#
+# PORTED-CHECK HAZARD NOTE. EPIC I / I1.6 (#672) moved the proof to
+# scripts/rcmtools/e2e/two_machine_backup.py and left an exec shim at the old
+# path, and this check went to the shim. Both halves broke, in the two
+# opposite ways a port breaks a check:
+#
+#   "the proof says why -v is load-bearing" went RED, loudly, because the
+#   shim carries none of the explanation. Visible, and fixed by repointing.
+#
+#   "every docker rm removes the container's volumes too" went VACUOUSLY
+#   GREEN, silently, because a shim contains no `docker rm` at all and a
+#   grep that matches nothing has nothing to complain about. It would have
+#   gone on ticking forever over a file that cannot violate it.
+#
+# So the scan is repointed AND given a floor: the proof must contain at
+# least two `docker rm` sites (teardown and release_case), which is what
+# stops the absence of a finding from being mistaken for a clean result.
+proof_script="$(dirname "$0")/../rcmtools/e2e/two_machine_backup.py"
 if [ ! -f "$proof_script" ]; then
-  fail "I7 the two-machine proof script is where this expects it"
+  fail "I7 the two-machine proof is where this expects it" "no file at $proof_script"
 else
   # Comment lines are excluded, and the prose above the teardown quotes
   # `docker rm -f` on purpose to explain why it is wrong; a check that
   # cannot tell a command from its own explanation is not a check.
-  bare_removals="$(grep -vE '^[[:space:]]*#' "$proof_script" | grep -nE 'docker rm ' | grep -v -- '-fv' || true)"
+  code_only="$(grep -vE '^[[:space:]]*#' "$proof_script")"
+  removal_sites="$(printf '%s\n' "$code_only" | grep -cE '"docker", "rm"' || true)"
+  if [ "$removal_sites" -ge 2 ]; then
+    pass "I7 the proof still has removal sites to check ($removal_sites), so the scan below is not vacuous"
+  else
+    fail "I7 the proof still has removal sites to check, found $removal_sites" \
+      "A scan that matches nothing cannot fail. Either the removals moved, or this check has stopped watching."
+  fi
+  bare_removals="$(printf '%s\n' "$code_only" | grep -nE '"docker", "rm"' | grep -v -- '"-fv"' || true)"
   if [ -z "$bare_removals" ]; then
     pass "I7 every docker rm in the proof removes the container's volumes too"
   else

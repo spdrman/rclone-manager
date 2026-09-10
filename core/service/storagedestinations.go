@@ -54,7 +54,7 @@ import (
 //
 // # The one thing that still renders it, and why that is not a third spelling
 //
-// `backup-manager settings` and `backup-set retention` print a
+// `rbm settings` and `backup-set retention` print a
 // `medium=...` column only for a tier that is NOT on the local hard drive.
 // That reads like a call site with an opinion and is not one: it is a
 // RENDERING rule ("a destination column is worth a reader's attention when
@@ -156,14 +156,17 @@ func mediumForConfig(surface string) string {
 // binary loads, and its round-trip rule is what FR-35 pins.
 
 // localStorageMediumSummary is the local hard drive as the destinations
-// list reports it.
+// list reports it, for a configuration that never declared it.
 //
-// It is SYNTHESISED on every read rather than materialised into the
-// configuration, and that is the same decision EffectiveDefaultStorageMedium
-// and RetentionTier.EffectiveMedium both make: a local entry written into
-// storage_mediums would be a declared medium claiming the reserved id,
-// which config.Validate refuses outright, and it would arrive in the
-// operator's file by the act of loading a settings page.
+// Since #670 a fresh install declares local for real
+// (seedLocalStorageMedium), and toStorageMediumSummaries uses that row
+// instead of calling this function. This one stays as the fallback for
+// every configuration written before #670: it is SYNTHESISED on every
+// read rather than materialised, the same decision
+// EffectiveDefaultStorageMedium and RetentionTier.EffectiveMedium both
+// make, so an old config.yaml keeps loading and resolving exactly as it
+// always did, with no migration and no rewrite the operator never asked
+// for.
 //
 // Path is the drive it writes to, resolved through
 // config.EffectiveBackupRoot exactly as the capacity section resolves it,
@@ -291,11 +294,11 @@ func declaresStorageDestination(cfg *config.Config, id string) bool {
 // default.
 //
 // It is applied on the way out of a removal, unconditionally, rather than
-// left to follow from the fact that the local hard drive is always
-// present. The issue asks for the rule to be stated and tested rather
-// than inherited from a side effect, and there is a second reason to
-// write it down: it also repairs a default this removal orphaned. The
-// default cannot normally be removed (RemoveStorageMedium refuses it), but
+// left to follow from a fact about local specifically. The issue asks for
+// the rule to be stated and tested rather than inherited from a side
+// effect, and there is a second reason to write it down: it also repairs
+// a default this removal orphaned. The default cannot normally be
+// removed (RemoveStorageMedium refuses it), but
 // a configuration edited by hand between two of this process's writes can
 // arrive here naming a destination the removal just took out, and a
 // dangling default is a config.Validate failure that would surface as "the
@@ -308,10 +311,15 @@ func normalizeDefaultStorageMedium(cfg *config.Config) bool {
 	if cfg == nil {
 		return false
 	}
-	// One destination left means the local hard drive and nothing else,
-	// since local is always there and never declared. Spelled as a count
-	// over the whole set rather than as "len(StorageMediums) == 0" so the
-	// rule in the code is the rule in the issue.
+	// Zero declared destinations only ever happens on a configuration
+	// that never declared local at all (every one written before #670,
+	// or one hand-edited since) — a fresh install's seed guarantees at
+	// least one row from first boot, and RemoveStorageMedium's own
+	// invariant (the default cannot be removed, and the last one
+	// remaining is always the default) keeps a legitimate removal from
+	// ever reaching zero. Spelled as a count over the whole set rather
+	// than a name check, so the rule in the code is the rule in the
+	// issue.
 	if len(cfg.StorageMediums) == 0 {
 		if cfg.DefaultStorageMedium == "" {
 			return false

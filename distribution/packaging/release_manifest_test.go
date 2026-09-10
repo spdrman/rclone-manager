@@ -577,7 +577,15 @@ func fixtureManifest(p providerUnderTest, commit string) ReleaseManifest {
 	for _, arch := range p.canonical.Architectures {
 		hashes := map[string]string{}
 		for _, b := range p.canonical.Binaries {
-			hashes[strings.TrimPrefix(b, "/")] = strings.Repeat("a", 64)
+			// manifestBinaryKey, not a bare TrimPrefix: since the 0.3.3
+			// CLI rename the canonical binary paths (/rbm, /rbm-web) and
+			// the keys container/release-manifest.json records a hash
+			// under (backup-manager, backup-manager-web) are different
+			// strings, and a fixture that keyed on the path would be a
+			// manifest the real reader cannot read. Every positive
+			// control built on this would then fail for the fixture's
+			// reason rather than pass for the code's.
+			hashes[manifestBinaryKey(b)] = strings.Repeat("a", 64)
 		}
 		arches = append(arches, ReleaseArchitecture{Architecture: arch, BinarySHA256: hashes})
 	}

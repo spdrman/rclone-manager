@@ -483,7 +483,7 @@ func BuildSPDX(inv Inventory, name, namespace, created string) SPDXDocument {
 		DocumentNamespace: namespace,
 		CreationInfo: SPDXCreationInfo{
 			Created:  created,
-			Creators: []string{"Tool: backup-manager-provenance", "Organization: The Backup Manager Authors"},
+			Creators: []string{"Tool: rclone-manager-provenance", "Organization: Roman Goldmann"},
 		},
 	}
 	for _, c := range inv.Components {
@@ -745,7 +745,7 @@ func ArtifactParityComplaints(targets map[string]DistributionTarget, recorded []
 // repository with no tags is an abbreviated commit) and the tag every
 // provider package advertises is a semantic version that resolves
 // nowhere. The moment a push happens, the two must be the same string,
-// or `docker run ghcr.io/spdrman/backup-manager:1.0.0 /backup-manager
+// or `docker run ghcr.io/spdrman/backup-manager:1.0.0 /rbm
 // version` answers with a commit SHA that the listing never mentions.
 func VersionParityComplaints(published bool, canonicalTag, manifestVersion, bundleVersion string, versionIsABuildStamp bool) []string {
 	var out []string

@@ -13,7 +13,7 @@ import (
 )
 
 // FR-27/FR-30 (issue #239) on the surface FR-20 calls the mandatory
-// dry-run: `backup-manager retention` has to show every MOVE it would
+// dry-run: `rbm retention` has to show every MOVE it would
 // make, not only every deletion, before anything runs.
 //
 // Both tests drive the real command over a real local-backend fetch, the

@@ -434,7 +434,7 @@ func TestPreviewRetention_CarriesThePlacementsItCouldNotConfirm(t *testing.T) {
 // A deletion on the implicit local medium carries no `medium` key, and
 // that absence is the answer rather than a gap: it is what keeps a
 // deployment that declares no storage medium reading exactly as it did
-// before this field existed, and `backup-manager retention` spells the
+// before this field existed, and `rbm retention` spells the
 // same asymmetry the same way (mediumSuffix, core/cmd/backup-manager/
 // retention.go).
 func TestPreviewRetention_EveryDeletionNamesTheMediumItHappensOn(t *testing.T) {

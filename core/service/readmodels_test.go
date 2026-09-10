@@ -313,7 +313,7 @@ func TestListOperations_ReportsSubmittedOperationsNewestFirst(t *testing.T) {
 }
 
 // TestHealth_ReportsEveryConfiguredBackupSet is GET /api/v1/system/health,
-// the same FR-24 computation `backup-manager status` prints.
+// the same FR-24 computation `rbm status` prints.
 func TestHealth_ReportsEveryConfiguredBackupSet(t *testing.T) {
 	svc, _ := openTestService(t)
 	ctx := context.Background()
