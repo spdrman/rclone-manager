@@ -113,7 +113,7 @@ export function DestinationConfigureWizard({
       .getStorageMediumConfiguration(destination.id)
       .then((current) => {
         if (!live) return;
-        setValues({ ...emptyValues(manifest), ...current.values });
+        setValues({ ...emptyValues(manifest), ...current.fields });
         setCredentialConfigured(current.credentialConfigured);
       })
       .catch((e: unknown) => live && setFailure(apiErrorOf(e)));
@@ -192,7 +192,7 @@ export function DestinationConfigureWizard({
       }
 
       const answer = await api.preflightStorageMediumConfiguration(destination.id, {
-        values: configurationValues(manifest, values),
+        fields: configurationValues(manifest, values),
         ...(reference ? { credentials: { credentialsId: reference } } : {})
       });
       setReport(answer);
@@ -221,7 +221,7 @@ export function DestinationConfigureWizard({
     setFailure(null);
     try {
       let saved = await api.configureStorageMedium(destination.id, {
-        values: configurationValues(manifest, values),
+        fields: configurationValues(manifest, values),
         ...(credentialsId ? { credentials: { credentialsId } } : {})
       });
       // After the write and never inside it. A save that also moved the
