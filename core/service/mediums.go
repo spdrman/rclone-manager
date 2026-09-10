@@ -136,6 +136,11 @@ type StorageMediumSpec struct {
 	StorageClass       string
 	UploadVerification string
 
+	// Path is a local_volume medium's directory: config.StorageMedium's
+	// field, unchanged. Meaningless (and refused by config.Validate) on
+	// any other type, issue #666.
+	Path string
+
 	// Credentials is where this medium's credentials come from.
 	Credentials StorageMediumCredentials
 
@@ -689,7 +694,18 @@ func (b *BackupService) mediumFromSpec(spec StorageMediumSpec, inheritCredential
 			ErrInvalidRequest, StorageMediumLocalID)
 	}
 	var creds config.MediumCredentials
-	if !inheritCredentials {
+	switch {
+	case spec.Type == config.StorageMediumTypeLocalVolume:
+		// A local_volume medium reads no credential at all (its manifest
+		// declares none), so a spec naming one is a caller's mistake
+		// rather than something to resolve, and inheritCredentials never
+		// applies here: there is nothing on file to carry forward either.
+		if !spec.Credentials.namesNothing() {
+			return config.StorageMedium{}, fmt.Errorf(
+				"%w: a local_volume medium has no credential to declare; a directory on this machine authenticates with nothing",
+				ErrInvalidRequest)
+		}
+	case !inheritCredentials:
 		var err error
 		creds, err = b.resolveSpecCredentials(spec.Credentials)
 		if err != nil {
@@ -702,6 +718,7 @@ func (b *BackupService) mediumFromSpec(spec StorageMediumSpec, inheritCredential
 		Region:             spec.Region,
 		Endpoint:           spec.Endpoint,
 		Bucket:             spec.Bucket,
+		Path:               spec.Path,
 		Prefix:             spec.Prefix,
 		StorageClass:       spec.StorageClass,
 		UploadVerification: spec.UploadVerification,

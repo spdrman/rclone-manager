@@ -179,10 +179,21 @@ func TestValidate_AcceptsEveryStorageClassAndVerificationMode(t *testing.T) {
 			}
 		})
 	}
+	// Every declared type is accepted, but "accepted" means a medium
+	// SHAPED for that type: flipping Type in place on mediumsConfig's
+	// s3-shaped medium would leave local_volume with a bucket, a region
+	// and a credential it forbids, and no path at all, which is not
+	// "local_volume is accepted", it is "local_volume is accepted with
+	// every one of its own rules broken".
 	for _, typ := range StorageMediumTypes() {
 		t.Run("type "+typ, func(t *testing.T) {
 			c := mediumsConfig()
-			c.StorageMediums[0].Type = typ
+			switch typ {
+			case StorageMediumTypeLocalVolume:
+				c.StorageMediums[0] = StorageMedium{ID: "offsite_s3", Type: StorageMediumTypeLocalVolume, Path: "/mnt/second-disk"}
+			default:
+				c.StorageMediums[0].Type = typ
+			}
 			mustValidate(t, &c)
 		})
 	}

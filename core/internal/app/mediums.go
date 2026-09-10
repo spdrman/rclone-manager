@@ -91,12 +91,23 @@ func (r MediumResolver) Resolve(id string) (transport.Medium, placement.Class, e
 		if err != nil {
 			return transport.Medium{}, "", err
 		}
+		bucket := m.Bucket
+		if typ == transport.MediumTypeLocalDir {
+			// A local_volume medium's destination is its Path, not its
+			// (forbidden, per config.Validate) Bucket. transport.Medium.
+			// Bucket's own doc already carries this: "For
+			// MediumTypeLocalDir it is the directory that stands in for
+			// one" - true since before #666, for the in-tree test
+			// backend transport.MediumTypeLocalDir exists for; #666 is
+			// the first configuration that can actually reach it.
+			bucket = m.Path
+		}
 		return transport.Medium{
 			ID:           m.ID,
 			Type:         typ,
 			Region:       m.Region,
 			Endpoint:     m.Endpoint,
-			Bucket:       m.Bucket,
+			Bucket:       bucket,
 			Prefix:       m.Prefix,
 			StorageClass: m.EffectiveStorageClass(),
 			Credentials: transport.MediumCredentials{
@@ -122,6 +133,8 @@ func (r MediumResolver) Resolve(id string) (transport.Medium, placement.Class, e
 // needs no edit here at all - only a new manifest file. A role this
 // switch does not yet handle is still a refusal at the moment something
 // is about to be reached, exactly as the type-keyed switch was before it.
+// local_volume (issue #666) is exactly that case: RoleLocalVolume ->
+// transport.MediumTypeLocalDir, added below with no new switch shape.
 func mediumType(m config.StorageMedium) (transport.MediumType, error) {
 	reg, err := backend.Bundled()
 	if err != nil {
@@ -134,6 +147,8 @@ func mediumType(m config.StorageMedium) (transport.MediumType, error) {
 	switch manifest.Role {
 	case backend.RoleObjectStore:
 		return transport.MediumTypeS3, nil
+	case backend.RoleLocalVolume:
+		return transport.MediumTypeLocalDir, nil
 	default:
 		return "", fmt.Errorf("app: storage medium %q's backend %q has role %q, which this adapter does not yet dial", m.ID, m.Type, manifest.Role)
 	}

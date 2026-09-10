@@ -10,6 +10,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"syscall"
 
 	"github.com/spdrman/rclone-manager/core/internal/capacity"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -106,6 +108,23 @@ import (
 // act on. LocalSteps below is where it lives.
 const StepSpace Step = "space"
 
+// StepDistinctVolume is whether a local destination lives on a
+// genuinely different filesystem from every OTHER local destination this
+// deployment already writes backups into (issue #666).
+//
+// It is StepSpace's twin in every way that matters: not in Steps for the
+// identical reason (an S3 bucket has no filesystem to be the SAME
+// filesystem as, so the step would be a permanent, meaningless skip on
+// every remote report), and it exists because a directory can fail in a
+// fourth way none of reach/write/space names: two configured
+// destinations can be the SAME disk under two different paths, which is
+// a backup strategy that only LOOKS like one. A drive failure that takes
+// out one path takes out both, so a retention tier that thinks it holds
+// a second copy on this "second" destination is wrong in exactly the way
+// #666 exists to catch before an operator finds out from a failed
+// restore.
+const StepDistinctVolume Step = "distinct_volume"
+
 // LocalSteps is every step a local test connection performs, in order.
 //
 // A list of its own rather than Steps with an insertion, because the two
@@ -113,36 +132,59 @@ const StepSpace Step = "space"
 // would put a permanently skipped step on one of them. What they SHARE is
 // the Step vocabulary and the Report shape, which is what a surface needs.
 var LocalSteps = []Step{
-	StepCredentials, StepReach, StepDeliverable, StepSpace,
+	StepCredentials, StepReach, StepDistinctVolume, StepDeliverable, StepSpace,
 	StepWrite, StepReadBack, StepStorageClass, StepVerification, StepDelete,
 }
 
 // LocalTarget describes the local destination being checked: the
-// directory backups land in, and the operator's own FR-21 lines that
-// decide when it is too full to take one.
+// directory backups land in, the same FR-21 lines that decide when it is
+// too full to take one, and every OTHER local directory this deployment
+// already writes backups into (issue #666).
 //
 // The thresholds arrive as plain byte counts rather than as a
 // config.Capacity, which is internal/capacity's own rule for the same
 // numbers: this package has no need to know where they came from, only
 // that they are bytes, and a config type here would change shape every
 // time that one does.
+//
+// This one struct describes BOTH the backup root's own check and a
+// declared local_volume instance's check (#666): the two used to be one
+// destination and are now a family of them, and a caller distinguishes
+// them only by which id and which other roots it passes in, never by a
+// second type. RunLocal does not know or care whether ID is the reserved
+// local id or an operator-chosen one; it is a string this package
+// composes into a Report and a message, nothing more.
 type LocalTarget struct {
-	// Root is the directory this deployment's backups land in, already
-	// resolved (config.EffectiveBackupRoot). Empty is a real state and is
-	// its own failure: a deployment with no backup set configured has no
-	// local destination to check yet, and saying so is a better answer
-	// than checking the process's working directory.
+	// Root is the directory this destination writes into, already
+	// resolved. Empty is a real state and is its own failure: a
+	// deployment with no backup set configured has no local destination
+	// to check yet, and saying so is a better answer than checking the
+	// process's working directory.
 	Root string
 
-	// SafetyMarginBytes is FR-21's margin: the space this manager holds
-	// back before every transfer. Space below it is space a transfer will
-	// already refuse to start into, so a destination there is not ready
-	// whatever a probe write of a hundred bytes would say.
-	//
-	// Unsigned, matching capacity.Thresholds and capacity.Stat rather
-	// than internal/config's signed fields, because every comparison in
-	// this file is against a statfs reading and a mixed-signedness
-	// comparison is the one arithmetic mistake worth designing out.
+	// ID is this destination's own id, carried into the Report and into
+	// StepDistinctVolume's messages. Empty means the reserved local id
+	// (localReportMedium, "local"), so every caller that predates #666
+	// and never set this field goes on reporting exactly what it always
+	// reported.
+	ID string
+
+	// OtherRoots is every OTHER local destination this deployment
+	// already writes backups into, keyed by its own id: the implicit
+	// backup root under the reserved local id, and every other declared
+	// local_volume instance. Empty means there is nothing yet to compare
+	// against, which is the ordinary state before a second local
+	// destination exists, and StepDistinctVolume passes rather than
+	// failing on an empty comparison set: "nothing to collide with" is
+	// not the same claim as "proven distinct".
+	OtherRoots map[string]string
+
+	// SafetyMarginBytes is held back on top of every incoming artifact's
+	// own size before a transfer is admitted. See internal/capacity's
+	// headroom-arithmetic section for what it is meant to cover (listing
+	// drift, block rounding, other writers on the same volume) and for why
+	// it is a plain byte count this package does not try to compute on an
+	// operator's behalf.
 	SafetyMarginBytes uint64
 
 	// CriticalFreeBytes is the operator's own critical line, zero meaning
@@ -151,6 +193,15 @@ type LocalTarget struct {
 	// and the critical line is where this deployment has already decided
 	// it is in trouble.
 	CriticalFreeBytes uint64
+}
+
+// id is the id RunLocal reports and names in messages: ID, or the
+// reserved local id when the caller left it unset (see ID's own doc).
+func (t LocalTarget) id() string {
+	if t.ID == "" {
+		return localReportMedium
+	}
+	return t.ID
 }
 
 // localProbeDir is the directory segment every probe this file writes
@@ -207,6 +258,7 @@ func RunLocal(ctx context.Context, observe func(Step, error), target LocalTarget
 	r := &localRun{observe: observe, target: target}
 	r.skip(StepCredentials, "a local destination reads no credential: the backups are written by this service to a directory on this machine.")
 	r.reachable()
+	r.distinctFilesystem()
 	r.deliverable()
 	r.roomy()
 	r.written()
@@ -284,6 +336,65 @@ func (r *localRun) reachable() {
 	}
 	r.reached = true
 	r.pass(StepReach, "The directory this deployment's backups land in is there and is a directory.")
+}
+
+// distinctFilesystem is #666's fourth local answer: is this directory
+// genuinely on its own disk, or is it the SAME disk as another
+// configured local destination reached by a different path.
+//
+// It runs right after reachable, before anything is written, because it
+// is a property of the PATH itself and answers the same kind of question
+// reachable does: not "does this directory work" but "is this the
+// directory it claims to be". An operator who points a second
+// destination at a subdirectory of the first one, or at a bind-mount of
+// the same underlying disk under a different name, has declared two
+// destinations that are one disk failure away from being zero, and
+// nothing about that mistake shows up in a write, a read-back or a free
+// space reading: all three succeed identically whether or not the disk
+// underneath is shared.
+//
+// An empty OtherRoots is not evidence of anything: it is the ordinary
+// state before a second local destination exists, or the state of the
+// implicit backup root's own check before #666's callers started passing
+// their sibling destinations in. This step is deliberately never SKIPPED
+// once the directory is reached, even with nothing to compare against:
+// it PASSES, because "there is nothing to collide with yet" is a
+// distinct, positive answer to "is this destination distinct", not an
+// untried step.
+func (r *localRun) distinctFilesystem() {
+	if !r.reached {
+		r.skip(StepDistinctVolume, "This was never tried: the directory could not be reached.")
+		return
+	}
+
+	dev, err := deviceIDOf(r.target.Root)
+	if err != nil {
+		r.fail(StepDistinctVolume, err, "The filesystem this directory lives on could not be identified. The manager's log carries the reason.")
+		return
+	}
+
+	others := make([]string, 0, len(r.target.OtherRoots))
+	for id := range r.target.OtherRoots {
+		others = append(others, id)
+	}
+	sort.Strings(others)
+
+	for _, id := range others {
+		otherDev, err := deviceIDOf(r.target.OtherRoots[id])
+		if err != nil {
+			// That other destination's own problem (gone, unmounted,
+			// unreadable) is not this one's to report; its own check,
+			// run separately, is where that surfaces.
+			continue
+		}
+		if otherDev == dev {
+			r.fail(StepDistinctVolume, fmt.Errorf("shares a filesystem with local destination %q", id),
+				fmt.Sprintf("This directory is on the same filesystem as %q. Two destinations on one disk protect against nothing a single copy did not already protect against: a drive failure takes both down together, so a retention tier that treats this as a second copy of %q is not getting one.",
+					id, id))
+			return
+		}
+	}
+	r.pass(StepDistinctVolume, "This directory is on its own filesystem, distinct from every other local destination this deployment writes to.")
 }
 
 // deliverable is the local answer to "can an artifact be delivered here at
@@ -419,7 +530,7 @@ func (r *localRun) failWrite(err error) {
 // "a step that recorded nothing is a hole rather than silence" rule
 // run.report holds.
 func (r *localRun) report() Report {
-	out := Report{Medium: localReportMedium, OK: true, Checks: make([]Check, 0, len(LocalSteps))}
+	out := Report{Medium: r.target.id(), OK: true, Checks: make([]Check, 0, len(LocalSteps))}
 	for _, step := range LocalSteps {
 		c, ok := r.checks[step]
 		if !ok {
@@ -431,6 +542,37 @@ func (r *localRun) report() Report {
 		out.Checks = append(out.Checks, c)
 	}
 	return out
+}
+
+// deviceIDOf identifies the filesystem that contains path, by the device
+// number POSIX stat(2) reports (st_dev): two paths on the same device are
+// on the same filesystem regardless of how differently they are spelled,
+// which is exactly what a bind-mount, a symlink or a subdirectory of an
+// already-configured destination would otherwise hide from a plain string
+// comparison of paths.
+//
+// A var rather than a plain function so a test can substitute a fake
+// mapping and prove distinctFilesystem's two branches (same device,
+// different device) without needing two real filesystems mounted on the
+// machine running the test - the identical reason TestRunLocal_
+// NoRoomFailsItsOwnStep drives the safety margin rather than trying to
+// fill a real disk. Nothing overrides this in production.
+var deviceIDOf = defaultDeviceIDOf
+
+// defaultDeviceIDOf is deviceIDOf's real implementation. syscall.Stat_t's
+// Dev field is available on every platform capacity.StatPath already
+// targets (linux/amd64, linux/arm64, darwin; see that file's own doc), so
+// no build-tag split is needed here.
+func defaultDeviceIDOf(path string) (uint64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("mediumcheck: stat %q: %w", path, err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("mediumcheck: %q: no device information available on %T", path, info.Sys())
+	}
+	return uint64(st.Dev), nil
 }
 
 // localReportMedium is the id this report names, and it is deliberately

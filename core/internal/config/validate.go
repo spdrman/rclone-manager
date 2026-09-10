@@ -1463,10 +1463,29 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 			v.addf("%s: id must not be empty", path)
 		case !storageMediumIDPattern.MatchString(m.ID):
 			v.addf("%s: id %q must be lower_snake_case (letters, digits and underscores, starting with a letter)", path, m.ID)
-		case m.ID == MediumLocal:
-			// Reserved. Two answers to "where is local" is a placement
-			// record nothing can interpret, and FR-29 stores exactly that
-			// string against every artifact in every deployment.
+		case m.ID == MediumLocal && m.Type != StorageMediumTypeLocalVolume:
+			// Reserved, except as instance zero of the local_volume
+			// backend (issue #666/#670). Two answers to "where is local"
+			// is a placement record nothing can interpret, and FR-29
+			// stores exactly that string against every artifact in every
+			// deployment - but a local_volume medium declaring this id
+			// IS that one answer, made explicit rather than implicit,
+			// not a second one. Any other type claiming it goes on being
+			// refused: MediumTypeLocalDir's doctrine ("a second answer
+			// to where local artifacts live") survives intact for every
+			// type this string is not paired with.
+			//
+			// This is a SCHEMA relaxation only. It has to accept the
+			// shape forever, not just once, because config.Validate runs
+			// on every load: a first-run seed writer (or an operator's
+			// own hand edit - already a supported way to configure this
+			// product) that declares id: local, type: local_volume once
+			// must go on validating on every later restart, with no
+			// migration. It says nothing about whether
+			// CreateStorageMedium or UpdateStorageMedium may ever mint
+			// or rename INTO this id - that operator-facing guard is
+			// mediums.go's own (mediumFromSpec) and is unaffected by
+			// this schema accepting what it produces.
 			v.addf("%s: id %q is reserved for the implicit local medium (a backup set's own local_path) and cannot name a configured one", path, m.ID)
 		default:
 			if first, dup := seen[m.ID]; dup {
@@ -1494,10 +1513,55 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 			v.addf("%s: bucket %q must not contain \"/\"; a key namespace inside the bucket belongs in prefix, not in the bucket name", path, m.Bucket)
 		}
 
-		v.validateMediumCredentials(path, m.Credentials)
+		// The registry delegation above only ever judges fields the
+		// TARGET backend's own manifest declares - validateStorageMediumBackend
+		// builds its values map by ranging over manifest.Fields, never
+		// over every field this struct happens to have - so a field the
+		// manifest does not mention (bucket/region/endpoint/storage_class/
+		// credentials on a local_volume medium, or path on an s3 one)
+		// never reaches backend.ValidateInstance at all and would be
+		// silently accepted rather than refused. That gap was measured
+		// live with #667's author over hub before this line was
+		// written: registry delegation structurally cannot see it, so
+		// these checks are #666's own necessary complement, not a
+		// duplicate of anything above.
+		switch m.Type {
+		case StorageMediumTypeLocalVolume:
+			v.validateLocalVolumeForbiddenFields(path, m)
+			v.validateNoMediumCredentials(path, m.Credentials)
+		default:
+			if m.Path != "" {
+				v.addf("%s: path must not be set for a %q medium; bucket and region name the destination instead", path, m.Type)
+			}
+			v.validateMediumCredentials(path, m.Credentials)
+		}
 	}
 
 	return declared
+}
+
+// validateLocalVolumeForbiddenFields is #666's own half of FR-27,
+// narrowed to what backend.Registry.ValidateInstance (below) cannot see:
+// validateStorageMediumBackend only ever asks the registry about fields
+// the TARGET manifest declares, so a field local_volume's manifest does
+// not mention - bucket, region, endpoint, storage_class - is never put
+// into the values map at all and would otherwise be silently accepted.
+// path's own required/absolute/clean shape is NOT re-checked here: that
+// is exactly what ValidateInstance's KindPath rule already proves, once
+// storageMediumFieldValue's "path" case (below) puts it in front of it.
+func (v *validator) validateLocalVolumeForbiddenFields(path string, m *StorageMedium) {
+	if m.Bucket != "" {
+		v.addf("%s: bucket must not be set for a %q medium; path names the destination instead", path, m.Type)
+	}
+	if m.Region != "" {
+		v.addf("%s: region must not be set for a %q medium; there is no provider region to configure", path, m.Type)
+	}
+	if m.Endpoint != "" {
+		v.addf("%s: endpoint must not be set for a %q medium; there is no network endpoint to configure", path, m.Type)
+	}
+	if m.StorageClass != "" {
+		v.addf("%s: storage_class must not be set for a %q medium; a filesystem has no storage classes", path, m.Type)
+	}
 }
 
 // validateStorageMediumBackend is where #667 moved this schema: type
@@ -1509,11 +1573,11 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 //
 // The type gate is narrower than reg.IDs(): a backend the registry
 // declares but whose REQUIRED fields storageMediumFieldValue cannot yet
-// supply (local_volume, until #666 adds a case for its "path" field) is
-// not yet a legal StorageMedium.Type, because there is no way to author
-// an instance of it that could ever validate. That is expressibleBackendIDs'
-// whole job, and it is also StorageMediumTypes' definition now: the two
-// must never disagree about what an operator may write, so both read it.
+// supply is not yet a legal StorageMedium.Type, because there is no way
+// to author an instance of it that could ever validate. That is
+// expressibleBackendIDs' whole job, and it is also StorageMediumTypes'
+// definition now: the two must never disagree about what an operator
+// may write, so both read it.
 //
 // id, type and connection_unverified are excluded from the values map on
 // purpose (storageMediumFieldsNotInTheManifest's own reasons,
@@ -1561,15 +1625,19 @@ func (v *validator) validateStorageMediumBackend(path string, m *StorageMedium, 
 // extends: it names, for one manifest field id, which of StorageMedium's
 // own Go fields carries that value.
 //
-// A field id this struct has no case for (a field a declared backend's
-// manifest names that this struct has not grown yet - local_volume's
-// "path", before #666 adds it) answers ("", false) rather than ("",
-// true): the difference is what the caller does with it.
+// A field id this struct has no case for answers ("", false) rather than
+// ("", true): the difference is what the caller does with it.
 // validateStorageMediumBackend never even puts such a key into the
 // values map, so backend.ValidateInstance's "required field absent"
 // rule fires precisely as if nothing had been collected, and
 // expressibleBackendIDs uses the same false to keep that backend out of
 // the legal type set entirely until there is a real field to read.
+//
+// "path" is #666's own addition: local_volume's manifest declares it as
+// a required KindPath field, and this is the one line that turns
+// expressibleBackendIDs' "local_volume, until #666 adds a case for its
+// path field" into "local_volume, now that it has one" - no other
+// function in this file needed to change for that to be true.
 func storageMediumFieldValue(m *StorageMedium, fieldID string) (string, bool) {
 	switch fieldID {
 	case "bucket":
@@ -1584,6 +1652,8 @@ func storageMediumFieldValue(m *StorageMedium, fieldID string) (string, bool) {
 		return m.StorageClass, true
 	case "upload_verification":
 		return m.UploadVerification, true
+	case "path":
+		return m.Path, true
 	case "credentials":
 		if hasMediumCredentials(m.Credentials) {
 			// A placeholder, never the real value: backend.ValidateInstance's
@@ -1619,12 +1689,9 @@ func hasMediumCredentials(c MediumCredentials) bool {
 // This is narrower than reg.IDs() on purpose. The registry is data
 // shipped for every consumer at once (#668's wizard among them), and it
 // may know about a backend before this struct has grown the field that
-// backend requires - exactly local_volume's position until #666 adds a
-// "path" field. A type this config schema could never author a passing
-// instance of is not a legal value here yet, no matter what the registry
-// declares, and the moment #666 adds that one case to
-// storageMediumFieldValue, this set gains "local_volume" with no further
-// edit to this function.
+// backend requires. A type this config schema could never author a
+// passing instance of is not a legal value here yet, no matter what the
+// registry declares.
 func expressibleBackendIDs(reg *backend.Registry) []string {
 	ids := make([]string, 0, reg.Len())
 	for _, id := range reg.IDs() {
@@ -1777,6 +1844,18 @@ func (v *validator) validateMediumCredentials(path string, c MediumCredentials) 
 			// credential is actually needed.
 			v.addf("%s: executable %q must be an absolute path", cmdPath, c.Command[0])
 		}
+	}
+}
+
+// validateNoMediumCredentials is validateMediumCredentials' mirror for a
+// backend that reads no credential at all (issue #666's local_volume): a
+// directory this service writes to as itself has nothing to authenticate
+// with, so any of the three sources being set is a value this schema
+// would silently ignore, exactly the failure validateMaxMovesPerCycle's
+// own doc names.
+func (v *validator) validateNoMediumCredentials(path string, c MediumCredentials) {
+	if c.File != "" || c.Env != "" || len(c.Command) != 0 {
+		v.addf("%s.credentials: must not be set for a local_volume medium; a directory on this machine has no credential to declare", path)
 	}
 }
 
