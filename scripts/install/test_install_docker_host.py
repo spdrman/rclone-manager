@@ -39,6 +39,7 @@ import email.message
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -5109,6 +5110,113 @@ class TestARestartLoopIsNotAnInstall(unittest.TestCase):
         answer = self.settled(["exited"] * 60)
         self.assertNotEqual(answer, "running")
         self.assertIn("exited", answer, "the operator needs the state to know which log to read")
+
+
+
+class TestTheSiteReferenceNamesEveryFlagThisParserDeclares(unittest.TestCase):
+    """docs/site/reference.html sets out to be every flag, and a page that
+    says that is wrong the moment a flag lands without a row.
+
+    The Go side of the same page (distribution/packaging/site_reference_test.go)
+    holds its command table to the binary's dispatch table. This holds its
+    flag table to the parser in this file, which is the only thing that
+    actually knows what the installer accepts. Between them the page
+    cannot drift from either surface it documents.
+
+    Two flags are deliberately not on the page and are exempt here for
+    stated reasons rather than by being forgotten: -h/--help, which every
+    argparse parser has and no reader needs told about, and
+    --if-installed, which is not an option at all. It exists only so a
+    script still passing the flag it was told to pass gets a sentence
+    instead of argparse's "unrecognized arguments", it is suppressed from
+    --help for exactly that reason, and documenting it on a reference page
+    would be advertising a flag whose whole purpose is to be gone.
+    """
+
+    REGION = "INSTALLER-FLAGS"
+    EXEMPT = {"-h", "--help", "--if-installed"}
+
+    def reference(self):
+        path = REPO_ROOT / "docs" / "site" / "reference.html"
+        self.assertTrue(path.is_file(), f"{path} is missing; this test reads it")
+        return path.read_text(encoding="utf-8")
+
+    def region(self, doc):
+        begin, end = f"<!-- BEGIN {self.REGION} -->", f"<!-- END {self.REGION} -->"
+        i, j = doc.find(begin), doc.find(end)
+        self.assertTrue(0 <= i < j,
+                        f"reference.html has no {begin} ... {end} region; this test reads that "
+                        f"region, so removing it removes the check")
+        return doc[i + len(begin):j]
+
+    @staticmethod
+    def flags_in_first_cell(region_text):
+        """Every --flag in the FIRST cell of every row.
+
+        The first cell only, because the prose in the other two names
+        flags all the time ("defaults to what --prefix gave it"), and a
+        reader mentioning a flag is not the same claim as a row
+        documenting it. One row can still carry two, which is what
+        `--puid` / `--pgid` is.
+        """
+        found = set()
+        for row in region_text.split("<tr>")[1:]:
+            first_cell = row.split("</td>")[0]
+            found.update(re.findall(r"<code>(--[a-z0-9-]+)</code>", first_cell))
+        return found
+
+    def declared_flags(self):
+        parser = installer.build_parser()
+        sub = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)][0]
+        declared = set()
+        for sp in sub.choices.values():
+            for action in sp._actions:
+                declared.update(action.option_strings)
+        return declared - self.EXEMPT
+
+    def test_every_flag_the_parser_declares_has_a_row(self):
+        documented = self.flags_in_first_cell(self.region(self.reference()))
+        missing = sorted(self.declared_flags() - documented)
+        self.assertEqual(missing, [],
+                         f"docs/site/reference.html's flag table omits flags the installer accepts: "
+                         f"{missing}. That page says it is every flag, so a flag with no row is the "
+                         f"page lying rather than the page being short.")
+
+    def test_no_row_names_a_flag_this_installer_does_not_accept(self):
+        documented = self.flags_in_first_cell(self.region(self.reference()))
+        extra = sorted(documented - self.declared_flags() - self.EXEMPT)
+        self.assertEqual(extra, [],
+                         f"docs/site/reference.html documents flags the installer does not accept: "
+                         f"{extra}")
+
+    def test_the_exemptions_are_still_real(self):
+        """An exemption that stops naming anything is how a list like this
+        quietly grows: nobody removes an entry, so the next flag that
+        happens to collide with it is silently uncovered. Every name here
+        has to still be a flag the parser declares."""
+        declared = set()
+        parser = installer.build_parser()
+        sub = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)][0]
+        for sp in sub.choices.values():
+            for action in sp._actions:
+                declared.update(action.option_strings)
+        for flag in sorted(self.EXEMPT):
+            self.assertIn(flag, declared,
+                          f"{flag} is exempted from the reference page and is not a flag any "
+                          f"subcommand declares; the exemption is stale and is covering nothing")
+
+    def test_the_extractor_can_actually_fail(self):
+        """The positive control. Every assertion above is an absence, and
+        an extractor that reads zero flags out of every document satisfies
+        all of them."""
+        control = (
+            "<tr><td colspan=\"3\"><strong>a group heading</strong></td></tr>\n"
+            "<tr><td><code>--prefix</code></td><td>all six</td><td>and here --not-a-flag is prose</td></tr>\n"
+            "<tr><td><code>--puid</code> / <code>--pgid</code></td><td>x</td><td>y</td></tr>\n"
+        )
+        self.assertEqual(self.flags_in_first_cell(control), {"--prefix", "--puid", "--pgid"},
+                         "the extractor should read both flags out of a shared row, skip a colspan "
+                         "heading, and never read a flag named in the prose columns")
 
 
 if __name__ == "__main__":
