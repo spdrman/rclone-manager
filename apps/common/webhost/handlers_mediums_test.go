@@ -318,6 +318,38 @@ func TestCreateStorageMedium_DeclaresItAndCarriesNoCredentialBack(t *testing.T) 
 	}
 }
 
+// TestListAndGetStorageMedium_NeverCarryTheCredentialReferenceEither is
+// issue #665's C3, extending TestCreateStorageMedium_DeclaresItAndCarriesNoCredentialBack's
+// coverage to the two read routes rather than writing a second copy of
+// its check: a medium created from the canary reference above must not
+// come back carrying it, or the word "credential", from GET
+// /api/v1/storage-mediums (the list) or GET /api/v1/storage-mediums/{id}
+// (one medium) either. StorageMediumSummary has structurally no field
+// for a secret (service/mediums.go's own doc), so this proves that
+// absence holds through the real JSON encoding this handler uses, not
+// only through the struct's shape.
+func TestListAndGetStorageMedium_NeverCarryTheCredentialReferenceEither(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	mustStatus(t, rt.post(t, "/api/v1/storage-mediums", candidateBody), http.StatusCreated)
+	if rt.backend.lastMediumSpec.Credentials.ID != "9b41c7e2" {
+		t.Fatalf("the credential reference did not reach the backend: %+v", rt.backend.lastMediumSpec.Credentials)
+	}
+	rt.backend.mediums = []service.StorageMediumSummary{
+		{ID: "offsite_s3", Type: "s3", Bucket: "nas-backups", StorageClass: "STANDARD_IA", UploadVerification: "readback"},
+	}
+
+	for _, route := range []string{"/api/v1/storage-mediums", "/api/v1/storage-mediums/offsite_s3"} {
+		rec := rt.get(t, route)
+		mustStatus(t, rec, http.StatusOK)
+		body := rec.Body.String()
+		for _, forbidden := range []string{"9b41c7e2", "credential"} {
+			if strings.Contains(strings.ToLower(body), strings.ToLower(forbidden)) {
+				t.Errorf("GET %s carries %q:\n%s", route, forbidden, body)
+			}
+		}
+	}
+}
+
 // TestRemoveStorageMedium_RefusesWithAConflictWhileCopiesNameIt is FR-30
 // on the wire. A 409 rather than a 400 because the request was understood
 // perfectly and is being declined on the state of the deployment; a 400
