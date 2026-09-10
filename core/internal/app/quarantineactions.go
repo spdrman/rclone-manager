@@ -379,6 +379,28 @@ func (s *Service) ReinstateQuarantined(ctx context.Context, id model.ArtifactID,
 	// happens here rather than above the checks because `reinstate`
 	// writes nothing at all on a failing verdict, and that has to stay
 	// true for a FAILED artifact too.
+	//
+	// This is not decoration and the hop cannot be replaced with a direct
+	// FAILED -> COMMITTED (or -> REMOTE_RETAINED) edge, however tempting
+	// that looks once #663's badge fix makes the hop's own row stop
+	// misreporting as a fresh quarantine. FR-15's permanent forfeiture of
+	// the remote delete is not attached to this function; it is DERIVED
+	// from the edge shape, in machine.go's reinstatementEdges: every
+	// declared Transition whose From is a quarantine state and whose To
+	// is a durable restore point. FAILED is not a quarantine state, so a
+	// direct FAILED -> COMMITTED edge would be invisible to
+	// reinstatementEdges and to DeleteRemote's refusal built on it — an
+	// artifact re-trusted on this call's local hash comparison would stay
+	// remote-delete eligible, silently. And it would go unnoticed rather
+	// than merely unhandled:
+	// TestEveryQuarantineExitIntoADurableStateForfeitsRemoteDeletion
+	// computes its own coverage set from ReinstatementEdges(), so a new
+	// edge outside that derivation is not flagged as uncovered, it is
+	// simply never looked at. ADR 0004
+	// (docs/adr/0004-reinstating-a-quarantined-backup.md) already
+	// adjudicated this shape and rejected it for exactly that reason.
+	// Holding at QUARANTINED first is what keeps a FAILED artifact's
+	// reinstatement on the one edge shape the delete gate actually reads.
 	if cur == lifecycle.Failed {
 		if _, err := lifecycle.Advance(ctx, s.lifecycleDeps(), state.Transition{
 			Artifact: id,
