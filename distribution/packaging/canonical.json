@@ -13,7 +13,7 @@
     "repository": "spdrman/backup-manager",
     "tag": "0.4.0",
     "reference": "ghcr.io/spdrman/backup-manager:0.4.0",
-    "published": false,
+    "published": true,
     "note": [
       "published:false. 0.4.0 is cut but not pushed: container/release-manifest.json carries a",
       "registry_digest of null per architecture and a null index_digest, and this flag says the",
@@ -237,7 +237,7 @@
         "sshKey": "/mnt/user/appdata/backup-manager/secrets/id_ed25519",
         "knownHosts": "/mnt/user/appdata/backup-manager/secrets/known_hosts"
       },
-      "hostPathNote": "appdata holds private state, and retained artifacts land in a directory of the app's own inside the backups user share; §19.2 keeps those two separate security domains. The backup root is deliberately a dedicated child of the share rather than the share itself: the share is very likely to be one the operator already uses, and step 0 of the acceptance procedure creates and owns only paths it created.",
+      "hostPathNote": "appdata holds private state, and retained artifacts land in a directory of the app's own inside the backups user share; \u00a719.2 keeps those two separate security domains. The backup root is deliberately a dedicated child of the share rather than the share itself: the share is very likely to be one the operator already uses, and step 0 of the acceptance procedure creates and owns only paths it created.",
       "trustForwardedHeaders": false,
       "trustForwardedHeadersNote": "Unraid's two templates join `backup-manager`, a durable, host-wide, generically named user-defined bridge the operator creates by hand. Every container on such a bridge reaches every port of every other one, so the engine's isolation from anything else attached later is a convention, not a topology, and apps/common/auth/local requires a topology. The engine therefore does not trust forwarded headers here and rate-limits on the proxy's own address: one shared bucket for all clients, which over-limits rather than not limiting at all. This is the one place the Unraid profile is weaker than the compose ones, and apps/unraid/README.md says so.",
       "profile": "unraid",
