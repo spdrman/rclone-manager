@@ -320,14 +320,29 @@ func TestCreateStorageMedium_DeclaresItAndCarriesNoCredentialBack(t *testing.T) 
 
 // TestListAndGetStorageMedium_NeverCarryTheCredentialReferenceEither is
 // issue #665's C3, extending TestCreateStorageMedium_DeclaresItAndCarriesNoCredentialBack's
-// coverage to the two read routes rather than writing a second copy of
-// its check: a medium created from the canary reference above must not
-// come back carrying it, or the word "credential", from GET
-// /api/v1/storage-mediums (the list) or GET /api/v1/storage-mediums/{id}
-// (one medium) either. StorageMediumSummary has structurally no field
-// for a secret (service/mediums.go's own doc), so this proves that
-// absence holds through the real JSON encoding this handler uses, not
-// only through the struct's shape.
+// coverage to every other route a client can read rather than writing a
+// second copy of its check: a medium created from the canary reference
+// above must not come back carrying it, or the word "credential", from
+// GET /api/v1/storage-mediums (the list) or GET
+// /api/v1/storage-mediums/{id} (one medium) either.
+// StorageMediumSummary has structurally no field for a secret
+// (service/mediums.go's own doc), so this proves that absence holds
+// through the real JSON encoding this handler uses, not only through the
+// struct's shape.
+//
+// # Why the backend catalogue is checked here and by a different rule
+//
+// EPIC I (#664) added GET /api/v1/backends, which is a new API response
+// and therefore inside C3's scope rather than beside it. It is also the
+// one response in this product where the WORD "credential" legitimately
+// appears: a manifest DECLARES that a credential is needed, which is a
+// statement of shape and is exactly what #669's form renders a control
+// from. So the blanket word ban above cannot be the rule there, and the
+// rule that replaces it is the structural one — a credential-kind field
+// may declare its id, its label and its required-ness, and no field on
+// that shape can hold material. Anything an operator supplied, the
+// canary included, must be absent from it as absolutely as from the two
+// reads above.
 func TestListAndGetStorageMedium_NeverCarryTheCredentialReferenceEither(t *testing.T) {
 	rt := newReadSurfaceRouter(t)
 	mustStatus(t, rt.post(t, "/api/v1/storage-mediums", candidateBody), http.StatusCreated)
@@ -347,6 +362,38 @@ func TestListAndGetStorageMedium_NeverCarryTheCredentialReferenceEither(t *testi
 				t.Errorf("GET %s carries %q:\n%s", route, forbidden, body)
 			}
 		}
+	}
+
+	// The backend catalogue, by the structural rule its docblock above
+	// explains. Read after the create, so the canary really is in play
+	// in this process when the catalogue is served.
+	rec := rt.get(t, "/api/v1/backends")
+	mustStatus(t, rec, http.StatusOK)
+	if strings.Contains(rec.Body.String(), "9b41c7e2") {
+		t.Errorf("GET /api/v1/backends carries the credential reference:\n%s", rec.Body.String())
+	}
+	var catalogue backendsBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &catalogue); err != nil {
+		t.Fatalf("decode the backend catalogue: %v", err)
+	}
+	declared := 0
+	for _, b := range catalogue.Backends {
+		for _, f := range b.Fields {
+			if f.Kind != "credential" {
+				continue
+			}
+			declared++
+			// Shape only. A pattern would be a claim about what a
+			// secret looks like, unset_means would be a default
+			// credential, and a choice set would be a list of them.
+			if f.Pattern != "" || f.UnsetMeans != "" || len(f.Values) != 0 {
+				t.Errorf("backend %q declares credential field %q with a value-shaped attribute: pattern=%q unset_means=%q values=%d",
+					b.ID, f.ID, f.Pattern, f.UnsetMeans, len(f.Values))
+			}
+		}
+	}
+	if declared == 0 {
+		t.Fatal("no bundled manifest declares a credential field, so the structural check above is vacuous")
 	}
 }
 

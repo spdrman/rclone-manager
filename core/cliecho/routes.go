@@ -760,6 +760,21 @@ var routes = map[string]entry{
 		namesShippedVerbs: []string{"backup-set"},
 	},
 
+	// ------------------------------------------------------- backends ---
+	// EPIC I (#664). A gap entry rather than a command, and the gap is
+	// real: there is no verb that lists the registered backends at all.
+	// `medium add --backend <id>` takes one and refuses an id no manifest
+	// declares, so a terminal operator learns the set from a refusal
+	// rather than from a listing. Naming the missing verb here is the
+	// point of this table: a parity gap that is written down is a
+	// decision, and inventing a `medium backends` verb to satisfy this
+	// test would invert the rule, which exists so a missing verb is
+	// VISIBLE rather than absent.
+	key("GET", "/backends"): {
+		why:               "there is no verb that lists the registered backends; on a terminal one is named on `medium add --backend <id>` and refused if no manifest declares it",
+		namesShippedVerbs: []string{"medium"},
+	},
+
 	// ------------------------------------------------------------- ssh ---
 	key("POST", "/ssh-keys"): {
 		// Never a command, and the reason is the interesting half. This
