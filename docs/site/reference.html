@@ -93,7 +93,7 @@
   <section>
     <span class="step-eyebrow">Reference</span>
     <h1>Every screen, every command, every flag</h1>
-    <p>This page is the whole surface in one place: the nine screens of the web interface and the terminal docked under them, the twenty commands of the <code>rbm</code> command line, and every subcommand and flag of the installer. <a href="first-run.html">The first-run tutorial</a> walks the one path a new install takes; this one does not walk anything, it enumerates.</p>
+    <p>This page is the whole surface in one place: the nine screens of the web interface, the three destination surfaces that live inside one of them, and the terminal docked under them all; the twenty commands of the <code>rbm</code> command line; and every subcommand and flag of the installer. <a href="first-run.html">The first-run tutorial</a> walks the one path a new install takes; this one does not walk anything, it enumerates.</p>
 
     <div class="toc">
       <ol>
@@ -104,6 +104,9 @@
         <li><a href="#web-activity">Activity</a></li>
         <li><a href="#web-quarantine">Quarantine</a></li>
         <li><a href="#web-settings">Settings</a></li>
+        <li><a href="#web-destinations">Storage destinations</a></li>
+        <li><a href="#web-destination-add">Adding a destination</a></li>
+        <li><a href="#web-destination-configure">Configuring a destination</a></li>
         <li><a href="#web-catalog">Catalog recovery</a></li>
         <li><a href="#web-terminal">The docked terminal</a></li>
         <li><a href="#cli">The command line</a></li>
@@ -121,7 +124,8 @@
   <section>
     <h2 id="web">The web interface</h2>
     <p>Six items in the sidebar, one screen behind each, two detail screens you reach by opening a row on the list above them, a catalog-recovery screen reached from the footer, and a terminal docked to the bottom of all of them. The top bar carries the service badge (running, and which version), a light/dark toggle and Sign out. The sidebar footer says which platform the deployment thinks it is on, which is the thing to check first when a NAS-specific feature is missing.</p>
-    <p>Everything on these screens is reachable from <a href="#cli">the command line</a> as well, and several screens say so in place: a control that changes configuration prints the <code>rbm</code> command that does the same thing, right underneath itself.</p>
+    <p>Three of the surfaces below have no route of their own: the storage destinations list and the two wizards that add and configure one all live inside <a href="#web-settings">Settings</a>. They are enumerated separately anyway, because each is a screenful of controls that write configuration, and a reader looking one up should not have to find it inside a table row about a card.</p>
+    <p>Nearly everything on these screens is reachable from <a href="#cli">the command line</a> as well, and several screens say so in place: a control that changes configuration prints the <code>rbm</code> command that does the same thing, right underneath itself. Where the command cannot carry a field the screen is about to save, the screen prints the command <em>and</em> names the fields it leaves out, rather than printing a line that quietly configures less than was asked for.</p>
 
     <h3 id="web-dashboard">Dashboard</h3>
     <figure>
@@ -265,7 +269,7 @@
           <tr><td><strong>Storage capacity</strong></td><td>A cap, a warning threshold and a critical threshold</td><td>A cap of 0 means no cap, and the dashboard reports against the disk instead. Any other value is enforced: a transfer that would push past it is refused before it starts, rather than half way through.</td></tr>
           <tr><td><strong>Retention policy</strong></td><td>The timezone, the week start, and the tier chain</td><td>Each tier is a name, a granularity, how many to keep, an optional window unit, and the destination its copies go to. Removing every tier is not how retention is switched off: an empty chain reinstates the default daily/weekly/monthly one.</td></tr>
           <tr><td><strong>Protect the newest known-good</strong></td><td>A checkbox</td><td>FR-19. With it on, no tier may delete the newest verified backup of a set.</td></tr>
-          <tr><td><strong>Storage destinations</strong></td><td>Where copies can go</td><td><code>local</code> is the drive backups already land on and is always there. A destination marked <strong>Default</strong> is where a NEWLY created tier starts, and it cannot be removed while it carries the mark. <strong>Test connection</strong> writes a probe object, reads it back, checks the storage class, and deletes it.</td></tr>
+          <tr><td><strong>Storage destinations</strong></td><td>Where copies can go</td><td>Every destination is an instance of a registered backend, so there can be more than one of any of them &mdash; two local volumes and two buckets is an ordinary list. It has <a href="#web-destinations">a section of its own below</a>, because five of its controls change configuration and each one costs something different.</td></tr>
           <tr><td><strong>Notifications</strong></td><td>Where alerts go</td><td>Native NAS notifications where the platform has them, webhooks where it does not. The card says which of the two this deployment got.</td></tr>
           <tr><td><strong>Administrator password</strong></td><td>The local account's password</td><td>Current, new, confirm. This account is not the NAS login and never was.</td></tr>
           <tr><td><strong>Catalog recovery</strong></td><td>A link to the screen below</td><td>It appears here because it is the only destructive-sounding thing that is not destructive.</td></tr>
@@ -278,6 +282,98 @@
       <span class="note-label">The same thing from a terminal</span>
       <p>Under every retention tier and every destination, this screen prints the <code>rbm</code> command that does what the control above it does: <code>rbm settings patch --tier-medium monthly=offsite_s3</code>, <code>rbm medium test-connection offsite_s3</code>, <code>rbm medium remove offsite_s3</code>. They are there to be copied, and they are the reason the two surfaces cannot drift: the button and the command are the same call.</p>
     </div>
+
+    <h3 id="web-destinations">Storage destinations</h3>
+    <figure>
+      <img src="screens/ref-11-destinations.png" alt="The Storage destinations card: four destinations in a column. local, marked Default, with Test connection live and Make default and Remove dimmed above two paragraphs explaining why. usb_shelf, described as local_volume at /mnt/usb-shelf/artifacts, with all four controls live. offsite_s3 and offsite_cold, both s3, the second carrying a reads-need-a-restore chip. Each row prints the rbm commands its live controls are equivalent to, and an Add a destination button closes the card" loading="lazy">
+      <figcaption>Four destinations, two backends. That is the whole of what changed: a destination is an <em>instance</em> of a registered backend rather than one of a fixed pair, so a deployment can hold two local volumes and two buckets and the list can tell them apart.</figcaption>
+    </figure>
+    <p>A backend is described by a manifest the build carries &mdash; data, not code &mdash; and the manifest is what decides which fields a destination has, and which steps its connection test runs. Two are registered: <code>local_volume</code>, a directory on a disk this machine can see, and <code>s3</code>, a bucket on Amazon's service or anything that speaks its API. The drive backups already land on is an instance too, called <code>local</code>, and the only thing still special about it is that its location comes from the deployment's backup root rather than from a field, so it has no <strong>Edit</strong>.</p>
+    <p>Declaring a destination moves nothing. Backups arrive somewhere only once a retention tier names it, which is <a href="#web-settings">the card above this one</a> and a separate decision with its own disclosure.</p>
+    <div class="scroll-x">
+      <table class="fields">
+        <thead><tr><th>Control</th><th>What it does</th><th>What it costs</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Test connection</strong></td><td>Runs the probe this destination's manifest declares, one step at a time, and reports every step.</td><td>A real object written to the destination, read back, and deleted. Reachable is not the same as writable, which is why it is not a ping. Nothing is saved by checking; a destination that refuses is left exactly as unproven as it already was. A pass against a destination carrying <strong>never proven</strong> clears that mark, and it is the only thing that does.</td></tr>
+          <tr><td><strong>Make default</strong></td><td>Hands the <strong>Default</strong> mark to this destination.</td><td>Two things, from one click, and the confirmation says both: this destination becomes the one a newly created tier starts on <em>and stops being removable</em>; the destination that held the mark <em>becomes removable</em>. Nothing already written moves &mdash; no tier is rewritten and no copy is relocated &mdash; so the second half is the half nobody clicked for, and it is the one that makes a destination deletable.</td></tr>
+          <tr><td><strong>Edit</strong></td><td>Opens the editor for a declared destination's fields.</td><td>Nothing until it saves, and it will not save what it has not proven. Absent, not dimmed, on <code>local</code>: there is no state an operator can reach that would give that destination fields to edit.</td></tr>
+          <tr><td><strong>Remove</strong></td><td>Deletes the declaration.</td><td>Configuration only: not one stored copy is deleted. It is refused while any copy names this destination, and the refusal names how many and which backup sets, because removing the declaration would leave the deployment with no endpoint and no credential to reach those copies with &mdash; they would read as unreachable and no retention pass could ever run against them again.</td></tr>
+          <tr><td><strong>Add a destination</strong></td><td>Opens <a href="#web-destination-add">the three-step wizard below</a>.</td><td>Nothing. The wizard writes <code>storage_mediums[]</code> in <code>config.yaml</code> eventually, and says so beside the button, but not from any of its own three steps.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Three chips appear beside a destination's name, and each is a claim about a different thing. <strong>Default</strong> is where a newly created tier starts. <strong>reads need a restore</strong> is an archival storage class: a copy here cannot be read until the provider is asked to thaw it, which is billed and takes hours. <strong>never proven</strong> is a destination declared with the check skipped &mdash; <code>--no-verify</code> on the command line &mdash; so nothing has yet shown that its credential is accepted or that an object written there can be read back.</p>
+    <div class="note ok">
+      <span class="note-label">A control that is off is still on the row</span>
+      <p>The destination holding the <strong>Default</strong> mark keeps both <strong>Make default</strong> and <strong>Remove</strong>, disabled, each with the sentence saying why and what lifts it. That pairing is deliberate: the destination an operator cannot remove is the one whose row would otherwise offer neither the removal nor the way to earn it, and the control that earns it sits on every <em>other</em> row. A destination marked <strong>never proven</strong> has <strong>Make default</strong> off for a second reason &mdash; every tier that follows the default would start somewhere nobody has checked &mdash; and a refusal is worth more before the click than after it.</p>
+    </div>
+    <figure>
+      <img src="screens/ref-15-default-transfer.png" alt="The confirmation dialog for handing over the default: an eyebrow reading Two things change, the question Make usb_shelf the default destination, a paragraph saying usb_shelf becomes the default and cannot be removed while it carries the mark, a paragraph saying local stops being the default and becomes removable, a paragraph saying nothing already written moves, the equivalent rbm medium default command, and Cancel beside Make usb_shelf the default" loading="lazy">
+      <figcaption>Not a consent gate: there is no typed phrase, because nothing is destroyed. It exists because only one of the two things it does is the thing the operator clicked.</figcaption>
+    </figure>
+
+    <h3 id="web-destination-add">Adding a destination</h3>
+    <figure>
+      <img src="screens/ref-12-add-backend.png" alt="Step 1 of 3 of the add-a-destination wizard, headed Add a destination and captioned nothing is written by these steps: a search box, radio rows for Local volume and S3 or S3-compatible each naming its manifest id and the rclone backend it is dialed through, then a dimmed dashed row for sftp under the heading Understood, and not registered in this build, then Cancel and a disabled Next: name this instance" loading="lazy">
+      <figcaption>Step one of three. The list is whatever manifests the build carries, served by <code>GET /api/v1/backends</code>; there is no list of backend names in the page.</figcaption>
+    </figure>
+    <p>Choosing and naming are two steps rather than one, and that will look like ceremony in a release that registers two backends. It is the shape the rest of this holds up: several instances of one backend is the normal case, and a single screen that collapses &ldquo;pick S3&rdquo; and &ldquo;call it <code>cold_archive</code>&rdquo; into one act has quietly said again that a destination <em>is</em> a backend type.</p>
+    <div class="scroll-x">
+      <table class="fields">
+        <thead><tr><th>Step</th><th>What it asks</th><th>What it costs</th></tr></thead>
+        <tbody>
+          <tr><td><strong>1. Choose a backend</strong></td><td>Which registered backend this destination is an instance of, searchable by id, label, summary or rclone backend.</td><td>Nothing. Backends this build understands and no manifest describes are drawn and cannot be chosen: they carry no radio and say so in place. Listing them is a real answer to somebody who came looking for SFTP, which a menu that never mentions it is not.</td></tr>
+          <tr><td><strong>2. Name this instance</strong></td><td>What this destination is called. The step lists the instances of the chosen backend that already exist.</td><td>Nothing, and the name is the one thing here that cannot be changed later: a retention tier refers to a destination by it, and every stored copy records it as where it lives. The pattern and the reserved id come from the same response as the backend list, so this form refuses exactly what a hand-edited configuration file would be refused for.</td></tr>
+          <tr><td><strong>3. Confirm</strong></td><td>Nothing. It states the backend, the name, that no values have been asked for yet, and which fields the next step will ask for.</td><td>Nothing, and it says so: <strong>Next: configure it</strong> hands off to <a href="#web-destination-configure">the configure wizard</a> and writes no configuration on the way.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note danger">
+      <span class="note-label">Adding a destination does not make one</span>
+      <p>None of these three steps writes anything, and the confirm step says as much. The destination is written once, by the configure step that follows, and only after a connection test against it has passed. That is not a shortcut: a destination carrying no values is refused by the configuration schema itself, so a half-created one is not representable in <code>config.yaml</code> at all &mdash; and the consequence an operator can use is that no retention tier can ever be pointed at a destination nobody has proved.</p>
+    </div>
+
+    <h3 id="web-destination-configure">Configuring a destination</h3>
+    <figure>
+      <img src="screens/ref-13-configure-manifest.png" alt="The configure wizard's first step for a local volume: a line reading Local volume and the manifest's summary, then a Directory field filled with /mnt/usb-offsite above its help text, an empty Subdirectory field above its help text, a How a copy is proven dropdown reading Leave unset (readback), and Cancel beside Next: test connection" loading="lazy">
+      <figcaption>One renderer, not a form per backend. Every label, every sentence of help, and every choice in that dropdown is declared by the manifest; nothing in the page knows what a local volume asks for.</figcaption>
+    </figure>
+    <p>Three steps: fill in what the manifest declares, prove it, then look at what is about to be written. The order is the point &mdash; what gets written is what was proven &mdash; and it is enforced rather than advised: editing any field makes an earlier pass stale, the screen says so where the edit was made, and <strong>Save configuration</strong> is out of reach until a check against the values now on screen has passed.</p>
+    <div class="scroll-x">
+      <table class="fields">
+        <thead><tr><th>Field kind</th><th>What it renders</th><th>What to know</th></tr></thead>
+        <tbody>
+          <tr><td><code>string</code></td><td>A text box.</td><td>A manifest may pin a pattern to it, and the refusal names the field rather than quoting what was typed.</td></tr>
+          <tr><td><code>path</code></td><td>A text box for an absolute path on this machine.</td><td>A volume that is not mounted looks exactly like an empty directory, which is why the connection test writes a file and reads it back rather than checking the directory is there.</td></tr>
+          <tr><td><code>url</code></td><td>A text box for an endpoint.</td><td>Deliberately not the browser's own URL field: that accepts any scheme, and a field the browser waves through and the manifest refuses is two definitions of a legal endpoint with the one nobody wrote deciding.</td></tr>
+          <tr><td><code>enum</code></td><td>A dropdown of the declared choices.</td><td>An optional one opens on <strong>Leave unset</strong> and names what unset will be read as. It stays unset: choosing the default on the operator's behalf would freeze a value this product resolves at read time into their configuration file.</td></tr>
+          <tr><td><code>bool</code></td><td>A checkbox.</td><td>&mdash;</td></tr>
+          <tr><td><code>key_prefix</code></td><td>A text box for a namespace inside the bucket or directory.</td><td>So one bucket or one volume can hold more than this product's artifacts. Empty writes at the top.</td></tr>
+          <tr><td><code>credential</code></td><td>An access key id, readable, and a secret in a masked field.</td><td>Typed once, exchanged immediately for an opaque reference, and dropped from the page before anything else is sent. It is <strong>never read back</strong>: nothing reports a destination's credential, not even which kind it is, so the field is empty when an operator returns to a destination that has one &mdash; and the review step says <code>stored, and never shown again</code> rather than showing anything. Changing a region does not mean re-entering a key; leaving the pair empty keeps the credential already stored.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figure>
+      <img src="screens/ref-14-probe-steps.png" alt="The configure wizard's test step: a paragraph saying a real object is written and read back and removed and that reachable is not the same as writable, a round trip figure of 0.7s, then nine rows. credentials skipped with the manifest's reason that a local destination reads no credential, reach passed naming the directory, deliverable passed, write passed, read_back passed, storage_class skipped with the manifest's reason that a filesystem has no storage classes, verification passed, delete passed, and space passed reporting 1.4 TB available. Below them the equivalent rbm medium test-connection command and Back, Test connection again and Next: review" loading="lazy">
+      <figcaption>The probe as a step list, in the manifest's declared order. A refusal with no step named throws away the part an operator can act on, so every step is a row before the first request is sent.</figcaption>
+    </figure>
+    <p>Eight steps are a closed vocabulary the engine and the manifests share, and a manifest declares for each one whether this backend runs it and, when it does not, the sentence saying why. So the skipped rows and their reasons are on screen from the start: an operator learns that a local volume reads no credential rather than wondering why nothing checked their key. The drive on this machine and a declared local volume both add a ninth answer, <code>space</code>, which is the one failure a bucket cannot have.</p>
+    <div class="scroll-x">
+      <table class="fields">
+        <thead><tr><th>Step</th><th>What it proves</th></tr></thead>
+        <tbody>
+          <tr><td><code>credentials</code></td><td>The credential this destination declares can be obtained at all, which is a question about this host. Skipped for a local volume, which reads none.</td></tr>
+          <tr><td><code>reach</code></td><td>The endpoint answers and holds the bucket with that credential &mdash; or, for a local volume, that the directory is there and is a directory.</td></tr>
+          <tr><td><code>deliverable</code></td><td>An artifact can be delivered to this destination's storage class at all. An archive class cannot take delivery, and is refused <em>before</em> anything is written, because a probe object there is billed for a minimum measured in months.</td></tr>
+          <tr><td><code>space</code></td><td>The filesystem has room, measured against this deployment's own safety margin. Local destinations only: a bucket has no filesystem to fill.</td></tr>
+          <tr><td><code>write</code>, <code>read_back</code>, <code>delete</code></td><td>A real object written, read back byte for byte, and removed again. Read access is not what a move needs, a write nobody can read is not a backup, and a destination this manager can write to and not delete from is one no retention pass could ever clean up.</td></tr>
+          <tr><td><code>storage_class</code></td><td>The object landed in the class the configuration asked for, rather than one the provider substituted. Skipped for a local volume, which has no classes.</td></tr>
+          <tr><td><code>verification</code></td><td>The way this destination claims a copy is proven can actually be achieved here. Declaring a digest the endpoint cannot produce is a class that can never be met, so every move would refuse after the upload rather than fall back to a weaker check.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>A step after a failing one is <em>not tried</em>, and the list says that rather than drawing it as a pass or leaving it blank. Every sentence beside a row is the engine's own; none of them carries the text of what actually came back, because that names a path on the host or the name of an environment variable, and the classified cause goes to this manager's log instead.</p>
+    <p>The review step is the last of the three: what is about to be written, whether it was proven, and a checkbox offering to make this the destination new tiers start on. The offer is never taken as a side effect of saving &mdash; it is a second call, after the save &mdash; and the consequence is written beside it, naming the destination that stops being the default and therefore becomes removable. It is not offered at all to a destination that already holds the mark.</p>
 
     <h3 id="web-catalog">Catalog recovery</h3>
     <figure>
@@ -297,7 +393,7 @@
 
   <section>
     <h2 id="cli">The command line</h2>
-    <p>The engine and the command line are two binaries in one image. <code>rbm-web</code> serves the API and the interface; <code>rbm</code> is what an operator types. Everything the interface does is here, and several things it does not: retention previews with per-run overrides, artifact-level validation with a full re-download, catalog rebuilds, and the storage-destination verbs.</p>
+    <p>The engine and the command line are two binaries in one image. <code>rbm-web</code> serves the API and the interface; <code>rbm</code> is what an operator types. Almost everything the interface does is here, and several things it does not: retention previews with per-run overrides, artifact-level validation with a full re-download, catalog rebuilds, and the storage-destination verbs. The exception runs the other way and is named under <code>medium</code> below: a destination on a local volume can be declared from the browser and not from here.</p>
     <p>On the standard deployment it is reached through the engine container:</p>
     <pre><code>docker compose exec rclone-manager /rbm status</code></pre>
     <p>On a <a href="index.html#install-cli-only">CLI-only install</a> the installer writes a wrapper and you type <code>~/rclone-manager/bin/rbm status</code> instead. Every command except <code>version</code> takes <code>--config</code>, which defaults to <code>/etc/backup-manager/config/config.yaml</code> and also accepts the directory, because that is what packaging mounts.</p>
@@ -325,7 +421,7 @@
           <tr><td><code>quarantine</code></td><td>Act on one quarantined artifact: <code>revalidate</code> re-checks it, <code>retry</code> re-enters it at DISCOVERED, <code>reinstate</code> trusts it in place and permanently forfeits deleting its remote original.</td></tr>
           <tr><td><code>retry</code></td><td>Put one FAILED artifact back into the pipeline. Failed is not quarantined, so it is its own verb, and nothing does it automatically.</td></tr>
           <tr><td><code>unconfigured</code></td><td>List the backup sets the journal remembers and the configuration no longer names, and what they still occupy. <code>unconfigured clear</code> ends those rows and removes the <code>.partial</code> residue a removal stranded, never a retained backup.</td></tr>
-          <tr><td><code>medium</code></td><td>The storage-destination verbs: <code>list</code>, <code>show</code>, <code>add</code>, <code>edit</code>, <code>remove</code>, <code>default</code>, <code>test-connection</code> (also spelled <code>preflight</code>) and <code>import-credentials</code>. Credentials are taken on standard input and never as a flag.</td></tr>
+          <tr><td><code>medium</code></td><td>The storage-destination verbs: <code>list</code>, <code>show</code>, <code>add</code>, <code>edit</code>, <code>remove</code>, <code>default</code>, <code>test-connection</code> (also spelled <code>preflight</code>) and <code>import-credentials</code>. Credentials are taken on standard input and never as a flag. Its field flags are the ones a bucket has: <code>--type</code> takes <code>s3</code>, and there is no <code>--path</code>, so an instance of the <code>local_volume</code> backend cannot be declared here &mdash; <a href="#web-destination-configure">the configure wizard</a> is the only surface that can, and it prints its equivalent command with the missing fields named rather than a line that would write something else.</td></tr>
           <tr><td><code>restore</code></td><td>Ask the storage provider to make one archived copy readable again. It is billed and takes hours, so <code>--acknowledge</code> is required; <code>--days</code> defaults to 7 and is bounded to 30.</td></tr>
           <tr><td><code>settings</code></td><td>Report the live retention and capacity settings, or change one in place with <code>settings patch</code>, including pointing a single retention tier at a destination.</td></tr>
           <tr><td><code>version</code></td><td>Report the binary, Go and embedded rclone versions.</td></tr>
