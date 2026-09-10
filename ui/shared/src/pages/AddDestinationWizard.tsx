@@ -73,8 +73,6 @@ import { useApi } from "@shared/api/ApiContext";
 import type { BackendCatalog, BackendManifest, StorageMedium } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
 import { ErrorState } from "@shared/components/EmptyState";
-import { CommandEcho } from "@shared/pages/CommandEcho";
-import { declareCommand } from "@shared/pages/storageDestinationCommands";
 import { refuseInstanceName } from "@shared/pages/destinationInstanceName";
 import type { InstanceNameRefusal } from "@shared/pages/destinationInstanceName";
 
@@ -522,12 +520,22 @@ function ConfirmPane({
         </span>
       </div>
 
-      {/* The command this whole flow is equivalent to, named on the step
-          that settles what it will say. It carries the backend and the
-          name and no value, because those are the two things chosen so
-          far; the configure step prints the same verb with the flags it
-          collects. */}
-      <CommandEcho label="Equivalent command" commands={[declareCommand(name, backend.id)]} />
+      {/* EPIC G's rule is that what an operator can DO names its
+          equivalent command. These steps do nothing: they collect two
+          answers and hand them on, and there is no `rbm` invocation that
+          declares a destination carrying no values (see
+          storageDestinationCommands.ts, which is where the `declareCommand`
+          that used to be printed here was deleted and why). So the gap is
+          named, the way core/cliecho names a route with no verb, rather
+          than filled with a line that fails on execution. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-3)" }}>Equivalent command</span>
+        <span style={{ fontSize: 12, color: "var(--text-2)", maxWidth: "74ch" }}>
+          These steps run none. On a terminal a destination is declared in one act, by{" "}
+          <code className="mono">rbm medium add</code> carrying the values below — so the command this flow
+          is equivalent to is printed by the configure step, which is the step that writes.
+        </span>
+      </div>
 
       <div style={{ display: "flex", gap: 8 }}>
         <button className="btn" type="button" onClick={onBack}>
