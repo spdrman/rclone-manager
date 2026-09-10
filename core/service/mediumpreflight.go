@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/mediumcheck"
 )
 
@@ -129,6 +130,24 @@ func (b *BackupService) PreflightStorageMedium(ctx context.Context, id string) (
 		return toMediumPreflight(report), nil
 	}
 
+	// A declared local_volume instance (issue #666) is dispatched by
+	// ROLE, not by id, the same way the reserved id above is: the two
+	// checks share nothing below the report (no MediumStore reach, no
+	// rclone dial, an fs.Stat and a real write instead), and "local",
+	// "second_disk" and "archive_disk" are all instances of the same
+	// backend and all get the identical local check.
+	if m, ok := b.declaredStorageMedium(id); ok && m.Type == config.StorageMediumTypeLocalVolume {
+		report, err := b.state.Load().inner.PreflightLocalVolumeMedium(ctx, m)
+		if err != nil {
+			return MediumPreflight{}, fmt.Errorf("service: testing the connection to local volume %s: %w", id, err)
+		}
+		if report.OK {
+			b.clearStorageMediumUnverified(ctx, id)
+		}
+		return toMediumPreflight(report), nil
+	}
+
+
 	report, err := b.state.Load().inner.PreflightMedium(ctx, id)
 	switch {
 	case app.AsMediumNotDeclared(err):
@@ -172,4 +191,19 @@ func toMediumPreflight(report mediumcheck.Report) MediumPreflight {
 		})
 	}
 	return out
+}
+
+// declaredStorageMedium finds the raw config.StorageMedium record behind
+// id, so PreflightStorageMedium can dispatch on its Type before deciding
+// which check to run. It is separate from GetStorageMedium (mediums.go)
+// because that returns the projected StorageMediumSummary, which has no
+// Type-vs-backend distinction this dispatch needs to make before the
+// projection happens.
+func (b *BackupService) declaredStorageMedium(id string) (config.StorageMedium, bool) {
+	for _, m := range b.state.Load().inner.Config.StorageMediums {
+		if m.ID == id {
+			return m, true
+		}
+	}
+	return config.StorageMedium{}, false
 }

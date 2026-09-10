@@ -90,12 +90,23 @@ func (r MediumResolver) Resolve(id string) (transport.Medium, placement.Class, e
 		if err != nil {
 			return transport.Medium{}, "", err
 		}
+		bucket := m.Bucket
+		if typ == transport.MediumTypeLocalDir {
+			// A local_volume medium's destination is its Path, not its
+			// (forbidden, per config.Validate) Bucket. transport.Medium.
+			// Bucket's own doc already carries this: "For
+			// MediumTypeLocalDir it is the directory that stands in for
+			// one" - true since before #666, for the in-tree test
+			// backend transport.MediumTypeLocalDir exists for; #666 is
+			// the first configuration that can actually reach it.
+			bucket = m.Path
+		}
 		return transport.Medium{
 			ID:           m.ID,
 			Type:         typ,
 			Region:       m.Region,
 			Endpoint:     m.Endpoint,
-			Bucket:       m.Bucket,
+			Bucket:       bucket,
 			Prefix:       m.Prefix,
 			StorageClass: m.EffectiveStorageClass(),
 			Credentials: transport.MediumCredentials{
@@ -109,14 +120,18 @@ func (r MediumResolver) Resolve(id string) (transport.Medium, placement.Class, e
 }
 
 // mediumType maps the schema's closed type set onto the transport's own.
-// The two are the same strings by construction (a test in internal/
-// transport pins that), and this is still a switch rather than a cast,
+// s3's two are the same string by construction (a test in internal/
+// transport pins that); local_volume maps onto
+// transport.MediumTypeLocalDir, the ROLE local_volume declares in its
+// manifest (issue #666). This is still a switch rather than a cast,
 // because a type this build cannot reach must be a refusal at the moment
 // something is about to be reached rather than a value handed onward.
 func mediumType(m config.StorageMedium) (transport.MediumType, error) {
 	switch m.Type {
 	case config.StorageMediumTypeS3:
 		return transport.MediumTypeS3, nil
+	case config.StorageMediumTypeLocalVolume:
+		return transport.MediumTypeLocalDir, nil
 	default:
 		return "", fmt.Errorf("app: storage medium %q declares type %q, which this build has no backend for", m.ID, m.Type)
 	}

@@ -1374,6 +1374,21 @@ const DefaultMaxMovesPerCycle = 4
 // operator could write and nothing could serve.
 const StorageMediumTypeS3 = "s3"
 
+// StorageMediumTypeLocalVolume is a directory on a disk this host can
+// see: a second internal drive, a USB disk, or an already-mounted
+// network share (issue #666, EPIC I / #664).
+//
+// It never resolves through a network endpoint the way
+// StorageMediumTypeS3 does, but it is exactly as declarable, exactly as
+// editable and exactly as removable, because it is a genuinely separate
+// destination an operator chose to add. What it is NOT is a second
+// answer to where the backup ROOT lives: that question stays
+// MediumLocal's alone (see MediumLocal's own doc and
+// transport.MediumTypeLocalDir's, EPIC E). A local_volume instance is
+// somewhere a copy GOES, never the place a backup set's own local_path
+// already is.
+const StorageMediumTypeLocalVolume = "local_volume"
+
 // The closed set of S3 storage classes a medium may ask for (FR-27).
 //
 // These are spelled exactly as S3 spells them, upper case included, so
@@ -1562,6 +1577,17 @@ type StorageMedium struct {
 	// one field, and the refusal says so rather than letting the backend
 	// report a bucket name it cannot resolve.
 	Bucket string `yaml:"bucket"`
+
+	// Path is the directory a local_volume medium writes into: absolute,
+	// clean, and mounted INSIDE the container this service runs in (a
+	// path that exists on the host but not in the container is the
+	// common first mistake, and the connection test is what catches it).
+	// Required when Type is StorageMediumTypeLocalVolume; meaningless
+	// otherwise, and validateStorageMediums refuses it being set on any
+	// other type for the reason validateMaxMovesPerCycle's own doc
+	// gives: a field this schema silently ignored would read to the
+	// operator who set it as a setting that took effect.
+	Path string `yaml:"path,omitempty"`
 
 	// Prefix is the key namespace inside Bucket, so one bucket can hold
 	// more than this product's artifacts. Optional; empty puts the key

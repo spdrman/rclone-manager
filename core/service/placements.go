@@ -429,6 +429,10 @@ func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
 			UploadVerification:  m.EffectiveUploadVerification(),
 			ReadsRequireRestore: archive.IsArchive(class),
 			IsDefault:           m.ID == defaultID,
+			// Path is empty for every backend but local_volume (issue
+			// #666), the same "empty for a bucket" contract Path's own
+			// doc already states for the synthesised local entry above.
+			Path: m.Path,
 			// Read straight off the configuration rather than derived from
 			// anything: whether a destination was ever proven is not
 			// something its own history can answer, so it is only ever

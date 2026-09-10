@@ -1447,10 +1447,29 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 			v.addf("%s: id must not be empty", path)
 		case !storageMediumIDPattern.MatchString(m.ID):
 			v.addf("%s: id %q must be lower_snake_case (letters, digits and underscores, starting with a letter)", path, m.ID)
-		case m.ID == MediumLocal:
-			// Reserved. Two answers to "where is local" is a placement
-			// record nothing can interpret, and FR-29 stores exactly that
-			// string against every artifact in every deployment.
+		case m.ID == MediumLocal && m.Type != StorageMediumTypeLocalVolume:
+			// Reserved, except as instance zero of the local_volume
+			// backend (issue #666/#670). Two answers to "where is local"
+			// is a placement record nothing can interpret, and FR-29
+			// stores exactly that string against every artifact in every
+			// deployment - but a local_volume medium declaring this id
+			// IS that one answer, made explicit rather than implicit,
+			// not a second one. Any other type claiming it goes on being
+			// refused: MediumTypeLocalDir's doctrine ("a second answer
+			// to where local artifacts live") survives intact for every
+			// type this string is not paired with.
+			//
+			// This is a SCHEMA relaxation only. It has to accept the
+			// shape forever, not just once, because config.Validate runs
+			// on every load: a first-run seed writer (or an operator's
+			// own hand edit - already a supported way to configure this
+			// product) that declares id: local, type: local_volume once
+			// must go on validating on every later restart, with no
+			// migration. It says nothing about whether
+			// CreateStorageMedium or UpdateStorageMedium may ever mint
+			// or rename INTO this id - that operator-facing guard is
+			// mediums.go's own (mediumFromSpec) and is unaffected by
+			// this schema accepting what it produces.
 			v.addf("%s: id %q is reserved for the implicit local medium (a backup set's own local_path) and cannot name a configured one", path, m.ID)
 		default:
 			if first, dup := seen[m.ID]; dup {
@@ -1475,35 +1494,83 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 			}
 		}
 
-		switch {
-		case m.Bucket == "":
-			v.addf("%s: bucket must not be empty; a medium with no bucket names no destination at all", path)
-		case strings.Contains(m.Bucket, "/"):
-			// One specific mistake, named in words an operator can act
-			// on rather than left to the backend to report as an
-			// unresolvable bucket.
-			v.addf("%s: bucket %q must not contain \"/\"; a key namespace inside the bucket belongs in prefix, not in the bucket name", path, m.Bucket)
-		}
-
-		// Empty means the documented default in both of the next two, and
-		// the default is resolved by an accessor rather than written back
-		// into the struct here. Writing it back would freeze today's
-		// default into an operator's own file on the next settings save
-		// (issue #294), and for the same reason nothing below fills in a
-		// value: this function only ever refuses.
+		// storage_class's closed-set membership is checked regardless of
+		// type, same as upload_verification below, so a medium whose
+		// TYPE is also wrong still gets every other problem reported in
+		// the same pass (validateCollectsEveryMediumProblem's own
+		// promise). What is type-conditional is only whether the field
+		// is legal to set AT ALL: bucket/region/endpoint/credentials for
+		// s3, path for local_volume, each in their own block below, plus
+		// storage_class's own local_volume-specific refusal inside
+		// validateLocalVolumeFields (a filesystem has no classes, valid
+		// spelling or not).
 		if m.StorageClass != "" && !validStorageClasses[m.StorageClass] {
 			v.addf("%s: storage_class %q is not one of: %s", path, m.StorageClass, storageClassList)
 		}
+
+		switch m.Type {
+		case StorageMediumTypeLocalVolume:
+			v.validateLocalVolumeFields(path, m)
+			v.validateNoMediumCredentials(path, m.Credentials)
+		case StorageMediumTypeS3:
+			switch {
+			case m.Bucket == "":
+				v.addf("%s: bucket must not be empty; a medium with no bucket names no destination at all", path)
+			case strings.Contains(m.Bucket, "/"):
+				// One specific mistake, named in words an operator can act
+				// on rather than left to the backend to report as an
+				// unresolvable bucket.
+				v.addf("%s: bucket %q must not contain \"/\"; a key namespace inside the bucket belongs in prefix, not in the bucket name", path, m.Bucket)
+			}
+			if m.Path != "" {
+				v.addf("%s: path must not be set for a %q medium; bucket and region name the destination instead", path, m.Type)
+			}
+			v.validateMediumCredentials(path, m.Credentials)
+		}
+
 		if m.UploadVerification != "" && !validUploadVerifications[m.UploadVerification] {
 			v.addf("%s: upload_verification %q is not one of: %s", path, m.UploadVerification, uploadVerificationList)
 		}
 		v.validateUploadVerificationIsAchievable(path, m)
 
 		v.validateMediumPrefix(path, m.Prefix)
-		v.validateMediumCredentials(path, m.Credentials)
 	}
 
 	return declared
+}
+
+// validateLocalVolumeFields checks #666's own half of FR-27: the fields
+// that mean something for a directory, and the refusal of every field
+// that means something for a bucket instead.
+//
+// path must be absolute and clean for validAbsolutePath's own reason
+// (FR-20's "prove it is beneath the configured root" needs a spelling
+// that does not change with the process's working directory), and it is
+// the ONE field a local_volume medium requires: there is no defensible
+// default to invent for a directory nobody named, the same argument
+// bucket's own doc makes for a bucket.
+func (v *validator) validateLocalVolumeFields(path string, m *StorageMedium) {
+	switch {
+	case m.Path == "":
+		v.addf("%s: path must not be empty; a local_volume medium with no path names no destination at all", path)
+	default:
+		if err := validAbsolutePath(m.Path); err != nil {
+			v.addf("%s: path %s", path, err)
+		}
+	}
+
+	if m.Bucket != "" {
+		v.addf("%s: bucket must not be set for a %q medium; path names the destination instead", path, m.Type)
+	}
+	if m.Region != "" {
+		v.addf("%s: region must not be set for a %q medium; there is no provider region to configure", path, m.Type)
+	}
+	if m.Endpoint != "" {
+		v.addf("%s: endpoint must not be set for a %q medium; there is no network endpoint to configure", path, m.Type)
+	}
+	if m.StorageClass != "" {
+		v.addf("%s: storage_class must not be set for a %q medium; a filesystem has no storage classes", path, m.Type)
+	}
 }
 
 // validateUploadVerificationIsAchievable refuses an upload_verification
@@ -1667,6 +1734,18 @@ func (v *validator) validateMediumCredentials(path string, c MediumCredentials) 
 			// credential is actually needed.
 			v.addf("%s: executable %q must be an absolute path", cmdPath, c.Command[0])
 		}
+	}
+}
+
+// validateNoMediumCredentials is validateMediumCredentials' mirror for a
+// backend that reads no credential at all (issue #666's local_volume): a
+// directory this service writes to as itself has nothing to authenticate
+// with, so any of the three sources being set is a value this schema
+// would silently ignore, exactly the failure validateMaxMovesPerCycle's
+// own doc names.
+func (v *validator) validateNoMediumCredentials(path string, c MediumCredentials) {
+	if c.File != "" || c.Env != "" || len(c.Command) != 0 {
+		v.addf("%s.credentials: must not be set for a local_volume medium; a directory on this machine has no credential to declare", path)
 	}
 }
 
@@ -1887,10 +1966,11 @@ func (v *validator) validateTierIsNotBoundToAnArchiveClass(path string, t *Reten
 }
 
 // validStorageMediumTypes is the closed set StorageMedium.Type accepts.
-// One entry today; see StorageMediumTypeS3 for why the set is closed and
-// what adding to it costs.
+// See StorageMediumTypeS3 and StorageMediumTypeLocalVolume for why the
+// set is closed and what adding to it costs.
 var validStorageMediumTypes = map[string]bool{
-	StorageMediumTypeS3: true,
+	StorageMediumTypeS3:          true,
+	StorageMediumTypeLocalVolume: true,
 }
 
 // storageMediumTypes is the same set in a fixed order, for the "must be
@@ -1900,7 +1980,7 @@ var validStorageMediumTypes = map[string]bool{
 // Two spellings of one set is the pattern every closed vocabulary in this
 // file follows, for the reason validStorageClasses states: ranging the map
 // would reorder the sentence per run.
-var storageMediumTypes = []string{StorageMediumTypeS3}
+var storageMediumTypes = []string{StorageMediumTypeS3, StorageMediumTypeLocalVolume}
 
 var storageMediumTypeList = strings.Join(storageMediumTypes, ", ")
 

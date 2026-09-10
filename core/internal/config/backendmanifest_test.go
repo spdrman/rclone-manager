@@ -62,6 +62,7 @@ var storageMediumFieldsNotInTheManifest = map[string]string{
 	"id":                    "the instance's own identity (config.StorageMedium.ID), not one of the backend's collected fields",
 	"type":                  "the instance's own identity (which backend this is an instance of), not one of the backend's collected fields",
 	"connection_unverified": "written by core/service from StorageMediumSpec.SkipConnectionCheck, and never taken from an operator's own input (issue #636) - there is nothing for a manifest field to collect",
+	"path":                  "issue #666's local_volume field, meaningless for an s3 medium; bundled/local_volume.json declares it instead, and the local_volume manifest's own expressibility is #666's concern, not this s3-specific pin's",
 }
 
 // TestTodaysS3MediumIsExpressibleInTheS3Manifest is issue #665's test
