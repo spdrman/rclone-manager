@@ -44,6 +44,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -5334,6 +5335,150 @@ class TestTheSiteReferenceNamesEveryFlagThisParserDeclares(unittest.TestCase):
         self.assertEqual(self.flags_in_first_cell(control), {"--prefix", "--puid", "--pgid"},
                          "the extractor should read both flags out of a shared row, skip a colspan "
                          "heading, and never read a flag named in the prose columns")
+
+
+
+class _FakeRun:
+    """Stands in for installer.run, answering by the verb it is given."""
+
+    def __init__(self, logs_stdout="", restart_rc=0):
+        self.logs_stdout, self.restart_rc = logs_stdout, restart_rc
+        self.calls = []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        verb = next((a for a in argv if a in ("logs", "restart", "up", "ps")), "")
+        if verb == "logs":
+            return types.SimpleNamespace(returncode=0, stdout=self.logs_stdout, stderr="")
+        if verb == "restart":
+            return types.SimpleNamespace(returncode=self.restart_rc, stdout="", stderr="nope")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+class TestReissuingAnEnrollmentLink(unittest.TestCase):
+    """`enroll-link` exists so that a lapsed link is one command rather
+    than two raw `docker compose` invocations plus an instruction to read
+    the right line out of the output.
+
+    The reading is the part worth having in code. A container keeps its
+    log across a restart, so after reissuing there are two notices in it
+    and the dead one is first: a reader told to grep gets both and no
+    reason to prefer either.
+    """
+
+    NOTICE = "rbm-web: no administrator account exists yet. Open {} to create one (valid 30 minutes, single use)."
+
+    def test_the_newest_notice_wins_not_the_first(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        old = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=OLDOLDOLD")
+        new = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=NEWNEWNEW")
+        fake = _FakeRun(logs_stdout="\n".join([old, "some other engine line", new]) + "\n")
+        with unittest.mock.patch.object(installer, "run", fake):
+            got = installer._newest_enrollment_notice(args)
+        self.assertIn("NEWNEWNEW", got)
+        self.assertNotIn("OLDOLDOLD", got,
+                         "the first notice in the log is the one the restart invalidated")
+
+    def test_no_notice_at_all_is_an_empty_answer_not_a_crash(self):
+        fx = Fixture(self)
+        fake = _FakeRun(logs_stdout="engine started\nnothing about enrollment here\n")
+        with unittest.mock.patch.object(installer, "run", fake):
+            self.assertEqual(installer._newest_enrollment_notice(fx.args(command="enroll-link")), "")
+
+    def test_an_existing_administrator_is_its_own_refusal(self):
+        """Not a 30 and not a retry. Enrollment is a one-time door, so a
+        script that keeps trying this would loop for ever, where one
+        retrying a runtime failure is being reasonable."""
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        (args.prefix / "compose.yaml").write_text("services: {}\n")
+        (args.prefix / ".env").write_text("PUID=1000\n")
+        args.state_dir.mkdir(parents=True, exist_ok=True)
+        (args.state_dir / "local-auth.json").write_text('{"username": "nas-admin"}')
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "rclone-manager"}], {})):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_ENROLLMENT_CLOSED)
+        self.assertIn("already exists", caught.exception.message)
+        self.assertIn("factory-reset", caught.exception.remedy,
+                      "somebody who has lost the password needs told the one way back")
+
+    def test_nothing_installed_refuses_before_touching_docker(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        fake = _FakeRun()
+        with unittest.mock.patch.object(installer, "detect_existing", lambda a: (False, [], {})), \
+             unittest.mock.patch.object(installer, "run", fake):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_PREREQ_PAYLOAD)
+        self.assertEqual(fake.calls, [], "it restarted something on a host with nothing installed")
+
+    def test_no_engine_container_says_how_to_get_one(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        fake = _FakeRun()
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "web-ui"}], {})), \
+             unittest.mock.patch.object(installer, "run", fake):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_RUNTIME)
+        self.assertIn("up -d", caught.exception.remedy)
+        self.assertEqual(fake.calls, [])
+
+    def test_the_happy_path_restarts_then_prints_the_new_link(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        old = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=OLDOLDOLD")
+        new = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=NEWNEWNEW")
+
+        seen = {"restarted": False}
+        real_logs = [old]
+
+        def fake_run(argv, **kwargs):
+            if "restart" in argv:
+                seen["restarted"] = True
+                real_logs.append(new)
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if "logs" in argv:
+                return types.SimpleNamespace(returncode=0, stdout="\n".join(real_logs), stderr="")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "rclone-manager"}], {})), \
+             unittest.mock.patch.object(installer, "run", fake_run):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = installer.cmd_enroll_link(args)
+        self.assertEqual(code, installer.EXIT_OK)
+        self.assertTrue(seen["restarted"], "a token is only minted by a restart")
+        printed = out.getvalue()
+        self.assertIn("NEWNEWNEW", printed)
+        self.assertNotIn("OLDOLDOLD", printed, "it printed the link its own restart just killed")
+        self.assertIn("works once", printed)
+
+    def test_a_restart_that_prints_nothing_new_is_a_refusal(self):
+        """The control on the assertion above. Without it, "prints the new
+        link" is also satisfied by a command that prints whatever was
+        already there and calls it fresh."""
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        old = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=OLDOLDOLD")
+        fake = _FakeRun(logs_stdout=old)
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "rclone-manager"}], {})), \
+             unittest.mock.patch.object(installer, "run", fake), \
+             unittest.mock.patch.object(installer, "ENROLL_NOTICE_WAIT", 0):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_VERIFY)
 
 
 if __name__ == "__main__":

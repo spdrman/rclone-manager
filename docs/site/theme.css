@@ -530,3 +530,56 @@ html:not(.tip-js) .io:has(.tip-bubble:hover) .tip-bubble,
     box-shadow: none;
   }
 }
+
+/* -------------------------------------------------------------------
+   The install section, given the weight of the thing it is.
+
+   It is the first section on the page and above the tutorial and
+   reference cards, because somebody arriving here wants to install this
+   before they want to read about it. A plain <section> in that position
+   still read as the first of several: the panel and the accent are what
+   say "this is the command", so the eye lands on it before the prose.
+   ------------------------------------------------------------------- */
+.install-hero {
+  margin: 0 0 2rem;
+  padding: 1.4rem 1.5rem 1.1rem;
+  border: 1px solid var(--border-strong);
+  border-left: 5px solid var(--primary);
+  border-radius: 10px;
+  /* --bg, not --surface, and the output block is why. On a white panel
+     the white output block had nothing to stand against and the typed
+     and returned blocks stopped reading as two things. Against --bg
+     there are three distinct steps in both schemes:
+
+       light   panel #f4f4f2  typed #ececea  output #ffffff
+       dark    panel #121312  typed #1e201e  output #0d0f0d
+
+     The panel is identified by its border and accent rather than by its
+     fill, which is what lets the fill do this job instead. */
+  background: var(--bg);
+}
+.install-hero > h2 {
+  margin-top: 0;
+  border-bottom: 0;
+  font-size: 1.55rem;
+}
+.install-hero > h2::before {
+  content: "Start here";
+  display: block;
+  margin-bottom: 0.35rem;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+/* The two commands themselves, which are the point of the section. */
+.install-hero > pre:first-of-type {
+  border-color: var(--primary);
+  font-size: 0.92rem;
+}
+@media (max-width: 640px) {
+  .install-hero { padding: 1.1rem 1rem 0.9rem; }
+  .install-hero > h2 { font-size: 1.3rem; }
+}

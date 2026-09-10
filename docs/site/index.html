@@ -106,19 +106,7 @@
     <p>It is a standalone Go binary that embeds pinned rclone Go packages. It does not fork rclone, and it does not shell out to the <code>rclone</code> command line for normal data movement.</p>
   </section>
 
-  <a href="first-run.html" class="clipping">
-    <span class="clipping-tag">Tutorial</span>
-    <p>Setting one up for the first time means an enrolment link printed to a container log, an administrator account that is not your NAS login, and a six-step wizard whose answers become a <code>config.yaml</code> you will live with. The first-run walkthrough shows every screen, with an example for every field and a sentence on what that entry actually causes the product to do, including the two places where the wizard shows you a control that is not yet wired to anything.</p>
-    <span class="clipping-read">Walk the first run &rarr;</span>
-  </a>
-
-  <a href="reference.html" class="clipping">
-    <span class="clipping-tag">Reference</span>
-    <p>Every screen of the web interface with a picture and a table of what each control does, every one of the twenty <code>rbm</code> commands, and every subcommand and flag of the installer with its default. The command table and the flag table are both checked against the code on every run of the gate, so a command or a flag that lands without a row fails the build rather than going quietly stale.</p>
-    <span class="clipping-read">Read the reference &rarr;</span>
-  </a>
-
-  <section>
+  <section class="install-hero">
     <h2 id="install">Installing it</h2>
     <p>Two commands, no arguments, on any machine with Docker:</p>
     <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py
@@ -154,10 +142,17 @@ to create one (valid 30 minutes, single use).</code></pre>
 
     <div class="note ok">
       <span class="note-label">If the link has expired</span>
-      <p>The token lasts 30 minutes and works once. Nothing re-issues it while the engine keeps running, so if it lapses, restart the engine: a start with no administrator yet mints a fresh token and prints a fresh notice.</p>
-      <pre><code>docker compose -p rclone-manager ... restart rclone-manager
-docker compose -p rclone-manager ... logs --tail=50 rclone-manager | grep enroll</code></pre>
-      <p>The log keeps the old notices as well, so take the <strong>last</strong> line: the restart invalidated every link above it. This only works while enrolment is still open. Once an administrator exists the engine prints no link at all, which is not a fault: <a href="first-run.html#again">sign in</a> instead.</p>
+      <p>The token lasts 30 minutes and works once, and nothing re-issues it while the engine keeps running. One command mints a fresh one:</p>
+      <pre><code>python3 install_docker_host.py enroll-link</code></pre>
+      <p class="io-label">Output</p>
+      <pre class="io-out"><code>==&gt; Restarting rclone-manager, which is what mints a token
+==&gt; Waiting up to 90s for the new notice
+
+rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?token=jdurSlionp6jyoHTzP_5fHYfLy3Kk6tq to create one (valid 30 minutes, single use).
+
+    Valid 30 minutes, and it works once. Every link printed before this one is now dead,
+    including any still in your scrollback.</code></pre>
+      <p>It reads back the <strong>newest</strong> notice rather than the first, because the container keeps its log across the restart and the earlier link is the one that restart just killed. On a deployment that already has an administrator it refuses instead, with its own exit code: enrolment is a one-time door and it closed when that account was created, so <a href="first-run.html#again">sign in</a>.</p>
     </div>
 
     <h3 style="margin-top:2rem">Command line only, no web interface</h3>
@@ -196,6 +191,19 @@ python3 install_docker_host.py install --cli-only</code></pre>
     </div>
     <p>The configuration directory in particular is mounted writable, as a directory rather than a single file, because a directory is the only shape that can honestly be empty. That is what makes an install that has never been configured reach the setup screen instead of refusing to start. <a href="first-run.html">The first-run tutorial</a> picks up from there.</p>
   </section>
+
+  <a href="first-run.html" class="clipping">
+    <span class="clipping-tag">Tutorial</span>
+    <p>Setting one up for the first time means an enrolment link printed to a container log, an administrator account that is not your NAS login, and a six-step wizard whose answers become a <code>config.yaml</code> you will live with. The first-run walkthrough shows every screen, with an example for every field and a sentence on what that entry actually causes the product to do, including the two places where the wizard shows you a control that is not yet wired to anything.</p>
+    <span class="clipping-read">Walk the first run &rarr;</span>
+  </a>
+
+  <a href="reference.html" class="clipping">
+    <span class="clipping-tag">Reference</span>
+    <p>Every screen of the web interface with a picture and a table of what each control does, every one of the twenty <code>rbm</code> commands, and every subcommand and flag of the installer with its default. The command table and the flag table are both checked against the code on every run of the gate, so a command or a flag that lands without a row fails the build rather than going quietly stale.</p>
+    <span class="clipping-read">Read the reference &rarr;</span>
+  </a>
+
 
   <section>
     <h2 id="the-rule">The rule everything else serves</h2>
