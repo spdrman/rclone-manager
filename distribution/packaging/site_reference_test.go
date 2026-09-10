@@ -307,3 +307,24 @@ func TestTheSiteReferenceRouteExtractorsCanActuallyFail(t *testing.T) {
 		t.Fatal("hasHTMLAnchor found an id that is not there")
 	}
 }
+
+// ---------------------------------------------------------------------
+// 5. The page opens into its contents, not into a footnote
+// ---------------------------------------------------------------------
+//
+// The picture-provenance claim belongs in the footer, which every page
+// on the site already carries, not in a callout the reader meets before
+// the opening paragraph has finished landing them on the page they came
+// to look something up on. See #706.
+
+func TestTheSiteReferenceDoesNotOpenWithThePictureProvenanceCallout(t *testing.T) {
+	doc := readReference(t)
+	if strings.Contains(doc, "Where the pictures come from") {
+		t.Fatal("reference.html still opens with the picture-provenance callout; " +
+			"that claim belongs in the footer, which the page already carries (#706)")
+	}
+	if !strings.Contains(doc, "Screenshots taken against the development fixture API") {
+		t.Fatal("reference.html's footer no longer carries the picture-provenance claim; " +
+			"removing the opening callout must not lose it")
+	}
+}
