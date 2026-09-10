@@ -575,11 +575,57 @@ html:not(.tip-js) .io:has(.tip-bubble:hover) .tip-bubble,
   color: var(--primary);
 }
 /* The two commands themselves, which are the point of the section. */
-.install-hero > pre:first-of-type {
+/* Named rather than positional: copy.js wraps each <pre>, so it stops
+   being a child of the section and :first-of-type stops matching. */
+.install-hero .cmd-primary {
   border-color: var(--primary);
   font-size: 0.92rem;
 }
 @media (max-width: 640px) {
   .install-hero { padding: 1.1rem 1rem 0.9rem; }
   .install-hero > h2 { font-size: 1.3rem; }
+}
+
+/* -------------------------------------------------------------------
+   The copy control on a command block. Injected by copy.js, so the
+   wrapper below never appears in the markup: every rule here has to be
+   written as if the <pre> gained a parent at runtime, which it did.
+   ------------------------------------------------------------------- */
+.code-wrap {
+  position: relative;
+  margin-bottom: 0.75rem;
+}
+/* The margin moved to the wrapper, or every block would carry both. */
+.code-wrap > pre { margin-bottom: 0; }
+
+.copy-btn {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  z-index: 2;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+/* Revealed on hover like the reference, and ALWAYS on a keyboard focus
+   or once it has been used: a control that only exists while a pointer
+   is over it does not exist for somebody tabbing through the page. */
+.code-wrap:hover .copy-btn,
+.copy-btn:focus,
+.copy-btn.is-copied { opacity: 1; }
+
+.copy-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+.copy-btn.is-copied { background: var(--ok); color: #fff; border-color: var(--ok); }
+
+/* Touch has no hover, so there is nothing to reveal it with. */
+@media (hover: none) {
+  .copy-btn { opacity: 1; }
 }

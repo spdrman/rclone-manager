@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="topbar.css">
   <script src="topbar.js" defer></script>
+  <script src="copy.js" defer></script>
   <script src="tooltip.js" defer></script>
 </head>
 <body>
@@ -109,8 +110,8 @@
   <section class="install-hero">
     <h2 id="install">Installing it</h2>
     <p>Two commands, no arguments, on any machine with Docker:</p>
-    <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py
-python3 install_docker_host.py install</code></pre>
+    <pre class="cmd-primary"><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py</code></pre>
+    <pre class="cmd-primary"><code>python3 install_docker_host.py install</code></pre>
 
     <p class="io-label">Output</p>
     <div class="io">
@@ -157,8 +158,8 @@ rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?
 
     <h3 style="margin-top:2rem">Command line only, no web interface</h3>
     <p>Same two commands, one flag on the second one:</p>
-    <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py
-python3 install_docker_host.py install --cli-only</code></pre>
+    <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py</code></pre>
+    <pre><code>python3 install_docker_host.py install --cli-only</code></pre>
 
     <p class="io-label">Output</p>
     <pre class="io-out"><code>==&gt; Installed. Nothing is running yet, and that is what --cli-only means here:
