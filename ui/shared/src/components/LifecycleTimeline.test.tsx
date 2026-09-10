@@ -24,6 +24,7 @@ const BASE: BackupArtifact = {
   sizeBytes: 1024,
   checksum: "abc123",
   checksumAlgorithm: "sha256",
+  state: "COMPLETE",
   validation: "verified",
   retentionClasses: ["daily"],
   retentionPolicy: "configured",

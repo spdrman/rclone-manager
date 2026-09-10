@@ -1193,6 +1193,13 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
     sizeBytes: a.size_bytes,
     checksum: a.checksum ?? "",
     checksumAlgorithm: a.checksum_algorithm ?? "",
+    // Carried, not dropped (#662). Until this line the mapper read both
+    // verdict fields and threw the lifecycle state away, and the two
+    // verdicts cannot express "this backup failed an attempt and stopped":
+    // nothing on that path records a validation verdict, so `validation`
+    // below is "pending", and a FAILED row is not quarantined, so
+    // `quarantine` is null. The state is the only field that says it.
+    state: a.state,
     validation:
       a.validation === "passed" ? "verified" : a.validation === "failed" ? "failed" : "pending",
     // The backend records which retention tier last selected an artifact,
