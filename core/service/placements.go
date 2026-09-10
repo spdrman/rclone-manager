@@ -441,11 +441,25 @@ func toServicePlacement(p state.Placement, idx mediumIndex) Placement {
 func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
 	out := make([]StorageMediumSummary, 0, len(cfg.StorageMediums)+1)
 
-	declaresLocal := false
-	for _, m := range cfg.StorageMediums {
-		if m.ID == StorageMediumLocalID {
-			declaresLocal = true
-			break
+	// A configuration that has EVER pointed its default somewhere other
+	// than local (cfg.DefaultStorageMedium is non-empty) has, at some
+	// point, gone through this build's own write path, so an absent
+	// local row here means an operator's REMOVAL, not a file this build
+	// has never touched. Synthesising in that case would be exactly the
+	// hazard #670's own issue names: a destination the operator removed
+	// quietly reappearing on the next read. A configuration that has
+	// never moved its default off local (the empty string) is the
+	// legacy case synthesis exists for: it was written before local was
+	// declarable at all, or an upgraded deployment that has not touched
+	// its destinations since, and it still needs the same local entry
+	// every read has always given it.
+	declaresLocal := cfg.DefaultStorageMedium != ""
+	if !declaresLocal {
+		for _, m := range cfg.StorageMediums {
+			if m.ID == StorageMediumLocalID {
+				declaresLocal = true
+				break
+			}
 		}
 	}
 	if !declaresLocal {

@@ -581,6 +581,16 @@ func createConfigExclusivelyRemovingOnError(path string, b []byte) (retErr error
 // to it.
 func seedLocalStorageMedium(ctx context.Context, cfg *config.Config) (config.StorageMedium, error) {
 	root := cfg.EffectiveBackupRoot()
+	// A relative root is refused here as the shape problem it is
+	// (matching config.Validate's own eventual rule for
+	// BackupSet.LocalPath) rather than left to reach the probe below:
+	// mediumcheck.RunLocal has no defensible interpretation of a
+	// relative path, and reporting a filesystem check's failure would
+	// bury the actual, cheaply-decidable mistake behind a confusing
+	// probe error.
+	if root != "" && !filepath.IsAbs(root) {
+		return config.StorageMedium{}, fmt.Errorf("%w: local_path %q must be an absolute path", ErrInvalidRequest, root)
+	}
 	report, err := mediumcheck.RunLocal(ctx, func(step mediumcheck.Step, err error) {
 		// The one place the underlying cause is allowed to go, exactly as
 		// app.Service.PreflightLocalMedium's own Observe is: an os error

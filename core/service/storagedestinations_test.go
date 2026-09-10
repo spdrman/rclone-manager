@@ -257,12 +257,15 @@ func TestRemoveStorageMedium_RefusesTheDefault(t *testing.T) {
 // drive could never be un-declared because it was never declared at all,
 // and RemoveStorageMedium said so by name. A configuration written
 // before #670 (localFixture: local is never a row in storage_mediums)
-// still has no row to remove, so the honest answer is the same one any
-// other undeclared id gets: not found. This is deliberately NOT the old
-// ErrStorageMediumIsDefault-flavoured refusal; that behaviour belonged to
-// a special case #670 removes, not to a wording preference.
+// still has no row to remove, so once it is no longer this deployment's
+// default (the default-protection check runs first, exactly as it does
+// for any other id) the honest answer is the same one any other
+// undeclared id gets: not found.
 func TestRemoveStorageMedium_ALegacyConfigurationReportsLocalNotFound(t *testing.T) {
 	svc, _ := localFixture(t)
+	if _, err := svc.SetDefaultStorageMedium(context.Background(), "offsite_s3"); err != nil {
+		t.Fatalf("SetDefaultStorageMedium: %v", err)
+	}
 
 	err := svc.RemoveStorageMedium(context.Background(), StorageMediumLocalID)
 	if !errors.Is(err, ErrMediumNotFound) {
