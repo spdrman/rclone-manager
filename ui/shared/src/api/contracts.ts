@@ -849,6 +849,81 @@ export interface StorageMediumSpec {
 }
 
 /**
+ * One destination's configuration, in the vocabulary its backend's
+ * manifest declares (issue #669, EPIC I #664).
+ *
+ * This is the shape StorageMediumSpec above cannot be. That one
+ * enumerates S3's fields - `bucket` is required and there is no `path` -
+ * because it was written when S3 was the only destination anybody could
+ * declare, so it is a hand-transcribed copy of s3.json's field ids and
+ * cannot carry a local volume at all. #667 deletes that assumption from
+ * the engine; this is the wire's half of the same deletion, and it is
+ * additive rather than a rewrite so that #594's S3 wizard keeps working
+ * until it is retired.
+ *
+ * `values` is keyed by manifest field id, with every value as the string
+ * the engine validates: a bool is "true" or "false", which is what
+ * `backend.validateFieldValue` reads, and an omitted or empty entry
+ * means UNSET - never a default filled in by the caller, because a
+ * default written back into the record is a default frozen into the
+ * operator's file by the next save (#294).
+ *
+ * `credentials` is separate, and that separation is load-bearing rather
+ * than tidy. A credential is not a value: it is a reference this
+ * deployment minted, it is checked by a different rule, and a bag that
+ * COULD hold one is a bag something will eventually put material into.
+ * Keeping it out is what makes #665's C1-C5 hold on this path by
+ * construction. Absent means "keep the credential already configured",
+ * for StorageMediumSpec's reason: nothing reports a destination's
+ * credential back, not even its kind, so a form cannot resubmit what it
+ * never received.
+ */
+export interface StorageMediumConfiguration {
+  /**
+   * The backend this instance is an instance of, required when the id is
+   * not declared yet.
+   *
+   * It is here because a destination cannot exist unconfigured (P2,
+   * #669): `Registry.ValidateInstance` refuses an absent required field
+   * (core/internal/backend/validate.go:228-233), `config.Validate`
+   * delegates every per-field rule to it, and both bundled manifests
+   * have required fields. So there is no record to read a backend id
+   * off before the values exist, and the create and the configure are
+   * one write with one check in front of it.
+   */
+  backend?: string;
+  fields: Record<string, string>;
+  credentials?: StorageMediumCredentialsReference;
+}
+
+/**
+ * What one destination has configured right now, in its backend's
+ * vocabulary (issue #669).
+ *
+ * A form has to have this before it can offer an edit. This flow sends
+ * the WHOLE declared field set, so a form that started empty and saved
+ * would unset every field the operator did not retype - an empty form is
+ * not a neutral starting point here, and inferring the current values
+ * from StorageMedium's named fields in the browser would be a second,
+ * hand-transcribed copy of the field-id mapping the engine already owns
+ * (config's `storageMediumFieldValue`).
+ *
+ * An unset optional field is ABSENT rather than present as its
+ * `unset_means` value, which is the same #294 rule the write side obeys:
+ * a default resolved at read time must not travel as though somebody
+ * chose it, because then the next save freezes it into their file.
+ *
+ * `credentialConfigured` is a boolean and never the reference. Whether a
+ * credential exists is what a form needs - it decides whether the pair
+ * may be left empty - and it is not material, not a path, and not a
+ * variable name, so it is the most this may say (FR-33, #665's C3).
+ */
+export interface StorageMediumConfigurationState {
+  fields: Record<string, string>;
+  credentialConfigured: boolean;
+}
+
+/**
  * What the journal says is currently on one storage destination, per
  * backup set (FR-30).
  *
@@ -1903,6 +1978,51 @@ export interface BackupManagerApi {
    * far side of the network from the binary it constrains.
    */
   listBackends(): Promise<BackendCatalog>;
+
+  /**
+   * Configure a destination in its backend's own vocabulary (issue
+   * #669, EPIC I #664), and prove it first.
+   *
+   * A read and two writes, and the writes are separate for the reason
+   * preflightStorageMediumCandidate exists beside createStorageMedium:
+   * a check that can only run against what is already written makes
+   * "declare it and find out" the supported flow, which is the ordering
+   * FR-30 exists to prevent. The preflight writes nothing whatever it
+   * answers and resolves with `ok` false when the destination does not
+   * work - a bucket that is not there is what an operator configured,
+   * not a request that broke.
+   *
+   * `configureStorageMedium` is create AND replace, which is what PUT
+   * means and which P2 makes necessary rather than convenient: a
+   * destination cannot exist unconfigured, because
+   * `Registry.ValidateInstance` refuses an absent required field
+   * (core/internal/backend/validate.go:228-233), `config.Validate`
+   * delegates every per-field rule to it, and both bundled manifests
+   * have required fields. So #668's confirm step names a backend and an
+   * instance and writes nothing, and this is the single create, after
+   * the check. `backend` on the request is required exactly then,
+   * because there is no record to read it off yet.
+   *
+   * `getStorageMediumConfiguration` exists because these writes replace
+   * the WHOLE declared field set: a form that started empty and saved
+   * would unset every field the operator did not retype.
+   *
+   * The engine runs the same check in front of the write and refuses
+   * with MEDIUM_CONNECTION_NOT_PROVEN when it fails (#636), so a
+   * destination cannot become configured-and-unproven by way of this
+   * path either - and a configuration naming no credential is checked
+   * with the one already stored, which is what lets an operator change
+   * a prefix on a destination whose access key they do not have.
+   */
+  getStorageMediumConfiguration(mediumId: string): Promise<StorageMediumConfigurationState>;
+  preflightStorageMediumConfiguration(
+    mediumId: string,
+    config: StorageMediumConfiguration
+  ): Promise<MediumPreflight>;
+  configureStorageMedium(
+    mediumId: string,
+    config: StorageMediumConfiguration
+  ): Promise<StorageMedium>;
 
   /** Make this the destination a NEWLY CREATED retention tier starts on
    *  (#622). It moves that and nothing else: no existing tier is

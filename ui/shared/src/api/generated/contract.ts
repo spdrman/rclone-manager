@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "ad99bcfe63437b219ab61c84b1e69ee7d0ded504a543e34fae7367e30d988e40";
+export const CONTRACT_SHA256 = "f08ab42ee75da18e8a8be2fab0611c9f41c8ff754dd241df73281c0660e0a8dc";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1143,6 +1143,62 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "getStorageMediumConfiguration",
+    method: "GET",
+    path: "/storage-mediums/{id}/configuration",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "MediumConfigurationResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["MEDIUM_NOT_FOUND"],
+    }
+  },
+  {
+    id: "configureStorageMedium",
+    method: "PUT",
+    path: "/storage-mediums/{id}/configuration",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "MediumConfigurationRequest",
+    responseSchema: "StorageMediumSummary",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND"],
+      409: ["MEDIUM_CONNECTION_NOT_PROVEN"],
+    }
+  },
+  {
+    id: "preflightStorageMediumConfiguration",
+    method: "POST",
+    path: "/storage-mediums/{id}/configuration/preflight",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "MediumConfigurationRequest",
+    responseSchema: "MediumPreflightResponse",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND"],
+    }
+  },
+  {
     id: "setDefaultStorageMedium",
     method: "PUT",
     path: "/storage-mediums/{id}/default",
@@ -2048,6 +2104,49 @@ export interface WireManagerStorage {
   unknown_reason: "" | "no_backup_root" | "not_created" | "unreadable" | "misconfigured";
   used_bytes: number;
   warning_free_bytes: number;
+}
+
+/** One destination's configuration, in the vocabulary its backend's
+ *  manifest declares (#669). This is what StorageMediumRequest cannot
+ *  be: that one enumerates S3's fields, so bucket is required and
+ *  there is no path, and a local volume - the only destination a
+ *  fresh install has (#670) - cannot be described in it. credentials
+ *  stays its own reference object because a credential is not a
+ *  value: it is checked by a different rule, and a value bag that
+ *  could hold one is a value bag something eventually puts material
+ *  into (#665's C1-C5). */
+export interface WireMediumConfigurationRequest {
+  backend?: string;
+  credentials?: WireStorageMediumCredentialsReference;
+  fields: WireMediumFieldValue[];
+}
+
+/** What one destination has configured right now, in its backend's
+ *  vocabulary. credential_configured is a boolean and never the
+ *  reference: whether a credential exists is what a form needs - it
+ *  decides whether the credential pair may be left empty - and it is
+ *  not material, not a path and not a variable name, which is the
+ *  most that may be said about it either way (FR-33, #665's C3). */
+export interface WireMediumConfigurationResponse {
+  credential_configured: boolean;
+  fields: WireMediumFieldValue[];
+}
+
+/** One manifest-declared value, as a pair. A pair list rather than an
+ *  object keyed by field id, because no schema in this contract is a
+ *  map and the generator models additionalProperties as a bool only,
+ *  so a keyed object would arrive in both languages as an untyped
+ *  blob. An unset optional field is ABSENT from the list rather than
+ *  present with an empty value: absent is what a manifest's
+ *  unset_means resolves at read time, and an empty value written back
+ *  is a product default frozen into the operator's file by the next
+ *  save (#294). An EMPTY list is meaningful and is not the same as an
+ *  absent one - these writes replace the whole declared field set, so
+ *  empty means "this instance carries no values". The list is sorted
+ *  by field, so one configuration has one body. */
+export interface WireMediumFieldValue {
+  field: string;
+  value: string;
 }
 
 /** One step of a storage-medium preflight. There is deliberately no

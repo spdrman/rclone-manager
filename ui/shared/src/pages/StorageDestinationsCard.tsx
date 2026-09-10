@@ -53,6 +53,7 @@ import { useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import type {
   ApiError,
+  BackendCatalog,
   MediumPreflight,
   StorageMedium,
   StorageMediumUsage
@@ -64,6 +65,7 @@ import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { apiErrorOf, isNotConfigured } from "@shared/api/failure";
 import { AddDestinationWizard } from "@shared/pages/AddDestinationWizard";
 import { S3DestinationWizard } from "@shared/pages/S3DestinationWizard";
+import { DestinationConfigureWizard } from "@shared/pages/DestinationConfigureWizard";
 import { MediumPreflightChecks } from "@shared/pages/MediumPreflightChecks";
 import { CommandEcho } from "@shared/pages/CommandEcho";
 import {
@@ -92,6 +94,12 @@ export function StorageDestinationsCard({
 }) {
   const api = useApi();
   const mediums = useAsync<StorageMedium[]>(() => api.listStorageMediums(), [api]);
+  // The registry, for the configure step's renderer. Read here rather
+  // than inside that step so the ONE fact both halves of the add flow
+  // need - which backends exist and what each one declares - is read
+  // once: AddDestinationWizard's picker and the form it hands off to
+  // must not be able to disagree about a manifest.
+  const catalog = useAsync<BackendCatalog>(() => api.listBackends(), [api]);
 
   // One function rather than passing `mediums.reload` and `onChanged`
   // separately down two paths: every change on this card has to do both,
@@ -110,7 +118,13 @@ export function StorageDestinationsCard({
   // been created: the configure step performs the one create, after it
   // has proved the destination (see this file's own doc, and
   // AddDestinationWizard's on why an unconfigured instance cannot exist).
-  const [configuring, setConfiguring] = useState<string | null>(null);
+  const [configuring, setConfiguring] = useState<{ backendId: string; instanceId: string } | null>(
+    null
+  );
+
+  const configuringManifest = configuring
+    ? catalog.data?.registered.find((m) => m.id === configuring.backendId)
+    : undefined;
 
   return (
     <section className="card" role="region" aria-label="Storage destinations">
@@ -182,26 +196,47 @@ export function StorageDestinationsCard({
           <AddDestinationWizard
             existing={mediums.data ?? []}
             onClose={() => setAdding(false)}
-            onConfirmed={(_backendId, instanceId) => {
-              // The backend id is not used yet, and that is the seam
-              // #669 fills: the configure surface here is S3-shaped, so
-              // there is nothing to choose between. Its renderer takes
-              // the manifest, and choosing a surface by backend type
-              // would be the switch EPIC I exists to delete.
+            onConfirmed={(backendId, instanceId) => {
+              // The backend id is carried, not discarded, and it is
+              // carried as an ID rather than as a chosen surface: it is
+              // what the configure step looks the MANIFEST up by, and
+              // choosing a component by backend type would be the switch
+              // EPIC I exists to delete.
               setAdding(false);
-              setConfiguring(instanceId);
+              setConfiguring({ backendId, instanceId });
             }}
           />
         ) : null}
         {configuring !== null ? (
-          <S3DestinationWizard
-            presetId={configuring}
-            onClose={() => setConfiguring(null)}
-            onSaved={() => {
-              setConfiguring(null);
-              changed();
-            }}
-          />
+          configuringManifest === undefined ? (
+            // The registry has not answered yet, or has answered and
+            // does not name this backend. The second case is a real
+            // state and not a defect: a manifest is data, and a picker
+            // held open across a manager restart that dropped one is
+            // exactly when it happens. Rendering the form anyway would
+            // mean rendering no fields at all and offering to save it.
+            <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>
+              {catalog.error
+                ? "The backends this manager registers could not be read, so there is nothing to render a form from yet."
+                : "Reading what this backend asks for…"}
+            </p>
+          ) : (
+            <DestinationConfigureWizard
+              manifest={configuringManifest}
+              instanceId={configuring.instanceId}
+              // Nothing has been created: the save below performs the one
+              // create, after the probe has passed. See
+              // AddDestinationWizard on why an unconfigured instance
+              // cannot exist.
+              destination={null}
+              currentDefault={mediums.data?.find((m) => m.isDefault)?.id ?? null}
+              onClose={() => setConfiguring(null)}
+              onSaved={() => {
+                setConfiguring(null);
+                changed();
+              }}
+            />
+          )
         ) : null}
         {editing ? (
           <S3DestinationWizard

@@ -391,6 +391,16 @@ describe("every request the shared client makes is a declared operation", () => 
         })],
       ["removeStorageMedium", () => httpApi.removeStorageMedium("offsite_s3")],
       ["setDefaultStorageMedium", () => httpApi.setDefaultStorageMedium("offsite_s3")],
+      ["getStorageMediumConfiguration", () => httpApi.getStorageMediumConfiguration("offsite_s3")],
+      ["preflightStorageMediumConfiguration", () => httpApi.preflightStorageMediumConfiguration("offsite_s3", {
+        fields: { bucket: "nas-backups" },
+        credentials: { credentialsId: "cred-1" }
+      })],
+      ["configureStorageMedium", () => httpApi.configureStorageMedium("offsite_s3", {
+        backend: "s3",
+        fields: { bucket: "nas-backups" },
+        credentials: { credentialsId: "cred-1" }
+      })],
       ["getStorage", () => httpApi.getStorage()],
       ["scanCatalog", () => httpApi.scanCatalog()],
       ["rebuildCatalog", () => httpApi.rebuildCatalog()],

@@ -730,7 +730,7 @@
       },
       "OperationProgress": {
         "type": "object",
-        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md \u00a752). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
+        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
         "additionalProperties": false,
         "properties": {
           "observed_at": {
@@ -4012,6 +4012,68 @@
           "instance_id_pattern",
           "reserved_instance_id"
         ]
+      },
+      "MediumFieldValue": {
+        "type": "object",
+        "description": "One manifest-declared value, as a pair. A pair list rather than an object keyed by field id, because no schema in this contract is a map and the generator models additionalProperties as a bool only, so a keyed object would arrive in both languages as an untyped blob. An unset optional field is ABSENT from the list rather than present with an empty value: absent is what a manifest's unset_means resolves at read time, and an empty value written back is a product default frozen into the operator's file by the next save (#294). An EMPTY list is meaningful and is not the same as an absent one - these writes replace the whole declared field set, so empty means \"this instance carries no values\". The list is sorted by field, so one configuration has one body.",
+        "required": [
+          "field",
+          "value"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "The manifest field id this value is for."
+          },
+          "value": {
+            "type": "string",
+            "description": "The value, as the engine validates it: a bool field is \"true\" or \"false\". Never empty."
+          }
+        }
+      },
+      "MediumConfigurationRequest": {
+        "type": "object",
+        "description": "One destination's configuration, in the vocabulary its backend's manifest declares (#669). This is what StorageMediumRequest cannot be: that one enumerates S3's fields, so bucket is required and there is no path, and a local volume - the only destination a fresh install has (#670) - cannot be described in it. credentials stays its own reference object because a credential is not a value: it is checked by a different rule, and a value bag that could hold one is a value bag something eventually puts material into (#665's C1-C5).",
+        "required": [
+          "fields"
+        ],
+        "properties": {
+          "backend": {
+            "type": "string",
+            "description": "The manifest id this instance is an instance of. Required when the id is not declared yet, because a destination cannot exist unconfigured (Registry.ValidateInstance refuses an absent required field, core/internal/backend/validate.go:228-233) so there is no record to read it off before the values exist. Refused when it disagrees with a declared instance: that would be a different destination under the same name."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediumFieldValue"
+            },
+            "description": "Every value this instance carries, keyed by manifest field id."
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/StorageMediumCredentialsReference"
+          }
+        }
+      },
+      "MediumConfigurationResponse": {
+        "type": "object",
+        "description": "What one destination has configured right now, in its backend's vocabulary. credential_configured is a boolean and never the reference: whether a credential exists is what a form needs - it decides whether the credential pair may be left empty - and it is not material, not a path and not a variable name, which is the most that may be said about it either way (FR-33, #665's C3).",
+        "required": [
+          "fields",
+          "credential_configured"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MediumFieldValue"
+            },
+            "description": "Every value this instance carries. An unset optional field is absent."
+          },
+          "credential_configured": {
+            "type": "boolean",
+            "description": "Whether this destination names a credential source at all. Nothing about which, and nothing about what is behind it."
+          }
+        }
       }
     },
     "responses": {}
@@ -9688,6 +9750,293 @@
         "x-optimistic-concurrency": null,
         "x-csrf-required": false,
         "x-authenticated": true
+      }
+    },
+    "/storage-mediums/{id}/configuration": {
+      "get": {
+        "operationId": "getStorageMediumConfiguration",
+        "summary": "One destination's configuration, in the vocabulary its backend's manifest declares. A form needs this before it can offer an edit: the write below replaces the whole declared field set.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediumConfigurationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
+            ]
+          }
+        },
+        "x-authenticated": true,
+        "x-csrf-required": false,
+        "x-idempotency-key": "none"
+      },
+      "put": {
+        "operationId": "configureStorageMedium",
+        "summary": "Write one destination's configuration, creating it when the id is not declared yet. Create AND replace through one route, because a destination cannot exist unconfigured: an absent required field is refused two layers below this contract, so the create and the configure are one write with one check in front of it (#669's P2).",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediumConfigurationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Written. The destination as it now stands, so a caller renders what was persisted rather than echoing its own request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageMediumSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST. A field this manager cannot store, a value the manifest's own rule refuses, a repeated field id, an empty value, or a create that named no backend. The message names the field id, which is the schema's own word, and never the value (mediumcreds.go: refusals by shape, never by content).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: MEDIUM_CONNECTION_NOT_PROVEN. The engine ran the same check in front of the write and it did not pass (#636).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_CONNECTION_NOT_PROVEN"
+            ]
+          }
+        },
+        "x-authenticated": true,
+        "x-csrf-required": true,
+        "x-idempotency-key": "none"
+      }
+    },
+    "/storage-mediums/{id}/configuration/preflight": {
+      "post": {
+        "operationId": "preflightStorageMediumConfiguration",
+        "summary": "Prove a configuration before it is written. Writes nothing to the configuration whatever it answers, and a destination that does not work is a 200 with ok false. A request naming no credential is checked with the one already stored, which is what lets an operator change a prefix on a destination whose access key they do not have.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": [],
+            "csrfCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The storage medium id, as the configuration declares it and as a retention tier names it."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediumConfigurationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The configuration may or may not have passed: read `ok`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MediumPreflightResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: MEDIUM_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "MEDIUM_NOT_FOUND"
+            ]
+          }
+        },
+        "x-authenticated": true,
+        "x-csrf-required": true,
+        "x-idempotency-key": "none"
       }
     }
   },
