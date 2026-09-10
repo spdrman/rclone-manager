@@ -276,18 +276,32 @@ export function resetMockFixtures(): void {
 /**
  * The artifacts the dev server and the screenshots run on.
  *
- * `state` is not free: it is the lifecycle state the journal holds, and
- * every other field on the row is a reading of that same row. A backend
- * derives `quarantined` FROM the state and nothing else
- * (core/service/artifacts.go), so a fixture that is QUARANTINED without a
- * quarantine record, or carries one without being in that state, is a
- * shape no server can produce. #662 is what a fixture that lies costs: a
- * recovery card was gated on a combination only a fixture had, so it
- * passed its test and rendered for no real backup.
+ * Every id here is `setId + "/" + filename`, because that is what an
+ * artifact id is: model.ArtifactID.String() (core/internal/model/ids.go)
+ * is BackupSetID.String() + "/" + name, and BackupSetID.String() is
+ * source + "/" + set. These used to be flat opaque tokens
+ * ("art_01J9F4M2QK8Z"), which no deployment has ever produced, and the
+ * cost of that was not cosmetic: the artifact route declared one path
+ * segment, which is unreachable with a real id and perfectly reachable
+ * with these, so five cases asserted their way through a page nobody
+ * could open on a real deployment and the Web UI suite stayed green over
+ * #677 until it was pointed at a real one. #285 corrected the same
+ * unreality in the SETS array above for the same reason.
+ *
+ * `state` is not free either, and it is the same lesson one field over:
+ * it is the lifecycle state the journal holds, and every other field on
+ * the row is a reading of that same row. A backend derives `quarantined`
+ * FROM the state and nothing else (core/service/artifacts.go), so a
+ * fixture that is QUARANTINED without a quarantine record, or carries
+ * one without being in that state, is a shape no server can produce.
+ * #662 is what a fixture that lies costs: a recovery card was gated on a
+ * combination only a fixture had, so it passed its test and rendered for
+ * no real backup.
  */
 const ARTIFACTS: BackupArtifact[] = [
   {
-    id: "art_01J9F4M2QK8Z", setId: "production/postgres-primary", setName: "Production PostgreSQL",
+    id: "production/postgres-primary/postgres-prod-20260828.dump.zst",
+    setId: "production/postgres-primary", setName: "Production PostgreSQL",
     filename: "postgres-prod-20260828.dump.zst",
     remoteOriginalPath: "prod-db-01:/backups/postgresql/postgres-prod-20260828.dump.zst",
     localPath: "/data/backups/production/postgres/2026/08/postgres-prod-20260828.dump.zst",
@@ -319,7 +333,8 @@ const ARTIFACTS: BackupArtifact[] = [
     ]
   },
   {
-    id: "art_01J9F2A7BC44", setId: "production/billing-mysql", setName: "Billing MySQL",
+    id: "production/billing-mysql/billing-20260827.sql.gz",
+    setId: "production/billing-mysql", setName: "Billing MySQL",
     filename: "billing-20260827.sql.gz",
     remoteOriginalPath: "billing-db:/srv/backups/mysql/billing-20260827.sql.gz",
     localPath: "/data/backups/production/billing/2026/08/billing-20260827.sql.gz",
@@ -344,7 +359,8 @@ const ARTIFACTS: BackupArtifact[] = [
     ]
   },
   {
-    id: "art_01J9E8QP4R21", setId: "production/auth-config", setName: "Auth service config",
+    id: "production/auth-config/auth-config-20260826.tar.zst",
+    setId: "production/auth-config", setName: "Auth service config",
     filename: "auth-config-20260826.tar.zst",
     remoteOriginalPath: "prod-db-01:/etc/auth-service/backups/auth-config-20260826.tar.zst",
     localPath: "/data/backups/production/auth/quarantine/auth-config-20260826.tar.zst",
@@ -373,7 +389,8 @@ const ARTIFACTS: BackupArtifact[] = [
     ]
   },
   {
-    id: "art_01J9C1XY7T09", setId: "production/billing-mysql", setName: "Billing MySQL",
+    id: "production/billing-mysql/billing-20260824.sql.gz",
+    setId: "production/billing-mysql", setName: "Billing MySQL",
     filename: "billing-20260824.sql.gz",
     remoteOriginalPath: "billing-db:/srv/backups/mysql/billing-20260824.sql.gz",
     localPath: "/data/backups/production/billing/quarantine/billing-20260824.sql.gz",
@@ -404,7 +421,8 @@ const ARTIFACTS: BackupArtifact[] = [
     ]
   },
   {
-    id: "art_01J98MN3V5KK", setId: "media/weekly-archive", setName: "Media archive",
+    id: "media/weekly-archive/media-week34.tar",
+    setId: "media/weekly-archive", setName: "Media archive",
     filename: "media-week34.tar",
     remoteOriginalPath: "media-01:/export/weekly/media-week34.tar",
     localPath: "/data/backups/media/2026/w34/media-week34.tar",
@@ -433,7 +451,8 @@ const ARTIFACTS: BackupArtifact[] = [
     // and it holds fourteen gigabytes until somebody deletes the file by
     // hand. It is otherwise a perfectly healthy, verified backup, which
     // is exactly what makes it hard to spot without the marker.
-    id: "art_01J8XK6D9P30", setId: "production/legacy-redis", setName: "Legacy Redis (removed)",
+    id: "production/legacy-redis/redis-20260812.rdb.zst",
+    setId: "production/legacy-redis", setName: "Legacy Redis (removed)",
     filename: "redis-20260812.rdb.zst",
     remoteOriginalPath: "legacy-redis-01:/var/backups/redis/redis-20260812.rdb.zst",
     localPath: "/data/backups/production/legacy-redis/2026/08/redis-20260812.rdb.zst",
@@ -1713,7 +1732,25 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
 
     listArtifacts: (setId) =>
       delay(empty ? [] : artifacts.filter((a) => !a.quarantine && (!setId || a.setId === setId))),
-    getArtifact: (id) => delay(artifacts.find((a) => a.id === id) ?? artifacts[0]),
+    // An id this fixture does not have is a refusal, not the first
+    // artifact. The fallback that used to be here answered every wrong id
+    // with a real page about somebody else's backup, which is the same
+    // class of untruth as the flat ids above and hides the same bugs: a
+    // route that dropped a segment, an escape that was lost, an id
+    // reassembled in the wrong order would all render happily. A real
+    // deployment answers 404 (#677).
+    getArtifact: (id) => {
+      const found = artifacts.find((a) => a.id === id);
+      return found
+        ? delay(found)
+        : delay(null).then(() => {
+            throw new BackupManagerError({
+              code: "ARTIFACT_NOT_FOUND",
+              message: "no backup with id " + id,
+              correlationId: "cid_mock404"
+            });
+          });
+    },
 
     listOperations: () => delay(empty ? [] : OPERATIONS),
     listActivity: () =>

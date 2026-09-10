@@ -42,6 +42,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { artifactPath } from "@shared/utilities/routes";
 import { App } from "@shared/App";
 import { QuarantinePage } from "@shared/pages/QuarantinePage";
 import { BackupDetailPage } from "@shared/pages/BackupDetailPage";
@@ -84,7 +85,12 @@ const SET_ID = "cicd-pipeline/var-backups";
  *  test the product fails. `quarantine: null` is honest and is the half
  *  the Quarantine page cannot see. */
 const STUCK: BackupArtifact = {
-  id: "art_dpkg_diversions_5",
+  // Three parts, because that is what model.ArtifactID.String() joins
+  //  (core/internal/model/ids.go): the backup set id and the file's
+  //  name. A one-segment id reaches no page now that App.tsx declares
+  //  the segments the id actually has, and it never named anything on a
+  //  real deployment either (issue #677).
+  id: SET_ID + "/dpkg.diversions.5.gz",
   setId: SET_ID,
   setName: "var-backups",
   filename: "dpkg.diversions.5.gz",
@@ -391,10 +397,10 @@ describe("what the browser offers an operator whose backup is stuck (#662 defect
     const getArtifact = vi.spyOn(api, "getArtifact").mockResolvedValue(artifact);
     const retry = vi.spyOn(api, "retryFailedIngestion").mockResolvedValue(undefined);
     render(
-      <MemoryRouter initialEntries={["/backups/" + artifact.id]}>
+      <MemoryRouter initialEntries={[artifactPath(artifact.id)]}>
         <ApiProvider api={api}>
           <Routes>
-            <Route path="/backups/:artifactId" element={<BackupDetailPage />} />
+            <Route path="/backups/:source/:set/:name" element={<BackupDetailPage />} />
           </Routes>
         </ApiProvider>
       </MemoryRouter>
@@ -529,7 +535,7 @@ describe("what the browser offers an operator whose backup is stuck (#662 defect
     const bridge: PlatformBridge = { ...genericBridge, getAuthContext: () => Promise.resolve(authenticated) };
 
     render(
-      <MemoryRouter initialEntries={["/backups/" + STUCK.id]}>
+      <MemoryRouter initialEntries={[artifactPath(STUCK.id)]}>
         <ApiProvider api={api}>
           <PlatformProvider bridge={bridge}>
             <App />
@@ -579,10 +585,10 @@ describe("what the browser offers an operator whose backup is stuck (#662 defect
     );
 
     render(
-      <MemoryRouter initialEntries={["/backups/" + STUCK.id]}>
+      <MemoryRouter initialEntries={[artifactPath(STUCK.id)]}>
         <ApiProvider api={api}>
           <Routes>
-            <Route path="/backups/:artifactId" element={<BackupDetailPage />} />
+            <Route path="/backups/:source/:set/:name" element={<BackupDetailPage />} />
           </Routes>
         </ApiProvider>
       </MemoryRouter>
@@ -629,10 +635,10 @@ describe("what the browser offers an operator whose backup is stuck (#662 defect
     );
 
     render(
-      <MemoryRouter initialEntries={["/backups/" + STUCK.id]}>
+      <MemoryRouter initialEntries={[artifactPath(STUCK.id)]}>
         <ApiProvider api={api}>
           <Routes>
-            <Route path="/backups/:artifactId" element={<BackupDetailPage />} />
+            <Route path="/backups/:source/:set/:name" element={<BackupDetailPage />} />
           </Routes>
         </ApiProvider>
       </MemoryRouter>

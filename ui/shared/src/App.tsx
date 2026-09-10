@@ -255,7 +255,18 @@ export function App() {
             match a path with that extra segment in it (issue #285). */}
         <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={readOnly} />} />
         <Route path="/backups" element={<BackupsPage readOnly={readOnly} />} />
-        <Route path="/backups/:artifactId" element={<BackupDetailPage readOnly={readOnly} />} />
+        {/* And three, not one, for the same reason one route up: an
+            artifact id (model.ArtifactID.String()) is a backup set id
+            plus the file's name, so it is source, set and name, and the
+            API's own route is /backups/{source}/{set}/{name}. This line
+            declared a single :artifactId while the comment above
+            explained why it could not work: every click on a backup row
+            matched nothing, the catch-all below redirected, and the
+            operator arrived at the Dashboard as if they had misclicked
+            (issue #677). Callers build the URL with artifactPath()
+            (utilities/routes.ts) rather than by hand, which is what
+            escapes each part. */}
+        <Route path="/backups/:source/:set/:name" element={<BackupDetailPage readOnly={readOnly} />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/quarantine" element={<QuarantinePage readOnly={readOnly} quarantine={quarantine} />} />
         <Route path="/settings" element={<SettingsPage readOnly={readOnly} />} />
