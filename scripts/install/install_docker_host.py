@@ -3718,11 +3718,7 @@ def cmd_install(args) -> int:
             remedy,
         )
 
-    say("")
-    say("==> Installed.")
-    say(f"    Web UI:  {args.public_base_url}")
-    say(f"    Compose: {' '.join(compose_argv(args))}")
-    for line in first_run_epilog(args):
+    for line in installed_epilog(args):
         say(line)
     return EXIT_OK
 
@@ -3826,21 +3822,8 @@ def finish_cli_only_install(args) -> int:
     compose = " ".join(compose_argv(args))
 
     if not (args.config_dir / "config.yaml").is_file():
-        say("")
-        say("==> Installed. Nothing is running yet, and that is what --cli-only means here:")
-        say("    `rbm daemon` is refused rather than started without a config.yaml, and a CLI-only")
-        say("    install has no first-run wizard to write one. Creating the first backup set writes")
-        say("    the first config.yaml with it:")
-        say(f"      {wrapper} backup-set create <source>/<backup-set> \\")
-        say("          --host HOST --user USER --remote-path /remote/path --local-path /backups/path \\")
-        say("          --ssh-key-file /etc/rclone-manager/id_ed25519 --trust-host-key \\")
-        say("          --completion-strategy stable")
-        say("")
-        say("    Then start the scheduler:")
-        say(f"      {compose} up -d --no-build {ENGINE_SERVICE}")
-        say("")
-        say(f"    CLI:     {wrapper}")
-        say(f"    Compose: {compose}")
+        for line in cli_only_staged_epilog(args):
+            say(line)
         return EXIT_OK
 
     say(f"==> docker compose up -d {ENGINE_SERVICE}")
@@ -3901,6 +3884,54 @@ def first_run_epilog(args: argparse.Namespace) -> list[str]:
         "    precisely so that a fresh install does not need one hand-written before it starts.",
         "    Open the Web UI and follow it. The enrollment link is in the engine's log:",
         f"      {' '.join(compose_argv(args))} logs rclone-manager | grep enroll",
+    ]
+
+
+def installed_epilog(args: argparse.Namespace) -> list[str]:
+    """Everything a full install prints once its last check has passed.
+
+    A list rather than a run of say() calls, for the reason
+    first_run_epilog is already one: docs/site/index.html shows this
+    output to a reader who has just run the install, and terminal output
+    copied into a page by hand drifts from the program silently. The
+    site's check renders these lines and compares, so the page cannot
+    claim an epilog this installer does not print.
+    """
+    return [
+        "",
+        "==> Installed.",
+        f"    Web UI:  {args.public_base_url}",
+        f"    Compose: {' '.join(compose_argv(args))}",
+        *first_run_epilog(args),
+    ]
+
+
+def cli_only_staged_epilog(args: argparse.Namespace) -> list[str]:
+    """What a fresh --cli-only install prints, having started nothing.
+
+    Separate from installed_epilog rather than a flag on it, because the
+    two say different things: this one has no Web UI line and no
+    enrolment link at all, which is the whole point of the flag (#689),
+    and the site shows it precisely to make that absence visible.
+    """
+    wrapper = args.prefix / "bin" / "rbm"
+    compose = " ".join(compose_argv(args))
+    return [
+        "",
+        "==> Installed. Nothing is running yet, and that is what --cli-only means here:",
+        "    `rbm daemon` is refused rather than started without a config.yaml, and a CLI-only",
+        "    install has no first-run wizard to write one. Creating the first backup set writes",
+        "    the first config.yaml with it:",
+        f"      {wrapper} backup-set create <source>/<backup-set> \\",
+        "          --host HOST --user USER --remote-path /remote/path --local-path /backups/path \\",
+        "          --ssh-key-file /etc/rclone-manager/id_ed25519 --trust-host-key \\",
+        "          --completion-strategy stable",
+        "",
+        "    Then start the scheduler:",
+        f"      {compose} up -d --no-build {ENGINE_SERVICE}",
+        "",
+        f"    CLI:     {wrapper}",
+        f"    Compose: {compose}",
     ]
 
 
@@ -5085,7 +5116,7 @@ def cmd_enroll_link(args) -> int:
     # container's; two tokens never collide.
     previous = _newest_enrollment_notice(args)
 
-    say(f"==> Restarting {ENGINE_SERVICE}, which is what mints a token")
+    say(ENROLL_RESTART_SAY)
     restart = run([*compose_argv(args), "restart", ENGINE_SERVICE],
                   check=False, timeout=300, cwd=str(args.prefix))
     if restart.returncode != 0:
@@ -5095,7 +5126,7 @@ def cmd_enroll_link(args) -> int:
             "Nothing was reissued, so the link you already had is still whatever it was.",
         )
 
-    say(f"==> Waiting up to {ENROLL_NOTICE_WAIT}s for the new notice")
+    say(ENROLL_WAIT_SAY)
     deadline = time.time() + ENROLL_NOTICE_WAIT
     notice = ""
     while time.time() < deadline:
@@ -5114,12 +5145,35 @@ def cmd_enroll_link(args) -> int:
             f"  {' '.join(compose_argv(args))} logs --tail=50 {ENGINE_SERVICE}",
         )
 
-    say("")
-    say(notice)
-    say("")
-    say("    Valid 30 minutes, and it works once. Every link printed before this one is now dead,")
-    say("    including any still in your scrollback.")
+    for line in enroll_link_epilog(notice):
+        say(line)
     return EXIT_OK
+
+
+# The two lines `enroll-link` prints while it works, and the block it
+# prints when it has one. Named rather than inline for the reason
+# installed_epilog is: docs/site/index.html shows this transcript, and a
+# page holding a hand-copy of program output drifts from the program
+# without anybody noticing. The site's check renders these.
+ENROLL_RESTART_SAY = f"==> Restarting {ENGINE_SERVICE}, which is what mints a token"
+ENROLL_WAIT_SAY = f"==> Waiting up to {ENROLL_NOTICE_WAIT}s for the new notice"
+
+
+def enroll_link_epilog(notice: str) -> list[str]:
+    """What to print once a fresh notice is in hand.
+
+    The notice itself is passed in rather than read here: it is the
+    engine's own line, echoed exactly as the container logged it, and
+    this function's job is only the two sentences around it that say
+    what has just happened to every earlier link.
+    """
+    return [
+        "",
+        notice,
+        "",
+        "    Valid 30 minutes, and it works once. Every link printed before this one is now dead,",
+        "    including any still in your scrollback.",
+    ]
 
 
 def cmd_status(args) -> int:
