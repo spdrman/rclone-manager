@@ -394,11 +394,27 @@ describe("confirming (#668 step 3)", () => {
     expect(api.updateStorageMedium).not.toHaveBeenCalled();
   });
 
-  it("prints the equivalent command, and it names no field value", async () => {
+  it("names no equivalent command, because these steps run none", async () => {
     await reachConfirm();
 
     const shown = group().textContent ?? "";
-    expect(shown).toContain("rbm medium add usb_dock --backend local_volume");
+    // This step used to print `rbm medium add usb_dock --backend
+    // local_volume`, and `medium` has no --backend flag at all
+    // (core/cmd/backup-manager/medium.go:183) — the line failed on
+    // execution with "flag provided but not defined". `--type` would not
+    // have fixed it either: there is no `medium add` equivalent to a step
+    // that writes nothing, since an instance carrying no values is
+    // refused by ValidateInstance. So the gap is NAMED, the way
+    // core/cliecho names a route with no verb.
+    //
+    // Asserted as the absence of a runnable line AND the presence of the
+    // reason, because either half alone is satisfiable by a defect:
+    // printing nothing at all passes the first, and printing a broken
+    // line beside the prose passes the second.
+    expect(shown).not.toContain("--backend");
+    expect(shown).not.toContain("rbm medium add usb_dock");
+    expect(shown).toContain("These steps run none");
+    expect(shown).toContain("printed by the configure step");
   });
 });
 
