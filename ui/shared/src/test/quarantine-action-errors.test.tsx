@@ -34,6 +34,7 @@ const ARTIFACT: BackupArtifact = {
   sizeBytes: 1024,
   checksum: "deadbeef",
   checksumAlgorithm: "sha256",
+  state: "QUARANTINED",
   validation: "failed",
   retentionClasses: [],
   retentionPolicy: "configured",

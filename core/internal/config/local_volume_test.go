@@ -5,6 +5,27 @@ import (
 	"testing"
 )
 
+// TestStorageMediumTypes_IncludesLocalVolume is the observable proof
+// that #666 and #667 fit together: StorageMediumTypes() is now
+// expressibleBackendIDs(reg) filtered to backends this struct can fully
+// populate (#667), and that filter excluded local_volume until this
+// issue's Path field gave storageMediumFieldValue a "path" case to
+// return. A regression here (local_volume silently dropping back out of
+// this list) would mean an operator-visible backend the settings form
+// can no longer offer, with no other test failing to say so.
+func TestStorageMediumTypes_IncludesLocalVolume(t *testing.T) {
+	found := false
+	for _, typ := range StorageMediumTypes() {
+		if typ == StorageMediumTypeLocalVolume {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("StorageMediumTypes() = %v, does not include %q", StorageMediumTypes(), StorageMediumTypeLocalVolume)
+	}
+}
+
 // Tests for issue #666 (EPIC I / #664, I1.3): the local_volume medium
 // type, so an operator with a second disk has somewhere to declare it,
 // and more than one local destination is an ordinary configuration

@@ -1363,15 +1363,19 @@ func (c *Config) EffectiveDefaultStorageMedium() string {
 // that will not finish.
 const DefaultMaxMovesPerCycle = 4
 
-// StorageMediumTypeS3 is the one medium type this schema accepts.
+// StorageMediumTypeS3 is the id the s3 manifest declares
+// (core/internal/backend/bundled/s3.json), and the one non-local backend
+// this schema can fully populate today.
 //
-// The set is closed and grows only by a future FR, because a new backend
-// is an architecture decision rather than an import line: EPIC E's FR-28
-// is that decision for s3, and it says the implementation is the embedded
-// rclone's own s3 backend behind the FR-3 transport boundary, with no AWS
-// SDK entering the tree in Go or in TypeScript. A type this package
-// accepted without that decision having been made would be a config an
-// operator could write and nothing could serve.
+// The legal StorageMedium.Type set is no longer a Go-side closed set
+// pinned to this one constant: #667 moved that decision onto
+// core/internal/backend's registry (config.StorageMediumTypes,
+// config.expressibleBackendIDs), which is data a backend adds to by
+// shipping a manifest rather than by an import line here. This constant
+// remains because s3 is still the one backend most of this schema (and
+// its callers - internal/app's mediumType, this package's own tests)
+// need to name literally, and because it is the string the manifest
+// itself carries as "id": changing it would be changing the manifest.
 const StorageMediumTypeS3 = "s3"
 
 // StorageMediumTypeLocalVolume is a directory on a disk this host can
@@ -1541,8 +1545,11 @@ type StorageMedium struct {
 	// validate it client-side against the same rule Validate applies.
 	ID string `yaml:"id"`
 
-	// Type names the backend. The only value is StorageMediumTypeS3; see
-	// that constant for why the set is closed.
+	// Type names the backend: one of the ids StorageMediumTypes()
+	// returns, which is core/internal/backend's bundled registry
+	// filtered to the backends this struct can fully populate (see
+	// expressibleBackendIDs in validate.go). "s3" is the only value that
+	// resolves today.
 	Type string `yaml:"type"`
 
 	// Region is the provider region, passed through to the backend

@@ -325,7 +325,10 @@ commands:
                                                   same thing as quarantine, so this is its own command and not a
                                                   fourth quarantine verb. Nothing does this automatically: a blind
                                                   re-transfer for a cause nothing has classified is a cost this
-                                                  manager does not take on its own (#419)
+                                                  manager does not take on its own (#419). When the artifact's own
+                                                  durable local copy is still intact this completes it in place
+                                                  instead of re-fetching, and that also forfeits any future remote
+                                                  delete, the same as quarantine reinstate (#662)
   restore <source/backup-set/artifact> --medium M [--days N] --acknowledge
                                                   ask the storage provider to make one archived copy readable again
                                                   (EPIC E, FR-34). --acknowledge is required rather than a --force

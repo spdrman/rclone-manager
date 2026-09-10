@@ -450,6 +450,35 @@ func Transfer(ctx context.Context, d Deps, p TransferParams) (state.Outcome, err
 		return state.Outcome{}, fmt.Errorf("lifecycle: transfer: cancelled: %w", transport.NewError(transport.Cancelled, "transfer", err))
 	}
 
+	// What the backend said it moved is not evidence that it moved it, and
+	// issue #662 is the bill for having recorded it as though it were: a
+	// copy that had genuinely written 294 bytes reported zero, the zero
+	// went into the journal unchecked, and every later step preferred it
+	// over the remote size that contradicted it -- verification's expected
+	// size, the commit placement, the sidecar recovery manifest. So the
+	// file this step just wrote is measured, and the measurement is what
+	// gets recorded.
+	//
+	// A measurement that contradicts the remote object's own recorded size
+	// is refused rather than written down. That is the same policy as
+	// Commit's (measure, never trust a report, and treat a contradicted
+	// report as a fault), resolved the other way for the one reason that
+	// differs here: nothing downstream of this point has happened yet, so
+	// refusing costs an attempt, whereas at commit time the bytes are
+	// already durable and refusing would strand a good copy. See
+	// measureCommitted.
+	copied, statErr := os.Stat(partial)
+	if statErr != nil {
+		return failCopy(ctx, d, p, transport.NewError(transport.IntegrityFailure, "copy_to_local", fmt.Errorf(
+			"the copy reported %d bytes but its destination %s cannot be measured: %w",
+			result.BytesTransferred, partial, statErr)), claimed, started.Record)
+	}
+	if rec.Remote.Size != nil && copied.Size() != *rec.Remote.Size {
+		return failCopy(ctx, d, p, transport.NewError(transport.IntegrityFailure, "copy_to_local", fmt.Errorf(
+			"copied %d bytes of a remote object the journal records as %d (the copy itself reported %d); refusing to record a short copy as transferred",
+			copied.Size(), *rec.Remote.Size, result.BytesTransferred)), claimed, started.Record)
+	}
+
 	out, err := Advance(ctx, d, state.Transition{
 		Artifact: p.Artifact,
 		Key:      p.AttemptKey + keyTransferredSuffix,
@@ -461,7 +490,7 @@ func Transfer(ctx context.Context, d Deps, p TransferParams) (state.Outcome, err
 		// a hash policy asks for. See state.TransferResult's own doc for
 		// why the column is still there.
 		Transfer: &state.TransferResult{
-			BytesTransferred: result.BytesTransferred,
+			BytesTransferred: copied.Size(),
 		},
 	})
 	if err != nil {

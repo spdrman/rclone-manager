@@ -260,6 +260,46 @@ var activitySeverityByState = map[string]int{
 	"QUARANTINED_LOST": severityErr,
 }
 
+// activitySeverityByEdge is issue #625's other half of #663: two rows a
+// successful in-place recovery writes are keyed on their destination alone
+// by the table above, which captions them as if that destination were a
+// verdict rather than a waypoint. completeIngestionInPlace's own re-stamp
+// is a FAILED -> FAILED transition (an amber "attempt failed" under the
+// state-only table, for an attempt that just succeeded), and
+// ReinstateQuarantined's mandatory hold is FAILED -> QUARANTINED (a red
+// "quarantined for review", for a hold nobody reviews because the
+// judgement was already made a moment later in the same call). Both are
+// waypoints on the way back to a durable state, not destinations, so both
+// rank no higher than severityInfo here — the same rank ui/shared/src/api/
+// client.ts's mirror of this table gives them, for the same reason: #625
+// was filed the last time this file and that one drifted, and the two
+// entries below are the two this fix and its TS counterpart agreed on
+// before either was written (issue #663).
+//
+// Checked before activitySeverityByState: an edge named here overrides the
+// destination-only guess, and every edge not named here falls through to
+// it unchanged. lifecycle.Transition's own doc says the ORIGIN decides
+// what a QUARANTINED destination means; this map is the presentation
+// layer's application of that same rule. COMMITTED -> QUARANTINED and
+// REMOTE_RETAINED -> QUARANTINED are deliberately absent: that is the
+// `validate` origin, a true statement about a broken record, and it keeps
+// the red badge the state-only table already gives it.
+var activitySeverityByEdge = map[[2]string]int{
+	{"FAILED", "FAILED"}:      severityInfo, // durable copy matched the remote object
+	{"FAILED", "QUARANTINED"}: severityInfo, // held for the reinstatement judgement
+}
+
+// activitySeverity is the severity filterActivity and the page both key
+// on: the edge if activitySeverityByEdge names it, else the destination
+// alone, else severityInfo for a transition this build has never heard of
+// (filterActivity's own doc gives the reason for that last fallback).
+func activitySeverity(e apicontract.ActivityEvent) int {
+	if v, ok := activitySeverityByEdge[[2]string{e.From, e.To}]; ok {
+		return v
+	}
+	return activitySeverityByState[e.To]
+}
+
 // severityRank reads the --severity flag. An unrecognised value is
 // refused rather than treated as "everything": a filter that silently did
 // nothing would print a full feed under a flag that says it is narrowed,
@@ -289,7 +329,7 @@ func filterActivity(events []apicontract.ActivityEvent, setID string, minSeverit
 		if setID != "" && e.BackupSetID != setID {
 			continue
 		}
-		if activitySeverityByState[e.To] < minSeverity {
+		if activitySeverity(e) < minSeverity {
 			continue
 		}
 		out = append(out, e)

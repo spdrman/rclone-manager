@@ -80,9 +80,18 @@ func TestValidate_StorageMediumFieldRules(t *testing.T) {
 		{"empty type", func(m *StorageMedium) { m.Type = "" }, []string{"storage_mediums[0]", "type", StorageMediumTypeS3}},
 		{"unknown type", func(m *StorageMedium) { m.Type = "azure" }, []string{"storage_mediums[0]", "azure", StorageMediumTypeS3}},
 		{"empty bucket", func(m *StorageMedium) { m.Bucket = "" }, []string{"storage_mediums[0]", "bucket"}},
-		{"unknown storage class", func(m *StorageMedium) { m.StorageClass = "COLD" }, []string{"storage_mediums[0]", "storage_class", "COLD", StorageClassDeepArchive}},
-		{"lower-case storage class", func(m *StorageMedium) { m.StorageClass = "standard" }, []string{"storage_mediums[0]", "storage_class", "standard"}},
-		{"unknown upload verification", func(m *StorageMedium) { m.UploadVerification = "trust" }, []string{"storage_mediums[0]", "upload_verification", "trust", UploadVerificationReadback}},
+		// #667 moved this check onto backend.Registry.ValidateInstance,
+		// which never echoes an operator-supplied value back in a
+		// message (C5, issue #665: "refusals by SHAPE, never by
+		// content", so a value pasted into the wrong field is never
+		// echoed regardless of which field it landed in). The bad value
+		// itself ("COLD", "standard", "trust") is therefore deliberately
+		// absent from every one of these three want lists; only the
+		// schema's OWN fixed vocabulary (a declared class, a declared
+		// mode) may still appear.
+		{"unknown storage class", func(m *StorageMedium) { m.StorageClass = "COLD" }, []string{"storage_mediums[0]", "storage_class", StorageClassDeepArchive}},
+		{"lower-case storage class", func(m *StorageMedium) { m.StorageClass = "standard" }, []string{"storage_mediums[0]", "storage_class"}},
+		{"unknown upload verification", func(m *StorageMedium) { m.UploadVerification = "trust" }, []string{"storage_mediums[0]", "upload_verification", UploadVerificationReadback}},
 		{"prefix with a leading slash", func(m *StorageMedium) { m.Prefix = "/rclone-manager" }, []string{"storage_mediums[0]", "prefix"}},
 		{"prefix with a trailing slash", func(m *StorageMedium) { m.Prefix = "rclone-manager/" }, []string{"storage_mediums[0]", "prefix"}},
 		{"prefix with an empty segment", func(m *StorageMedium) { m.Prefix = "rclone//manager" }, []string{"storage_mediums[0]", "prefix"}},
@@ -820,10 +829,20 @@ func TestValidate_IsIdempotentWithStorageMediums(t *testing.T) {
 // stopping at the first problem, so a config wrong in three places does not
 // cost an operator three restarts. A per-medium early return is the easy
 // way to break that.
+//
+// The two problems asserted are in two DIFFERENT mediums rather than two
+// in the same one: #667 moved field-level checks (storage_class among
+// them) onto backend.Registry.ValidateInstance, which needs a resolved
+// manifest to check a field against, so a medium whose type is unknown
+// (the first medium here) cannot also be told its storage_class is
+// wrong - there is no schema to check it against until the type is
+// fixed. That is one problem reported for one root cause, the same
+// principle isArchiveStorageClass's own doc states, not a regression in
+// how much this test proves: it still shows two independent mediums,
+// wrong in two independent ways, both surfacing in one pass.
 func TestValidate_CollectsEveryMediumProblem(t *testing.T) {
 	c := mediumsConfig()
 	c.StorageMediums[0].Type = "azure"
-	c.StorageMediums[0].StorageClass = "COLD"
 	c.StorageMediums = append(c.StorageMediums, StorageMedium{
 		ID:          "second_bad",
 		Type:        StorageMediumTypeS3,
@@ -832,9 +851,9 @@ func TestValidate_CollectsEveryMediumProblem(t *testing.T) {
 	})
 	err := c.Validate()
 	if err == nil {
-		t.Fatal("Validate accepted three separate medium problems")
+		t.Fatal("Validate accepted two separate medium problems")
 	}
-	for _, want := range []string{"azure", "COLD", "storage_mediums[1]"} {
+	for _, want := range []string{"azure", "storage_mediums[1]"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not carry %q; every problem must be reported in one pass", err, want)
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/recovery"
 	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // This file implements FR-14, the durable NAS commit. Steps 1 and 2 of
@@ -226,13 +227,74 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		// without touching the filesystem or the journal again, other than
 		// re-ensuring the recovery manifest exists (see writeRecoveryManifest's
 		// doc: a process killed after COMMITTED landed but before the
-		// manifest was ever written must not leave it missing forever).
+		// manifest was ever written must not leave it missing forever) --
+		// written from the record below regardless of what a fresh
+		// measurement of the file finds, for the reason given there.
 		if committing.Record.LocalPath != final {
 			return state.Outcome{}, fmt.Errorf(
 				"lifecycle: commit %s: already COMMITTED at %q, not the final path %q this LocalDir computes",
 				in.Artifact, committing.Record.LocalPath, final)
 		}
-		if err := writeRecoveryManifest(in.LocalDir, committing.Record); err != nil {
+		converged, err := measureCommitted(final, committing.Record)
+		if err != nil {
+			return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: %w", in.Artifact, err)
+		}
+		// A disagreement found HERE is handled differently from the same
+		// disagreement found on the fresh path above, and the difference is
+		// deliberate: whichever way this comes out, the manifest below is
+		// written from a measurement built from the RECORD, never from
+		// converged.
+		//
+		// On the fresh path the file is ground truth and the transport's
+		// own report of what it sent is the suspect: the bytes have just
+		// been fsynced and linked into their final name, and what is still
+		// in the manager's gift is whether the record describes them, so
+		// the record is corrected to match the file (see measureCommitted's
+		// doc). Here the relationship is the exact inverse. committing.Record
+		// was itself measured from this same file by that same fixed
+		// Commit, at commit time -- it did not arrive as a transport's
+		// unverified claim. Whatever measureCommitted finds now is a fresh
+		// look at a file that has had time to change SINCE the commit that
+		// produced the record, so on this branch the record is the
+		// trustworthy side of any disagreement and the file underneath it
+		// is the suspect one.
+		//
+		// That is why converged is consulted only for its Fault, to decide
+		// whether to also report a disagreement, and its Size/Hash/Alg are
+		// discarded even when there is nothing to report: the record
+		// already carries the answer a fresh measurement would just be
+		// re-deriving from the same unchanged file.
+		//
+		// Two alternatives were considered and rejected. (a) Record the
+		// correction here too, as the fresh path does: impossible, the
+		// COMMITTED transition is already written and this branch holds no
+		// second idempotency key to write another. (b) Skip
+		// writeRecoveryManifest entirely on a disagreement and return only
+		// the error: a COMMITTED row is never routed back to commitOne
+		// (internal/app/pipeline.go only reaches it for VERIFIED/COMMITTING),
+		// so this branch is reachable only as crash recovery inside one
+		// attempt key, and skipping the write would leave that artifact
+		// with no sidecar manifest permanently -- reversing
+		// writeRecoveryManifest's own reason to exist, which is exactly the
+		// process-killed-before-the-manifest-was-ever-written case this
+		// branch is for.
+		if converged.Fault != "" {
+			// The manifest is still written, and written from the RECORD:
+			// this branch exists so a crash between COMMITTED and the
+			// manifest cannot leave it missing forever, and that guarantee
+			// must not depend on the file still being intact. But it is not
+			// written from the measurement, because a manifest is what a
+			// rebuild trusts when the journal is gone, and these bytes are
+			// the suspect side of the disagreement, not the trusted one.
+			if err := writeRecoveryManifest(in.LocalDir, committing.Record, recordMeasurement(committing.Record)); err != nil {
+				return state.Outcome{}, err
+			}
+			return state.Outcome{}, fmt.Errorf(
+				"lifecycle: commit %s: converging on an already-COMMITTED artifact, but %s no longer matches the record: %s; "+
+					"the recovery manifest was left describing the bytes this artifact was committed with, not what is at that path now",
+				in.Artifact, final, converged.Fault)
+		}
+		if err := writeRecoveryManifest(in.LocalDir, committing.Record, converged); err != nil {
 			return state.Outcome{}, err
 		}
 		return committing, nil
@@ -257,7 +319,14 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: %w", in.Artifact, err)
 	}
 
-	committed, err := Advance(ctx, d, state.Transition{
+	// The bytes are durable now, so this is the last moment at which the
+	// record of them can still be made true. Issue #662: it never was.
+	measured, err := measureCommitted(final, committing.Record)
+	if err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: %w", in.Artifact, err)
+	}
+
+	committed, err := Advance(ctx, d, measured.committedTransition(state.Transition{
 		Artifact:  in.Artifact,
 		Key:       in.CommittedKey,
 		From:      string(Committing),
@@ -269,50 +338,213 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		// internal/state because only this package knows that LocalPath
 		// stops naming a .partial and starts naming the finished artifact
 		// exactly here; see state.PlacementUpdate's own doc.
-		Placement: localPlacementFor(committing.Record, final),
-	})
+		Placement: localPlacementFor(measured, final),
+	}, committing.Record))
 	if err != nil {
 		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: recording COMMITTED: %w", in.Artifact, err)
 	}
-	if err := writeRecoveryManifest(in.LocalDir, committed.Record); err != nil {
+	if err := writeRecoveryManifest(in.LocalDir, committed.Record, measured); err != nil {
 		return state.Outcome{}, err
 	}
 	return committed, nil
 }
 
+// commitMeasurement is what Commit measured on the file it has just made
+// durable, and it is what both durable records of that file -- the
+// journal's local placement and the sidecar recovery manifest -- are
+// written from.
+//
+// It exists because issue #662 found both of them written from the record
+// instead. A local read-back that came back empty put size_bytes 0 and the
+// sha256 of the empty string into the journal AND into the sidecar
+// manifest, over a file that was 294 bytes and perfectly good, with
+// verification_class "content" stamped on top because a hash string was
+// present. The commit step had stat'ed that very file three lines earlier
+// and never compared the two.
+type commitMeasurement struct {
+	// Size is the committed file's size, measured rather than reported.
+	Size int64
+
+	// Hash and Alg describe the committed file's content: the hash
+	// recorded at verification while nothing contradicts it, and a fresh
+	// digest of the committed file when something does.
+	//
+	// Re-deriving the hash off the back of a size disagreement is not
+	// belt-and-braces. The recorded byte count and the recorded hash come
+	// from one read of one copy, so a byte count that turns out to be
+	// false is evidence about the hash beside it: #662's journal row
+	// carried 0 bytes and the sha256 of nothing together, both of them
+	// that one empty read-back's answer.
+	Hash string
+	Alg  string
+
+	// Fault is the disagreement this measurement found, in the words an
+	// operator reads, or empty when the record and the file agreed.
+	//
+	// It is carried rather than only logged because the journal
+	// transition is where an operator meets it (`rbm artifacts` prints
+	// the recorded detail), and a transport telling the manager something
+	// false about a copy it just made is a fault worth reporting, not a
+	// discrepancy to paper over.
+	Fault string
+}
+
+// measureCommitted measures the file Commit has just linked into place and
+// reports whether the record disagreed with it (issue #662).
+//
+// # Why this records the measurement rather than refusing the commit
+//
+// Both are honest answers and this one is the safe one. By the time this
+// runs the bytes are already at their final name and already fsynced;
+// what is still in the manager's gift is whether the record describes
+// them. Refusing would leave the artifact at COMMITTING over a file that
+// is at the final name, and the very next attempt on it would meet FR-12's
+// final-name collision guard and fail there instead -- which is the loop
+// issue #662 was filed about, reached one step earlier and over a copy
+// that is provably good. So the record is made true and the disagreement
+// is reported on the transition an operator reads, rather than the
+// artifact being stranded to make the same point.
+//
+// That argument is about the COMMITTING path, and only about it: it is an
+// argument from the cost of refusing, and the cost is what differs at
+// Commit's other call site. Converging on an artifact that is already
+// COMMITTED refuses instead, because refusing there strands nothing. The
+// reasoning is at that call site, not repeated here.
+//
+// A hash that cannot be computed IS refused, and so is one that could not
+// be read whole, and that is not an inconsistency: there the manager has
+// no measurement to record, and writing "verification_class: content"
+// over bytes nothing measured is precisely what #662 caught.
+func measureCommitted(final string, rec state.Record) (commitMeasurement, error) {
+	info, err := os.Stat(final)
+	if err != nil {
+		return commitMeasurement{}, fmt.Errorf("measuring the committed file %s: %w", final, err)
+	}
+
+	m := commitMeasurement{Size: info.Size(), Hash: rec.LocalHash, Alg: rec.LocalHashAlg}
+	if rec.Transfer == nil || rec.Transfer.BytesTransferred == info.Size() {
+		return m, nil
+	}
+
+	n, sum, err := readAndHashLocal(final)
+	if err != nil {
+		return commitMeasurement{}, fmt.Errorf(
+			"the transfer of %s reported %d bytes for a file that measures %d, and re-hashing the file to record what is actually there failed: %w",
+			final, rec.Transfer.BytesTransferred, info.Size(), err)
+	}
+	// io.Copy reports a nil error on a short read, and this fallback runs
+	// precisely when the environment has already demonstrated that it lies
+	// about read-backs: it is reached ONLY because the recorded byte count
+	// contradicted os.Stat. So Size comes from one source and Hash from
+	// another, and localPlacementFor stamps verification_class: content on
+	// whatever pair it is handed. Two numbers that disagree about the same
+	// file are not a measurement (issue #662).
+	if n != info.Size() {
+		return commitMeasurement{}, fmt.Errorf(
+			"re-hashing %s to record what is actually there read %d bytes of a file that measures %d, "+
+				"so the digest describes neither; refusing to record verification_class content over a partial read",
+			final, n, info.Size())
+	}
+	m.Hash, m.Alg = sum, string(transport.SHA256)
+	m.Fault = fmt.Sprintf(
+		"issue #662: the transfer of this artifact reported %d bytes but the committed file at %s measures %d; "+
+			"recorded the measurement (%s %s) instead, and the %s hash recorded at verification, %s, describes neither",
+		rec.Transfer.BytesTransferred, final, info.Size(), m.Alg, m.Hash,
+		orNone(rec.LocalHashAlg), orNone(rec.LocalHash))
+	return m, nil
+}
+
+// recordMeasurement builds a commitMeasurement from a journal row rather
+// than from a fresh look at the file. It exists for the already-COMMITTED
+// convergence branch above, for the case where a fresh measurement
+// disagrees with the record: see the comment at that call site for why the
+// record, not the file, is the trustworthy side of a convergence-time
+// disagreement.
+//
+// It never carries a Fault. The fault it exists to route around is
+// reported through that branch's own returned error, not smuggled back
+// into a value that is about to be written as a certificate.
+func recordMeasurement(rec state.Record) commitMeasurement {
+	return commitMeasurement{
+		Size: rec.Transfer.BytesTransferred,
+		Hash: rec.LocalHash,
+		Alg:  rec.LocalHashAlg,
+	}
+}
+
+// orNone renders an unrecorded field as a word rather than as an empty gap
+// in the middle of a sentence an operator is meant to act on.
+func orNone(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
+}
+
+// committedTransition folds a measured fault into the COMMITTED write.
+//
+// The correction travels on the same transition as the placement,
+// deliberately: a row left carrying a size and a hash that describe
+// different bytes than its own durable copy is #662 itself, and the very
+// next reconciliation pass would condemn the file on it (defect 2). The
+// detail is how an operator finds out, and prior is read for Checksummed
+// so correcting the byte count does not also erase whether the copy was
+// checksummed in flight.
+func (m commitMeasurement) committedTransition(t state.Transition, prior state.Record) state.Transition {
+	if m.Fault == "" {
+		return t
+	}
+	t.Detail = m.Fault
+	t.Transfer = &state.TransferResult{BytesTransferred: m.Size}
+	if prior.Transfer != nil {
+		t.Transfer.Checksummed = prior.Transfer.Checksummed
+	}
+	t.Hashes = &state.HashUpdate{Hash: m.Hash, Alg: m.Alg}
+	return t
+}
+
 // localPlacementFor describes the durable local copy Commit has just
 // created, for the journal to record alongside the COMMITTED transition.
 //
-// The verification class is `content` when a local hash was recorded and
-// empty otherwise, and that is not a formality: FR-13's hash tier is
-// optional, so an artifact verified without hash: sha256 has a durable
-// copy that nothing has content-verified, and a placement claiming
-// otherwise would be the first lie in a chain that ends with a local copy
-// deleted against an unverified upload. Empty is the honest answer, and
-// #237 is where a stronger class can be earned.
-func localPlacementFor(rec state.Record, final string) *state.PlacementUpdate {
+// Every field comes from the measurement rather than from the record
+// (issue #662): a placement is a claim about the bytes at a location, so
+// the bytes are what it has to be written from.
+//
+// The verification class is `content` when a hash describing those bytes
+// is in hand and empty otherwise, and that is not a formality: FR-13's
+// hash tier is optional, so an artifact verified without hash: sha256 has
+// a durable copy that nothing has content-verified, and a placement
+// claiming otherwise would be the first lie in a chain that ends with a
+// local copy deleted against an unverified upload. Empty is the honest
+// answer, and #237 is where a stronger class can be earned.
+func localPlacementFor(m commitMeasurement, final string) *state.PlacementUpdate {
+	size := m.Size
 	p := &state.PlacementUpdate{
 		Medium:   state.MediumLocal,
 		Location: final,
-		Hash:     rec.LocalHash,
-		HashAlg:  rec.LocalHashAlg,
+		Size:     &size,
+		Hash:     m.Hash,
+		HashAlg:  m.Alg,
 		Status:   state.PlacementActive,
 	}
-	if rec.Transfer != nil {
-		size := rec.Transfer.BytesTransferred
-		p.Size = &size
-	}
-	if rec.LocalHash != "" {
+	if m.Hash != "" {
 		p.VerificationClass = state.VerificationContent
 	}
 	return p
 }
 
 // writeRecoveryManifest writes rec's EPIC-B section 19.3 sidecar recovery
-// manifest into localDir, deriving every field from rec itself, which,
-// like every internal/state.Record, never carries a secret (see
-// internal/recovery's package doc for the structural guarantee this
-// relies on).
+// manifest into localDir, deriving its bookkeeping from rec -- which, like
+// every internal/state.Record, never carries a secret (see
+// internal/recovery's package doc for the structural guarantee this relies
+// on) -- and its size and checksum from measured.
+//
+// The split is issue #662's. The manifest is the record a rebuild trusts
+// when the journal is gone, and #662 found it carrying size_bytes 0 and
+// the sha256 of the empty string over a 294-byte file, because every field
+// including those two came out of the same row that the empty read-back
+// had already written its answer into. Timestamps and identity are the
+// journal's to state; what is at the location is the file's.
 //
 // It is called from both of Commit's success paths above: the
 // fresh/resumed one and the already-converged one. That duplication is
@@ -320,19 +552,31 @@ func localPlacementFor(rec state.Record, final string) *state.PlacementUpdate {
 // journal write landed but before the manifest was ever written must
 // still get one written on the very next call with the same
 // CommittingKey/CommittedKey, via the already-converged branch, rather
-// than silently staying without recovery metadata forever. Since the
-// manifest's content is derived entirely, deterministically, from the
-// journal record, writing it again on a later converged call is always
-// safe: it overwrites the same bytes it would have written the first time.
-func writeRecoveryManifest(localDir string, rec state.Record) error {
-	size := int64(0)
-	switch {
-	case rec.Transfer != nil:
-		size = rec.Transfer.BytesTransferred
-	case rec.Remote.Size != nil:
-		size = *rec.Remote.Size
-	}
-
+// than silently staying without recovery metadata forever.
+//
+// Rewriting it on that later converged call overwrites the same bytes it
+// would have written the first time, and the thing that makes that true
+// is named rather than assumed, because it is no longer a property of
+// this function on its own. Since issue #662 the manifest's size and
+// checksum come from a measurement rather than from the record on the
+// fresh path -- but the already-converged branch never passes this
+// function a fresh measurement of the file. It passes one built from the
+// SAME record that produced the manifest the first time (recordMeasurement,
+// used whenever a fresh look at the file disagrees with that record; see
+// the comment at that call site for why the record, not the file, is the
+// trustworthy side of a convergence-time disagreement). A fresh
+// measurement is still taken at convergence, but only to decide whether to
+// also report a disagreement -- its own Size/Hash/Alg never reach this
+// function, so the bytes this function writes on that branch are the same
+// on every call regardless of what has happened to the file since.
+//
+// The consequence is worth stating plainly: an artifact whose committed
+// file has drifted since commit still gets a manifest, but the manifest
+// describes the bytes it was committed with, not whatever is at that path
+// now. A rebuild that trusts this file is trusting what the commit
+// actually verified, not a stranger's measurement of drift nobody asked it
+// to certify.
+func writeRecoveryManifest(localDir string, rec state.Record, measured commitMeasurement) error {
 	m := recovery.Manifest{
 		FormatVersion:      recovery.CurrentFormatVersion,
 		Source:             rec.Artifact.Set.Source,
@@ -342,9 +586,9 @@ func writeRecoveryManifest(localDir string, rec state.Record) error {
 		ProducerTimestamp:  rec.Remote.ModTime,
 		ReceivedTimestamp:  rec.UpdatedAt,
 		RetentionTimestamp: rec.DiscoveredAt,
-		SizeBytes:          size,
-		Checksum:           rec.LocalHash,
-		ChecksumAlgorithm:  rec.LocalHashAlg,
+		SizeBytes:          measured.Size,
+		Checksum:           measured.Hash,
+		ChecksumAlgorithm:  measured.Alg,
 		ValidationPassed:   rec.ValidationPassed,
 		ValidationDetail:   rec.ValidationDetail,
 		Placements:         manifestPlacements(rec),

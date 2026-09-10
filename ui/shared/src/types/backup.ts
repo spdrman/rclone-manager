@@ -399,6 +399,26 @@ export interface BackupArtifact {
    *  UI silently relabelled a hash it did not recognise. Empty when
    *  nothing has been hashed. */
   checksumAlgorithm: string;
+  /**
+   * The lifecycle state the journal holds for this backup, verbatim
+   * ("DISCOVERED", "FETCHED", "COMMITTED", "FAILED", "QUARANTINED", ...).
+   *
+   * It is here because #662 proved the two verdict fields cannot answer
+   * "is this backup stuck". A backup that failed an attempt carries
+   * `state: "FAILED"` with NO validation verdict at all — nothing on that
+   * path writes one, so `validation` is "pending" — and it is not
+   * quarantined either, so it appears on no recovery surface. Reading the
+   * state is the only way a surface can see it.
+   *
+   * Deliberately `string` and not a union of the states this build knows.
+   * The wire declares it as a bare string (WireArtifact.state), the
+   * lifecycle graph is core's to extend, and a union here would be this
+   * client claiming to know every state of a server it did not compile —
+   * the mistake retentionPolicyFor exists to avoid one field over. A
+   * surface compares against the states it has a behaviour for and treats
+   * everything else as "not that".
+   */
+  state: string;
   validation: "verified" | "failed" | "pending";
   retentionClasses: RetentionClass[];
   /** Remote deletion is a lifecycle FACT, never a user action. */
