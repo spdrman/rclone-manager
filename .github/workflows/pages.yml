@@ -1,0 +1,68 @@
+name: Site
+
+# Publishes docs/site to GitHub Pages.
+#
+# Why a workflow rather than the "deploy from a branch" setting: that one
+# only offers the repository root or /docs as the source, and this site
+# lives at docs/site. Moving it to /docs to satisfy the picker would put
+# the site's files in the same directory as the acceptance procedures,
+# the EPIC documents and the perf records, which are documentation for
+# people working ON this product rather than pages published to people
+# using it. The workflow keeps that separation and costs one file.
+#
+# It runs on a push to main that touches docs/site, so an edit to the
+# Go tree does not redeploy a site nothing changed in, and it can be run
+# by hand for a redeploy after a Pages setting changes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Read the tree, mint the OIDC token Pages deployment authenticates with,
+# and write the deployment. No packages, no contents: write.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one in flight: a cancelled
+# deploy can leave the live site mid-swap, which is a worse outcome than
+# waiting for a superseded run to finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: publish docs/site
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Pages runs Jekyll over the upload unless told not to, and Jekyll
+      # drops anything whose path starts with an underscore. Nothing in
+      # docs/site does today, so this is insurance rather than a fix: it
+      # costs one empty file and it means a future asset directory named
+      # _fonts does not 404 with no error anywhere to read.
+      - name: Turn Jekyll off
+        run: touch docs/site/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload docs/site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
