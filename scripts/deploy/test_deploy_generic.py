@@ -17,7 +17,6 @@ from __future__ import annotations
 import contextlib
 import io
 import os
-import stat
 import sys
 import tempfile
 import unittest
@@ -25,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import deploy_generic  # noqa: E402
+import deploy_generic
 
 
 def _base_args(ssh_key: str, known_hosts: str, **overrides: str) -> list[str]:
@@ -51,7 +50,10 @@ def _base_args(ssh_key: str, known_hosts: str, **overrides: str) -> list[str]:
     return args
 
 
-def _write_key(path: Path, mode: int = 0o600, content: str = "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n") -> None:
+_FAKE_KEY_BODY = "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n"
+
+
+def _write_key(path: Path, mode: int = 0o600, content: str = _FAKE_KEY_BODY) -> None:
     """A private key file, with its mode set explicitly.
 
     The mode is a parameter because it is the subject of two of these
@@ -86,7 +88,7 @@ class RequiredFlagsTests(unittest.TestCase):
     """RED item: 'a test asserting the script exits non-zero, with a
     message naming the flag, when --ssh-key is absent.'"""
 
-    def test_missing_ssh_key_exits_nonzero_and_names_the_flag(self):
+    def test_missing_ssh_key_exits_nonzero_and_names_the_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             known_hosts = Path(tmp) / "known_hosts"
             known_hosts.write_text("sftp.example.com ssh-ed25519 AAAA...\n")
@@ -105,7 +107,7 @@ class RequiredFlagsTests(unittest.TestCase):
         self.assertNotEqual(code, 0, "missing --ssh-key must exit non-zero")
         self.assertIn("--ssh-key", err, "the error must name the missing flag")
 
-    def test_missing_known_hosts_exits_nonzero_and_names_the_flag(self):
+    def test_missing_known_hosts_exits_nonzero_and_names_the_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             key = Path(tmp) / "id_ed25519"
             _write_key(key)
@@ -131,7 +133,7 @@ class SSHKeyValidationTests(unittest.TestCase):
     permission-strictness requirement from the issue body ("refuse a key
     with permissions the SSH client would reject")."""
 
-    def test_refuses_a_path_that_does_not_exist(self):
+    def test_refuses_a_path_that_does_not_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             known_hosts = Path(tmp) / "known_hosts"
             known_hosts.write_text("host key\n")
@@ -143,7 +145,7 @@ class SSHKeyValidationTests(unittest.TestCase):
         self.assertIn(str(missing), err)
 
     @unittest.skipIf(os.geteuid() == 0, "root bypasses POSIX read permission checks")
-    def test_refuses_a_key_that_exists_but_is_not_readable(self):
+    def test_refuses_a_key_that_exists_but_is_not_readable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             known_hosts = Path(tmp) / "known_hosts"
             known_hosts.write_text("host key\n")
@@ -156,7 +158,7 @@ class SSHKeyValidationTests(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn(str(key), err)
 
-    def test_refuses_a_world_readable_key(self):
+    def test_refuses_a_world_readable_key(self) -> None:
         """A real SSH client refuses a private key readable by group or
         other; this script must refuse it at the door too, before ever
         starting a container that would only fail to authenticate later
@@ -172,7 +174,7 @@ class SSHKeyValidationTests(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn("permission", err.lower())
 
-    def test_accepts_a_key_with_owner_only_permissions(self):
+    def test_accepts_a_key_with_owner_only_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             known_hosts = Path(tmp) / "known_hosts"
             known_hosts.write_text("host key\n")
@@ -183,7 +185,7 @@ class SSHKeyValidationTests(unittest.TestCase):
 
         self.assertEqual(code, 0, err)
 
-    def test_refuses_a_known_hosts_path_that_does_not_exist(self):
+    def test_refuses_a_known_hosts_path_that_does_not_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             key = Path(tmp) / "id_ed25519"
             _write_key(key)
@@ -194,7 +196,7 @@ class SSHKeyValidationTests(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn(str(missing), err)
 
-    def test_validation_happens_before_any_docker_call(self):
+    def test_validation_happens_before_any_docker_call(self) -> None:
         """'Validate the key exists and is readable BEFORE starting
         anything' - proven here by making a bogus --ssh-key fail even
         though the deploy directory (and everything else needed to reach
@@ -217,7 +219,7 @@ class ConfigRenderingTests(unittest.TestCase):
     (#74's resolvers), and the key's own contents must never appear in
     generated config or in any log line."""
 
-    def test_ssh_key_maps_onto_the_fixed_container_key_file_path(self):
+    def test_ssh_key_maps_onto_the_fixed_container_key_file_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             known_hosts = Path(tmp) / "known_hosts"
             known_hosts.write_text("host key\n")
@@ -232,7 +234,7 @@ class ConfigRenderingTests(unittest.TestCase):
         self.assertNotIn(str(key), config_yaml, "the host-side key PATH must not appear in config.yaml")
         self.assertNotIn(secret_marker, config_yaml, "the key's CONTENTS must never appear in config.yaml")
 
-    def test_config_yaml_never_contains_key_contents_even_via_main_dry_run(self):
+    def test_config_yaml_never_contains_key_contents_even_via_main_dry_run(self) -> None:
         """The same claim as the test above, made against a whole run.
 
         Rendering one file and finding no key material in it proves nothing
@@ -259,7 +261,7 @@ class ConfigRenderingTests(unittest.TestCase):
                     self.assertNotIn(secret_marker, rendered.read_text(errors="ignore"),
                                       f"{rendered} must never contain the key's contents")
 
-    def test_env_file_points_at_the_hosts_ssh_key_path_read_only(self):
+    def test_env_file_points_at_the_hosts_ssh_key_path_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             known_hosts = Path(tmp) / "known_hosts"
             known_hosts.write_text("host key\n")
@@ -274,7 +276,7 @@ class ConfigRenderingTests(unittest.TestCase):
         # config.yaml, this is expected and matches existing convention.
         self.assertIn(str(key), env_file)
 
-    def test_rendering_is_deterministic(self):
+    def test_rendering_is_deterministic(self) -> None:
         """Two renders of the same arguments produce the same bytes.
 
         Worth asserting because the output is a file an operator may keep

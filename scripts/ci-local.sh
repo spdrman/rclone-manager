@@ -294,17 +294,34 @@ bash scripts/architecture/check-unowned-go.sh
 gate_step "the e2e drivers' --help is still the text it was (#514)"
 bash scripts/tests/e2e-help.test.sh
 
-# scripts/rcmtools, the shared script code base EPIC I / I1.6 (#672) is
-# consolidating onto, held to a linter and a type checker.
+# Every Python file under scripts/, held to a linter, and the subset that is
+# clean under a type checker held to that too (EPIC I / I1.6, #672).
 #
-# Nothing in this repository linted Python before this: the gate ran gofmt,
+# Nothing in this repository linted Python before #672: the gate ran gofmt,
 # go vet, golangci-lint and eslint, and for Python it ran one unittest suite
-# and stopped. So this step is scoped to the new package rather than to the
-# tree, and the configuration lives at scripts/rcmtools/pyproject.toml rather
-# than at the root, for the reason that file gives at length: a root-level
-# rule would put scripts/install/install_docker_host.py and its 4,700-line
-# suite under a gate nobody agreed to, and the first thing anybody would see
-# is somebody else's untouched file going red.
+# and stopped. The step landed scoped to scripts/rcmtools alone so that a new
+# rule would not turn up first as somebody else's untouched file going red.
+# It is wider now, and the two halves widened by different amounts because
+# the trial runs said different things.
+#
+# ruff: 49 findings across scripts/install and scripts/deploy, all fixed at
+# the cause, so it now runs over all of scripts/. Two files carry an E501
+# exemption named in the config, both because they embed text nobody may
+# reflow: a byte-exact copy of container/compose.yaml, and pasted `iptables
+# -L` output.
+#
+# mypy --strict: 965 errors over the same six files, 944 of them in
+# scripts/install. So it names its paths instead. scripts/deploy is included
+# because it is clean (deploy_generic.py needed nothing; its two suites
+# needed twenty annotations). scripts/install/install_docker_host.py and its
+# test suite are not, and the count is the reason: a gate that arrives with
+# 965 suppressions is not a gate. Typing them is a change of its own.
+#
+# --config / --config-file explicitly, for both tools. ruff would otherwise
+# discover the configuration by walking up from each file, which finds it for
+# scripts/rcmtools and finds nothing for scripts/install -- and silently
+# linting half the tree at ruff's 88-column defaults is the failure this
+# change exists to avoid.
 #
 # Neither tool is a dependency of this repository, and neither is going to be
 # installed on a NAS. A machine without them therefore LEDGERS rather than
@@ -314,11 +331,11 @@ bash scripts/tests/e2e-help.test.sh
 # hard refusal because these tools arrived with this change and failing every
 # developer's gate until they install two things is not how a new check earns
 # its place.
-gate_step "scripts/rcmtools: ruff and mypy --strict (#672)"
+gate_step "scripts: ruff over every Python file, mypy --strict over the typed subset (#672)"
 if command -v ruff >/dev/null 2>&1; then
-  ruff check scripts/rcmtools
+  ruff check --config scripts/rcmtools/pyproject.toml scripts
 else
-  gate_note_skip "ruff over scripts/rcmtools (#672): ruff is not on PATH. Install it (pipx install ruff) and re-run."
+  gate_note_skip "ruff over scripts (#672): ruff is not on PATH. Install it (pipx install ruff) and re-run."
 fi
 # `mypy` on PATH rather than `python3 -m mypy`, and that is a fixture
 # decision as much as an ergonomic one: scripts/tests/ci-local-gate.test.sh
@@ -328,9 +345,10 @@ fi
 # whichever python3 the developer happened to have. `pipx install mypy` and
 # an activated virtualenv both put the binary on PATH.
 if command -v mypy >/dev/null 2>&1; then
-  mypy --strict --config-file scripts/rcmtools/pyproject.toml scripts/rcmtools
+  mypy --strict --config-file scripts/rcmtools/pyproject.toml \
+    scripts/rcmtools scripts/deploy scripts/install/embed_compose.py
 else
-  gate_note_skip "mypy --strict over scripts/rcmtools (#672): mypy is not on PATH. Install it (pipx install mypy) and re-run."
+  gate_note_skip "mypy --strict over scripts/rcmtools, scripts/deploy and scripts/install/embed_compose.py (#672): mypy is not on PATH. Install it (pipx install mypy) and re-run."
 fi
 
 # The two-machine proof's exit statuses, which are this gate's own ledger
@@ -676,12 +694,17 @@ bash scripts/architecture/check-ui-shared-provider-imports.sh
 
 # The installer's refusals (#262). Standard library only and no Docker, so
 # this is a couple of seconds and runs in FAST mode too. It is here rather
-# than nowhere for the reason #160 exists: scripts/deploy's own Python
-# tests have never been wired into this gate, so they have never run on a
-# commit, and a refusal nobody has watched work is not a refusal. Every
-# assertion in it is about the installer saying no, which is exactly the
-# behaviour nobody exercises until the day it matters on a NAS they cannot
-# debug.
+# than nowhere for the reason #160 exists: a refusal nobody has watched
+# work is not a refusal. Every assertion in it is about the installer
+# saying no, which is exactly the behaviour nobody exercises until the day
+# it matters on a NAS they cannot debug.
+#
+# TestTheInstallerStillTravelsAlone is in there too, and it is the reason
+# this step matters to #672 rather than only to #262. The installer is
+# copied to a NAS on its own and may import only the standard library, so
+# it is the one script domain that can never become an rcmtools module.
+# That claim had no test behind it until this change; now a repo-relative
+# import in install_docker_host.py fails here.
 gate_step "installer prerequisite refusals (#262)"
 # Not piped through `tail`: this file has no `set -o pipefail` (and could
 # not portably rely on one, being #!/usr/bin/env sh), so a pipeline's exit
@@ -690,6 +713,18 @@ gate_step "installer prerequisite refusals (#262)"
 # silently forever, the exact "a refusal nobody has watched work is not a
 # refusal" failure this step exists to close, one line away from closing it.
 (cd scripts/install && python3 -m unittest test_install_docker_host)
+
+# scripts/deploy's own Python tests, which the comment above this step used
+# to name as the example of a suite that has never run on a commit. It was
+# accurate: 12 assertions about deploy_generic.py refusing an unreadable, a
+# world-readable or a missing SSH key, and about the rendered config.yaml
+# never containing key material, none of which anything ran. The integration
+# suite is deliberately not here -- it stands up a real SFTP container and
+# skips itself without one, and this step is the seconds-long half.
+#
+# Not piped, for the same reason as the line above.
+gate_step "deploy_generic's key refusals and rendering (#82/B4.1)"
+(cd scripts/deploy && python3 -m unittest test_deploy_generic)
 
 # Presence and the mutation self-test only, and the label says so on
 # purpose (#635). These two lines assert that a complete baseline exists

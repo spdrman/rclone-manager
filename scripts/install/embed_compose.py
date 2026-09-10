@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import sys
 from pathlib import Path
+from typing import Sequence
 
 HERE = Path(__file__).resolve().parent
 INSTALLER = HERE / "install_docker_host.py"
@@ -113,7 +114,7 @@ def rewrite(module_src: str, compose_text: str) -> str:
     return out[:d_start] + f'"{digest}"' + out[d_end:]
 
 
-def main(argv=None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Regenerate the embedded copy, or say why it did not.
 
     Already-identical is a success and prints so, because this is run to

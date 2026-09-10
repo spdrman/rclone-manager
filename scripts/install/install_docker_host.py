@@ -124,6 +124,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import ClassVar
 
 # ---------------------------------------------------------------------
 # Exit codes
@@ -376,8 +377,7 @@ def run(argv, *, check=True, timeout=None, cwd=None, env=None, input=None):
     try:
         proc = subprocess.run(
             argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             # utf-8/replace, not the platform-default strict decoding
             # text=True alone would use: a headless account on an
             # appliance can plausibly run under a C/POSIX locale, and
@@ -526,7 +526,15 @@ class Preflight:
         installing anything on the host, since installing a package is
         exactly what this account cannot do.
         """
-        if sys.version_info < (3, 8):
+        # The UP036 exemption below is deliberate. ruff is told
+        # target-version = py38 so that it never suggests syntax this
+        # file's floor forbids, and that same setting makes it read this
+        # block as dead. It is not. target-version is a
+        # statement about the syntax this SOURCE may use; this branch is a
+        # statement about the INTERPRETER a NAS may hand it, which is the
+        # one thing an installer cannot assume. Deleting it would delete
+        # EXIT_PREREQ_PYTHON's only trigger.
+        if sys.version_info < (3, 8):  # noqa: UP036
             raise Refusal(
                 EXIT_PREREQ_PYTHON,
                 f"this installer needs Python 3.8 or newer and is running on {sys.version.split()[0]}.",
@@ -730,7 +738,8 @@ class Preflight:
                 if not os.access(path, os.W_OK | os.X_OK):
                     raise Refusal(
                         EXIT_PREREQ_PATHS,
-                        f"{label} is {path}, which this account owns but cannot write to (mode {oct(st.st_mode & 0o777)}).",
+                        f"{label} is {path}, which this account owns but cannot write to "
+                        f"(mode {oct(st.st_mode & 0o777)}).",
                         "Fix its mode, or choose another path.",
                     )
             else:
@@ -1008,7 +1017,7 @@ class Preflight:
                 continue
             entries = entry if isinstance(entry, list) else [entry]
             for item in entries:
-                if f":{port}->" in (item.get("Publishers") and str(item.get("Publishers")) or ""):
+                if f":{port}->" in ((item.get("Publishers") and str(item.get("Publishers"))) or ""):
                     return True
                 for pub in item.get("Publishers") or []:
                     if isinstance(pub, dict) and pub.get("PublishedPort") == port:
@@ -3160,7 +3169,7 @@ def ensure_credentials(args) -> None:
 
     for d in warn_about_writable_ancestors(args.ssh_key, args.prefix):
         say(f"     WARNING: {d} is group- or world-writable, and the engine walks the whole")
-        say(f"              ancestry when it validates the key. If the first cycle refuses with")
+        say("              ancestry when it validates the key. If the first cycle refuses with")
         say(f"              key_permissions, run: chmod go-w {d}")
 
 
@@ -3268,12 +3277,15 @@ def wait_for_engine_health(args, timeout: int):
     deadline = time.time() + timeout
     last = "no container yet"
     while time.time() < deadline:
-        proc = run(compose_argv(args) + ["ps", "-q", "rclone-manager"], check=False, timeout=60,
+        proc = run([*compose_argv(args), "ps", "-q", "rclone-manager"], check=False, timeout=60,
                    cwd=str(args.prefix))
         cid = proc.stdout.strip().splitlines()
         if cid:
             inspect = run(
-                ["docker", "inspect", "-f", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", cid[0]],
+                ["docker", "inspect", "-f",
+                 "{{.State.Status}} "
+                 "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
+                 cid[0]],
                 check=False, timeout=60)
             last = inspect.stdout.strip()
             parts = last.split()
@@ -3378,7 +3390,7 @@ def stop_stack(args, *, remove: bool) -> None:
     """
     verb = "down" if remove else "stop"
     if (args.prefix / "compose.yaml").is_file() and (args.prefix / ".env").is_file():
-        argv = compose_argv(args) + [verb]
+        argv = [*compose_argv(args), verb]
         cwd = str(args.prefix)
     else:
         argv = ["docker", "compose", "-p", args.project, verb]
@@ -3638,7 +3650,7 @@ def cmd_install(args) -> int:
     # the image already loaded and sitting on the host. --no-build is
     # also the honest statement of intent, since an installed host is
     # never the place a release gets built.
-    up = run(compose_argv(args) + ["up", "-d", "--no-build", "--remove-orphans"], check=False, timeout=1800,
+    up = run([*compose_argv(args), "up", "-d", "--no-build", "--remove-orphans"], check=False, timeout=1800,
              cwd=str(args.prefix))
     if up.returncode != 0:
         raise Refusal(
@@ -3768,7 +3780,7 @@ def take_down_web_ui(args) -> None:
     if not [c for c in containers if str(c.get("Service", "")) == "web-ui"]:
         return
     say("==> --cli-only: taking down the web-ui container this deployment used to run")
-    rm = run(compose_argv(args) + ["rm", "--stop", "--force", "web-ui"],
+    rm = run([*compose_argv(args), "rm", "--stop", "--force", "web-ui"],
              check=False, timeout=300, cwd=str(args.prefix))
     if rm.returncode != 0:
         raise Refusal(
@@ -3825,7 +3837,7 @@ def finish_cli_only_install(args) -> int:
         return EXIT_OK
 
     say(f"==> docker compose up -d {ENGINE_SERVICE}")
-    up = run(compose_argv(args) + ["up", "-d", "--no-build", ENGINE_SERVICE],
+    up = run([*compose_argv(args), "up", "-d", "--no-build", ENGINE_SERVICE],
              check=False, timeout=1800, cwd=str(args.prefix))
     if up.returncode != 0:
         raise Refusal(
@@ -5003,7 +5015,9 @@ def cmd_status(args) -> int:
         say("no containers for project " + args.project)
         return EXIT_OK
     for c in containers:
-        say(f"  {c.get('Service', '?'):<16} {c.get('State', '?'):<10} {c.get('Health', '') or 'no healthcheck':<10} {c.get('Status', '')}")
+        health = c.get("Health", "") or "no healthcheck"
+        say(f"  {c.get('Service', '?'):<16} {c.get('State', '?'):<10} "
+            f"{health:<10} {c.get('Status', '')}")
 
     # The rules install may have inserted are raw iptables inserts: a
     # reboot loses them, and so does the host firewall rewriting its own
@@ -5066,7 +5080,7 @@ def cmd_uninstall(args) -> int:
         say("nothing to uninstall: no payload and no containers for project " + args.project)
         return EXIT_OK
     if payload:
-        down = run(compose_argv(args) + ["down", "--remove-orphans"], check=False, timeout=600,
+        down = run([*compose_argv(args), "down", "--remove-orphans"], check=False, timeout=600,
                    cwd=str(args.prefix))
     else:
         down = run(["docker", "compose", "-p", args.project, "down", "--remove-orphans"],
@@ -5316,7 +5330,7 @@ class _IfInstalledRemoved(argparse.Action):
     message it can act on.
     """
 
-    TRANSLATION = {"converge": "--mode upgrade", "refuse": "--mode fresh"}
+    TRANSLATION: ClassVar[dict[str, str]] = {"converge": "--mode upgrade", "refuse": "--mode fresh"}
 
     def __init__(self, option_strings, dest, **kwargs):
         kwargs.pop("nargs", None)
@@ -5492,11 +5506,11 @@ def resolve_source_port(args) -> None:
         raise Refusal(
             EXIT_PREREQ_CREDENTIALS,
             f"{origin} was supplied with no value.",
-            f"This is what `--source-port \"$SSH_PORT\"` does when SSH_PORT is not exported, so it is "
-            f"treated as the mistake it is rather than as silence. Nothing here falls back to 22: the "
-            f"port a source listens on is an input, and guessing one is how a deployment ends up "
-            f"pointed somewhere nobody named. Supply it, or drop the flag entirely if this deployment "
-            f"has no SFTP source on a non-default port.",
+            "This is what `--source-port \"$SSH_PORT\"` does when SSH_PORT is not exported, so it is "
+            "treated as the mistake it is rather than as silence. Nothing here falls back to 22: the "
+            "port a source listens on is an input, and guessing one is how a deployment ends up "
+            "pointed somewhere nobody named. Supply it, or drop the flag entirely if this deployment "
+            "has no SFTP source on a non-default port.",
         )
     if not text.isdigit() or not 1 <= int(text) <= 65535:
         raise Refusal(
