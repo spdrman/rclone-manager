@@ -301,7 +301,7 @@ type BackupServiceClient interface {
 
 	// ListArtifacts and GetArtifact back GET /api/v1/backups, GET
 	// /api/v1/backups/{id} and GET /api/v1/quarantine (issue #211):
-	// read-only reads of the FR-9 journal `backup-manager artifacts`
+	// read-only reads of the FR-9 journal `rbm artifacts`
 	// already prints.
 	ListArtifacts(ctx context.Context, filter service.ArtifactFilter) ([]service.Artifact, error)
 	GetArtifact(ctx context.Context, id string) (service.Artifact, error)
@@ -381,6 +381,17 @@ type BackupServiceClient interface {
 	RemoveStorageMedium(ctx context.Context, id string) error
 	SetDefaultStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
 
+	// The three configuration operations (I2.2, issue #669) speak in
+	// MANIFEST FIELD IDS rather than in StorageMediumSpec's fields,
+	// which are config.StorageMedium's and therefore S3's: `bucket` is
+	// required there and there is no `path`, so a local volume - the
+	// only destination a fresh install has (#670) - cannot be described
+	// in the shape the five above take. They are additive; nothing
+	// here replaces them.
+	StorageMediumConfigurationOf(ctx context.Context, id string) (service.StorageMediumConfigurationState, error)
+	PreflightStorageMediumConfiguration(ctx context.Context, id string, cfg service.StorageMediumConfiguration) (service.MediumPreflight, error)
+	ConfigureStorageMedium(ctx context.Context, id string, cfg service.StorageMediumConfiguration) (service.StorageMediumSummary, error)
+
 	// ListActivity backs GET /api/v1/activity: a read of the durable,
 	// append-only lifecycle record, not a second event stream.
 	ListActivity(ctx context.Context, limit int) ([]service.ActivityEvent, error)
@@ -401,7 +412,7 @@ type BackupServiceClient interface {
 
 	// Health backs GET /api/v1/system/health: FR-24's backup-freshness
 	// verdict for every configured backup set, the same computation
-	// `backup-manager status` prints. Deliberately not the same question
+	// `rbm status` prints. Deliberately not the same question
 	// as /health/ready, which is about this process rather than about
 	// whether backups are landing.
 	Health(ctx context.Context) (service.HealthReport, error)

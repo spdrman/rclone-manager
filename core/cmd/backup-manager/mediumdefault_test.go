@@ -108,20 +108,60 @@ func TestRun_MediumRemoveRefusesTheDefault(t *testing.T) {
 	}
 }
 
-// TestRun_MediumRemoveRefusesTheLocalHardDrive is the second invariant at
-// the same surface. Local is not declared, so it cannot be un-declared,
-// and without this the "there is never zero destinations" rule is one
-// command away from being false.
-func TestRun_MediumRemoveRefusesTheLocalHardDrive(t *testing.T) {
+// TestRun_MediumRemoveRefusesTheLocalHardDriveWhileItHoldsTheDefault is
+// the second invariant at the same surface: this deployment can never be
+// left with no destination a new tier could start on.
+//
+// It used to assert the refusal said "cannot be un-declared", which was
+// the local-SPECIFIC sentence: local was not declared in the
+// configuration at all, so there was no row to remove and the engine
+// said so by name. #670 deleted that special case — local is a declared
+// destination now, instance zero of the local_volume backend, and it is
+// undeletable exactly when, and because, it holds the default. The old
+// assertion outlived the behaviour and had been failing on main ever
+// since.
+//
+// Retargeted rather than dropped, and with more teeth than it had: the
+// refusal has to name the destination, say what to do about it, and
+// leave the file alone — and the second half proves the refusal is about
+// the MARK rather than about the name `local`, by moving the mark and
+// watching that reason disappear.
+func TestRun_MediumRemoveRefusesTheLocalHardDriveWhileItHoldsTheDefault(t *testing.T) {
 	configPath := writeOffsiteTestConfig(t)
+	before, rerr := os.ReadFile(configPath)
+	if rerr != nil {
+		t.Fatalf("ReadFile: %v", rerr)
+	}
 
 	err := captureStderr(t, func() {
 		if got := run([]string{"medium", "remove", "--config", configPath, "local"}); got == 0 {
-			t.Fatal("medium remove exited 0 for the local hard drive")
+			t.Fatal("medium remove exited 0 for the destination holding the default")
 		}
 	})
-	if !strings.Contains(err, "cannot be un-declared") {
-		t.Errorf("the refusal does not say why local cannot go:\n%s", err)
+	for _, want := range []string{"local", "default", "Make another destination the default first"} {
+		if !strings.Contains(err, want) {
+			t.Errorf("the refusal does not mention %q, so it does not say what is wrong or what to do about it:\n%s", want, err)
+		}
+	}
+	after, rerr := os.ReadFile(configPath)
+	if rerr != nil {
+		t.Fatalf("ReadFile: %v", rerr)
+	}
+	if string(after) != string(before) {
+		t.Errorf("a refused removal rewrote the configuration:\n%s", after)
+	}
+
+	// The mark moves, and with it the reason. Whatever this deployment
+	// answers about `local` afterwards, it is no longer "that one is the
+	// default": the refusal was never about the id.
+	if got := run([]string{"medium", "default", "--config", configPath, "cold_offsite"}); got != 0 {
+		t.Fatalf("medium default cold_offsite: %d, want 0", got)
+	}
+	moved := captureStderr(t, func() {
+		run([]string{"medium", "remove", "--config", configPath, "local"})
+	})
+	if strings.Contains(moved, "Make another destination the default first") {
+		t.Errorf("local is still refused for holding the default after the default moved to cold_offsite:\n%s", moved)
 	}
 }
 

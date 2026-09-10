@@ -91,7 +91,7 @@ import (
 //
 // A CLI read beside a live engine is ordinary use of this binary and
 // always has been: core/service's startup.go takes the journal lock
-// SHARED for exactly that reason, so `backup-manager status` next to a
+// SHARED for exactly that reason, so `rbm status` next to a
 // running `serve` keeps working. Nothing here may narrow that. Only a
 // write that lands in config.yaml is at risk of being believed by one
 // process and not the other.
@@ -153,7 +153,7 @@ const (
 //
 // And a remedy that exists. The remedy this used to lead with was "make
 // this change through the Web UI, or through the HTTP API that process
-// serves", which on a host running `backup-manager daemon` names two
+// serves", which on a host running `rbm daemon` names two
 // things that are not there: the daemon serves no HTTP at all. Stopping
 // the process is the one answer that is true on every deployment, so it
 // is the one every remedy below starts with, and the rest is offered as

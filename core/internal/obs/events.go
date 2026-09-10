@@ -2,6 +2,7 @@ package obs
 
 import (
 	"context"
+	"github.com/spdrman/rclone-manager/core/cliecho"
 	"log/slog"
 	"time"
 )
@@ -220,9 +221,9 @@ const (
 // "dev" / "none" in a non-release build), and goVersion is typically
 // runtime.Version(). None of these are secret; they exist to make "which
 // build is this" answerable from a log line alone, without shelling into
-// the host to run `backup-manager version`.
+// the host to run `rbm version`.
 func (l *Logger) Startup(ctx context.Context, binaryVersion, commit, goVersion string) {
-	l.emit(ctx, LevelInfo, EventStartup, "backup-manager starting",
+	l.emit(ctx, LevelInfo, EventStartup, cliecho.Binary+" starting",
 		slog.String("version", binaryVersion),
 		slog.String("commit", commit),
 		slog.String("go_version", goVersion),

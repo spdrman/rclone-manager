@@ -20,18 +20,21 @@
     "checks in provenance_test.go and compliance_test.go re-derive every hash and",
     "every component list from the tree on each run."
   ],
-
   "project": {
-    "displayName": "Backup Manager",
-    "appId": "com.iasbuilt.backupmanager",
-    "copyright": "Copyright 2026 The Backup Manager Authors",
+    "displayName": "rclone-manager",
+    "appId": "com.iasbuilt.rclonemanager",
+    "copyright": "Copyright 2026 Roman Goldmann",
     "copyrightNote": [
-      "A collective authorship line rather than a named person or company. §6 pins",
-      "the display name and app id; it names no legal entity, and inventing one in",
-      "a licence header is not this issue's call to make."
+      "Roman Goldmann is the author and the copyright holder. This used to read",
+      "\"The Backup Manager Authors\", a collective line chosen because naming a legal",
+      "entity was not that issue's call to make. It is this one's: the holder is a",
+      "named person, and NOTICE and the LICENSE appendix both render from here so they",
+      "cannot disagree with each other.",
+      "Contributors keep their own copyright and license their work in under Apache-2.0",
+      "through CONTRIBUTING.md's agreement, so this line is the project's holder rather",
+      "than a claim over anybody else's contribution."
     ]
   },
-
   "license": {
     "spdxId": "Apache-2.0",
     "file": "LICENSE",
@@ -131,21 +134,36 @@
       "Larger Work to ship under these terms in the first place."
     ],
     "copyleftBlocksTheLicenseChoice": true,
-  "permissiveIds": [
-    "Apache-2.0",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "CC0-1.0",
-    "MIT"
-  ],
+    "permissiveIds": [
+      "Apache-2.0",
+      "BSD-2-Clause",
+      "BSD-3-Clause",
+      "CC0-1.0",
+      "MIT"
+    ],
     "copyleftIds": [
-      "GPL-1.0-only", "GPL-1.0-or-later", "GPL-2.0-only", "GPL-2.0-or-later",
-      "GPL-3.0-only", "GPL-3.0-or-later",
-      "LGPL-2.0-only", "LGPL-2.1-only", "LGPL-2.1-or-later",
-      "LGPL-3.0-only", "LGPL-3.0-or-later",
-      "AGPL-1.0-only", "AGPL-3.0-only", "AGPL-3.0-or-later",
-      "MPL-1.1", "MPL-2.0", "EPL-1.0", "EPL-2.0", "CDDL-1.0", "CDDL-1.1",
-      "SSPL-1.0", "BUSL-1.1"
+      "GPL-1.0-only",
+      "GPL-1.0-or-later",
+      "GPL-2.0-only",
+      "GPL-2.0-or-later",
+      "GPL-3.0-only",
+      "GPL-3.0-or-later",
+      "LGPL-2.0-only",
+      "LGPL-2.1-only",
+      "LGPL-2.1-or-later",
+      "LGPL-3.0-only",
+      "LGPL-3.0-or-later",
+      "AGPL-1.0-only",
+      "AGPL-3.0-only",
+      "AGPL-3.0-or-later",
+      "MPL-1.1",
+      "MPL-2.0",
+      "EPL-1.0",
+      "EPL-2.0",
+      "CDDL-1.0",
+      "CDDL-1.1",
+      "SSPL-1.0",
+      "BUSL-1.1"
     ],
     "acceptedNonPermissive": [
       {
@@ -189,7 +207,6 @@
         ]
       }
     ],
-
     "_vendoredAssetsComment": [
       "Issue #621. Third-party material this repository carries in its own",
       "SOURCE rather than resolving through a package manager, which is a third",
@@ -401,7 +418,6 @@
       }
     ]
   },
-
   "sourceRepository": {
     "url": "https://github.com/spdrman/rclone-manager",
     "visibility": "public",
@@ -427,7 +443,6 @@
       "different obligations to different people."
     ]
   },
-
   "links": [
     {
       "id": "source",
@@ -445,7 +460,11 @@
       "url": "",
       "repoPath": "docs/compliance/source-offer.md",
       "targetsThisRepository": true,
-      "mustMention": ["Apache-2.0", "source", "rclone"]
+      "mustMention": [
+        "Apache-2.0",
+        "source",
+        "rclone"
+      ]
     },
     {
       "id": "privacy",
@@ -454,7 +473,11 @@
       "url": "",
       "repoPath": "docs/compliance/privacy-policy.md",
       "targetsThisRepository": true,
-      "mustMention": ["telemetry", "personal data", "SFTP"]
+      "mustMention": [
+        "telemetry",
+        "personal data",
+        "SFTP"
+      ]
     },
     {
       "id": "license",
@@ -463,7 +486,10 @@
       "url": "",
       "repoPath": "LICENSE",
       "targetsThisRepository": true,
-      "mustMention": ["Apache License", "Version 2.0"]
+      "mustMention": [
+        "Apache License",
+        "Version 2.0"
+      ]
     },
     {
       "id": "support",
@@ -472,10 +498,13 @@
       "url": "",
       "repoPath": "docs/compliance/support.md",
       "targetsThisRepository": true,
-      "mustMention": ["support", "recovery", "issue"]
+      "mustMention": [
+        "support",
+        "recovery",
+        "issue"
+      ]
     }
   ],
-
   "distribution": {
     "note": [
       "Every distribution target in conformance.json appears here exactly once, and",
@@ -490,7 +519,6 @@
       "the sentence above is the whole reason the image can be one target's answer",
       "for the licence, and it was a note about checksums that nothing read."
     ],
-
     "licenceDelivery": {
       "note": [
         "How a recipient of each target receives LICENSE, NOTICE and the",
@@ -531,10 +559,9 @@
       },
       "labels": {
         "org.opencontainers.image.licenses": "Apache-2.0",
-        "com.iasbuilt.backupmanager.licenses.path": "/licenses"
+        "com.iasbuilt.rclonemanager.licenses.path": "/licenses"
       }
     },
-
     "targets": {
       "generic": {
         "artifacts": [
@@ -581,37 +608,37 @@
         "licenceDelivery": "image"
       },
       "portainer": {
-    "artifacts": [
-     "apps/portainer/compose/backup-manager.env",
-     "apps/portainer/compose/backup-manager.yml",
-     "apps/portainer/templates.json",
-     "apps/portainer/logo.svg"
-    ],
-    "unbuiltReason": "",
-    "licenceDelivery": "image"
-   },
-   "dockge": {
-    "artifacts": [],
-    "unbuiltReason": "this target ships no artifact of its own on purpose: Dockge imports container/compose.yaml itself, whose digests the generic target above already records, and a second copy here would hash a file nobody distributes twice",
-    "licenceDelivery": "image"
-   },
-   "casaos": {
-    "artifacts": [
-     "apps/casaos/compose/backup-manager.yml",
-     "apps/casaos/icon.svg"
-    ],
-    "unbuiltReason": "",
-    "licenceDelivery": "image"
-   },
-   "zimaos": {
-    "artifacts": [
-     "apps/zimaos/compose/backup-manager.yml",
-     "apps/zimaos/icon.svg"
-    ],
-    "unbuiltReason": "",
-    "licenceDelivery": "image"
-   },
-   "synology": {
+        "artifacts": [
+          "apps/portainer/compose/backup-manager.env",
+          "apps/portainer/compose/backup-manager.yml",
+          "apps/portainer/templates.json",
+          "apps/portainer/logo.svg"
+        ],
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
+      },
+      "dockge": {
+        "artifacts": [],
+        "unbuiltReason": "this target ships no artifact of its own on purpose: Dockge imports container/compose.yaml itself, whose digests the generic target above already records, and a second copy here would hash a file nobody distributes twice",
+        "licenceDelivery": "image"
+      },
+      "casaos": {
+        "artifacts": [
+          "apps/casaos/compose/backup-manager.yml",
+          "apps/casaos/icon.svg"
+        ],
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
+      },
+      "zimaos": {
+        "artifacts": [
+          "apps/zimaos/compose/backup-manager.yml",
+          "apps/zimaos/icon.svg"
+        ],
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
+      },
+      "synology": {
         "artifacts": [],
         "unbuiltReason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json, and it owns getting LICENSE, NOTICE and provenance/third-party-licenses.json into the package too: the .spk installs the binaries natively and never pulls the canonical image, so the image's /licenses reaches nobody who installed this way",
         "licenceDelivery": "package-payload"
@@ -623,7 +650,6 @@
       }
     }
   },
-
   "performance": {
     "note": [
       "#81 asks that the refactor's performance evidence travel with the release",
@@ -637,13 +663,48 @@
       "is - what it buys is that the gap is enumerated and named rather than absent."
     ],
     "metrics": [
-      { "id": "idle-rss",              "unit": "bytes",   "value": null, "source": "#165 baseline, #167 after" },
-      { "id": "startup-to-healthy",    "unit": "seconds", "value": null, "source": "#165 baseline, #167 after" },
-      { "id": "api-read-latency",      "unit": "ms",      "value": null, "source": "#165 baseline, #167 after" },
-      { "id": "config-write-latency",  "unit": "ms",      "value": null, "source": "#165 baseline, #167 after" },
-      { "id": "transfer-throughput",   "unit": "MiB/s",   "value": null, "source": "#165 baseline, #170 after" },
-      { "id": "image-size",            "unit": "bytes",   "value": null, "source": "#165 baseline, #167 after" },
-      { "id": "idle-cpu",              "unit": "percent", "value": null, "source": "#165 baseline, #167 after" }
+      {
+        "id": "idle-rss",
+        "unit": "bytes",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      },
+      {
+        "id": "startup-to-healthy",
+        "unit": "seconds",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      },
+      {
+        "id": "api-read-latency",
+        "unit": "ms",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      },
+      {
+        "id": "config-write-latency",
+        "unit": "ms",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      },
+      {
+        "id": "transfer-throughput",
+        "unit": "MiB/s",
+        "value": null,
+        "source": "#165 baseline, #170 after"
+      },
+      {
+        "id": "image-size",
+        "unit": "bytes",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      },
+      {
+        "id": "idle-cpu",
+        "unit": "percent",
+        "value": null,
+        "source": "#165 baseline, #167 after"
+      }
     ]
   }
 }

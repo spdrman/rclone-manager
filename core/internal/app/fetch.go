@@ -45,9 +45,23 @@ type FetchPreviewEntry struct {
 	// discovery), i.e. whether a real fetch would expect this object to
 	// land in discovery.Result.AlreadyKnown rather than .Discovered.
 	Known bool
+
+	// State is the journal state of the row this object already has, and
+	// empty when Known is false.
+	//
+	// It is here because of issue #662, whose operator's whole question
+	// was "why does running it do nothing". All 28 objects came back
+	// "(already known)", the plan was empty, and the exit code was 0,
+	// over a set with three FAILED artifacts that no cycle will ever
+	// re-attempt. "Already known" was true of every one of them and told
+	// the truth about none of them: a settled backup set and a stuck one
+	// printed identically. The state is what separates the two, this
+	// function is already holding the rows it comes off, and a dry run's
+	// entire job is to say what a real run would do.
+	State string
 }
 
-// FetchResult is `backup-manager fetch`'s use case output: either a
+// FetchResult is `rbm fetch`'s use case output: either a
 // dry-run preview (Preview populated, everything else zero) or a real,
 // on-demand run of one specific backup set's whole cycle share
 // (Reconcile/Discovery populated, Preview nil).
@@ -90,7 +104,7 @@ type FetchResult struct {
 	Progress CycleProgress
 }
 
-// Fetch is `backup-manager fetch --source ... --backup-set ...`'s use
+// Fetch is `rbm fetch --source ... --backup-set ...`'s use
 // case: an operator-triggered, on-demand run of exactly one backup set's
 // share of the same cycle RunCycle performs for every configured backup
 // set (reconcile, then discover, then drive every in-flight artifact
@@ -193,17 +207,19 @@ func (s *Service) fetchDryRun(ctx context.Context, source transport.Source, set 
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("app: fetch --dry-run: listing journal for %s: %w", set, err)
 	}
-	knownPaths := make(map[string]bool, len(known))
+	knownState := make(map[string]string, len(known))
 	for _, rec := range known {
-		knownPaths[rec.RemotePath] = true
+		knownState[rec.RemotePath] = rec.State
 	}
 
 	result := FetchResult{Set: set, DryRun: true}
 	for _, a := range listed {
+		st, isKnown := knownState[a.Path]
 		result.Preview = append(result.Preview, FetchPreviewEntry{
 			RemotePath: a.Path,
 			Size:       a.Size,
-			Known:      knownPaths[a.Path],
+			Known:      isKnown,
+			State:      st,
 		})
 	}
 	return result, nil

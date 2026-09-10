@@ -200,7 +200,7 @@ func TestTheContractVersionAgreesWithTheCanonicalMetadata(t *testing.T) {
 // derive.go can hold four metadata formats to it, and every adapter
 // declares it again. Nothing compared the first two. #167 changed the
 // canonical definition to a liveness probe in a late review commit and
-// left canonical.json saying `backup-manager status`, so for three work
+// left canonical.json saying `rbm status`, so for three work
 // packages the nine adapters derived a start gate that a fresh install
 // cannot pass while every suite in the tree stayed green.
 //
@@ -255,7 +255,7 @@ func sameHealthTest(a, b []string) bool {
 // two commands being different is what makes "an adapter that declares
 // nothing inherits the canonical check" false.
 //
-// container/Dockerfile bakes in `backup-manager status`: FR-24's
+// container/Dockerfile bakes in `rbm status`: FR-24's
 // backup-freshness verdict, the right default for a plain `docker run`
 // and for the headless `daemon` command, which serves no HTTP and so has
 // no liveness endpoint to ask. The canonical start gate is a liveness

@@ -635,7 +635,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
                 cycle (FR-6), which is core's job and not a reason to
                 take the fleet's run away from the operator (#231). */}
             {/* The per-set run this page has never had (#597). The
-                engine half has existed since FR-1 behind `backup-manager
+                engine half has existed since FR-1 behind `rbm
                 fetch --backup-set`; what was missing was a way to reach
                 it in the serving process, so the work takes the engine's
                 own single-flight lock and lands in its feeds instead of

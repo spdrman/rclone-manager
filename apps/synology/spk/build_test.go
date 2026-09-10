@@ -87,16 +87,16 @@ func TestBuild_RefusesIncompleteInput(t *testing.T) {
 		{
 			name: "one of the core binaries is missing",
 			mutate: func(t *testing.T, o *BuildOptions) {
-				if err := os.Remove(filepath.Join(o.BinariesDir, "backup-manager-web")); err != nil {
+				if err := os.Remove(filepath.Join(o.BinariesDir, "rbm-web")); err != nil {
 					t.Fatalf("remove: %v", err)
 				}
 			},
-			wantErr: "backup-manager-web",
+			wantErr: "rbm-web",
 		},
 		{
 			name: "a staged binary is not an executable at all",
 			mutate: func(t *testing.T, o *BuildOptions) {
-				p := filepath.Join(o.BinariesDir, "backup-manager")
+				p := filepath.Join(o.BinariesDir, "rbm")
 				if err := os.WriteFile(p, []byte("#!/bin/sh\necho nope\n"), 0o755); err != nil {
 					t.Fatalf("write: %v", err)
 				}

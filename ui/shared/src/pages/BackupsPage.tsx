@@ -14,7 +14,7 @@
  * ever delete it. Rendered plainly beside the governed rows it reads as an
  * ordinary healthy backup, and the disk fills quietly. So the Retention
  * cell says the consequence for those rows and the list carries the same
- * footnote `backup-manager artifacts` prints under its own (issue #523).
+ * footnote `rbm artifacts` prints under its own (issue #523).
  *
  * The set list behind the filter is the shared node rather than another
  * fetch, so the dropdown cannot offer a set the rest of the app has
@@ -39,6 +39,7 @@ import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
 import { bytes, stamp } from "@shared/utilities/format";
+import { artifactPath } from "@shared/utilities/routes";
 import type { BackupArtifact } from "@shared/types/backup";
 
 /** Called "Backups", never "Restore points" — the product does not perform
@@ -169,7 +170,10 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
                 {rows.map((a) => (
                   <tr
                     key={a.id}
-                    onClick={() => navigate("/backups/" + a.id)}
+                    // Through the builder, never by concatenation: an
+                    // artifact id spans three path segments and each one
+                    // has to be escaped on its own (issue #677).
+                    onClick={() => navigate(artifactPath(a.id))}
                     style={{ cursor: "pointer" }}
                   >
                     <td className="mono" style={{ whiteSpace: "nowrap", color: "var(--text-2)" }}>
@@ -226,7 +230,7 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
                 {"This server did not say which retention policy governs " +
                   (unreported === 1 ? "one backup above" : unreported + " backups above") +
                   ", so this page cannot tell you which of them nothing will ever delete." +
-                  " Updating Backup Manager restores the answer; the backup-manager unconfigured" +
+                  " Updating Backup Manager restores the answer; the rbm unconfigured" +
                   " command has it in the meantime."}
               </span>
             </div>

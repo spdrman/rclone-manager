@@ -13,7 +13,7 @@
     "repository": "spdrman/backup-manager",
     "tag": "0.3.3",
     "reference": "ghcr.io/spdrman/backup-manager:0.3.3",
-    "published": false,
+    "published": true,
     "note": [
       "published:false. 0.3.3 is cut but not pushed: container/release-manifest.json carries a",
       "registry_digest of null per architecture and a null index_digest, and this flag says the",
@@ -21,7 +21,13 @@
       "TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag refuses a published flag",
       "with no digest and a digest with no flag, because either one alone is a half-truth. The",
       "release workflow does the push, and the digests are recorded back here afterwards.",
-      "0.3.0 remains published and signed for anyone who wants the previous release.",
+      "0.3.2 is the newest release that IS published and signed, so anyone who wants a",
+      "release rather than a cut one has 0.3.2; 0.3.0 and 0.3.1 are on the registry too. This",
+      "line names a version and therefore goes stale on its own, which it already did once: it",
+      "said 0.3.0 through the whole of 0.3.1 and 0.3.2. The durable answer is the git history of",
+      "this file, where each `Record <version>'s registry digests` commit is one real push, and",
+      "`docker buildx imagetools inspect ghcr.io/spdrman/backup-manager:<version>` asks the",
+      "registry directly.",
       "This reference is the one string every provider package must carry, so pointing the",
       "project at a different registry stays a one-line change here rather than an edit in four",
       "metadata formats. Every acceptance procedure in docs/acceptance/ keeps its step 0 for a",
@@ -81,14 +87,14 @@
   "healthchecks": {
     "engine": [
       "CMD",
-      "/backup-manager-web",
+      "/rbm-web",
       "healthcheck",
       "--url",
       "http://127.0.0.1:8080/health/live"
     ],
     "webUI": [
       "CMD",
-      "/backup-manager-web",
+      "/rbm-web",
       "healthcheck"
     ]
   },
@@ -126,7 +132,7 @@
     "dependency either, so the badge it produces is the freshness report it is",
     "meant to be.",
     "",
-    "The Web UI's is unchanged: `/backup-manager status` needs a config file and a",
+    "The Web UI's is unchanged: `/rbm status` needs a config file and a",
     "state database that container does not have, so every adapter has to either",
     "override it with the Web UI test or disable it outright (Unraid, whose only",
     "seam is `docker run --health-cmd`, which is shell form the distroless image",
@@ -134,29 +140,29 @@
   ],
   "commands": {
     "engine": [
-      "/backup-manager-web",
+      "/rbm-web",
       "serve"
     ],
     "webUI": [
-      "/backup-manager-web",
+      "/rbm-web",
       "serve-ui"
     ],
     "headless": [
-      "/backup-manager",
+      "/rbm",
       "daemon"
     ],
     "healthcheck": [
-      "/backup-manager-web",
+      "/rbm-web",
       "healthcheck"
     ],
     "imageHealthcheck": [
-      "/backup-manager",
+      "/rbm",
       "status"
     ]
   },
   "binaries": [
-    "/backup-manager",
-    "/backup-manager-web"
+    "/rbm",
+    "/rbm-web"
   ],
   "containerPaths": {
     "state": "/data/state",
@@ -230,7 +236,7 @@
         "sshKey": "/mnt/user/appdata/backup-manager/secrets/id_ed25519",
         "knownHosts": "/mnt/user/appdata/backup-manager/secrets/known_hosts"
       },
-      "hostPathNote": "appdata holds private state, and retained artifacts land in a directory of the app's own inside the backups user share; \u00a719.2 keeps those two separate security domains. The backup root is deliberately a dedicated child of the share rather than the share itself: the share is very likely to be one the operator already uses, and step 0 of the acceptance procedure creates and owns only paths it created.",
+      "hostPathNote": "appdata holds private state, and retained artifacts land in a directory of the app's own inside the backups user share; §19.2 keeps those two separate security domains. The backup root is deliberately a dedicated child of the share rather than the share itself: the share is very likely to be one the operator already uses, and step 0 of the acceptance procedure creates and owns only paths it created.",
       "trustForwardedHeaders": false,
       "trustForwardedHeadersNote": "Unraid's two templates join `backup-manager`, a durable, host-wide, generically named user-defined bridge the operator creates by hand. Every container on such a bridge reaches every port of every other one, so the engine's isolation from anything else attached later is a convention, not a topology, and apps/common/auth/local requires a topology. The engine therefore does not trust forwarded headers here and rate-limits on the proxy's own address: one shared bucket for all clients, which over-limits rather than not limiting at all. This is the one place the Unraid profile is weaker than the compose ones, and apps/unraid/README.md says so.",
       "profile": "unraid",

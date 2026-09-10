@@ -10,6 +10,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/cliecho"
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/backend"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -104,6 +105,15 @@ func parseFlagsAroundOperands(fs *flag.FlagSet, args []string) ([]string, error)
 // The returned cleanup func closes the journal; callers should always
 // `defer cleanup()` immediately.
 func openService(ctx context.Context, configPath string, withTransport bool) (*app.Service, *config.Config, func(), error) {
+	// Issue #665: same refusal Open (core/service/service.go) makes for
+	// the web host, applied to every CLI subcommand that opens a
+	// service. Nothing reads the result yet; the whole effect today is
+	// refusing loudly on a malformed manifest, before this binary's own
+	// config or journal are even opened.
+	if _, err := backend.Bundled(); err != nil {
+		return nil, nil, func() {}, fmt.Errorf("%s: loading the bundled backend manifests: %w", cliecho.Binary, err)
+	}
+
 	cfg, journal, releaseJournal, err := service.OpenConfigAndJournal(ctx, configPath)
 	if err != nil {
 		return nil, nil, func() {}, err
@@ -598,7 +608,7 @@ const (
 	// The second half is not an accident somebody should fix quietly.
 	// Every subcommand parses with flag.ContinueOnError and returns this
 	// for whatever fs.Parse hands back, and flag.ErrHelp is one of those,
-	// so `backup-manager check -h` is a correct command line, a request
+	// so `rbm check -h` is a correct command line, a request
 	// this binary answered, and a 2. That predates #551 and did not
 	// matter while the codes were an implementation detail; publishing
 	// them as a contract is what made it a promise, so the promise says

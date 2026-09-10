@@ -21,7 +21,7 @@ import (
 // open at all, shared by everyone who is merely reading it and taken
 // exclusively only by a process about to change the schema. Folding those
 // two into one lock would force a choice between two wrong answers: hold
-// it for the process lifetime and a `backup-manager status` alongside a
+// it for the process lifetime and a `rbm status` alongside a
 // running `serve` becomes an error, or hold it for the startup sequence
 // only and a migration can run underneath a process that finished
 // starting hours ago.
@@ -52,7 +52,7 @@ import (
 // milliseconds stops being a failure. A configuration write now holds the
 // startup lock for its duration (liveengine.go's ConfigWriteGuard, which
 // is how a write and an engine start are made mutually exclusive rather
-// than merely sampled), and without a wait a `backup-manager status`
+// than merely sampled), and without a wait a `rbm status`
 // that happened to land inside one would fail for no reason an operator
 // could act on.
 
@@ -63,7 +63,7 @@ import (
 // concurrently. It is scoped to the startup sequence only (see
 // acquireStartupLock's own doc): a second process is refused only while
 // the first is actually inside that sequence, never for the lifetime of
-// a running daemon, so an operator can still run `backup-manager status`
+// a running daemon, so an operator can still run `rbm status`
 // (or any other read-only CLI command) against a journal a `serve`
 // process already has open.
 var ErrStartupLocked = errors.New("service: another process is already running this journal's startup sequence")
@@ -190,7 +190,7 @@ var ErrJournalInUse = errors.New("service: another process still has this journa
 //
 // Shared-versus-exclusive is what lets both of the things this codebase
 // wants be true at once: any number of processes can have the journal open
-// together (an operator's `backup-manager status` alongside a live `serve`
+// together (an operator's `rbm status` alongside a live `serve`
 // is ordinary use of this CLI), while a process that needs to CHANGE the
 // schema can prove, with the kernel rather than with a convention, that it
 // is the only one there.

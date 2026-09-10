@@ -86,7 +86,11 @@ var contractBindings = map[string]contractBinding{
 	"testCandidateConnection": {testConnectionRequest{}, testConnectionResponse{}, "/api/v1/backup-sets/test-connection"},
 	"getBackupSet":            {nil, backupSetResponse{}, "/api/v1/backup-sets/src/set"},
 	"listValidators":          {nil, listValidatorsResponse{}, "/api/v1/validators"},
-	"importSSHKey":            {importSSHKeyRequest{}, importSSHKeyResponse{}, "/api/v1/ssh-keys"},
+	// EPIC I (#664): the registered-backend catalogue. Bound here like
+	// every other route, so its declared shape and the shape it actually
+	// serves cannot come apart.
+	"listBackends": {nil, listBackendsResponse{}, "/api/v1/backends"},
+	"importSSHKey": {importSSHKeyRequest{}, importSSHKeyResponse{}, "/api/v1/ssh-keys"},
 	// The candidate half of the same job, on its own operation (#592).
 	// It binds the SAME response type as the paste above, which is the
 	// point: two ways in, one result a client has to understand.
@@ -154,8 +158,14 @@ var contractBindings = map[string]contractBinding{
 	// a bespoke "ok" body would be a second description of a destination
 	// for one call to drift from.
 	"setDefaultStorageMedium": {nil, storageMediumBody{}, "/api/v1/storage-mediums/offsite_s3/default"},
-	"setBackupSetEnabled":     {setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
-	"setBackupSetReadOnly":    {setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
+	// The three configuration operations (issue #669). They speak in
+	// manifest field ids, so their request shape is
+	// mediumConfigurationRequest rather than storageMediumRequest.
+	"getStorageMediumConfiguration":       {nil, mediumConfigurationResponse{}, "/api/v1/storage-mediums/offsite_s3/configuration"},
+	"preflightStorageMediumConfiguration": {mediumConfigurationRequest{}, mediumPreflightResponse{}, "/api/v1/storage-mediums/offsite_s3/configuration/preflight"},
+	"configureStorageMedium":              {mediumConfigurationRequest{}, storageMediumBody{}, "/api/v1/storage-mediums/offsite_s3/configuration"},
+	"setBackupSetEnabled":                 {setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
+	"setBackupSetReadOnly":                {setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
 
 	// Issue #333. Three operations on one path, which is the point of a
 	// sub-resource: the method is what says whether the policy is being

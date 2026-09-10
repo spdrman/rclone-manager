@@ -1,6 +1,6 @@
 # Privacy policy
 
-Backup Manager, `com.iasbuilt.backupmanager`. This is the privacy disclosure
+Backup Manager, `com.iasbuilt.rclonemanager`. This is the privacy disclosure
 §73 Work Package 5.2 and §45.5 require, and it is the content the `privacy`
 link in `distribution/packaging/compliance.json` resolves to.
 
@@ -26,7 +26,7 @@ the container health check asking the local process whether it is healthy
 The app does open outbound network connections, and it opens exactly the ones
 the operator configured: SFTP sessions to the hosts named in the operator's own
 backup sets, made by the pinned rclone packages compiled into
-`/backup-manager`. Those connections carry the operator's own data to the
+`/rbm`. Those connections carry the operator's own data to the
 operator's own destination. No third party is in that path, and the app adds no
 destination of its own.
 

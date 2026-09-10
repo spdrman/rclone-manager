@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StorageDestinationsCard } from "@shared/pages/StorageDestinationsCard";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { BackupManagerError } from "@shared/api/contracts";
@@ -34,8 +34,6 @@ import { resetGraphForTests } from "@shared/state/graph";
  *     anything that reads as "gone".
  */
 
-const CANARY_SECRET = "CANARY-594-wizard-4c81de60fa93-DO-NOT-SEND";
-const PLACEHOLDER_KEY_ID = "EXAMPLE-NOT-A-REAL-KEY";
 
 const OFFSITE: StorageMedium = {
   id: "offsite_s3",
@@ -96,183 +94,51 @@ function renderCard(overrides: Partial<ReturnType<typeof createMockApi>>) {
   return api;
 }
 
-async function openTheWizard(api: Partial<ReturnType<typeof createMockApi>>) {
-  const built = renderCard({ listStorageMediums: vi.fn(() => Promise.resolve([])), ...api });
-  const add = await screen.findByRole("button", { name: "Add a destination" });
-  fireEvent.click(add);
-  await screen.findByRole("group", { name: "Add a destination" });
-  return built;
-}
-
+/**
+ * Reaches this wizard the way an operator now does (EPIC I, #668).
+ *
+ * "Add a destination" opens the add wizard — choose a backend, name the
+ * instance, confirm — and the configure step this file tests is what
+ * follows it. Only the NAVIGATION changed: every assertion below is
+ * unchanged, because the property they pin is unchanged. This wizard is
+ * still the one and only thing that writes a destination, and it still
+ * writes nothing until the destination has been proven.
+ *
+ * The `role="group"` name is the same on both wizards, so the wait after
+ * the last click is for a control only the configure step has.
+ */
 function fill(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
-async function describeDestinationThroughStepOne() {
-  fill("Destination id", "offsite_s3");
-  fill("Region", "us-east-1");
-  fill("Bucket", "nas-backups");
-  fill("Prefix (optional)", "monthly");
-  fireEvent.change(screen.getByLabelText("Storage class"), { target: { value: "STANDARD_IA" } });
-  fireEvent.click(screen.getByRole("button", { name: "Next: credentials" }));
-  await screen.findByLabelText("Access key id");
-}
-
-describe("the S3 destination wizard", () => {
-  beforeEach(() => resetGraphForTests());
-  afterEach(() => {
-    cleanup();
-    vi.restoreAllMocks();
-  });
-
-  it("writes nothing until the destination has been proven", async () => {
-    const importCredentials = vi.fn<(id: string, secret: string) => Promise<string>>(() =>
-      Promise.resolve("cred-1")
-    );
-    const preflight = vi.fn<(spec: StorageMediumSpec) => Promise<MediumPreflight>>(() =>
-      Promise.resolve(report(true))
-    );
-    const create = vi.fn(() => Promise.resolve(OFFSITE));
-    const api = await openTheWizard({
-      importStorageCredentials: importCredentials,
-      preflightStorageMediumCandidate: preflight,
-      createStorageMedium: create
-    });
-
-    await describeDestinationThroughStepOne();
-    fill("Access key id", PLACEHOLDER_KEY_ID);
-    fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
-
-    await waitFor(() => expect(preflight).toHaveBeenCalled());
-    // The load-bearing assertion: the candidate was checked and NOTHING was
-    // declared. Before this issue there was no way to reach this state at
-    // all, because the only preflight took an id out of config.yaml.
-    expect(create).not.toHaveBeenCalled();
-
-    const candidate = preflight.mock.calls[0]?.[0];
-    expect(candidate?.bucket).toBe("nas-backups");
-    expect(candidate?.credentials).toEqual({ credentialsId: "cred-1" });
-
-    fireEvent.click(await screen.findByRole("button", { name: "Next: save" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Save destination" }));
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    expect(api.createStorageMedium).toHaveBeenCalledTimes(1);
-  });
-
-  it("submits the secret once and never sends it again", async () => {
-    const importCredentials = vi.fn<(id: string, secret: string) => Promise<string>>(() =>
-      Promise.resolve("cred-1")
-    );
-    const preflight = vi.fn<(spec: StorageMediumSpec) => Promise<MediumPreflight>>(() =>
-      Promise.resolve(report(true))
-    );
-    const create = vi.fn(() => Promise.resolve(OFFSITE));
-    await openTheWizard({
-      importStorageCredentials: importCredentials,
-      preflightStorageMediumCandidate: preflight,
-      createStorageMedium: create
-    });
-
-    await describeDestinationThroughStepOne();
-    fill("Access key id", PLACEHOLDER_KEY_ID);
-    fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
-    await waitFor(() => expect(preflight).toHaveBeenCalled());
-    fireEvent.click(await screen.findByRole("button", { name: "Next: save" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Save destination" }));
-    await waitFor(() => expect(create).toHaveBeenCalled());
-
-    // The positive control: the canary really did reach the import, so
-    // "it is nowhere else" is a statement about a code path rather than
-    // about a form that carried nothing.
-    expect(importCredentials).toHaveBeenCalledTimes(1);
-    expect(importCredentials.mock.calls[0]?.[1]).toBe(CANARY_SECRET);
-
-    const later = JSON.stringify([preflight.mock.calls, create.mock.calls]);
-    expect(later).not.toContain(CANARY_SECRET);
-    expect(later).not.toContain(PLACEHOLDER_KEY_ID);
-  });
-
-  it("keeps Save disabled while the destination cannot be proven, and renders every skipped step", async () => {
-    const preflight = vi.fn<(spec: StorageMediumSpec) => Promise<MediumPreflight>>(() =>
-      Promise.resolve(report(false, "reach"))
-    );
-    const create = vi.fn(() => Promise.resolve(OFFSITE));
-    await openTheWizard({
-      importStorageCredentials: vi.fn(() => Promise.resolve("cred-1")),
-      preflightStorageMediumCandidate: preflight,
-      createStorageMedium: create
-    });
-
-    await describeDestinationThroughStepOne();
-    fill("Access key id", PLACEHOLDER_KEY_ID);
-    fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
-
-    const next = await screen.findByRole("button", { name: "Next: save" });
-    await waitFor(() => expect(next).toBeDisabled());
-    expect(create).not.toHaveBeenCalled();
-
-    // Every step, always, including the six that never ran. A surface that
-    // dropped them would show an operator a shorter list on a failure than
-    // on a success, which is the one moment the full list matters most.
-    const group = screen.getByRole("group", { name: "Add a destination" });
-    for (const step of ["credentials", "reach", "deliverable", "write", "read_back", "storage_class", "verification", "delete"]) {
-      expect(within(group).getByText(step)).toBeTruthy();
-    }
-    expect(within(group).getAllByText("skipped").length).toBe(6);
-    // The category is the machine-readable half and belongs beside the
-    // outcome, because an operator scanning that column is deciding whose
-    // problem it is.
-    expect(within(group).getByText("failed(configuration)")).toBeTruthy();
-  });
-
-  it("shows the YAML that is about to be written, with a reference and no secret in it", async () => {
-    await openTheWizard({
-      importStorageCredentials: vi.fn(() => Promise.resolve("cred-1")),
-      preflightStorageMediumCandidate: vi.fn(() => Promise.resolve(report(true))),
-      createStorageMedium: vi.fn(() => Promise.resolve(OFFSITE))
-    });
-
-    await describeDestinationThroughStepOne();
-    fill("Access key id", PLACEHOLDER_KEY_ID);
-    fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Next: save" }));
-
-    const group = await screen.findByRole("group", { name: "Add a destination" });
-    const shown = group.textContent ?? "";
-    expect(shown).toContain("id: offsite_s3");
-    expect(shown).toContain("s3_credentials/cred-1");
-    expect(shown).not.toContain(CANARY_SECRET);
-    expect(shown).not.toContain(PLACEHOLDER_KEY_ID);
-    expect(shown).not.toContain("access_key_id: ");
-  });
-
-  it("prints the equivalent backup-manager command, and it carries no secret", async () => {
-    await openTheWizard({
-      importStorageCredentials: vi.fn(() => Promise.resolve("cred-1")),
-      preflightStorageMediumCandidate: vi.fn(() => Promise.resolve(report(true))),
-      createStorageMedium: vi.fn(() => Promise.resolve(OFFSITE))
-    });
-
-    await describeDestinationThroughStepOne();
-    expect(screen.getByText("backup-manager medium import-credentials --stdin")).toBeTruthy();
-
-    fill("Access key id", PLACEHOLDER_KEY_ID);
-    fireEvent.change(screen.getByLabelText("Secret access key"), { target: { value: CANARY_SECRET } });
-    fireEvent.click(screen.getByRole("button", { name: "Next: test connection" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Next: save" }));
-
-    const group = await screen.findByRole("group", { name: "Add a destination" });
-    const shown = group.textContent ?? "";
-    expect(shown).toContain("backup-manager medium add offsite_s3");
-    expect(shown).toContain("--credentials-id cred-1");
-    expect(shown).not.toContain("--secret-access-key");
-    expect(shown).not.toContain(CANARY_SECRET);
-  });
-});
+/**
+ * The five add-path tests that were here have MOVED, not gone (I2.2,
+ * issue #669), to destination-configure-wizard.test.tsx's
+ * "the assertions #594 made about the add path, on the manifest
+ * renderer".
+ *
+ * #668 repointed the card's "Add a destination" button at the
+ * manifest-driven add wizard, and #669 repointed its configure step at
+ * the manifest renderer. So this file's create-mode preamble reached a
+ * pane the card can no longer open, and - the part that made a
+ * byte-identical port impossible - the five asserted against
+ * `preflightStorageMediumCandidate` and `createStorageMedium`, which the
+ * new flow does not call. Their assertions therefore live against
+ * `preflightStorageMediumConfiguration` and `configureStorageMedium`
+ * instead, made against a backend that does not exist, which is
+ * strictly stronger than making them against the one backend the old
+ * form knew.
+ *
+ * Every one of them was proven to still fail against the defect it was
+ * written for before this deletion was made, #594's canary included:
+ * material on the probe, a save enabled without a pass, only the failed
+ * step rendered, and the secret interpolated into the echoed command.
+ * The last one found a real gap in the ported draft.
+ *
+ * What stays below is what is still reachable: the FR-30 re-test of a
+ * destination backups already live on, its removal refusal, and the
+ * edit pane, all of which S3DestinationWizard still serves.
+ */
 
 describe("re-testing a destination backups already live on (FR-30)", () => {
   beforeEach(() => resetGraphForTests());

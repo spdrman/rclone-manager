@@ -23,7 +23,7 @@ import (
 //
 // The field report is two attempts running against one artifact at the same
 // time, which nothing in this product stops: `runOnce` (core/service) is an
-// in-process lock, `backup-manager fetch` and `run` open the journal in a
+// in-process lock, `rbm fetch` and `run` open the journal in a
 // second process behind a SHARED lock, and attemptKey carries only the
 // artifact and its retry count, so two live attempts derive the same
 // idempotency keys. The loser's copy failed, and by the time it went to

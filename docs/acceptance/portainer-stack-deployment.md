@@ -91,9 +91,9 @@ chmod 600 /opt/backup-manager/secrets/id_ed25519
 
 The engine's start gate is a liveness question, not a backup-freshness verdict
 (issue #206). It declares
-`["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]`,
+`["CMD", "/rbm-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]`,
 derived from `container/compose.yaml`, and `backup-manager-ui` waits on that with
-`condition: service_healthy`. `/backup-manager status` is still FR-24's freshness
+`condition: service_healthy`. `/rbm status` is still FR-24's freshness
 verdict and still the image's own baked-in `HEALTHCHECK`, and it exits non-zero on a
 fresh install by design, which is exactly why nothing waits on it any more. So a
 **fresh install reaches the web UI**: an empty configuration directory is a legitimate
@@ -154,8 +154,8 @@ host and user.
 - [ ] Every environment field Portainer showed matches a variable the stack reads
 - [ ] The stack deployed and both containers reach `running`
 - [ ] `backup-manager` reports healthy (it declares the liveness probe
-      `/backup-manager-web healthcheck --url http://127.0.0.1:8080/health/live`,
-      not the image's own `/backup-manager status`: the web UI waits on this, and
+      `/rbm-web healthcheck --url http://127.0.0.1:8080/health/live`,
+      not the image's own `/rbm status`: the web UI waits on this, and
       the backup-freshness verdict is non-zero on a fresh install)
 - [ ] `backup-manager-ui` reports healthy, having overridden the image's own healthcheck
 - [ ] No Portainer agent was installed, and no Portainer extension or plugin was added

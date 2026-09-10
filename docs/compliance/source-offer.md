@@ -1,6 +1,6 @@
 # Source code and the written offer
 
-Backup Manager, `com.iasbuilt.backupmanager`. This is the source and
+Backup Manager, `com.iasbuilt.rclonemanager`. This is the source and
 source-offer material §73 Work Package 5.2 requires, and it is what the
 `source-offer` link in `distribution/packaging/compliance.json` resolves to.
 
@@ -33,7 +33,7 @@ obligation is recorded and this file does not actually carry the offer.
 
 The one dependency worth naming here is **rclone**, which is MIT licensed and is
 consumed as a Go module rather than as an executable: its packages are compiled
-directly into `/backup-manager` behind a narrow transport adapter. There is no
+directly into `/rbm` behind a narrow transport adapter. There is no
 `rclone` binary anywhere in the image, and `container/Dockerfile` says so and is
 checked on it.
 
@@ -162,7 +162,7 @@ licence, this offer and the machine-readable inventory the other two point at,
 without needing this repository, which is private. The image also says so to
 `docker inspect`, which is the only question you can ask it without opening it:
 `org.opencontainers.image.licenses` is the licence id and
-`com.iasbuilt.backupmanager.licenses.path` is `/licenses`.
+`com.iasbuilt.rclonemanager.licenses.path` is `/licenses`.
 
 The image has no shell, so read them from outside it. `docker create` needs a
 command named because this image sets no `ENTRYPOINT` and no `CMD` on purpose,
@@ -170,7 +170,7 @@ and the container is never started, so the command never runs:
 
 ```
 docker image inspect --format '{{json .Config.Labels}}' <image>
-docker create --name bm <image> /backup-manager version
+docker create --name bm <image> /rbm version
 docker cp bm:/licenses .
 docker rm bm
 ```

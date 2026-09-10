@@ -3,8 +3,18 @@
  * the removal, and the FR-30 report when a destination artifacts already
  * live on stops answering (G2.2, issue #594).
  *
- * The wizard behind "Add a destination" is S3DestinationWizard.tsx; this
- * is the page it opens from and returns to.
+ * # Adding one is two wizards, in order (EPIC I, #664)
+ *
+ * "Add a destination" opens AddDestinationWizard: choose a registered
+ * backend, name this instance, confirm. It writes nothing. What it hands
+ * back is a backend id and an instance name, and the CONFIGURE step that
+ * follows collects the values, proves them, and performs the one create.
+ *
+ * The configure step here is still S3DestinationWizard, which is
+ * S3-shaped: issue #669's manifest-driven renderer replaces it, and the
+ * two land as a pair, which is also what makes a local volume
+ * configurable from this card at all. Until then the id chosen in step 2
+ * is passed to it as `presetId` rather than asked for twice.
  *
  * # What FR-30 makes this card responsible for
  *
@@ -43,6 +53,7 @@ import { useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import type {
   ApiError,
+  BackendCatalog,
   MediumPreflight,
   StorageMedium,
   StorageMediumUsage
@@ -50,8 +61,11 @@ import type {
 import { useAsync } from "@shared/hooks/useAsync";
 import { Banner } from "@shared/components/Banner";
 import { ErrorState } from "@shared/components/EmptyState";
+import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { apiErrorOf, isNotConfigured } from "@shared/api/failure";
+import { AddDestinationWizard } from "@shared/pages/AddDestinationWizard";
 import { S3DestinationWizard } from "@shared/pages/S3DestinationWizard";
+import { DestinationConfigureWizard } from "@shared/pages/DestinationConfigureWizard";
 import { MediumPreflightChecks } from "@shared/pages/MediumPreflightChecks";
 import { CommandEcho } from "@shared/pages/CommandEcho";
 import {
@@ -80,6 +94,12 @@ export function StorageDestinationsCard({
 }) {
   const api = useApi();
   const mediums = useAsync<StorageMedium[]>(() => api.listStorageMediums(), [api]);
+  // The registry, for the configure step's renderer. Read here rather
+  // than inside that step so the ONE fact both halves of the add flow
+  // need - which backends exist and what each one declares - is read
+  // once: AddDestinationWizard's picker and the form it hands off to
+  // must not be able to disagree about a manifest.
+  const catalog = useAsync<BackendCatalog>(() => api.listBackends(), [api]);
 
   // One function rather than passing `mediums.reload` and `onChanged`
   // separately down two paths: every change on this card has to do both,
@@ -91,6 +111,20 @@ export function StorageDestinationsCard({
   }
   const [editing, setEditing] = useState<StorageMedium | null>(null);
   const [adding, setAdding] = useState(false);
+  // The name chosen by the add wizard's step 2, held while the configure
+  // step collects the values. Null means no add is part-way through.
+  //
+  // It is the NAME rather than a created destination because nothing has
+  // been created: the configure step performs the one create, after it
+  // has proved the destination (see this file's own doc, and
+  // AddDestinationWizard's on why an unconfigured instance cannot exist).
+  const [configuring, setConfiguring] = useState<{ backendId: string; instanceId: string } | null>(
+    null
+  );
+
+  const configuringManifest = configuring
+    ? catalog.data?.registered.find((m) => m.id === configuring.backendId)
+    : undefined;
 
   return (
     <section className="card" role="region" aria-label="Storage destinations">
@@ -136,6 +170,7 @@ export function StorageDestinationsCard({
                   <DestinationRow
                     key={m.id}
                     medium={m}
+                    currentDefaultId={mediums.data?.find((d) => d.isDefault)?.id}
                     readOnly={readOnly}
                     onEdit={() => setEditing(m)}
                     onChanged={changed}
@@ -158,13 +193,50 @@ export function StorageDestinationsCard({
         )}
 
         {adding ? (
-          <S3DestinationWizard
+          <AddDestinationWizard
+            existing={mediums.data ?? []}
             onClose={() => setAdding(false)}
-            onSaved={() => {
+            onConfirmed={(backendId, instanceId) => {
+              // The backend id is carried, not discarded, and it is
+              // carried as an ID rather than as a chosen surface: it is
+              // what the configure step looks the MANIFEST up by, and
+              // choosing a component by backend type would be the switch
+              // EPIC I exists to delete.
               setAdding(false);
-              changed();
+              setConfiguring({ backendId, instanceId });
             }}
           />
+        ) : null}
+        {configuring !== null ? (
+          configuringManifest === undefined ? (
+            // The registry has not answered yet, or has answered and
+            // does not name this backend. The second case is a real
+            // state and not a defect: a manifest is data, and a picker
+            // held open across a manager restart that dropped one is
+            // exactly when it happens. Rendering the form anyway would
+            // mean rendering no fields at all and offering to save it.
+            <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>
+              {catalog.error
+                ? "The backends this manager registers could not be read, so there is nothing to render a form from yet."
+                : "Reading what this backend asks for…"}
+            </p>
+          ) : (
+            <DestinationConfigureWizard
+              manifest={configuringManifest}
+              instanceId={configuring.instanceId}
+              // Nothing has been created: the save below performs the one
+              // create, after the probe has passed. See
+              // AddDestinationWizard on why an unconfigured instance
+              // cannot exist.
+              destination={null}
+              currentDefault={mediums.data?.find((m) => m.isDefault)?.id ?? null}
+              onClose={() => setConfiguring(null)}
+              onSaved={() => {
+                setConfiguring(null);
+                changed();
+              }}
+            />
+          )
         ) : null}
         {editing ? (
           <S3DestinationWizard
@@ -189,19 +261,47 @@ export function StorageDestinationsCard({
  * because a failed check has to be able to sit beside the destination it
  * is about while the operator reads what is affected.
  *
- * # Which controls a row gets, and why two of them are absent rather than disabled
+ * # Which controls a row gets, and which are disabled rather than absent
  *
- * The local hard drive has no Edit and no Remove (#622). It is not
- * declared in the configuration, so there is nothing to edit and nothing
- * to un-declare, and the backend refuses both. They are ABSENT rather
- * than disabled because a disabled control invites an operator to work
- * out what would enable it, and nothing will: this is not a permission
- * they lack or a state they can leave, it is a thing that does not exist.
+ * Absent is for a control that does not exist. Disabled-and-explained is
+ * for a control an operator could have, once the deployment is in a
+ * different state. Getting that distinction backwards is how a settings
+ * page sends somebody hunting: a missing button has no reason beside it,
+ * so the operator goes looking for the screen that has it, and there
+ * isn't one.
  *
- * The default destination has no Remove either, and that one IS a state
- * they can leave: move the default elsewhere and the button comes back.
- * The backend refuses it regardless (ErrStorageMediumIsDefault), so this
- * is a courtesy in front of a gate rather than the gate.
+ * Edit is ABSENT on the local drive (#622). There is no editor here for
+ * a destination whose location comes from the deployment's backup root,
+ * and no state the operator can reach that would produce one.
+ *
+ * Make default and Remove are both DISABLED with a reason on the row
+ * that holds the default (#671), never hidden. Those two are the pair
+ * that traps an operator: the destination they cannot remove is the one
+ * whose row used to offer neither the removal nor the way to earn it,
+ * while the control that earns it sits on the OTHER rows. So the mark's
+ * own row keeps both, says why each is off, and says what lifts them.
+ *
+ * Remove is keyed off `isDefault` and not off `isLocal`, which is the
+ * one that changed with #670. The local drive is a declared destination
+ * now (instance zero of the local_volume backend) and the backend
+ * removes it like any other once it no longer holds the mark; keying the
+ * button off `isLocal` made a real, removable destination permanently
+ * undeletable from the browser, which is exactly the hazard
+ * StorageMedium.isLocal's own doc warns about. A legacy configuration's
+ * SYNTHESISED local entry is not reachable in the removable state: it
+ * only exists while `default_storage_medium` is unset, which is to say
+ * only while it IS the default, so its Remove is always the disabled and
+ * explained one.
+ *
+ * # Moving the mark is confirmed, because two things change
+ *
+ * The transfer is not destructive — no backup moves, no tier is
+ * rewritten — so the confirmation is not a consent gate and carries no
+ * typed phrase. It exists because only ONE of the two things it does is
+ * the thing the operator clicked: the destination they picked takes the
+ * mark, and the one that had it becomes removable. An operator told only
+ * the half they asked for has been misled by omission, and the half they
+ * were not told is the one that makes a destination deletable.
  *
  * # "Test connection", not "Verify"
  *
@@ -213,11 +313,22 @@ export function StorageDestinationsCard({
  */
 function DestinationRow({
   medium,
+  currentDefaultId,
   readOnly,
   onEdit,
   onChanged
 }: {
   medium: StorageMedium;
+  /** The destination that holds the mark right now, which is the one
+   *  this row's transfer would take it FROM.
+   *
+   *  It comes from the card rather than from this row, because a row
+   *  knows only itself and the confirmation has to name the OTHER half
+   *  of what the click does. Optional: a list with no default at all is
+   *  a broken deployment the card already says so about, and the
+   *  confirmation degrades to naming the consequence without the name
+   *  rather than refusing to open. */
+  currentDefaultId?: string;
   readOnly: boolean;
   onEdit(): void;
   onChanged(): void;
@@ -227,6 +338,7 @@ function DestinationRow({
   const [usage, setUsage] = useState<StorageMediumUsage | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<ApiError | null>(null);
+  const [confirmingTransfer, setConfirmingTransfer] = useState(false);
 
   async function testConnection() {
     setBusy(true);
@@ -257,6 +369,10 @@ function DestinationRow({
   }
 
   async function makeDefault() {
+    // The dialog closes on confirm rather than on the answer. What it
+    // asked has been answered; leaving it up while the request is in
+    // flight would put the row's own failure banner behind a scrim.
+    setConfirmingTransfer(false);
     setBusy(true);
     setFailure(null);
     try {
@@ -293,6 +409,28 @@ function DestinationRow({
   }
 
   const failedVerification = report !== null && !report.ok;
+
+  // One id per sentence, and the disabled control points at the sentence
+  // that is about IT (aria-describedby). Not decoration: a disabled
+  // button announces nothing on its own, so without the association a
+  // screen reader reads "Remove, dimmed" and the reason further down the
+  // row is a paragraph that could be about anything. It also makes
+  // "explained" a thing a test can assert rather than infer from the row
+  // happening to contain prose.
+  const defaultReasonId = "destination-" + medium.id + "-holds-the-default";
+  const unprovenReasonId = "destination-" + medium.id + "-never-proven";
+
+  // A destination nobody has proven cannot take the mark (#671). Every
+  // tier that follows the default would then start somewhere no check
+  // has ever passed against, and the point of #636's mark is that this
+  // deployment knows the difference. The control is off BEFORE the click
+  // rather than failing after it, because "you cannot do that" is worth
+  // more before an operator has decided than after.
+  const transferBlockedBy = medium.isDefault
+    ? defaultReasonId
+    : medium.connectionUnverified
+      ? unprovenReasonId
+      : undefined;
 
   return (
     <div
@@ -337,35 +475,45 @@ function DestinationRow({
         <button className="btn" disabled={busy} onClick={testConnection}>
           {busy ? "Working…" : "Test connection"}
         </button>
-        {medium.isDefault ? null : (
-          <button className="btn" disabled={readOnly || busy} onClick={makeDefault}>
-            Make default
-          </button>
-        )}
+        <button
+          className="btn"
+          disabled={readOnly || busy || transferBlockedBy !== undefined}
+          aria-describedby={transferBlockedBy}
+          onClick={() => setConfirmingTransfer(true)}
+        >
+          Make default
+        </button>
         {medium.isLocal ? null : (
           <button className="btn" disabled={readOnly || busy} onClick={onEdit}>
             Edit
           </button>
         )}
-        {medium.isLocal || medium.isDefault ? null : (
-          <button className="btn" disabled={readOnly || busy} onClick={remove}>
-            Remove
-          </button>
-        )}
+        <button
+          className="btn"
+          disabled={readOnly || busy || medium.isDefault}
+          aria-describedby={medium.isDefault ? defaultReasonId : undefined}
+          onClick={remove}
+        >
+          Remove
+        </button>
       </div>
 
       {medium.isDefault ? (
-        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-3)", maxWidth: "74ch" }}>
-          A retention tier created from here on starts on this destination. Moving that mark moves
-          no backup and rewrites no tier: it decides where the NEXT tier begins. This destination
-          cannot be removed while it carries the mark.
+        <p
+          id={defaultReasonId}
+          style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-3)", maxWidth: "74ch" }}
+        >
+          This destination already carries the mark: a retention tier created from here on starts
+          here, which is why Make default is off on this row. It cannot be removed while it carries
+          the mark — give the mark to another destination and Remove comes back. Moving it moves no
+          backup and rewrites no tier: it decides where the NEXT tier begins.
         </p>
       ) : null}
       {medium.isLocal ? (
         <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-3)", maxWidth: "74ch" }}>
-          This is not something the configuration declares, so there is nothing here to edit and
-          nothing to remove. Every retention tier that names no other destination keeps its backups
-          here.
+          Every retention tier that names no other destination keeps its backups here. Where this
+          one writes comes from the deployment&rsquo;s backup root rather than from fields on this
+          list, so there is nothing here to edit.
         </p>
       ) : null}
       {/* Issue #636: a destination nobody ever proved, said out loud.
@@ -381,12 +529,44 @@ function DestinationRow({
           that clears this is already on the row, two lines up, and a
           second one would be two ways to do one thing. */}
       {medium.connectionUnverified ? (
-        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--warn)", maxWidth: "74ch" }}>
+        <p
+          id={unprovenReasonId}
+          style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--warn)", maxWidth: "74ch" }}
+        >
           This destination was declared without a check, so nothing has shown that its credential is
-          accepted, that the bucket is there, or that an object written here can be read back. Test
-          connection clears this when it passes.
+          accepted, that the bucket is there, or that an object written here can be read back. That
+          is also why it cannot be made the default: every tier that follows the default would start
+          somewhere nobody has ever proven. Test connection clears this when it passes.
         </p>
       ) : null}
+
+      <ConfirmationDialog
+        open={confirmingTransfer}
+        eyebrow="Two things change"
+        title={"Make " + medium.id + " the default destination?"}
+        confirmLabel={"Make " + medium.id + " the default"}
+        onConfirm={makeDefault}
+        onCancel={() => setConfirmingTransfer(false)}
+      >
+        <p style={{ margin: 0 }}>
+          <strong>{medium.id}</strong> becomes the default: a retention tier created from here on
+          starts here, and this destination cannot be removed while it carries the mark.
+        </p>
+        <p style={{ margin: 0 }}>
+          <strong>{currentDefaultId ?? "The destination that holds it now"}</strong> stops being the
+          default, and becomes removable. That is the half nobody clicked for, which is why it is
+          said here rather than discovered later.
+        </p>
+        <p style={{ margin: 0 }}>
+          Nothing already written moves. A tier that names a destination explicitly is untouched;
+          only a tier that follows the default starts somewhere new, and no copy already stored is
+          moved or deleted by this. Changing where new copies go is not a migration of the old ones.
+        </p>
+        <CommandEcho
+          label="the same thing from a terminal — one line, both halves"
+          commands={[setDefaultCommand(medium.id)]}
+        />
+      </ConfirmationDialog>
 
       <CommandEcho
         label="the same thing from a terminal"
@@ -509,26 +689,51 @@ function AffectedSets({ usage }: { usage: StorageMediumUsage }) {
  *  missing entirely. It goes here rather than into the tier picker's
  *  label for the reason destinationLabel gives: this is the screen an
  *  operator comes to in order to see what their destinations ARE, and a
- *  picker is a list to choose between. */
+ *  picker is a list to choose between.
+ *
+ *  # Why the place is assembled from what is PRESENT (EPIC I, #664)
+ *
+ *  Two instances of one backend is the ordinary case, not an edge, and
+ *  this line is what tells them apart. It used to read the bucket and
+ *  nothing else, which is a description of one backend's idea of a place:
+ *  a declared destination on a local volume has no bucket, so two of them
+ *  both rendered as their type and stopped, and the list said two
+ *  destinations were one thing — exactly the assumption #664 exists to
+ *  remove, in the one place an operator would meet it.
+ *
+ *  So the location is whichever of bucket and path this destination
+ *  actually carries, joined to its namespace. That is a branch on what is
+ *  there rather than on which backend it is, which matters: a switch on
+ *  backend type here would need a new arm for every manifest added, and
+ *  the arm nobody wrote is a row that describes nothing. */
 function describeDestination(m: StorageMedium): string {
   if (m.isLocal) return localDriveDescription(m);
-  const where = m.prefix ? `${m.bucket}/${m.prefix}` : m.bucket;
+  const where = [m.bucket || m.path, m.prefix].filter(Boolean).join("/");
   return [m.type, where, m.region, m.storageClass].filter(Boolean).join(" · ");
 }
 
 /** The commands one row's controls are equivalent to, in the order the
  *  buttons above them sit in.
  *
- *  A row prints only the commands its own buttons offer. A `medium
- *  remove local` under an entry with no Remove button would teach a
- *  command that is refused, and a `medium default` under the destination
- *  that already carries the mark would be a line that changes nothing.
+ *  A row prints the commands its buttons can actually be USED for, which
+ *  is not the same as the buttons it shows. Since #671 the row that
+ *  holds the mark shows a disabled Make default and a disabled Remove,
+ *  and printing `medium default` under the destination that already
+ *  carries the mark, or `medium remove` under one the engine refuses to
+ *  remove, would teach two lines that do nothing but produce a refusal.
+ *  The reason each control is off is a sentence on the row; the command
+ *  list is not the place to repeat it.
+ *
+ *  `medium default` is also withheld from a destination nobody has
+ *  proven, for the same reason its button is off there: it is not a
+ *  transfer this deployment will make yet.
+ *
  *  EPIC G's rule is that what an operator can DO has an equivalent
  *  command, not that every verb appears under every row. */
 function commandsFor(m: StorageMedium): string[] {
   const out = [testConnectionCommand(m.id)];
-  if (!m.isDefault) out.push(setDefaultCommand(m.id));
+  if (!m.isDefault && !m.connectionUnverified) out.push(setDefaultCommand(m.id));
   if (!m.isLocal) out.push(showCommand(m.id));
-  if (!m.isLocal && !m.isDefault) out.push(removeCommand(m.id));
+  if (!m.isDefault) out.push(removeCommand(m.id));
   return out;
 }

@@ -31,7 +31,7 @@
 // time.
 //
 // That also settles the one objection a perf number in the gate normally
-// meets here. scripts/perf/capture-baseline.sh says in as many words that
+// meets here. python3 scripts/rcmtools/perf/capture_baseline.py says in as many words that
 // its two harnesses never run under -race, because the detector slows an
 // instrumented binary by several times and a baseline captured from one
 // could never be compared against an uninstrumented run. scripts/ci-local.sh
@@ -171,7 +171,7 @@ func readPerfBaseline(t *testing.T, root, hostID string) perfBaseline {
 	path := filepath.Join(root, "docs", "perf", "baselines", hostID+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("cannot read %s: %v\n\nscripts/perf/check-baseline.sh fails on this too, and says how to produce it: scripts/perf/capture-baseline.sh on the designated benchmark host.", path, err)
+		t.Fatalf("cannot read %s: %v\n\nscripts/perf/check-baseline.sh fails on this too, and says how to produce it: python3 scripts/rcmtools/perf/capture_baseline.py on the designated benchmark host.", path, err)
 	}
 	var b perfBaseline
 	if err := json.Unmarshal(data, &b); err != nil {
@@ -197,7 +197,7 @@ func validatePerfBaseline(path string, b perfBaseline) error {
 
 // inspectImageSize reads the architecture and total size off a built
 // image. `docker image inspect`'s .Size is the sum of the layer sizes,
-// which is the same number scripts/perf/capture-baseline.sh records, so
+// which is the same number python3 scripts/rcmtools/perf/capture_baseline.py records, so
 // the two are directly comparable.
 //
 // Labels do not enter into it, which had to be checked rather than
@@ -531,7 +531,7 @@ func TestTheBuiltImageIsInsideTheRecordedSizeBudget(t *testing.T) {
 		t.Errorf("the built image is %d bytes against a baseline of %d and a ceiling of %d (%.2fx): %.4fx, +%d bytes.\n\n"+
 			"docs/perf/gate.json gates this metric on the ratio alone, because two builds of one commit produce byte-identical sizes and there is no noise to allow for. So this is a real move, and it wants one of two answers.\n\n"+
 			"  If this change made the image bigger and did not mean to, that is the regression this gate exists to catch. `docker history` on the image names the layer.\n\n"+
-			"  If the growth is intended, account for it first and re-capture second: scripts/perf/capture-baseline.sh on %s, with what accounts for the growth written into docs/perf/README.md. A re-capture with no accounting behind it records the regression as the new normal, which is the one thing a baseline must not be used for (#635).",
+			"  If the growth is intended, account for it first and re-capture second: python3 scripts/rcmtools/perf/capture_baseline.py on %s, with what accounts for the growth written into docs/perf/README.md. A re-capture with no accounting behind it records the regression as the new normal, which is the one thing a baseline must not be used for (#635).",
 			size, base, limit, ratio, float64(size)/float64(base), size-limit, gate.BenchmarkHostID)
 	}
 }

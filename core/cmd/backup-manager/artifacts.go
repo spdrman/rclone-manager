@@ -13,7 +13,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
-// cmdArtifacts is `backup-manager artifacts`.
+// cmdArtifacts is `rbm artifacts`.
 //
 // With no operand it lists every journal record for every backup set
 // --source/--backup-set select (both optional; omitting either widens the

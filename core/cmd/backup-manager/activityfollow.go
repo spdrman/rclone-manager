@@ -12,7 +12,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/apicontract"
 )
 
-// `backup-manager activity --follow`: the live feed, in a terminal.
+// `rbm activity --follow`: the live feed, in a terminal.
 //
 // # Two feeds, and why this is not a mode of the other one
 //

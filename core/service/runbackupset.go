@@ -30,7 +30,7 @@ import (
 //
 // internal/app.Service.Fetch has been "an operator-triggered, on-demand
 // run of exactly one backup set's share of the same cycle RunCycle
-// performs" since FR-1, and `backup-manager fetch --backup-set` has
+// performs" since FR-1, and `rbm fetch --backup-set` has
 // called it all along. Nothing about the pipeline is new here: this is
 // the missing way to reach it from a serving process, so the work takes
 // the engine's single-flight lock, lands in the engine's journal and
@@ -50,7 +50,7 @@ import (
 //
 // RunCycle skips a disabled set because a sweep over everything must not
 // act on one an operator switched off. Naming that one set explicitly is
-// the opposite intent, and `backup-manager fetch --backup-set` has always
+// the opposite intent, and `rbm fetch --backup-set` has always
 // honoured it, so refusing here would make the two surfaces disagree
 // about the same request. The browser does not offer the control for a
 // disabled set; an operator who means it can still say so.

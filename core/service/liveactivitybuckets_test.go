@@ -69,7 +69,7 @@ func TestRecordAPIAction_AnActionOnASetThisDeploymentDoesNotHaveIsADeploymentLin
 		Actor: "alice", Method: "PATCH", Route: "/backup-sets/{source}/{set}",
 		Status: 404, ErrorCode: "BACKUP_SET_NOT_FOUND",
 		BackupSetID: "ghost-src/ghost-set",
-		Command:     "backup-manager backup-set patch ghost-src/ghost-set --stale-after 48h",
+		Command:     "rbm backup-set patch ghost-src/ghost-set --stale-after 48h",
 	})
 
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
@@ -97,7 +97,7 @@ func TestRecordAPIAction_StillLandsOnAConfiguredSet(t *testing.T) {
 	svc.RecordAPIAction(context.Background(), cliecho.APIAction{
 		Actor: "alice", Method: "PATCH", Route: "/backup-sets/{source}/{set}",
 		Status: 200, BackupSetID: "alpha/nightly",
-		Command: "backup-manager backup-set patch alpha/nightly --stale-after 48h",
+		Command: "rbm backup-set patch alpha/nightly --stale-after 48h",
 	})
 
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
@@ -158,7 +158,7 @@ func TestRecordAPIAction_ProbingThisAPIGrowsNothing(t *testing.T) {
 		svc.RecordAPIAction(context.Background(), cliecho.APIAction{
 			Actor: "alice", Method: "PATCH", Route: "/backup-sets/{source}/{set}",
 			Status: 404, ErrorCode: "BACKUP_SET_NOT_FOUND", BackupSetID: id,
-			Command: "backup-manager backup-set patch " + id + " --stale-after 48h",
+			Command: "rbm backup-set patch " + id + " --stale-after 48h",
 		})
 	}
 

@@ -1,6 +1,6 @@
 # The rclone-manager-tests commit this repository's gate runs its browser
 # e2e suite and its CLI smoke slice from. Moved by
-# scripts/e2e/bump-tests-pin.sh, and the commit that moves it is itself
+# scripts/rcmtools/e2e/bump_tests_pin.py, and the commit that moves it is itself
 # gated against the new pin, so a bad bump cannot land unnoticed.
 #
 # Why this repository pins that one, and that one pins a build of this one:
@@ -228,11 +228,11 @@
 # does not care which name reached it. What it does NOT prove, and their case
 # doc says so, is that the shipped image carries both names: the `go` builder
 # makes no image, so that half belongs to container/Dockerfile, where
-# apps/generic/tests/dockercli runs /backup-manager inside the built image.
+# apps/generic/tests/dockercli runs /rbm inside the built image.
 #
 # Their harness needed one fix that is worth knowing about here, because this
 # repository caused it. `docker cp` copies a symlink AS a symlink, and the new
-# image ships /rbm with /backup-manager as a link to it, so extraction was
+# image ships /rbm with /rbm as a link to it, so extraction was
 # landing a four-byte dangling link and exec'ing it. They pass `-L` now, which
 # is a no-op against a pre-rename image. The same defect was in this
 # repository's own release scripts and is fixed on the image branch.
@@ -267,4 +267,60 @@ TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
 # #624, so #60's three cases are red over there until it moves to whatever
 # commit this branch merges as. That is the same manual half every paragraph
 # above keeps flagging.
-TESTS_REPO_SHA=bfbe51e542319482d388695f15b2597677f38d8e
+TESTS_REPO_SHA=8d6e1abc1fa36826200ba578bc014d6a817f6e80
+#
+# Moved to bccd71c, rclone-manager-tests#65, off their merged main and not
+# off the branch, for the reason the paragraph about a794c38 above already
+# gives. It is #687's OPEN item: "suite/web-ui-real-backend is pushed and
+# green on the rig but nothing points at it." Suite B now drives a real
+# deployment over RM_BASE_URL instead of starting ui/shared's own Vite
+# dev server over a mock through RM_UI_DIR, which #65 retires along with
+# the fixture-driven suite it drove.
+#
+# The product half rides with it, in this same branch:
+# scripts/e2e/run-tests-repo-gate.sh now stands the deployment up with
+# scripts/e2e/three-machine-web-ui.sh and hands the checkout to it with
+# --suite, instead of picking a free port and exporting RM_UI_DIR. Either
+# half alone leaves the gate red: RM_UI_DIR is gone over there, and
+# nothing here called the rig before this bump.
+#
+# Verified before the bump, the way the notes above ask: 191 passed, 69
+# skipped, 8 expected failures (DISC-010, a real defect this move found:
+# an artifact id is three URL segments and its route is one, so a click
+# on a backup silently lands on the Dashboard), exit 0, run through
+# scripts/e2e/three-machine-web-ui.sh against this branch. Not yet filed
+# as its own issue on this side; recorded in this bump's PR instead
+# (rclone-manager-tests' findings/DISC-010.md has the full analysis and
+# a proposed fix).
+#
+# Moved to 8d6e1ab, read off their merged main and not off a branch, for the
+# reason the paragraph about a794c38 above already gives. It carries two of
+# their PRs at once.
+#
+# rclone-manager-tests#66 deletes the eight expectedToFailOnDISC010()
+# markers from backups.spec.ts, now that #677 fixed the route those cases
+# were failing on. They were wrapped in test.fail(), so this bump is the
+# first time they are RUN rather than required to fail: 191 passed, 69
+# skipped, nothing failed and nothing expected-failed, exit 0, through
+# scripts/e2e/three-machine-web-ui.sh against this branch. DISC-010 is
+# closed as a finding on both sides.
+#
+# rclone-manager-tests#67 retargets medium/remove-refuses-the-local-hard-
+# drive. It pinned "local is the drive this deployment's backups land on"
+# and "cannot be un-declared", the local-specific refusal #670 deleted when
+# it made local a declared destination, so it had been red against main
+# here since #670 merged. It now pins the FR-30 in-use refusal that
+# scenario actually produces.
+#
+# This is the pin doing its job in the direction it does not usually get
+# credit for: neither of those was a spec landing ahead of a feature, both
+# were specs describing a product that had changed under them, and the
+# gate here is where that surfaced.
+#
+# Still outstanding on their side, and still with no automation: their
+# build-under-test.json names 87a9dc7 of this repository, which predates
+# the `rbm` rename (#64), so roughly forty of their Suite A cases fail over
+# there with `expected "rbm: " … but it was "backup-manager: …"`. Their
+# hook is red on main for that reason alone. It is the manual half of the
+# lockstep every paragraph above keeps flagging, and no bump on this side
+# can close it.

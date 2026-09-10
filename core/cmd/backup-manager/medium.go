@@ -243,7 +243,7 @@ func (f mediumFlags) spec(id string) service.StorageMediumSpec {
 	return spec
 }
 
-// cmdMedium is `backup-manager medium <verb> [<medium-id>] [flags]`: the
+// cmdMedium is `rbm medium <verb> [<medium-id>] [flags]`: the
 // CLI's own half of the storage-destination surface.
 //
 // `preflight` (issue #443) was the first verb and was the only one until

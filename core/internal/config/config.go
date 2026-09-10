@@ -1187,7 +1187,7 @@ type RetentionTier struct {
 	// used to record as inert and defer to #239 "when retention starts
 	// planning on it". #239 landed and it stopped being inert: an
 	// override replaced the file's chain with an all-local one, so
-	// `backup-manager retention --tier` previewed placement against local
+	// `rbm retention --tier` previewed placement against local
 	// beside a deployment sending monthly to S3, and printed it no less
 	// confidently. `--tier-medium NAME=MEDIUM_ID` answers it (issue #595,
 	// retention_flags.go): a repeatable flag rather than a fifth
@@ -1363,16 +1363,35 @@ func (c *Config) EffectiveDefaultStorageMedium() string {
 // that will not finish.
 const DefaultMaxMovesPerCycle = 4
 
-// StorageMediumTypeS3 is the one medium type this schema accepts.
+// StorageMediumTypeS3 is the id the s3 manifest declares
+// (core/internal/backend/bundled/s3.json), and the one non-local backend
+// this schema can fully populate today.
 //
-// The set is closed and grows only by a future FR, because a new backend
-// is an architecture decision rather than an import line: EPIC E's FR-28
-// is that decision for s3, and it says the implementation is the embedded
-// rclone's own s3 backend behind the FR-3 transport boundary, with no AWS
-// SDK entering the tree in Go or in TypeScript. A type this package
-// accepted without that decision having been made would be a config an
-// operator could write and nothing could serve.
+// The legal StorageMedium.Type set is no longer a Go-side closed set
+// pinned to this one constant: #667 moved that decision onto
+// core/internal/backend's registry (config.StorageMediumTypes,
+// config.expressibleBackendIDs), which is data a backend adds to by
+// shipping a manifest rather than by an import line here. This constant
+// remains because s3 is still the one backend most of this schema (and
+// its callers - internal/app's mediumType, this package's own tests)
+// need to name literally, and because it is the string the manifest
+// itself carries as "id": changing it would be changing the manifest.
 const StorageMediumTypeS3 = "s3"
+
+// StorageMediumTypeLocalVolume is a directory on a disk this host can
+// see: a second internal drive, a USB disk, or an already-mounted
+// network share (issue #666, EPIC I / #664).
+//
+// It never resolves through a network endpoint the way
+// StorageMediumTypeS3 does, but it is exactly as declarable, exactly as
+// editable and exactly as removable, because it is a genuinely separate
+// destination an operator chose to add. What it is NOT is a second
+// answer to where the backup ROOT lives: that question stays
+// MediumLocal's alone (see MediumLocal's own doc and
+// transport.MediumTypeLocalDir's, EPIC E). A local_volume instance is
+// somewhere a copy GOES, never the place a backup set's own local_path
+// already is.
+const StorageMediumTypeLocalVolume = "local_volume"
 
 // The closed set of S3 storage classes a medium may ask for (FR-27).
 //
@@ -1526,8 +1545,11 @@ type StorageMedium struct {
 	// validate it client-side against the same rule Validate applies.
 	ID string `yaml:"id"`
 
-	// Type names the backend. The only value is StorageMediumTypeS3; see
-	// that constant for why the set is closed.
+	// Type names the backend: one of the ids StorageMediumTypes()
+	// returns, which is core/internal/backend's bundled registry
+	// filtered to the backends this struct can fully populate (see
+	// expressibleBackendIDs in validate.go). "s3" is the only value that
+	// resolves today.
 	Type string `yaml:"type"`
 
 	// Region is the provider region, passed through to the backend
@@ -1562,6 +1584,17 @@ type StorageMedium struct {
 	// one field, and the refusal says so rather than letting the backend
 	// report a bucket name it cannot resolve.
 	Bucket string `yaml:"bucket"`
+
+	// Path is the directory a local_volume medium writes into: absolute,
+	// clean, and mounted INSIDE the container this service runs in (a
+	// path that exists on the host but not in the container is the
+	// common first mistake, and the connection test is what catches it).
+	// Required when Type is StorageMediumTypeLocalVolume; meaningless
+	// otherwise, and validateStorageMediums refuses it being set on any
+	// other type for the reason validateMaxMovesPerCycle's own doc
+	// gives: a field this schema silently ignored would read to the
+	// operator who set it as a setting that took effect.
+	Path string `yaml:"path,omitempty"`
 
 	// Prefix is the key namespace inside Bucket, so one bucket can hold
 	// more than this product's artifacts. Optional; empty puts the key

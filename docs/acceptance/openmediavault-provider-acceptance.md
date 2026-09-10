@@ -162,7 +162,7 @@ reinstall would rewrite the retained backup store.
 > confirmed on its Verify server step, and no `config.yaml` is written by hand
 > at all.
 
-`/backup-manager-web serve` starts without a `config.yaml` and serves the
+`/rbm-web serve` starts without a `config.yaml` and serves the
 first-run setup flow instead (#176), but a config file that EXISTS and does not
 validate is still a hard startup failure. Given the read-only mount above, create
 all three before the first start.
@@ -172,7 +172,7 @@ now a writable directory the application owns, so the container can create and r
 `config.yaml` itself, and an empty directory is a legitimate state rather than a broken
 deployment. Two things nonetheless keep this step here. The directory itself must exist
 and be owned by the app's uid/gid before the first start, because a bind mount does not
-create or chown its source. And `/backup-manager-web serve` still refuses to start
+create or chown its source. And `/rbm-web serve` still refuses to start
 without a valid config: removing that refusal, and serving a first-run flow instead, is
 #176's work and is not merged. Once it is, everything below except creating and owning
 the directory becomes optional.
@@ -209,14 +209,14 @@ Verify the host key fingerprint out of band. Then write
 - [ ] The compose file saves with no validation error
 - [ ] `Up` completes and both services reach **running**
 - [ ] The engine service reaches health **healthy** (it declares the
-      liveness probe, `/backup-manager-web healthcheck --url
+      liveness probe, `/rbm-web healthcheck --url
       http://127.0.0.1:8080/health/live`, and NOT the image's own
-      `HEALTHCHECK`, `/backup-manager status`. The Web UI will not start until
+      `HEALTHCHECK`, `/rbm status`. The Web UI will not start until
       this reports healthy, and `status` is the backup-freshness verdict, which
       is non-zero on a fresh install that has backed nothing up)
 - [ ] The Web UI service reaches health **healthy** via its own
-      `/backup-manager-web healthcheck` override, not the image's
-      `/backup-manager status` (which would fail: no config, no state database)
+      `/rbm-web healthcheck` override, not the image's
+      `/rbm status` (which would fail: no config, no state database)
 - [ ] The engine service publishes no port (`docker compose ps` shows a port
       mapping only for the Web UI service)
 

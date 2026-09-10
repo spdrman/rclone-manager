@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -269,6 +270,57 @@ func TestUsageIntroducesThisBinaryByName(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("usage never names %q; a help text that tells an operator to run a command spelled differently from the one the image ships is the gap this file exists to close", want)
+		}
+	}
+}
+
+// TestTheWebHostNamesItselfFromTheConstant is the third angle, and the
+// only one that observes the shipped program rather than the source it
+// was built from or a function called inside the test process.
+//
+// The walk above proves no literal spells the old name and the usage test
+// proves the help block names the constant, and both of those are claims
+// about this package. What neither can see is a binary that builds, links
+// and then introduces itself differently anyway, which is precisely what
+// an operator meets in `docker compose logs`. So this one builds it, runs
+// it with a command it does not have, and reads the two lines that come
+// back.
+//
+// It replaced TestNoSourceFileSpellsTheWebHostsNameAsALiteral, which read
+// the same directory line by line for two spellings of the old name. The
+// AST walk above reads the same files for every literal, and apps/common
+// as well, so that check is a strict subset of this file's first test and
+// keeping it would have been the same assertion written twice.
+func TestTheWebHostNamesItselfFromTheConstant(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary; -short is for the runs that cannot afford a compile")
+	}
+
+	// Split, so this file does not contain the exact literal the walk
+	// above exists to find. It skips _test.go, so this would not fail the
+	// check, but a grep by a human looking for a stray old name would
+	// stop here for nothing.
+	oldName := legacyName + "-web"
+
+	bin := filepath.Join(t.TempDir(), cliecho.WebBinary)
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	run := exec.Command(bin, "no-such-command")
+	out, _ := run.CombinedOutput()
+	got := string(out)
+
+	if !strings.Contains(got, cliecho.WebBinary+": unknown command") {
+		t.Errorf("the diagnostic does not name cliecho.WebBinary (%q):\n%s", cliecho.WebBinary, got)
+	}
+	if !strings.Contains(got, "usage: "+cliecho.WebBinary+" <command>") {
+		t.Errorf("the usage line does not name cliecho.WebBinary (%q):\n%s", cliecho.WebBinary, got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, oldName+":") || strings.HasPrefix(line, "usage: "+oldName) {
+			t.Errorf("the binary still spells the old name in an operator-facing line: %q", line)
 		}
 	}
 }

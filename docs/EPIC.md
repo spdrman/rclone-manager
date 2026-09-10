@@ -342,8 +342,8 @@ This boundary is mandatory to contain upstream API churn.
 The application SHALL support:
 
 ``` bash
-backup-manager run
-backup-manager daemon
+rbm run
+rbm daemon
 ```
 
 `run` performs one processing cycle and exits.
@@ -1452,7 +1452,7 @@ Before deletion:
 A dry-run is mandatory:
 
 ``` bash
-backup-manager retention --dry-run
+rbm retention --dry-run
 ```
 
 It SHALL explain every KEEP/DELETE decision.
@@ -1564,7 +1564,7 @@ Expose at minimum:
 CLI:
 
 ``` bash
-backup-manager status
+rbm status
 ```
 
 Container health support is mandatory.
@@ -1706,30 +1706,30 @@ Builds SHOULD target the architecture used by the UGREEN NAS, with
 # CLI
 
 ``` bash
-backup-manager run
-backup-manager daemon
+rbm run
+rbm daemon
 
-backup-manager check
-backup-manager status
+rbm check
+rbm status
 
-backup-manager sources
-backup-manager artifacts
+rbm sources
+rbm artifacts
 
-backup-manager fetch --source production --backup-set postgres-primary --dry-run
+rbm fetch --source production --backup-set postgres-primary --dry-run
 
-backup-manager retention --dry-run
-backup-manager retention
+rbm retention --dry-run
+rbm retention
 
-backup-manager reconcile
-backup-manager validate <artifact-id>
+rbm reconcile
+rbm validate <artifact-id>
 
-backup-manager version
+rbm version
 ```
 
 `version` SHALL report both:
 
 ``` text
-backup-manager version
+rbm version
 embedded rclone version
 Go version
 build commit

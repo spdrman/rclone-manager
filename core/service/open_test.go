@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/backend"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
@@ -113,6 +114,36 @@ func TestOpen_WiresARealServiceAgainstARealConfigFile(t *testing.T) {
 	done := waitForTerminalStatus(t, svc, op.ID)
 	if done.Status != "completed" {
 		t.Fatalf("Status = %q, want %q (Error = %q)", done.Status, "completed", done.Error)
+	}
+}
+
+// TestOpenLoadsTheBundledRegistry is issue #665's test 31: Open wires
+// backend.Bundled() before opening anything else, and this is a smoke
+// assertion that the call is WIRED, not that it can fail. A bundled
+// registry cannot fail at runtime once TestEveryBundledManifestParses
+// (core/internal/backend) passes - the embedded files are fixed at
+// build time, and Bundled() memoises with sync.OnceValues - so there is
+// no injection seam here to fake a load failure through, and faking one
+// would test a code path this constructor cannot actually take. What
+// this proves instead: Open against a valid config still succeeds
+// (the every-other-Open-test-in-this-package fact, made explicit) AND
+// the bundled registry it loaded along the way is independently
+// loadable and non-empty, so a change that broke the wiring - the call
+// removed, or its error silently swallowed - would leave this the one
+// test naming why Open still worked anyway.
+func TestOpenLoadsTheBundledRegistry(t *testing.T) {
+	_, cleanup, err := Open(context.Background(), writeTestConfigFile(t))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	reg, err := backend.Bundled()
+	if err != nil {
+		t.Fatalf("backend.Bundled(): %v", err)
+	}
+	if reg.Len() == 0 {
+		t.Fatal("the bundled registry declares no backend, so Open's own load proves nothing")
 	}
 }
 

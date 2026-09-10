@@ -33,8 +33,8 @@ func TestLoadReleaseManifest(t *testing.T) {
     {
       "architecture": "amd64",
       "binary_sha256": {
-        "backup-manager": "91d5727a3aef5c6c3e707a31ad3d994274a03b716b3f49fcb4f1cf78b447ca7e",
-        "backup-manager-web": "250b3b4f6eeeeb134e96928a7bd999ffe8e7085e299c853e913ed9ffab3a2f16"
+        "rbm": "91d5727a3aef5c6c3e707a31ad3d994274a03b716b3f49fcb4f1cf78b447ca7e",
+        "rbm-web": "250b3b4f6eeeeb134e96928a7bd999ffe8e7085e299c853e913ed9ffab3a2f16"
       },
       "local_image_id_sha256": "3d311fbfa88fa28d9733ee170da44d7a3bf8c8df6e2db3f05aae089ce8a7dbb0"
     }
@@ -59,8 +59,8 @@ func TestLoadReleaseManifest(t *testing.T) {
 		},
 		{
 			name:    "a hash that is not a SHA-256",
-			body:    `{"version":"v","commit":"c","architectures":[{"architecture":"amd64","binary_sha256":{"backup-manager":"deadbeef","backup-manager-web":"` + strings.Repeat("a", 64) + `"}}]}`,
-			wantErr: "backup-manager",
+			body:    `{"version":"v","commit":"c","architectures":[{"architecture":"amd64","binary_sha256":{"rbm":"deadbeef","rbm-web":"` + strings.Repeat("a", 64) + `"}}]}`,
+			wantErr: "rbm",
 		},
 		{
 			name:    "no architectures at all",
@@ -84,8 +84,8 @@ func TestLoadReleaseManifest(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Arch(amd64): %v", err)
 				}
-				if got := entry.BinarySHA256["backup-manager"]; !strings.HasPrefix(got, "91d5727a") {
-					t.Fatalf("backup-manager hash = %q", got)
+				if got := entry.BinarySHA256["rbm"]; !strings.HasPrefix(got, "91d5727a") {
+					t.Fatalf("rbm hash = %q", got)
 				}
 				if _, err := m.Arch("arm64"); err == nil {
 					t.Fatal("Arch(arm64) succeeded on a manifest that only records amd64")

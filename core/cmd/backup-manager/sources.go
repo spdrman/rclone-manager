@@ -9,7 +9,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
-// cmdSources is `backup-manager sources`: a read-only dump of every
+// cmdSources is `rbm sources`: a read-only dump of every
 // configured source and backup set. It never opens the state journal or
 // touches a remote, since internal/app.Service.Sources reads only Config.
 //

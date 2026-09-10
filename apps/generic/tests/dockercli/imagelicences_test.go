@@ -191,7 +191,7 @@ func TestTheBuiltImageAnswersDockerInspectAboutItsLicence(t *testing.T) {
 	// And the directory the label names really is where they are. This
 	// copies the whole directory rather than the files one by one, which
 	// is what source-offer.md tells a recipient to do.
-	dir := declared["com.iasbuilt.backupmanager.licenses.path"]
+	dir := declared["com.iasbuilt.rclonemanager.licenses.path"]
 	if dir == "" {
 		t.Fatal("compliance.json declares no licences path label, so `docker inspect` tells a recipient the licence id and not where to read it")
 	}
@@ -237,7 +237,7 @@ func createContainer(t *testing.T, image string) string {
 	out, err := exec.Command("docker", "create",
 		"--name", name,
 		dockerlease.LabelFlag, dockerlease.LabelSpec,
-		image, "/backup-manager", "version",
+		image, "/rbm", "version",
 	).CombinedOutput()
 	if err != nil {
 		t.Fatalf("docker create: %v\n%s", err, out)

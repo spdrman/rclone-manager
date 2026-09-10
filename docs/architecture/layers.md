@@ -39,7 +39,7 @@ it; it does not own it.
 A **runtime profile** changes behaviour that genuinely depends on the host: a
 trusted native authentication gateway, a provider notification bridge, a launch
 or navigation bridge, platform capability reporting. Selected explicitly, for
-example `backup-manager serve --profile=generic`.
+example `rbm serve --profile=generic`.
 
 **A profile must never alter backup lifecycle semantics.** That is #81's wording
 and it is the line that separates a profile from a fork.

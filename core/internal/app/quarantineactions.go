@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // The four things an operator may do about a backup this manager stopped
@@ -98,15 +102,22 @@ func unconfiguredSet(set model.BackupSetID) error {
 // would be writing on a fact that may already be stale. So this reports,
 // ReinstateQuarantined re-measures and writes in one operation, and
 // neither one borrows the other's verdict.
+//
+// The state set is holdsAJudgementCall's, which includes FAILED, and issue
+// #662 is why. `retry` moves a quarantined artifact to DISCOVERED and the
+// next cycle can bounce it into FAILED without resolving anything; before
+// #662 that cost the operator this verb and `reinstate` both, on state
+// grounds alone, over an artifact whose durable copy was sitting intact at
+// its final name. Looking before deciding must not become unavailable
+// because the first thing an operator tried did not work.
 func (s *Service) RevalidateQuarantined(ctx context.Context, id model.ArtifactID) (ValidateResult, error) {
 	rec, err := s.Journal.Get(ctx, id)
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: revalidate: %w", err)
 	}
 
-	cur := lifecycle.State(rec.State)
-	if cur != lifecycle.Quarantined && cur != lifecycle.QuarantinedLost {
-		return ValidateResult{Artifact: id}, fmt.Errorf("%w: %s is %s", ErrNotQuarantined, id, cur)
+	if !holdsAJudgementCall(lifecycle.State(rec.State)) {
+		return ValidateResult{Artifact: id}, fmt.Errorf("%w: %s is %s", ErrNotQuarantined, id, rec.State)
 	}
 
 	_, bs, ok := s.backupSetConfigFor(id.Set)
@@ -179,8 +190,22 @@ func (s *Service) RetryQuarantinedIngestion(ctx context.Context, id model.Artifa
 	return nil
 }
 
-// RetryFailedIngestion puts one FAILED artifact back into DISCOVERED so
-// the ordinary pipeline attempts it again (issue #419).
+// RetryFailedIngestion re-attempts one FAILED artifact's ingestion (issue
+// #419).
+//
+// The ordinary outcome is DISCOVERED, so the next cycle walks the artifact
+// like any other newly-discovered one. There is a second outcome, and it
+// is issue #662's: an artifact whose own durable local copy sits at its
+// final name cannot be re-fetched past FR-12's collision guard, ever, so
+// its ingestion is completed in place instead and the artifact returns to
+// the durable state it already held. See completeIngestionInPlace, which
+// is where that whole decision and its argument live.
+//
+// Which of the two happened is not on the return value: a caller that has
+// to tell an operator reads the row back afterwards (`rbm retry` does).
+// Handing back only "no error" is what the API contract's own response for
+// this operation carries, and one method signature answering to two
+// surfaces is worth less than the row both of them can read.
 //
 // It is the FAILED counterpart of RetryQuarantinedIngestion above and is
 // deliberately a separate method rather than a widened one. The two refuse
@@ -219,8 +244,19 @@ func (s *Service) RetryFailedIngestion(ctx context.Context, id model.ArtifactID,
 	// configuration no longer names is one no cycle will ever walk, no
 	// longer FAILED so off that list, and unreachable by every recovery
 	// path there is.
-	if _, _, ok := s.backupSetConfigFor(id.Set); !ok {
+	src, bs, ok := s.backupSetConfigFor(id.Set)
+	if !ok {
 		return fmt.Errorf("app: retry failed ingestion: %w", unconfiguredSet(id.Set))
+	}
+
+	// Issue #662: for one shape of FAILED an ordinary retry cannot help,
+	// and sending the row round the pipeline again is the loop the issue
+	// was filed about.
+	switch settled, err := s.completeIngestionInPlace(ctx, rec, src, bs, note); {
+	case err != nil:
+		return err
+	case settled != "":
+		return nil
 	}
 
 	var recoveringFrom string
@@ -313,7 +349,7 @@ func (s *Service) ReinstateQuarantined(ctx context.Context, id model.ArtifactID,
 	}
 
 	cur := lifecycle.State(rec.State)
-	if !lifecycle.HasReinstatementExit(cur) {
+	if !holdsAJudgementCall(cur) {
 		return ReinstateResult{Artifact: id}, fmt.Errorf("%w: %s is %s", ErrNotQuarantined, id, cur)
 	}
 
@@ -336,6 +372,48 @@ func (s *Service) ReinstateQuarantined(ctx context.Context, id model.ArtifactID,
 		return result, nil
 	}
 
+	// A FAILED artifact has to be held for the judgement before the
+	// judgement can be recorded: reinstatement is only reachable from a
+	// quarantine state, and deliberately so (lifecycle.Transitions
+	// declares the two edges and nothing else takes them). The hop
+	// happens here rather than above the checks because `reinstate`
+	// writes nothing at all on a failing verdict, and that has to stay
+	// true for a FAILED artifact too.
+	//
+	// This is not decoration and the hop cannot be replaced with a direct
+	// FAILED -> COMMITTED (or -> REMOTE_RETAINED) edge, however tempting
+	// that looks once #663's badge fix makes the hop's own row stop
+	// misreporting as a fresh quarantine. FR-15's permanent forfeiture of
+	// the remote delete is not attached to this function; it is DERIVED
+	// from the edge shape, in machine.go's reinstatementEdges: every
+	// declared Transition whose From is a quarantine state and whose To
+	// is a durable restore point. FAILED is not a quarantine state, so a
+	// direct FAILED -> COMMITTED edge would be invisible to
+	// reinstatementEdges and to DeleteRemote's refusal built on it — an
+	// artifact re-trusted on this call's local hash comparison would stay
+	// remote-delete eligible, silently. And it would go unnoticed rather
+	// than merely unhandled:
+	// TestEveryQuarantineExitIntoADurableStateForfeitsRemoteDeletion
+	// computes its own coverage set from ReinstatementEdges(), so a new
+	// edge outside that derivation is not flagged as uncovered, it is
+	// simply never looked at. ADR 0004
+	// (docs/adr/0004-reinstating-a-quarantined-backup.md) already
+	// adjudicated this shape and rejected it for exactly that reason.
+	// Holding at QUARANTINED first is what keeps a FAILED artifact's
+	// reinstatement on the one edge shape the delete gate actually reads.
+	if cur == lifecycle.Failed {
+		if _, err := lifecycle.Advance(ctx, s.lifecycleDeps(), state.Transition{
+			Artifact: id,
+			Key:      fmt.Sprintf("app:reinstate-hold:%s:%s", id, s.now().Format(time.RFC3339Nano)),
+			From:     string(lifecycle.Failed),
+			To:       string(lifecycle.Quarantined),
+			Detail: "issue #662: an operator asked for this artifact's durable local copy to be trusted again while it was FAILED; " +
+				"holding it for that judgement, which is the only state a reinstatement is recorded from",
+		}); err != nil {
+			return result, fmt.Errorf("app: reinstate: holding %s for judgement: %w", id, err)
+		}
+	}
+
 	out, err := lifecycle.ReinstateFromQuarantine(ctx, s.lifecycleDeps(), lifecycle.QuarantineReinstateParams{
 		Artifact:   id,
 		AttemptKey: fmt.Sprintf("app:reinstate:%s:%s", id, s.now().Format(time.RFC3339Nano)),
@@ -349,4 +427,166 @@ func (s *Service) ReinstateQuarantined(ctx context.Context, id model.ArtifactID,
 	result.Reinstated = true
 	result.NewState = lifecycle.State(out.Record.State)
 	return result, nil
+}
+
+// holdsAJudgementCall is the set of states in which an artifact is waiting
+// on a person to say what its durable local copy is worth, and therefore
+// the set `quarantine revalidate` and `quarantine reinstate` answer for.
+//
+// FAILED is in it because of issue #662, and adding it is not a widening
+// of what those two verbs mean. The measured sequence was: reconciliation
+// quarantined an intact backup, the operator ran `retry`, the next cycle
+// met FR-12's final-name collision on the artifact's own durable copy and
+// recorded FAILED. Nothing in that sequence examined the file. The
+// artifact is in exactly the position QUARANTINED describes -- a durable
+// local copy only a person can rule on -- and the only thing that changed
+// is the label, because `retry` is the one door out of QUARANTINED and it
+// leads here. A verb that stops accepting an artifact for that reason has
+// taken away a recovery option and given nothing back.
+//
+// It is deliberately NOT lifecycle.IsExceptionalState, which is the same
+// three states for a different question (did this attempt produce a backup
+// this pipeline may trust). Sharing that predicate would tie two rules
+// together that have no reason to move in step.
+func holdsAJudgementCall(s lifecycle.State) bool {
+	return lifecycle.IsQuarantineState(s) || s == lifecycle.Failed
+}
+
+// completeIngestionInPlace finishes an ingestion whose only remaining
+// obstacle is the artifact's own durable local copy, and reports whether it
+// resolved the artifact.
+//
+// # The state this exists for
+//
+// Issue #662's dead end, measured on a live NAS. A good 294-byte file at
+// the artifact's final name; a journal row that recorded it as zero bytes;
+// FAILED, because `retry` sent the row back to DISCOVERED and the transfer
+// step's FR-12 collision guard refused to overwrite a file it cannot
+// identify. Every cycle after that refuses identically, so `retry` is a
+// loop: "a hundred cycles produce the same three failures".
+//
+// # Why the collision guard is not the thing that changes
+//
+// It is right. FR-12 must not clobber a file this manager cannot tell
+// apart from a known-good backup, and #662 says so explicitly. What was
+// missing is that the manager never established what the file is, although
+// it could: the artifact is a copy of a remote object, the object is still
+// there (that is what made a retry worth trying at all), and comparing the
+// two is what FR-13's verification tier does on every ingestion anyway.
+// So this re-runs that comparison against the file already at the final
+// name. Nothing is copied, nothing is overwritten, and the guard is
+// untouched.
+//
+// # Why an operator has to ask for it, rather than a cycle doing it
+//
+// It spends a remote hash. FR-31 already settles that shape for this
+// product: a check that costs a round trip to the far side per artifact is
+// operator-initiated, not something FR-17's every-cycle pass takes on
+// itself. `retry` is the operator initiating it, and it is the first verb
+// they reach for.
+//
+// # What it does not do
+//
+// It does not decide the artifact is good on anything less than that
+// comparison. A hash the transport cannot supply, a hash that does not
+// match, or no file at the final name at all, and this settles nothing
+// (an empty state) so the caller falls through to the ordinary retry with
+// today's behaviour exactly: a mismatch is not evidence enough to re-trust
+// a copy, and it is not this function's business to invent a new refusal
+// for it either. What the operator gets in those cases is the measurement,
+// in the FR-23 log, which is more than #662 gave them.
+func (s *Service) completeIngestionInPlace(
+	ctx context.Context, rec state.Record, src config.Source, bs config.BackupSet, note string,
+) (lifecycle.State, error) {
+	id := rec.Artifact
+	final, err := lifecycle.FinalArtifactPath(bs.LocalPath, id)
+	if err != nil {
+		return "", nil
+	}
+	// The row's own recorded local path being the occupied final name is
+	// what makes this the artifact's own durable copy rather than a stray
+	// file: only the durable commit ever records that path. A stray file
+	// leaves the collision exactly where FR-12 put it.
+	if rec.LocalPath != final {
+		return "", nil
+	}
+	if _, statErr := os.Stat(final); statErr != nil {
+		return "", nil
+	}
+	if s.Transport == nil {
+		return "", nil
+	}
+
+	localHash, err := sha256File(final)
+	if err != nil {
+		s.logger().Error(ctx, "retry-failed", fmt.Errorf("hashing %s's durable local copy at %s: %w", id, final, err))
+		return "", nil
+	}
+	remoteHash, err := s.Transport.RemoteHash(ctx, sourceFor(s.Config, src, bs), rec.RemotePath, transport.SHA256)
+	if err != nil {
+		s.logger().Error(ctx, "retry-failed", fmt.Errorf(
+			"asking the remote for %s's sha256 to settle whether %s is already that object: %w", rec.RemotePath, final, err))
+		return "", nil
+	}
+	if !strings.EqualFold(localHash, remoteHash) {
+		s.logger().Error(ctx, "retry-failed", fmt.Errorf(
+			"%s hashes to %s and the remote object %s hashes to %s, so the file at the final name is not this artifact's remote copy",
+			final, localHash, rec.RemotePath, remoteHash))
+		return "", nil
+	}
+
+	// The comparison FR-13 would have made has been made, and it passed.
+	// Recording it is what repairs the row #662 left behind: a size and a
+	// hash that describe the bytes at the final name, replacing the empty
+	// read-back's answer, which is also what stops the next reconciliation
+	// pass condemning the file on it.
+	//
+	// A stat that fails here is a hard failure, not one of the quiet
+	// declines above. Those mean "this is not the in-place case" and are
+	// right to write nothing and say nothing; this one means the case IS
+	// the in-place one and the measurement broke, on a file this same
+	// call read end to end a moment ago. Substituting a zero would put a
+	// byte count nothing measured beside a content hash with the
+	// checksummed flag set -- issue #662's own record, written by the
+	// code that exists to repair it, after which reconciliation condemns
+	// the file on it exactly as the issue describes. An operator can
+	// repeat a refusal; they cannot un-write a journal row.
+	info, statErr := os.Stat(final)
+	if statErr != nil {
+		return "", fmt.Errorf(
+			"app: retry failed ingestion: %s hashed clean a moment ago but measuring it failed: %w; "+
+				"refusing to record a byte count this manager did not measure (issue #662)", final, statErr)
+	}
+	size := info.Size()
+	if _, err := lifecycle.Advance(ctx, s.lifecycleDeps(), state.Transition{
+		Artifact: id,
+		Key:      fmt.Sprintf("app:retry-failed-in-place:%s:%s", id, s.now().Format(time.RFC3339Nano)),
+		From:     string(lifecycle.Failed),
+		To:       string(lifecycle.Failed),
+		Transfer: &state.TransferResult{BytesTransferred: size, Checksummed: true},
+		Hashes:   &state.HashUpdate{Hash: localHash, Alg: string(transport.SHA256)},
+		Detail: fmt.Sprintf(
+			"issue #662: an ordinary retry cannot get past this artifact's own durable copy at %s, so the copy was compared with the "+
+				"remote object instead: both are sha256 %s, %d bytes. Recorded that as this artifact's verified local identity, "+
+				"replacing the record the transfer left",
+			final, localHash, size),
+	}); err != nil {
+		return "", fmt.Errorf("app: retry failed ingestion: recording what %s's durable copy measures: %w", id, err)
+	}
+
+	// One door out, not two. The reinstatement path is the only place this
+	// product ever re-trusts a durable local copy, and going through it is
+	// what makes FR-15's permanent delete forfeiture apply here too: an
+	// artifact whose local copy was trusted on evidence rather than
+	// re-fetched never authorises a remote delete again.
+	res, err := s.ReinstateQuarantined(ctx, id, note)
+	if err != nil {
+		return "", fmt.Errorf("app: retry failed ingestion: %s: %w", id, err)
+	}
+	if !res.Reinstated {
+		return "", fmt.Errorf(
+			"app: retry failed ingestion: %s: its durable local copy at %s is byte-identical to the remote object (sha256 %s) but the "+
+				"reinstatement checks did not pass: %s", id, final, localHash, res.Reason)
+	}
+	return res.NewState, nil
 }

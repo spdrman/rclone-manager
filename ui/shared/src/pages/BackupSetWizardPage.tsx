@@ -603,7 +603,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
     saveHint =
       connectionResult !== null && !connectionResult.ok
         ? "The connection test did not pass. Fix what it reports and test connection again before saving."
-        : "Test connection before saving. Trusting the host key proves which machine answers, not that this key works or that the folder can be read. To build configuration for a source that cannot be reached yet, use backup-manager backup-set create --no-verify.";
+        : "Test connection before saving. Trusting the host key proves which machine answers, not that this key works or that the folder can be read. To build configuration for a source that cannot be reached yet, use rbm backup-set create --no-verify.";
   } else if (saveError) {
     saveHint = saveError;
   }

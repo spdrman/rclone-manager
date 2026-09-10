@@ -169,7 +169,7 @@ describe("the dashboard's run control", () => {
     // because the remediation sentence names the command too and a match
     // on that would pass with nothing to copy.
     const command = document.querySelector("pre");
-    expect(command?.textContent).toContain("backup-manager run");
+    expect(command?.textContent).toContain("rbm run");
     // The id somebody copies into a support message, behind the sentence
     // rather than inside it.
     expect(screen.getByText("cid_gate_1")).toBeTruthy();
@@ -280,7 +280,7 @@ describe("the per-set run control", () => {
   }
 
   // The control this page has never had. The engine half has existed
-  // since FR-1 behind `backup-manager fetch --backup-set`; what was
+  // since FR-1 behind `rbm fetch --backup-set`; what was
   // missing was a way to reach it from a browser.
   it("runs exactly the set on screen, by its full source/backup-set id", async () => {
     const runBackupSet = vi.fn<BackupManagerApi["runBackupSet"]>(() => Promise.resolve());
@@ -326,7 +326,7 @@ describe("the per-set run control", () => {
     // id `--backup-set` has taken since #569, so it pastes into a shell
     // without being split by hand.
     const command = document.querySelector("pre");
-    expect(command?.textContent).toContain("backup-manager fetch --backup-set " + target.id);
+    expect(command?.textContent).toContain("rbm fetch --backup-set " + target.id);
   });
 
   // The owner's rule, explicitly: when a deployment-wide run is refused,

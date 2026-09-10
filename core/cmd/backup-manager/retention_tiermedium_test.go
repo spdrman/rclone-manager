@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// `backup-manager retention --tier` and the destination it could not name
+// `rbm retention --tier` and the destination it could not name
 // (EPIC G, G2.3, issue #595).
 //
 // RetentionTier.Medium's own doc deferred this: "an override replaces the

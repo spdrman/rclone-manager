@@ -2,7 +2,7 @@
 # runs on, playing the NAS, with the toolchain to run core/tests inside it
 # and a docker client to reach the daemon that stands the other machines up.
 #
-# The Go version tracks core/go.mod. scripts/e2e/run-machine-tier.sh reads
+# The Go version tracks core/go.mod. scripts/rcmtools/e2e/run_machine_tier.py reads
 # the go directive and passes it as a build argument rather than guessing,
 # so a bumped directive fails loudly here instead of silently compiling the
 # tier against an older toolchain.
@@ -25,8 +25,8 @@
 # openssh-client because the machine tier generates its key material with
 # ssh-keygen and records host keys with ssh-keyscan exactly as it does on a
 # developer's machine, and netcat because the connection-cap probe uses it.
-# See run-machine-tier.sh's header for why this container gets a socket and
-# two-machine-backup.sh's manager deliberately does not.
+# See run_machine_tier.py's header for why this container gets a socket and
+# two_machine_backup.py's manager deliberately does not.
 ARG GO_VERSION
 FROM docker:28-cli AS cli
 

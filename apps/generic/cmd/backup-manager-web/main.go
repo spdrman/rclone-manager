@@ -1,4 +1,4 @@
-// Command rbm-web is the generic Web host's own executable
+// Command backup-manager-web is the generic Web host's own executable
 // (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2): it runs alongside the
 // CLI (core/cmd/backup-manager, unchanged by this issue) inside the same
 // canonical OCI image, and adds what that binary does not have: `serve`
@@ -9,12 +9,12 @@
 //
 // It is `rbm-web` to an operator and this directory is still
 // cmd/backup-manager-web, for the same reason `rbm` lives in
-// cmd/backup-manager: the image symlinks the old name beside the new one,
-// and a Go package path is not something anybody types. Every name this
-// binary prints for itself comes from core/cliecho.WebBinary, and the
-// whole of that argument is in core/cliecho/cliname.go. selfname_test.go
-// beside this file is what keeps it that way, and says why the paths
-// under /etc and the image reference deliberately do not follow.
+// cmd/backup-manager: a Go package path is not operator-visible, and
+// core/cliecho/cliname.go says so explicitly. Every name this binary
+// prints for itself comes from core/cliecho.WebBinary rather than a
+// literal, so the two cannot drift. selfname_test.go beside this file is
+// what keeps it that way, and says why the paths under /etc and the image
+// reference deliberately do not follow.
 //
 // These two run as SEPARATE CONTAINERS in production
 // (container/compose.yaml), from the SAME image: `serve` has no

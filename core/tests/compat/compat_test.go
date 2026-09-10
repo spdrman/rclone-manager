@@ -411,7 +411,7 @@ func TestSaveRoundTripsWhatItWasGiven(t *testing.T) {
 // leave every other field on it, including the two that a corpus is
 // supposed to go red over, the build's version and the embedded rclone's.
 func TestNormalizeEventTimeTakesTheClockAndNothingElse(t *testing.T) {
-	const line = `{"time":"2026-09-06T19:49:05.212202Z","level":"INFO","msg":"backup-manager starting","event":"startup","version":"dev","commit":"none","go_version":"go1.24.0"}`
+	const line = `{"time":"2026-09-06T19:49:05.212202Z","level":"INFO","msg":"rbm starting","event":"startup","version":"dev","commit":"none","go_version":"go1.24.0"}`
 
 	got := normalizeEventTime(line)
 	if strings.Contains(got, "2026-09-06T19:49:05") {

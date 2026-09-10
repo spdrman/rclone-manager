@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  BackendCatalog,
   BackupManagerApi,
   BackupSetRetention,
   CapacitySettings,
@@ -13,6 +14,7 @@ import type {
   MediumPreflight,
   MediumPreflightCheck,
   StorageMedium,
+  StorageMediumConfiguration,
   StorageMediumSpec,
   StorageMediumUsage,
   RetentionOverride,
@@ -273,16 +275,42 @@ export function resetMockFixtures(): void {
   }
 }
 
+/**
+ * The artifacts the dev server and the screenshots run on.
+ *
+ * Every id here is `setId + "/" + filename`, because that is what an
+ * artifact id is: model.ArtifactID.String() (core/internal/model/ids.go)
+ * is BackupSetID.String() + "/" + name, and BackupSetID.String() is
+ * source + "/" + set. These used to be flat opaque tokens
+ * ("art_01J9F4M2QK8Z"), which no deployment has ever produced, and the
+ * cost of that was not cosmetic: the artifact route declared one path
+ * segment, which is unreachable with a real id and perfectly reachable
+ * with these, so five cases asserted their way through a page nobody
+ * could open on a real deployment and the Web UI suite stayed green over
+ * #677 until it was pointed at a real one. #285 corrected the same
+ * unreality in the SETS array above for the same reason.
+ *
+ * `state` is not free either, and it is the same lesson one field over:
+ * it is the lifecycle state the journal holds, and every other field on
+ * the row is a reading of that same row. A backend derives `quarantined`
+ * FROM the state and nothing else (core/service/artifacts.go), so a
+ * fixture that is QUARANTINED without a quarantine record, or carries
+ * one without being in that state, is a shape no server can produce.
+ * #662 is what a fixture that lies costs: a recovery card was gated on a
+ * combination only a fixture had, so it passed its test and rendered for
+ * no real backup.
+ */
 const ARTIFACTS: BackupArtifact[] = [
   {
-    id: "art_01J9F4M2QK8Z", setId: "production/postgres-primary", setName: "Production PostgreSQL",
+    id: "production/postgres-primary/postgres-prod-20260828.dump.zst",
+    setId: "production/postgres-primary", setName: "Production PostgreSQL",
     filename: "postgres-prod-20260828.dump.zst",
     remoteOriginalPath: "prod-db-01:/backups/postgresql/postgres-prod-20260828.dump.zst",
     localPath: "/data/backups/production/postgres/2026/08/postgres-prod-20260828.dump.zst",
     producedAt: "2026-08-28T01:58:44+02:00", receivedAt: "2026-08-28T02:00:53+02:00",
     sizeBytes: 15246903296,
     checksum: "4f2a9c1e7b6d0835ae91cf4d2b7801e6c35a9f18d4b27e60ac139f5b8e2d7a04",
-    checksumAlgorithm: "sha256", validation: "verified",
+    checksumAlgorithm: "sha256", state: "COMPLETE", validation: "verified",
     retentionClasses: ["daily", "weekly", "protected"],
     retentionPolicy: "configured",
     remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null,
@@ -307,14 +335,15 @@ const ARTIFACTS: BackupArtifact[] = [
     ]
   },
   {
-    id: "art_01J9F2A7BC44", setId: "production/billing-mysql", setName: "Billing MySQL",
+    id: "production/billing-mysql/billing-20260827.sql.gz",
+    setId: "production/billing-mysql", setName: "Billing MySQL",
     filename: "billing-20260827.sql.gz",
     remoteOriginalPath: "billing-db:/srv/backups/mysql/billing-20260827.sql.gz",
     localPath: "/data/backups/production/billing/2026/08/billing-20260827.sql.gz",
     producedAt: "2026-08-27T01:55:00+02:00", receivedAt: "2026-08-27T02:00:41+02:00",
     sizeBytes: 3650722201,
     checksum: "b81c0d5f4a29e7136c8b0f2d97a4e5106d3b7c8290fa41e6b52d7c3a9018ef42",
-    checksumAlgorithm: "sha256", validation: "verified",
+    checksumAlgorithm: "sha256", state: "COMPLETE", validation: "verified",
     retentionClasses: ["daily", "weekly"],
     retentionPolicy: "configured",
     remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null,
@@ -332,14 +361,15 @@ const ARTIFACTS: BackupArtifact[] = [
     ]
   },
   {
-    id: "art_01J9E8QP4R21", setId: "production/auth-config", setName: "Auth service config",
+    id: "production/auth-config/auth-config-20260826.tar.zst",
+    setId: "production/auth-config", setName: "Auth service config",
     filename: "auth-config-20260826.tar.zst",
     remoteOriginalPath: "prod-db-01:/etc/auth-service/backups/auth-config-20260826.tar.zst",
     localPath: "/data/backups/production/auth/quarantine/auth-config-20260826.tar.zst",
     producedAt: "2026-08-26T04:10:00+02:00", receivedAt: "2026-08-26T04:13:52+02:00",
     sizeBytes: 44040192,
     checksum: "c19f3ba7d0428e6591cf7d3b2801ea64c58a9f13d4b72e06ac931f5b8e7d2a40",
-    checksumAlgorithm: "sha256", validation: "failed",
+    checksumAlgorithm: "sha256", state: "QUARANTINED", validation: "failed",
     retentionClasses: ["daily"],
     retentionPolicy: "configured", remoteSourceRemovedAt: null,
     // Remote original stays put. Quarantine never triggers remote deletion.
@@ -361,14 +391,15 @@ const ARTIFACTS: BackupArtifact[] = [
     ]
   },
   {
-    id: "art_01J9C1XY7T09", setId: "production/billing-mysql", setName: "Billing MySQL",
+    id: "production/billing-mysql/billing-20260824.sql.gz",
+    setId: "production/billing-mysql", setName: "Billing MySQL",
     filename: "billing-20260824.sql.gz",
     remoteOriginalPath: "billing-db:/srv/backups/mysql/billing-20260824.sql.gz",
     localPath: "/data/backups/production/billing/quarantine/billing-20260824.sql.gz",
     producedAt: "2026-08-24T01:55:00+02:00", receivedAt: "2026-08-24T02:17:30+02:00",
     sizeBytes: 3543348838,
     checksum: "e42b9c8f1a370d6512cf4b7d2098ae31c67d5f0a9b8241e3c07d5b6a2f918d04",
-    checksumAlgorithm: "sha256", validation: "failed",
+    checksumAlgorithm: "sha256", state: "QUARANTINED", validation: "failed",
     retentionClasses: [],
     retentionPolicy: "configured", remoteSourceRemovedAt: null,
     quarantine: {
@@ -392,14 +423,15 @@ const ARTIFACTS: BackupArtifact[] = [
     ]
   },
   {
-    id: "art_01J98MN3V5KK", setId: "media/weekly-archive", setName: "Media archive",
+    id: "media/weekly-archive/media-week34.tar",
+    setId: "media/weekly-archive", setName: "Media archive",
     filename: "media-week34.tar",
     remoteOriginalPath: "media-01:/export/weekly/media-week34.tar",
     localPath: "/data/backups/media/2026/w34/media-week34.tar",
     producedAt: "2026-08-25T01:00:00+02:00", receivedAt: "2026-08-25T04:41:19+02:00",
     sizeBytes: 1770035712819,
     checksum: "0a7c2e91b8d54f36ac1b9f0d27e4a5163d8b7c0f92a41e6b53d7c2a90187ef43",
-    checksumAlgorithm: "sha256", validation: "verified",
+    checksumAlgorithm: "sha256", state: "COMPLETE", validation: "verified",
     retentionClasses: ["weekly"],
     retentionPolicy: "configured",
     remoteSourceRemovedAt: "2026-08-25T04:43:02+02:00", quarantine: null,
@@ -421,14 +453,15 @@ const ARTIFACTS: BackupArtifact[] = [
     // and it holds fourteen gigabytes until somebody deletes the file by
     // hand. It is otherwise a perfectly healthy, verified backup, which
     // is exactly what makes it hard to spot without the marker.
-    id: "art_01J8XK6D9P30", setId: "production/legacy-redis", setName: "Legacy Redis (removed)",
+    id: "production/legacy-redis/redis-20260812.rdb.zst",
+    setId: "production/legacy-redis", setName: "Legacy Redis (removed)",
     filename: "redis-20260812.rdb.zst",
     remoteOriginalPath: "legacy-redis-01:/var/backups/redis/redis-20260812.rdb.zst",
     localPath: "/data/backups/production/legacy-redis/2026/08/redis-20260812.rdb.zst",
     producedAt: "2026-08-12T03:30:00+02:00", receivedAt: "2026-08-12T03:34:27+02:00",
     sizeBytes: 14293651456,
     checksum: "7d0e4b91cf2a8635ae10df4b27c9015e6a3b8f2d94c17e05bd236a9f8e410c73",
-    checksumAlgorithm: "sha256", validation: "verified",
+    checksumAlgorithm: "sha256", state: "COMPLETE", validation: "verified",
     // The journal still remembers which tier last selected it, and no
     // chain will ever look at it again, so the cell shows the consequence
     // instead of the stale claim.
@@ -624,7 +657,7 @@ const LIVE_ACTIVITY: SetActivity[] = [
  * every set, and this fixture is where that split is visible without a
  * running engine. It carries what the global terminal is for: the cycle's
  * own brackets, an error nothing could attribute, and the actions taken
- * in the browser with the `backup-manager` command each one is equivalent
+ * in the browser with the `rbm` command each one is equivalent
  * to. */
 const LIVE_DEPLOYMENT: DeploymentActivity = {
   unfinishedActions: [{ action: "cycle", actionId: "c_1", startedAt: "2026-08-29T02:01:11+02:00", sequence: 1 }],
@@ -643,7 +676,7 @@ const LIVE_DEPLOYMENT: DeploymentActivity = {
         actor: "admin",
         route: "PATCH /api/v1/backup-sets/{source}/{set}",
         status: "200",
-        command: "backup-manager backup-set patch production/auth-config --stale-after 48h"
+        command: "rbm backup-set patch production/auth-config --stale-after 48h"
       },
       "info",
       "deployment",
@@ -657,7 +690,7 @@ const LIVE_DEPLOYMENT: DeploymentActivity = {
         actor: "admin",
         route: "POST /api/v1/backup-sets/test-connection",
         status: "200",
-        command_gap: "no backup-manager equivalent yet",
+        command_gap: "no rbm equivalent yet",
         command_gap_detail: "there is no verb that tests a connection before a set exists"
       },
       "info",
@@ -1151,6 +1184,173 @@ const VALIDATORS: ValidatorCatalogEntry[] = [
 ];
 
 /**
+ * The backend catalogue this fixture serves (EPIC I, #664), transcribed
+ * from core/internal/backend/bundled/*.json field for field.
+ *
+ * A literal for VALIDATORS' reason, and one step more strongly: on the
+ * backend it is not per-deployment data either, it is JSON embedded at
+ * build time. Transcribed in full rather than abridged, because an
+ * abridged fixture cannot show the thing a manifest-driven form is for —
+ * the seven kinds, the enum choice sets, the unset_means sentences, and
+ * the skipped probe steps with their reasons. A picker driven by three
+ * fields and no help text renders green here and wrong against the real
+ * registry.
+ *
+ * `unregistered` carries sftp because the engine's transport layer asks
+ * for it (FR-4's RequiredBackends) and no manifest declares it, which is
+ * exactly the "understood, not registered" row #668's picker dims.
+ */
+const BACKEND_CATALOG: BackendCatalog = {
+  registered: [
+    {
+      id: "local_volume",
+      label: "Local volume",
+      summary:
+        "A directory on a disk this NAS can see. A second internal drive, a USB disk, or an already-mounted network share.",
+      role: "local_volume",
+      fields: [
+        {
+          id: "path",
+          label: "Directory",
+          help: "An absolute path this service can write to. A volume that is not mounted looks exactly like an empty directory, so the connection test writes a file and reads it back.",
+          kind: "path",
+          required: true
+        },
+        {
+          id: "prefix",
+          label: "Subdirectory",
+          help: "A namespace inside the directory, so one volume can hold more than this product's artifacts. Leave empty to write at the top.",
+          kind: "key_prefix",
+          required: false
+        },
+        {
+          id: "upload_verification",
+          label: "How a copy is proven",
+          kind: "enum",
+          required: false,
+          unsetMeans: "readback",
+          values: [
+            { value: "readback", label: "Read the copy back and re-hash it" },
+            { value: "attested", label: "Believe the destination's own digest" }
+          ]
+        }
+      ],
+      probe: {
+        steps: [
+          {
+            step: "credentials",
+            run: false,
+            reason:
+              "a local destination reads no credential: the backups are written by this service to a directory on this machine."
+          },
+          { step: "reach", run: true },
+          { step: "deliverable", run: true },
+          { step: "write", run: true },
+          { step: "read_back", run: true },
+          {
+            step: "storage_class",
+            run: false,
+            reason:
+              "a filesystem has no storage classes, so there is nothing here that could have landed in a different one than the configuration asked for."
+          },
+          { step: "verification", run: true },
+          { step: "delete", run: true }
+        ]
+      }
+    },
+    {
+      id: "s3",
+      label: "S3 or S3-compatible",
+      summary:
+        "Amazon S3, or any service that speaks its API: MinIO, Ceph, Backblaze B2, Wasabi, a private gateway.",
+      role: "object_store",
+      fields: [
+        {
+          id: "bucket",
+          label: "Bucket",
+          help: "A bucket with no key namespace in it. A subdirectory inside the bucket belongs in the prefix field.",
+          kind: "string",
+          required: true,
+          pattern: "^[^/]+$"
+        },
+        {
+          id: "region",
+          label: "Region",
+          help: "Passed to the provider unexamined. This product holds no list of legal regions, because a list here would be a second, staler copy that refuses a region that works.",
+          kind: "string",
+          required: false
+        },
+        {
+          id: "endpoint",
+          label: "Endpoint",
+          help: "Only for an S3-compatible service. Leave empty for Amazon's own endpoint for the region.",
+          kind: "url",
+          required: false
+        },
+        {
+          id: "prefix",
+          label: "Key namespace",
+          help: "So one bucket can hold more than this product's artifacts. Leave empty to write at the root.",
+          kind: "key_prefix",
+          required: false
+        },
+        {
+          id: "storage_class",
+          label: "Storage class",
+          kind: "enum",
+          required: false,
+          unsetMeans: "STANDARD",
+          values: [
+            { value: "STANDARD", label: "Standard" },
+            { value: "STANDARD_IA", label: "Standard, infrequent access" },
+            { value: "ONEZONE_IA", label: "One zone, infrequent access" },
+            { value: "INTELLIGENT_TIERING", label: "Intelligent tiering" },
+            { value: "GLACIER_IR", label: "Glacier instant retrieval" },
+            { value: "GLACIER", label: "Glacier (a restore takes hours)" },
+            { value: "DEEP_ARCHIVE", label: "Deep Archive (a restore takes hours)" }
+          ]
+        },
+        {
+          id: "upload_verification",
+          label: "How a copy is proven",
+          kind: "enum",
+          required: false,
+          unsetMeans: "readback",
+          values: [
+            { value: "readback", label: "Download the copy again and re-hash it" },
+            { value: "attested", label: "Believe the destination's own full-object digest" }
+          ]
+        },
+        {
+          id: "credentials",
+          label: "Access key",
+          help: "Stored once, in a file only this service can read. It is never shown again and never leaves this host in a response.",
+          kind: "credential",
+          required: true
+        }
+      ],
+      probe: {
+        steps: [
+          { step: "credentials", run: true },
+          { step: "reach", run: true },
+          { step: "deliverable", run: true },
+          { step: "write", run: true },
+          { step: "read_back", run: true },
+          { step: "storage_class", run: true },
+          { step: "verification", run: true },
+          { step: "delete", run: true }
+        ]
+      }
+    }
+  ],
+  unregistered: [{ transport: "sftp" }],
+  // config.StorageMediumIDPattern, which is RetentionTierNamePattern
+  // itself rather than a second copy of the same expression.
+  instanceIdPattern: "^[a-z][a-z0-9_]*$",
+  reservedInstanceId: "local"
+};
+
+/**
  * The settings fixture GET/PATCH /api/v1/settings serves here.
  *
  * `retention.tiers` is the RESOLVED default chain, spelled exactly the
@@ -1198,10 +1398,20 @@ function defaultSettings(): AppSettings {
       protectLastKnownGood: true
     },
     capacity: defaultCapacitySettings(),
-    // The local hard drive leads, then two declared mediums, one of them
-    // an archive class, so the dev server shows all three halves of the
-    // picker: the drive backups already land on, a place that serves on
-    // demand, and a place that cannot be read at all without a restore.
+    // The local hard drive leads, then a second local volume, then two
+    // buckets, one of them an archive class. Four rows and two backends,
+    // which is what makes this fixture able to show the thing EPIC I
+    // (#664) is about: a destination is an INSTANCE of a backend, and two
+    // instances of one backend is the ordinary case rather than an edge.
+    // A fixture with one local entry renders a destinations list that
+    // looks exactly as it did when "local" was a hardcoded special case
+    // and there could only ever be one of it, so every surface built on
+    // the registry goes green here without ever drawing its own point.
+    //
+    // `usb_shelf` is DECLARED, which is the whole difference: it carries
+    // its own directory, it is not the reserved entry, so it has an Edit
+    // and a Remove and can be handed the default. The reserved entry
+    // above it has neither, for the reason DestinationRow's doc gives.
     //
     // The local entry is here rather than synthesised by the mock's own
     // list call, because it is part of the settings response on a real
@@ -1215,6 +1425,12 @@ function defaultSettings(): AppSettings {
         id: LOCAL_DESTINATION_ID, type: "local", bucket: "", path: "/data/backups",
         storageClass: "", uploadVerification: "readback",
         readsRequireRestore: false, isLocal: true, isDefault: true,
+        connectionUnverified: false
+      },
+      {
+        id: "usb_shelf", type: "local_volume", bucket: "", path: "/mnt/usb-shelf",
+        prefix: "artifacts", storageClass: "", uploadVerification: "readback",
+        readsRequireRestore: false, isLocal: false, isDefault: false,
         connectionUnverified: false
       },
       {
@@ -1664,6 +1880,11 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       });
     },
     listValidators: (): Promise<ValidatorCatalogEntry[]> => delay(VALIDATORS.map((v) => ({ ...v }))),
+    // structuredClone rather than a shallow copy: the catalogue is
+    // nested three deep, and a fixture that handed out shared field
+    // objects would let one caller's mutation reach the next one's
+    // render.
+    listBackends: (): Promise<BackendCatalog> => delay(structuredClone(BACKEND_CATALOG)),
     importSSHKey: (): Promise<SSHKeyImportResult> =>
       delay({ id: "key_mock_" + Math.random().toString(36).slice(2, 10), algorithm: "ssh-ed25519", fingerprint: mockImportedKeyFingerprint }),
     probeHostKey: (): Promise<HostKeyProbeResult> =>
@@ -1701,7 +1922,25 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
 
     listArtifacts: (setId) =>
       delay(empty ? [] : artifacts.filter((a) => !a.quarantine && (!setId || a.setId === setId))),
-    getArtifact: (id) => delay(artifacts.find((a) => a.id === id) ?? artifacts[0]),
+    // An id this fixture does not have is a refusal, not the first
+    // artifact. The fallback that used to be here answered every wrong id
+    // with a real page about somebody else's backup, which is the same
+    // class of untruth as the flat ids above and hides the same bugs: a
+    // route that dropped a segment, an escape that was lost, an id
+    // reassembled in the wrong order would all render happily. A real
+    // deployment answers 404 (#677).
+    getArtifact: (id) => {
+      const found = artifacts.find((a) => a.id === id);
+      return found
+        ? delay(found)
+        : delay(null).then(() => {
+            throw new BackupManagerError({
+              code: "ARTIFACT_NOT_FOUND",
+              message: "no backup with id " + id,
+              correlationId: "cid_mock404"
+            });
+          });
+    },
 
     listOperations: () => delay(empty ? [] : OPERATIONS),
     listActivity: () =>
@@ -2056,6 +2295,81 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       return delay(structuredClone(medium), 400);
     },
 
+    // Issue #669. The projection is the inverse of `mediumConfigured`
+    // below and lives beside it, so this fixture cannot report a
+    // configuration it would not accept back. An unset field is ABSENT
+    // rather than present as its unset_means value (#294), which is what
+    // makes a form able to show "unset - read as STANDARD" instead of
+    // claiming STANDARD was chosen.
+    getStorageMediumConfiguration: (mediumId) => {
+      const medium = settings.mediums.find((m) => m.id === mediumId);
+      if (!medium) return Promise.reject(mediumNotFound());
+      const fields: Record<string, string> = {};
+      if (medium.bucket) fields.bucket = medium.bucket;
+      if (medium.region) fields.region = medium.region;
+      if (medium.endpoint) fields.endpoint = medium.endpoint;
+      if (medium.prefix) fields.prefix = medium.prefix;
+      if (medium.storageClass) fields.storage_class = medium.storageClass;
+      if (medium.uploadVerification) fields.upload_verification = medium.uploadVerification;
+      // A local destination reads no credential, which is a fact about
+      // the manifest and not about this fixture's data: a boolean here
+      // is the most that may be said either way (FR-33).
+      return delay({ fields, credentialConfigured: !medium.isLocal }, 200);
+    },
+
+    // Issue #669. The values map is applied through the same projection
+    // the real service uses in spirit - one field id to one named field -
+    // so this fixture cannot be configured into a state the engine would
+    // describe differently. `mediumConfigured` is where that mapping
+    // lives, once, for both operations.
+    //
+    // An id this fixture does not hold is the CREATE, and it is the whole
+    // of the add flow: nothing is declared until the probe has passed
+    // (P2, #669), so the destination this probe is about does not exist
+    // yet by construction. Refusing it with MEDIUM_NOT_FOUND, which is
+    // what this did, made the create path unreachable in dev and in every
+    // browser case that drove it - the wizard's own test step answered
+    // "nothing was written" and could never reach Save. The unsaved
+    // record it projects is the same one `configureStorageMedium` writes,
+    // through the same helper, so the fixture cannot prove one shape and
+    // then store another.
+    preflightStorageMediumConfiguration: (mediumId, config) => {
+      const at = settings.mediums.findIndex((m) => m.id === mediumId);
+      const declared =
+        at < 0
+          ? config.backend
+            ? mockUndeclaredMedium(mediumId, config.backend)
+            : null
+          : settings.mediums[at];
+      if (declared === null) return Promise.reject(mediumNotFound());
+      return delay(
+        mockPreflightFor({
+          ...mediumConfigured(declared, config),
+          // A probe writes nothing whatever it answers, so it never
+          // carries the mark: the mark is what a WRITE records about the
+          // check it did not run.
+          connectionUnverified: false
+        }),
+        700
+      );
+    },
+
+    configureStorageMedium: (mediumId, config) => {
+      const at = settings.mediums.findIndex((m) => m.id === mediumId);
+      // Create-or-replace, because a destination cannot exist
+      // unconfigured (P2, #669). An id this fixture does not hold is the
+      // create, and the request has to have named a backend for it.
+      if (at < 0) {
+        if (!config.backend) return Promise.reject(mediumNotFound());
+        const created = mediumConfigured(mockUndeclaredMedium(mediumId, config.backend), config);
+        settings.mediums.push(created);
+        return delay(structuredClone(created), 400);
+      }
+      const medium = mediumConfigured(settings.mediums[at], config);
+      settings.mediums[at] = medium;
+      return delay(structuredClone(medium), 400);
+    },
+
     // FR-30: refused while any copy names it, with the count and the sets
     // in the message, because "148 copies affected" with nothing listed is
     // a number rather than a report.
@@ -2073,14 +2387,14 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             "confirmed copy of their artifact anywhere",
           correlationId: "cid_mockmedium409inuse"
         }));
-      if (settings.mediums[at].isLocal)
-        return Promise.reject(new BackupManagerError({
-          code: "MEDIUM_IS_DEFAULT",
-          message:
-            "service: storage medium is this deployment's default destination: local is the drive this deployment's " +
-            "backups land on. It is not declared in the configuration and cannot be un-declared",
-          correlationId: "cid_mockmedium409local"
-        }));
+      // There is deliberately no local-shaped refusal here any more
+      // (#670 deleted the engine's, #671 made the state reachable from
+      // the browser). local is a declared destination — instance zero of
+      // the local_volume backend — and it is undeletable exactly when,
+      // and because, it is the default, which the rule below this one
+      // states for every destination alike. A fixture that went on
+      // refusing it by name would teach a rule the engine no longer has,
+      // and would do it on the surface developers look at first.
       if (settings.mediums[at].isDefault)
         return Promise.reject(new BackupManagerError({
           code: "MEDIUM_IS_DEFAULT",
@@ -2140,9 +2454,16 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   return refusingWhileUnconfigured(api, () => configured);
 }
 
-// mockPreflightFor builds the eight-step report both preflight fixtures
-// answer with, so the by-id check and the candidate check cannot drift
-// into two different ideas of what a report looks like.
+// mockPreflightFor builds the report both preflight fixtures answer with,
+// so the by-id check and the candidate check cannot drift into two
+// different ideas of what a report looks like.
+//
+// It branches on the PLACE this destination carries rather than on which
+// backend it is, the same rule describeDestination follows and for the
+// same reason (EPIC I, #664): a destination on a local volume has no
+// bucket and no storage class, and a report that named one anyway would
+// describe a bucket nobody declared. An arm per backend type is the arm
+// nobody writes when the next manifest lands.
 //
 // The archive case is not decoration. A destination whose class cannot
 // take delivery fails at `deliverable` and skips the five steps after it,
@@ -2159,7 +2480,14 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
 // is what made the disagreement invisible. There is nothing to pass now,
 // so there is nothing to pass backwards.
 function mockPreflightFor(medium: StorageMedium): MediumPreflight {
+  if (!medium.bucket) return mockLocalVolumePreflightFor(medium);
   const deliverable = !medium.readsRequireRestore;
+  // Resolved the way config.EffectiveStorageClass resolves it, because a
+  // destination configured without choosing a class carries an empty one
+  // (#294: unset_means is what an accessor resolves, never what a save
+  // writes) and a sentence reading "storage class  reads on demand" is
+  // this fixture describing a class nobody declared.
+  const class_ = medium.storageClass || "STANDARD";
   const skipped = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
     ({ step, outcome: "skipped", category: "", detail });
   const passed = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
@@ -2168,12 +2496,12 @@ function mockPreflightFor(medium: StorageMedium): MediumPreflight {
     passed("credentials", `the credential storage medium "${medium.id}" declares was obtained and the endpoint accepted it`),
     passed("reach", `the endpoint answered and holds bucket "${medium.bucket}"`),
     deliverable
-      ? passed("deliverable", `storage class ${medium.storageClass} reads on demand, so a backup delivered here can be verified and later restored`)
+      ? passed("deliverable", `storage class ${class_} reads on demand, so a backup delivered here can be verified and later restored`)
       : {
           step: "deliverable",
           outcome: "failed",
           category: "configuration",
-          detail: `storage class ${medium.storageClass} holds objects that cannot be read until an explicit restore has finished, so a retention tier cannot deliver to this medium`
+          detail: `storage class ${class_} holds objects that cannot be read until an explicit restore has finished, so a retention tier cannot deliver to this medium`
         }
   ];
   // The five steps that only mean anything once a probe has been written.
@@ -2182,9 +2510,9 @@ function mockPreflightFor(medium: StorageMedium): MediumPreflight {
   // question about this medium's own configuration, and on one answer the
   // engine fails it (see mockVerificationCheck).
   const written: MediumPreflightCheck[] = [
-    passed("write", `an object was written to bucket "${medium.bucket}" with storage class ${medium.storageClass}`),
+    passed("write", `an object was written to bucket "${medium.bucket}" with storage class ${class_}`),
     passed("read_back", "the object was read back and is byte for byte what was written"),
-    passed("storage_class", `the endpoint stored the object as ${medium.storageClass}, which is the class this medium declares`),
+    passed("storage_class", `the endpoint stored the object as ${class_}, which is the class this medium declares`),
     mockVerificationCheck(medium),
     // The delete runs after a FAILED verification, and passes. It is a
     // rollback of this preflight's own probe and not a verdict on the
@@ -2208,6 +2536,63 @@ function mockPreflightFor(medium: StorageMedium): MediumPreflight {
   // the moment a second step could, that expression would have reported a
   // green overall verdict over a failed step inside it. One fact, one
   // expression, which is the lesson of #633 applied to this line.
+  return { medium: medium.id, ok: checks.every((c) => c.outcome !== "failed"), checks };
+}
+
+/**
+ * The report a destination on a local volume answers with (#622's drive
+ * and #666's declared volumes alike).
+ *
+ * Two steps of the eight do not apply here and the manifest says which,
+ * so this repeats the manifest's own sentences rather than writing new
+ * ones: `local_volume.json` is the thing a browser renders skipped rows
+ * from, and a fixture that skipped the same steps for different reasons
+ * would be the drift the transcribed catalogue above exists to prevent.
+ *
+ * `space` is the ninth step, emitted by the engine and carried by the
+ * wire union, and it exists for the one failure a bucket cannot have:
+ * the filesystem filling up. Nothing in this fixture produced it before,
+ * which left ManifestProbeSteps' "a step the report carries that the
+ * manifest does not declare is appended rather than dropped" branch with
+ * no fixture that reaches it.
+ *
+ * The tenth, `distinct_volume` — is this directory on a different disk
+ * from every other local destination — is deliberately absent. It is not
+ * an omission in this file: it is in mediumcheck's vocabulary
+ * (localcheck.go) and not in the published schema's step enum
+ * (api/v1/openapi.json), so no client type can name it and a fixture
+ * asserting it would be describing a wire this product does not serve.
+ */
+function mockLocalVolumePreflightFor(medium: StorageMedium): MediumPreflight {
+  const where = medium.path || "the deployment's backup root";
+  const passed = (step: MediumPreflightCheck["step"], detail: string): MediumPreflightCheck =>
+    ({ step, outcome: "passed", category: "", detail });
+  const checks: MediumPreflightCheck[] = [
+    {
+      step: "credentials",
+      outcome: "skipped",
+      category: "",
+      detail:
+        "a local destination reads no credential: the backups are written by this service to a directory on this machine."
+    },
+    passed("reach", `the directory ${where} is there and is a directory`),
+    passed(
+      "deliverable",
+      "a copy written to a filesystem can be read back the instant it lands, so there is no class here that could refuse a delivery"
+    ),
+    passed("space", "The filesystem this deployment's backups land on has 1.4 TB available."),
+    passed("write", `a file was written under ${where}`),
+    passed("read_back", "the file was read back and is byte for byte what was written"),
+    {
+      step: "storage_class",
+      outcome: "skipped",
+      category: "",
+      detail:
+        "a filesystem has no storage classes, so there is nothing here that could have landed in a different one than the configuration asked for."
+    },
+    mockVerificationCheck(medium),
+    passed("delete", "the probe file was deleted, and the directory it was in is empty again")
+  ];
   return { medium: medium.id, ok: checks.every((c) => c.outcome !== "failed"), checks };
 }
 
@@ -2301,6 +2686,91 @@ function mockMediumOf(spec: StorageMediumSpec): StorageMedium {
     // check has passed, so a destination declared through this fixture is
     // always a proven one.
     connectionUnverified: spec.skipConnectionCheck === true
+  };
+}
+
+/**
+ * The record an instance the configuration does not hold yet starts from
+ * (EPIC I, #669).
+ *
+ * It exists once because two operations need it and they must not
+ * disagree: the configure step PROVES this record and then WRITES it, and
+ * a fixture that projected the candidate one way and stored it another
+ * would let the wizard show a green report for something else. Neither
+ * caller may assemble it inline for the same reason mockPreflightFor
+ * stopped taking `deliverable` as a parameter (#633).
+ *
+ * Nothing here is local and nothing here is the default. `isLocal` marks
+ * the one reserved entry (#622) and is never earned by a create, and the
+ * default moves only through setDefaultStorageMedium, which the review
+ * step calls separately and after the save (#669).
+ */
+function mockUndeclaredMedium(id: string, backend: string): StorageMedium {
+  return {
+    id,
+    type: backend,
+    bucket: "",
+    // Empty rather than STANDARD. A destination on a local volume has no
+    // class at all, and seeding one would put a class into the probe
+    // report and into the row's description of a place that has none —
+    // which is the assumption #664 exists to remove, arriving through a
+    // default nobody chose.
+    storageClass: "",
+    uploadVerification: "readback",
+    readsRequireRestore: false,
+    isLocal: false,
+    isDefault: false,
+    connectionUnverified: false
+  };
+}
+
+/**
+ * One destination with a manifest-shaped configuration applied (issue
+ * #669).
+ *
+ * The switch is on FIELD ID and not on backend: `config.StorageMedium`
+ * keeps its named typed fields because #664's own compatibility pin
+ * requires the on-disk schema to stay byte-for-byte what it was, so the
+ * translation between a manifest's vocabulary and those named fields has
+ * to happen somewhere, and the real service does it in exactly one
+ * place too. What matters is that no branch here asks WHICH backend is
+ * being configured - `path` and `bucket` are both just field ids, and a
+ * manifest declaring one and not the other needs no code.
+ *
+ * A field the fixture cannot place is left alone rather than guessed at,
+ * and the wizard's own mapper refuses before it ever gets here: a
+ * configuration that verifies green and saves something slightly
+ * different is the defect StorageMediumSpec's docblock says it exists to
+ * prevent.
+ */
+function mediumConfigured(
+  medium: StorageMedium,
+  config: StorageMediumConfiguration
+): StorageMedium {
+  const values = config.fields;
+  const storageClass = values.storage_class || medium.storageClass;
+  return {
+    ...medium,
+    bucket: values.bucket ?? medium.bucket,
+    // `path` is a field id like any other, which is what the docblock
+    // above claims and what this line was missing: a local_volume's
+    // Directory was collected by the form, sent, and dropped here, so a
+    // destination saved on /mnt/usb-shelf came back carrying no
+    // directory at all and its probe report described the deployment's
+    // backup root instead. A projection that silently discards the one
+    // required field of a backend is the "verifies green and saves
+    // something slightly different" defect this comment warns about.
+    path: values.path ?? medium.path,
+    region: values.region ?? medium.region,
+    endpoint: values.endpoint ?? medium.endpoint,
+    prefix: values.prefix ?? medium.prefix,
+    storageClass,
+    uploadVerification: values.upload_verification || medium.uploadVerification,
+    readsRequireRestore: storageClass === "GLACIER" || storageClass === "DEEP_ARCHIVE",
+    // A configuration that passed its check is a proven one, which is
+    // what the engine records: the mark exists for the write that
+    // skipped the check, and this path cannot skip it.
+    connectionUnverified: false
   };
 }
 

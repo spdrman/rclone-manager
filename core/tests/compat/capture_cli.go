@@ -455,7 +455,7 @@ func runCLI(ctx context.Context, bin string, args []string, root string, extra .
 // normalizeGoVersion is the second normalization this package does, and
 // unlike the first it is not about tidiness.
 //
-// `backup-manager version` prints the Go runtime it was built with, and
+// `rbm version` prints the Go runtime it was built with, and
 // that is the machine's fact, not the product's. Pinning it into a
 // checked-in corpus would make this gate red for every developer on a
 // different patch release of Go and green only for whoever captured it,

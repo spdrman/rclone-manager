@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="topbar.css">
   <script src="topbar.js" defer></script>
+  <script src="copy.js" defer></script>
 </head>
 <body>
 
@@ -44,6 +45,11 @@
       <a href="first-run.html" class="nav-item is-current">
         <span class="nav-label nav-label-full">First-run tutorial</span>
         <span class="nav-label nav-label-short">First run</span>
+      </a>
+
+      <a href="reference.html" class="nav-item">
+        <span class="nav-label nav-label-full">Reference</span>
+        <span class="nav-label nav-label-short">Ref</span>
       </a>
 
       <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
@@ -91,12 +97,6 @@
     <p>Every screen a freshly installed instance shows, in the order it shows them, with an example for each field and a sentence on what that entry causes the product to do. Not what the label says. What the entry does.</p>
     <p>The worked example throughout is a UGREEN NAS running the canonical Docker Compose deployment, pulling finished backup archives off two VPS over SFTP. The first run configures the first of the two. <a href="#second-vps">The second one</a> is an ordinary backup set added afterwards.</p>
 
-    <div class="note">
-      <span class="note-label">Where these pictures came from</span>
-      <p>Every screenshot on this page was taken against <code>ui/shared</code>'s development server, whose API is the in-memory fixture in <code>src/api/mock.ts</code>. The component tree, the layout and every word of copy are the real product's. The <em>data</em> is not: fingerprints, key ids and anything numeric are fixtures.</p>
-      <p>They were deliberately not taken from a real instance. Completing this flow claims the administrator account and writes a configuration file, and the enrolment token that opens it is single use, so a screenshot run against a live deployment would finish somebody's setup for them. <a href="#reshoot">Re-shooting them</a> is one command.</p>
-    </div>
-
     <div class="note warn">
       <span class="note-label">Two known defects on this path</span>
       <p>Both are open and both are on screens below. <a href="https://github.com/spdrman/rclone-manager/issues/274">#274</a>: an expired enrolment token reports &ldquo;The administrator account could not be created&rdquo;, which blames your password for a problem with the link. <a href="https://github.com/spdrman/rclone-manager/issues/275">#275</a>: the wizard draws a &ldquo;Cancel and return to backup sets&rdquo; control during first run that cannot do anything. Each is called out where it appears.</p>
@@ -139,17 +139,17 @@
     <p>There is no screen for this one. On first start, before any browser is involved, the engine prints a one-time enrolment secret to its own stdout. Read it from the engine container, not the web one:</p>
     <pre><code>docker compose logs rclone-manager | grep enroll</code></pre>
     <p>What comes back looks like this:</p>
-    <pre><code><span class="cm">backup-manager: no administrator account exists yet. Open</span>
-<span class="cm">http://localhost:8080/enroll?token=</span>&lt;a long random string&gt;<span class="cm"> to create one</span>
-<span class="cm">(valid 30 minutes, single use).</span></code></pre>
+    <pre><code><!-- BEGIN ENROL-LOG-LINE --><span class="cm">rbm-web: no administrator account exists yet. Open</span>
+<span class="cm">http://10.0.0.10:8080/enroll?token=</span>&lt;a long random string&gt;<span class="cm"> to create one</span>
+<span class="cm">(valid 30 minutes, single use).</span><!-- END ENROL-LOG-LINE --></code></pre>
 
     <table class="fields">
       <thead><tr><th>Thing</th><th>Value</th><th>What it means for you</th></tr></thead>
       <tbody>
         <tr>
           <td><strong>The host in the link</strong></td>
-          <td>localhost:8080</td>
-          <td>The shipped Compose file sets <code>PUBLIC_BASE_URL</code> to <code>http://localhost:${LISTEN_PORT}</code>, and <code>localhost</code> only resolves correctly if you open the link <em>on the NAS itself</em>. <span class="does">From a laptop, swap the host for the NAS address and keep the token exactly as printed.</span> Set <code>PUBLIC_BASE_URL</code> in <code>.env</code> to your NAS address to get a link that is correct next time.</td>
+          <td>this machine's own address</td>
+          <td><code>install_docker_host.py</code> reads the address this machine's default route leaves by and writes it into <code>PUBLIC_BASE_URL</code>, so the link works from the laptop you are reading it on. <span class="does">Open it as printed, token and all.</span> If you wrote the Compose file yourself instead, the shipped default is <code>http://localhost:${LISTEN_PORT}</code>, which only resolves on the NAS: swap the host for the NAS address, keep the token exactly as printed, and set <code>PUBLIC_BASE_URL</code> in <code>.env</code> to get a correct link next time.</td>
         </tr>
         <tr>
           <td><strong>The token</strong></td>
@@ -179,6 +179,22 @@
     <span class="step-eyebrow">Screen 1</span>
     <h2 id="enrol">Create the administrator</h2>
     <p>Open the link. This account manages Backup Manager and nothing else. It is not your NAS operating-system account, and it is stored on the NAS as an Argon2id hash in <code>/data/state/local-auth.json</code>, in the same volume as the lifecycle journal, so it survives a container restart without a second volume.</p>
+
+
+    <div class="note ok">
+      <span class="note-label">If the link has expired before you get here</span>
+      <p>The token lasts 30 minutes and works once, and nothing re-issues it while the engine keeps running. One command mints a fresh one, from wherever you ran the installer:</p>
+      <pre><code>python3 install_docker_host.py enroll-link</code></pre>
+      <p class="io-label">Output</p>
+      <pre class="io-out"><code>==&gt; Restarting rclone-manager, which is what mints a token
+==&gt; Waiting up to 90s for the new notice
+
+rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?token=jdurSlionp6jyoHTzP_5fHYfLy3Kk6tq to create one (valid 30 minutes, single use).
+
+    Valid 30 minutes, and it works once. Every link printed before this one is now dead,
+    including any still in your scrollback.</code></pre>
+      <p>It restarts the engine, because that is what mints a token, and reads back the newest notice rather than the first: the container keeps its log across the restart, so the earlier link is still in it and is the one the restart killed. That is the same reason an old link in your scrollback is dead even inside its 30 minutes.</p>
+    </div>
 
     <figure>
       <img src="screens/01-enrolment-empty.png" alt="The Create Backup Manager administrator form, empty, with Username, Password and Confirm password fields and a disabled Create administrator button" loading="lazy">
@@ -516,7 +532,7 @@
     <p>Each bucket contributes at most one artifact, and what is kept is the <strong>union</strong> of every tier's selections plus the protected last-known-good. <span class="does">Anything the union does not claim is a delete candidate, including artifacts that fell in a gap between two tiers' windows rather than outside all of them.</span> Tier order never changes which artifacts survive, only the order tier names appear in a verdict.</p>
     <div class="note">
       <span class="note-label">Before you change it</span>
-      <p>There is no spelling of &ldquo;keep nothing&rdquo; in the schema. Emptying the tier list does not disable retention, it reinstates the default daily/weekly/monthly policy, which is the fail-safe direction. Retention is turned off by not running a retention pass. And <code>backup-manager retention</code> previews the decisions without acting on them, which is the right way to check a chain edit before it deletes anything.</p>
+      <p>There is no spelling of &ldquo;keep nothing&rdquo; in the schema. Emptying the tier list does not disable retention, it reinstates the default daily/weekly/monthly policy, which is the fail-safe direction. Retention is turned off by not running a retention pass. And <code>rbm retention</code> previews the decisions without acting on them, which is the right way to check a chain edit before it deletes anything.</p>
     </div>
   </section>
 
@@ -679,15 +695,8 @@
     </ul>
     <div class="note">
       <span class="note-label">This page will move under you</span>
-      <p>Both defects called out above are being fixed as this is written, so screens 1 and 2 are the two most likely to look different from these pictures. Nothing else on the path is under active change. Re-shoot rather than hand-editing a caption.</p>
+      <p>Both defects called out above are being fixed as this is written, so screens 1 and 2 are the two most likely to look different from these pictures. Nothing else on the path is under active change.</p>
     </div>
-  </section>
-
-  <section>
-    <h2 id="reshoot">Re-shooting these</h2>
-    <p>From a checkout with <code>ui/shared</code>'s dependencies installed:</p>
-    <pre><code>node docs/site/tools/capture-first-run.mjs</code></pre>
-    <p>It starts the development server on a port it proved free, drives the whole flow, and overwrites every PNG in <code>docs/site/screens/</code>, printing one line per screen. It borrows Playwright from the checkout the repository's own e2e gate already maintains rather than adding a dependency back to <code>ui/shared</code>, so if it reports that it has nothing to borrow, run the gate once first. The script's header comment explains the two things that are not obvious: why the flow is driven against the fixture API rather than a real instance, and why one network route has to be stubbed for the application to consider itself signed in.</p>
   </section>
 
 </main>

@@ -75,7 +75,7 @@ func backupSetVerbNames() []string {
 	return names
 }
 
-// cmdBackupSet is `backup-manager backup-set <verb> <source/backup-set>
+// cmdBackupSet is `rbm backup-set <verb> <source/backup-set>
 // [flags]`, the CLI's own half of the backup-set write surface. Three
 // verbs share this command's flag set, and they arrived from three
 // issues:

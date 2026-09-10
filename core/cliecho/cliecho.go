@@ -370,7 +370,7 @@ type entry struct {
 	//
 	// Most gap sentences name a verb that does not exist, which is the
 	// point of them. Some name one that does, as a counterexample:
-	// "`backup-manager run` starts a cycle in your own shell, not in this
+	// "`rbm run` starts a cycle in your own shell, not in this
 	// engine" is telling an operator which verb is NOT the answer, and
 	// "`backup-set patch` refuses --disabled" is saying what the existing
 	// verb will not do. Listing the verb here is how that is told apart

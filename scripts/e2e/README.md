@@ -17,7 +17,12 @@ through four merges and was dismissed twice as an ordering flake.
 ## What runs, when, and how a red blocks
 
 `scripts/ci-local.sh` runs `run-tests-repo-gate.sh` on every non-FAST run,
-which is every commit through `.husky/pre-commit`. The step:
+which is every commit through `.husky/pre-commit`. That file is a four-line
+bash shim that execs `scripts/rcmtools/e2e/run_tests_repo_gate.py`, which is
+the gate (#672); it stays a file at that path because
+`scripts/tests/ci-local-gate.test.sh` fabricates a stand-in gate there inside a
+sandbox tree, and `ci-local.sh` keeps calling the shim so that stand-in is the
+thing that runs. The step:
 
 1. clones `rclone-manager-tests` at the sha in `tests-repo.pin` into
    `${XDG_CACHE_HOME:-$HOME/.cache}/rclone-manager-tests-gate/<sha>`, once
@@ -53,8 +58,8 @@ merge evidence and says so.
 ## Moving the pin
 
 ```sh
-scripts/e2e/bump-tests-pin.sh              # the pinned branch's tip
-scripts/e2e/bump-tests-pin.sh <full sha>   # an exact commit
+python3 scripts/rcmtools/e2e/bump_tests_pin.py              # the pinned branch's tip
+python3 scripts/rcmtools/e2e/bump_tests_pin.py <full sha>   # an exact commit
 ```
 
 The bump carries no proof of its own, deliberately. The commit that lands
@@ -165,8 +170,9 @@ down on success, on failure and on interrupt.
 
 ## Both drivers' `--help` is a pinned block, not a line range
 
-`two-machine-backup.sh` and `run-machine-tier.sh` print their `--help` from the
-header block between `# HELP-START` and `# HELP-END` near the top of each file.
+`two-machine-backup.sh` and `scripts/rcmtools/e2e/run_machine_tier.py` print
+their `--help` from the header block between `# HELP-START` and `# HELP-END`
+near the top of each file.
 That used to be a range of line numbers, `sed -n '2,110p' "$0"`, so the help an
 operator reads was a set of coordinates rather than a piece of text: a comment
 inserted above the boundary rewrote it and deleting one truncated it, with

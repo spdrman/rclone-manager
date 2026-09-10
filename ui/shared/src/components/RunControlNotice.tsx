@@ -2,12 +2,20 @@
  * What a run control's last answer looked like, above the page it was
  * pressed on.
  *
- * This is an interim surface with a deliberate expiry. G1.2's global
- * terminal and G1.3's per-set terminal are where these lines belong, and
- * both read the same browserNotices node this renders from, so when they
- * land this banner can go without either of them changing. What it is
- * not, and must never become, is a second vocabulary: every word it shows
- * comes from the notice, and the notice was written once by
+ * This was written as an interim surface with a deliberate expiry, and
+ * the expiry has arrived: the per-set terminal (G1.3) and the global one
+ * (G1.2) both read the same browserNotices node this renders from, so
+ * this banner could now go without either of them changing.
+ *
+ * It is kept for one reason, and it is not inertia. This sits at the top
+ * of the page the button is on; the terminal is a strip at the bottom of
+ * the window that an operator is free to collapse, and a refusal that
+ * only appears in a collapsed panel is a press that did nothing again.
+ * Retiring it is a decision about screens and belongs with whoever makes
+ * that one.
+ *
+ * What it is not, and must never become, is a second vocabulary: every
+ * word it shows comes from the notice, and the notice was written once by
  * useRunControls from the service's own typed code.
  *
  * It shows only the newest notice, on purpose. A page is not a log, and a

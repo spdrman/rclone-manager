@@ -1,46 +1,32 @@
 #!/usr/bin/env bash
-# Ownership check (issue #165).
+# The layer-ownership check: nothing outside core may DECLARE a core-owned
+# concept -- lifecycle state, retention, validation, catalog or backup
+# policy (issue #165).
 #
-# The dependency checks next to this one answer "who may import whom". This
-# one answers a different question that #165's acceptance criteria ask
-# separately:
+# The check itself is scripts/rcmtools/architecture/check_layer_ownership.py
+# now (EPIC I, I1.6 / #672 / #697). This file stays because the path is load
+# bearing:
 #
-#   "GIVEN a provider or distribution package that attempts to hold
-#    lifecycle state, retention policy, validation rules, catalog truth or
-#    backup policy, WHEN the ownership check runs, THEN it fails, because
-#    those may only live in the provider-neutral core."
+#   * scripts/ci-local.sh and .github/workflows/ci.yml run
+#     `bash scripts/architecture/check-layer-ownership.sh`;
+#   * scripts/tests/ci-local-gate.test.sh FABRICATES a file at this literal
+#     path to drive the gate step it stubs;
+#   * scripts/architecture/selftest.sh drives THIS path from inside each
+#     mutant copy of the tree, so the shim is exercised by every control.
 #
-# An import rule cannot catch this. A runtime profile that grows its own
-# retention type imports nothing it should not; it just quietly becomes a
-# second place retention is decided, which is exactly how a fork starts.
+# The scanning is still scripts/architecture/ownership.go, unported and
+# invoked with `GOWORK=off go run` from the module: the thing being detected
+# is a Go DECLARATION, and grep cannot tell one from a comment. The Python
+# is the wrapper that decides WHAT to scan -- every runtime-platform and
+# distribution path in the layer manifest -- so adding a platform or an
+# adapter brings it under the rule automatically.
 #
-# The scanning itself is scripts/architecture/ownership.go, which parses Go
-# rather than grepping it, because the thing being detected is a
-# declaration and grep cannot tell one from a comment. This wrapper decides
-# WHAT to scan: every path the layer manifest puts in the runtime-platform
-# or distribution layer, so adding a platform or an adapter brings it under
-# the rule automatically.
+# `exec`, so the exit status is the check's own.
+#
+# NOTE: no `cd` here, deliberately. The check resolves its target tree with
+# `git rev-parse --show-toplevel` of the CURRENT WORKING DIRECTORY, exactly
+# as the bash original's `cd "$(git rev-parse --show-toplevel)"` did, which
+# is what lets the self-test point it at a mutant copy.
 set -euo pipefail
-cd "$(git rev-parse --show-toplevel)"
-# shellcheck source=./lib.sh
-source scripts/architecture/lib.sh
 
-manifest=$(arch::manifest)
-if [ ! -f "$manifest" ]; then
-  echo "FAIL: $manifest does not exist, so there is no way to know which paths this rule applies to." >&2
-  exit 1
-fi
-
-targets=()
-while IFS= read -r path; do
-  [ -n "$path" ] || continue
-  targets+=("$path")
-done < <(arch::layer_paths platform; arch::layer_paths distribution)
-
-if [ "${#targets[@]}" -eq 0 ]; then
-  echo "FAIL: the manifest puts no path in the runtime-platform or distribution layer, so this check would scan nothing." >&2
-  exit 1
-fi
-
-echo "==> scanning ${#targets[@]} runtime-platform and distribution path(s) for core-owned declarations"
-GOWORK=off go run scripts/architecture/ownership.go . "${targets[@]}"
+exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/rcmtools/architecture/check_layer_ownership.py" "$@"
