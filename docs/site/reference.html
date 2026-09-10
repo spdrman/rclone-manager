@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="topbar.css">
   <script src="topbar.js" defer></script>
+  <script src="copy.js" defer></script>
 </head>
 <body>
 
@@ -114,7 +115,7 @@
         <li><a href="#cli-modes">Where a change is written</a></li>
         <li><a href="#cli-exits">Exit codes</a></li>
         <li><a href="#installer">install_docker_host.py</a></li>
-        <li><a href="#installer-commands">Its six subcommands</a></li>
+        <li><a href="#installer-commands">Its seven subcommands</a></li>
         <li><a href="#installer-flags">Every flag</a></li>
         <li><a href="#installer-exits">Its exit codes</a></li>
       </ol>
@@ -474,19 +475,23 @@
 python3 install_docker_host.py install</code></pre>
     <p>Every flag below has a default that works, which is what makes that second line the whole command. <a href="index.html#install">The install section on the home page</a> is the short version of this.</p>
 
-    <h3 id="installer-commands">Its six subcommands</h3>
+    <h3 id="installer-commands">Its seven subcommands</h3>
+    <p>This table is checked against the parser's own subcommand list, and so is that number, because a count in a heading is the part that stays wrong after the missing row has been added.</p>
     <div class="scroll-x">
+      <!-- BEGIN INSTALLER-COMMANDS -->
       <table class="fields">
         <thead><tr><th>Subcommand</th><th>What it does</th><th>What it touches</th></tr></thead>
         <tbody>
           <tr><td><code>preflight</code></td><td>Runs every prerequisite check and exits.</td><td>Nothing. It is a dry run of <code>install</code>, and it declares the same flags so the run it rehearses is the run you get.</td></tr>
           <tr><td><code>install</code></td><td>Stages the deployment, brings it up, and proves it works, or refuses and says which prerequisite stopped it.</td><td>Creates directories, generates an SSH keypair if there is none, writes <code>compose.yaml</code>, <code>compose.image.yaml</code> and <code>.env</code>, and starts containers.</td></tr>
           <tr><td><code>status</code></td><td>Reports what is here and whether bridge networking still works.</td><td>Read-only.</td></tr>
+          <tr><td><code>enroll-link</code></td><td>Mints a fresh enrolment link and prints it, by restarting the engine, which is what issues a token. Refuses with its own exit code on a deployment that already has an administrator: enrolment is a one-time door.</td><td>Restarts the engine container and reads its log. Nothing on disk.</td></tr>
           <tr><td><code>uninstall</code></td><td>Takes the stack down and removes the deployment files.</td><td>Never the backups, the state or the configuration.</td></tr>
           <tr><td><code>network-doctor</code></td><td>Diagnoses Docker bridge networking by measurement and repairs it.</td><td>Firewall rules, escalating through sudo, and with <code>--fix-network persist</code> a systemd unit and timer.</td></tr>
           <tr><td><code>network-undo</code></td><td>Removes every rule and unit <code>network-doctor</code> installed.</td><td>Only what carries this installer's own comment marker.</td></tr>
         </tbody>
       </table>
+      <!-- END INSTALLER-COMMANDS -->
     </div>
 
     <h3 id="installer-flags">Every flag</h3>
@@ -554,6 +559,7 @@ python3 install_docker_host.py install</code></pre>
           <tr><td><code>30</code>, <code>31</code></td><td>The stack failed to start, or it started and did not reach the state that counts as installed. Both leave it up on purpose, so the logs are still there to read.</td></tr>
           <tr><td><code>40</code>&ndash;<code>46</code></td><td>The bridge-networking repair: no terminal for sudo, the wrong password, sudo not permitted, networking broken, still broken after a repair, undiagnosed, or persistence installed but unverified.</td></tr>
           <tr><td><code>50</code>&ndash;<code>52</code></td><td>The release: a conflict between <code>--release</code> and <code>--image</code>, the registry unreachable, or a release too old to carry the binaries this deployment runs.</td></tr>
+          <tr><td><code>53</code></td><td><code>enroll-link</code> on a deployment that already has an administrator. Its own code rather than a generic refusal because the answer is not to try again: enrolment closed permanently the first time somebody walked through it, so a script retrying this would loop for ever.</td></tr>
         </tbody>
       </table>
     </div>

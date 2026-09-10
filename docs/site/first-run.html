@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="topbar.css">
   <script src="topbar.js" defer></script>
+  <script src="copy.js" defer></script>
 </head>
 <body>
 
@@ -139,7 +140,7 @@
     <pre><code>docker compose logs rclone-manager | grep enroll</code></pre>
     <p>What comes back looks like this:</p>
     <pre><code><!-- BEGIN ENROL-LOG-LINE --><span class="cm">rbm-web: no administrator account exists yet. Open</span>
-<span class="cm">http://192.168.0.10:8080/enroll?token=</span>&lt;a long random string&gt;<span class="cm"> to create one</span>
+<span class="cm">http://10.0.0.10:8080/enroll?token=</span>&lt;a long random string&gt;<span class="cm"> to create one</span>
 <span class="cm">(valid 30 minutes, single use).</span><!-- END ENROL-LOG-LINE --></code></pre>
 
     <table class="fields">
@@ -178,6 +179,22 @@
     <span class="step-eyebrow">Screen 1</span>
     <h2 id="enrol">Create the administrator</h2>
     <p>Open the link. This account manages Backup Manager and nothing else. It is not your NAS operating-system account, and it is stored on the NAS as an Argon2id hash in <code>/data/state/local-auth.json</code>, in the same volume as the lifecycle journal, so it survives a container restart without a second volume.</p>
+
+
+    <div class="note ok">
+      <span class="note-label">If the link has expired before you get here</span>
+      <p>The token lasts 30 minutes and works once, and nothing re-issues it while the engine keeps running. One command mints a fresh one, from wherever you ran the installer:</p>
+      <pre><code>python3 install_docker_host.py enroll-link</code></pre>
+      <p class="io-label">Output</p>
+      <pre class="io-out"><code>==&gt; Restarting rclone-manager, which is what mints a token
+==&gt; Waiting up to 90s for the new notice
+
+rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?token=jdurSlionp6jyoHTzP_5fHYfLy3Kk6tq to create one (valid 30 minutes, single use).
+
+    Valid 30 minutes, and it works once. Every link printed before this one is now dead,
+    including any still in your scrollback.</code></pre>
+      <p>It restarts the engine, because that is what mints a token, and reads back the newest notice rather than the first: the container keeps its log across the restart, so the earlier link is still in it and is the one the restart killed. That is the same reason an old link in your scrollback is dead even inside its 30 minutes.</p>
+    </div>
 
     <figure>
       <img src="screens/01-enrolment-empty.png" alt="The Create Backup Manager administrator form, empty, with Username, Password and Confirm password fields and a disabled Create administrator button" loading="lazy">

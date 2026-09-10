@@ -16,6 +16,8 @@
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="topbar.css">
   <script src="topbar.js" defer></script>
+  <script src="copy.js" defer></script>
+  <script src="tooltip.js" defer></script>
 </head>
 <body>
 
@@ -105,52 +107,64 @@
     <p>It is a standalone Go binary that embeds pinned rclone Go packages. It does not fork rclone, and it does not shell out to the <code>rclone</code> command line for normal data movement.</p>
   </section>
 
-  <a href="first-run.html" class="clipping">
-    <span class="clipping-tag">Tutorial</span>
-    <p>Setting one up for the first time means an enrolment link printed to a container log, an administrator account that is not your NAS login, and a six-step wizard whose answers become a <code>config.yaml</code> you will live with. The first-run walkthrough shows every screen, with an example for every field and a sentence on what that entry actually causes the product to do, including the two places where the wizard shows you a control that is not yet wired to anything.</p>
-    <span class="clipping-read">Walk the first run &rarr;</span>
-  </a>
-
-  <a href="reference.html" class="clipping">
-    <span class="clipping-tag">Reference</span>
-    <p>Every screen of the web interface with a picture and a table of what each control does, every one of the twenty <code>rbm</code> commands, and every subcommand and flag of the installer with its default. The command table and the flag table are both checked against the code on every run of the gate, so a command or a flag that lands without a row fails the build rather than going quietly stale.</p>
-    <span class="clipping-read">Read the reference &rarr;</span>
-  </a>
-
-  <section>
+  <section class="install-hero">
     <h2 id="install">Installing it</h2>
     <p>Two commands, no arguments, on any machine with Docker:</p>
-    <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py
-python3 install_docker_host.py install</code></pre>
-    <div class="out">
-      <span class="out-label">Output &mdash; what it prints, not something to type</span>
-      <pre><code><!-- BEGIN INSTALL-OUTPUT -->==&gt; Installed.
-    Web UI:  http://192.168.0.10:8080
+    <pre class="cmd-primary"><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py</code></pre>
+    <pre class="cmd-primary"><code>python3 install_docker_host.py install</code></pre>
+
+    <p class="io-label">Output</p>
+    <pre class="io-out"><code><!-- BEGIN INSTALL-OUTPUT -->==&gt; Installed.
+    Web UI:  http://10.0.0.10:8080
     Compose: docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml
 
     No config.yaml was written, on purpose. Issue #176 shipped a first-run setup flow
     precisely so that a fresh install does not need one hand-written before it starts.
     Open the Web UI and follow it. The enrollment link is in the engine's log:
       docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml logs rclone-manager | grep enroll<!-- END INSTALL-OUTPUT --></code></pre>
-      <span class="out-note">The address and the prefix in it are this machine's own; every other character is printed exactly as above.</span>
-    </div>
+
     <p>That is the whole of it. The installer picks every path for you (<code>~/rclone-manager</code>, with <code>backups</code>, <code>state</code>, <code>config</code> and <code>secrets</code> under it), generates the SSH key the engine will use, pins the exact image it was built against, and refuses before it changes anything if the machine cannot run it. Nothing needs deciding up front, and everything it chose can be changed afterwards.</p>
-    <p>The last line of that is a command rather than a result, and it is the one that matters. The installer does not print the enrolment link itself: the engine mints the token and writes it to its own log, so the installer prints the command that fetches it out. Run that line and what comes back is one sentence:</p>
-    <div class="out">
-      <span class="out-label">Output &mdash; the engine's own log line, with the link in it</span>
-      <pre class="hinted"><code><!-- BEGIN ENROL-LOG-LINE --><span class="cm">rbm-web: no administrator account exists yet. Open</span>
-<span class="hint"><a class="hint-link" href="first-run.html#enrol" aria-describedby="enrol-hint">http://192.168.0.10:8080/enroll?token=&lt;a long random string&gt;</a><!-- BEGIN TOOLTIP --><span class="hint-bubble" id="enrol-hint" role="note"><strong>The one-time enrolment link.</strong> Single use, and dead 30 minutes after the engine printed it, so it is the first thing to do with a fresh install rather than something to come back to. The host in it is this machine's own address and not <code>localhost</code>, because the link is read on another machine, where <code>localhost</code> is that machine. It opens the form that <a href="first-run.html#enrol">creates the administrator</a>.</span><!-- END TOOLTIP --></span>
-<span class="cm">to create one (valid 30 minutes, single use).</span><!-- END ENROL-LOG-LINE --></code></pre>
+    <p>That last line is a command rather than a result, and it is the one that matters. The installer does not print the enrolment link itself: the engine mints the token during startup and writes the notice to its own log, so the epilog prints the line that fetches it back out. Run it &mdash; every path in it is the one the install just chose:</p>
+    <pre><code><!-- BEGIN ENROL-COMMAND -->docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml logs rclone-manager | grep enroll<!-- END ENROL-COMMAND --></code></pre>
+
+    <p class="io-label">Output</p>
+    <div class="io">
+      <pre class="io-out"><code><!-- BEGIN ENROL-LOG-LINE -->rbm-web: no administrator account exists yet. Open
+<a class="tip-term" href="first-run.html#enrol">http://10.0.0.10:8080/enroll?token=<span class="tip-token">4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6</span></a>
+to create one (valid 30 minutes, single use).<!-- END ENROL-LOG-LINE --></code></pre>
+      <aside class="tip-bubble">
+        <button type="button" class="tip-close" aria-label="Close this note">&times;</button>
+        <span class="tip-heading">Attention &middot; this is the one-time link</span>
+        <p>It claims the administrator account, and it is the only thing that can: reaching the port is deliberately not enough. The token proves you can read the container's own log, which is what somebody else on the network cannot do.</p>
+        <p><strong>Single use, and it expires in 30 minutes.</strong> The address is this machine's own, not <code>localhost</code>, so open it from whichever computer you are sitting at. Lapsed? Restart the engine and it prints a fresh one.</p>
+        <p><a href="first-run.html#enrol">Creating the administrator, screen by screen &rarr;</a></p>
+      </aside>
     </div>
-    <p>The link is the whole of the first run: it carries a token that proves you can read the container's log, which is what stops anyone else on the network claiming the administrator account. It is single use, it expires 30 minutes after the engine printed it, and the host in it is this machine's address rather than <code>localhost</code> &mdash; <code>localhost</code> read over SSH on a laptop is the laptop, which is <a href="https://github.com/spdrman/rclone-manager/issues/688">what the installer used to print</a>. Open it, set an administrator password, and <a href="first-run.html#enrol">the first-run tutorial</a> picks up from there.</p>
+    <p>The address in it is this machine's own rather than <code>localhost</code>, because the link is read from another machine on the same network: <code>localhost</code> over SSH on a laptop is the laptop, which is <a href="https://github.com/spdrman/rclone-manager/issues/688">what the installer used to print</a>. Open it, set an administrator password, and <a href="first-run.html">the first-run tutorial</a> picks up from there.</p>
+
+
+    <div class="note ok">
+      <span class="note-label">If the link has expired</span>
+      <p>The token lasts 30 minutes and works once, and nothing re-issues it while the engine keeps running. One command mints a fresh one:</p>
+      <pre><code>python3 install_docker_host.py enroll-link</code></pre>
+      <p class="io-label">Output</p>
+      <pre class="io-out"><code><!-- BEGIN ENROLL-LINK-OUTPUT -->==&gt; Restarting rclone-manager, which is what mints a token
+==&gt; Waiting up to 90s for the new notice
+
+rbm-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?token=jdurSlionp6jyoHTzP_5fHYfLy3Kk6tq to create one (valid 30 minutes, single use).
+
+    Valid 30 minutes, and it works once. Every link printed before this one is now dead,
+    including any still in your scrollback.<!-- END ENROLL-LINK-OUTPUT --></code></pre>
+      <p>It reads back the <strong>newest</strong> notice rather than the first, because the container keeps its log across the restart and the earlier link is the one that restart just killed. On a deployment that already has an administrator it refuses instead, with its own exit code: enrolment is a one-time door and it closed when that account was created, so <a href="first-run.html#again">sign in</a>.</p>
+    </div>
 
     <h3 id="install-cli-only" style="margin-top:2rem">Command line only, no web interface</h3>
     <p>Same two commands, one flag on the second one:</p>
-    <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py
-python3 install_docker_host.py install --cli-only</code></pre>
-    <div class="out">
-      <span class="out-label">Output &mdash; and no enrolment link in it, deliberately</span>
-      <pre><code><!-- BEGIN INSTALL-OUTPUT-CLI-ONLY -->==&gt; Installed. Nothing is running yet, and that is what --cli-only means here:
+    <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py</code></pre>
+    <pre><code>python3 install_docker_host.py install --cli-only</code></pre>
+
+    <p class="io-label">Output</p>
+    <pre class="io-out"><code><!-- BEGIN INSTALL-OUTPUT-CLI-ONLY -->==&gt; Installed. Nothing is running yet, and that is what --cli-only means here:
     `rbm daemon` is refused rather than started without a config.yaml, and a CLI-only
     install has no first-run wizard to write one. Creating the first backup set writes
     the first config.yaml with it:
@@ -164,10 +178,9 @@ python3 install_docker_host.py install --cli-only</code></pre>
 
     CLI:     /home/you/rclone-manager/bin/rbm
     Compose: docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml<!-- END INSTALL-OUTPUT-CLI-ONLY --></code></pre>
-      <span class="out-note">No Web UI line and no link, because there is no Web UI. Both blocks on this page are rendered from the installer's own epilog by a check in its test suite, so neither can drift from what it prints.</span>
-    </div>
+    <p>No enrolment link there, and nothing to click: a CLI-only deployment has no Web UI to enrol into.</p>
     <p>That runs the engine as <code>rbm daemon</code> rather than <code>rbm-web serve</code>, never starts the <code>web-ui</code> container, and publishes no port on this host at all, so nothing in the deployment serves HTTP and the <code>rbm-web</code> binary is never executed. What you drive it with is the <code>rbm</code> wrapper the installer writes to <code>~/rclone-manager/bin/rbm</code>, which takes every command in <a href="#cli">the table below</a>.</p>
-    <p>The block above has no enrolment link in it because there is nothing to enrol into, and there is no first-run wizard either. So on a fresh host this stages everything, starts nothing, and prints the one command that writes the first configuration: creating the first backup set writes the first <code>config.yaml</code> along with it. Re-running the installer later with no flags keeps the deployment this shape, and <code>--no-cli-only</code> converts it to the full stack.</p>
+    <p>There is no first-run wizard either, which is why a fresh CLI-only host stages everything, starts nothing, and prints the one command that writes the first configuration: creating the first backup set writes the first <code>config.yaml</code> along with it. Re-running the installer later with no flags keeps the deployment this shape, and <code>--no-cli-only</code> converts it to the full stack.</p>
 
     <p>If you would rather see what either of those would do before it does it, <code>python3 install_docker_host.py preflight</code> runs every check and installs nothing.</p>
 
@@ -180,6 +193,19 @@ python3 install_docker_host.py install --cli-only</code></pre>
     </div>
     <p>The configuration directory in particular is mounted writable, as a directory rather than a single file, because a directory is the only shape that can honestly be empty. That is what makes an install that has never been configured reach the setup screen instead of refusing to start. <a href="first-run.html">The first-run tutorial</a> picks up from there.</p>
   </section>
+
+  <a href="first-run.html" class="clipping">
+    <span class="clipping-tag">Tutorial</span>
+    <p>Setting one up for the first time means an enrolment link printed to a container log, an administrator account that is not your NAS login, and a six-step wizard whose answers become a <code>config.yaml</code> you will live with. The first-run walkthrough shows every screen, with an example for every field and a sentence on what that entry actually causes the product to do, including the two places where the wizard shows you a control that is not yet wired to anything.</p>
+    <span class="clipping-read">Walk the first run &rarr;</span>
+  </a>
+
+  <a href="reference.html" class="clipping">
+    <span class="clipping-tag">Reference</span>
+    <p>Every screen of the web interface with a picture and a table of what each control does, every one of the twenty <code>rbm</code> commands, and every subcommand and flag of the installer with its default. The command table and the flag table are both checked against the code on every run of the gate, so a command or a flag that lands without a row fails the build rather than going quietly stale.</p>
+    <span class="clipping-read">Read the reference &rarr;</span>
+  </a>
+
 
   <section>
     <h2 id="the-rule">The rule everything else serves</h2>

@@ -52,6 +52,11 @@
   --text-light: #5b5d5b;
   --text-faint: #8b8d8a;
   --code-bg: #ececea;
+  /* An output block is not a thing you type, so it does not look like
+     one. White against the typed block's grey, and the highlight inside
+     it is tuned against THIS panel rather than against the page. */
+  --code-bg-out: #ffffff;
+  --hl-bg: #b2e2c4;
   --border: #dedcd8;
   --border-strong: #c8c7c3;
   --hero-bg: #16283a;
@@ -78,6 +83,12 @@
   --text-light: #a3a6a2;
   --text-faint: #767976;
   --code-bg: #1e201e;
+  /* Inverted relationship on purpose: in the dark scheme the output
+     panel goes DEEPER than the typed one rather than lighter, because
+     there is nothing above white to move to. Same intent, opposite
+     direction, and the highlight is re-tuned for it. */
+  --code-bg-out: #0d0f0d;
+  --hl-bg: #22513a;
   --border: #313331;
   --border-strong: #454745;
   --hero-bg: #0d1720;
@@ -241,97 +252,6 @@ pre code { background: none; padding: 0; }
 .num { color: var(--warn); }
 
 /* ---------------------------------------------------------------
-   Output blocks.
-
-   A block to type and a block the program printed that look alike
-   is worse than showing no output at all, because the reader types
-   the second one. So an output block says the word above itself,
-   is set in the body-copy colour rather than the code colour, and
-   carries a dashed frame that no block meant for typing has.
-   --------------------------------------------------------------- */
-.out { margin-bottom: 0.75rem; }
-
-.out-label,
-.out-note {
-  display: block;
-  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color: var(--text-faint);
-}
-
-.out-label {
-  font-size: 0.72rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  font-weight: 600;
-  margin-bottom: 0.3rem;
-}
-
-.out-note { font-size: 0.75rem; line-height: 1.5; }
-
-.out pre {
-  background: var(--surface);
-  border-style: dashed;
-  color: var(--text-light);
-  margin-bottom: 0.35rem;
-}
-
-/* ---------------------------------------------------------------
-   The one line of output that has to be acted on.
-
-   The enrolment link is single use and dead thirty minutes after
-   the engine printed it, so it is highlighted rather than left to
-   be found in a wall of text, and what it is is attached to it
-   rather than written underneath. It opens on focus as well as on
-   hover: a tooltip only a mouse can reach is one that half the
-   readers of this page never see.
-   --------------------------------------------------------------- */
-pre.hinted {
-  /* This one block does not clip its own tooltip. Nothing in it is
-     wide enough to need the scrolling every other pre gets, so the
-     overflow that scrolling needs is given up here. */
-  overflow: visible;
-  white-space: pre-wrap;
-}
-
-.hint { position: relative; }
-
-.hint-link {
-  background: var(--code-bg);
-  color: var(--primary);
-  font-weight: 600;
-  padding: 0.05rem 0.3rem;
-  border-radius: 3px;
-  box-shadow: inset 0 0 0 1px var(--border-strong);
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
-}
-
-.hint-bubble {
-  display: none;
-  position: absolute;
-  top: 1.8em;
-  left: 0;
-  z-index: 5;
-  width: min(30rem, 82vw);
-  white-space: normal;
-  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 0.82rem;
-  line-height: 1.55;
-  color: var(--text-light);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-left: 4px solid var(--primary);
-  border-radius: 0 6px 6px 0;
-  padding: 0.7rem 0.9rem;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
-}
-
-.hint:hover .hint-bubble,
-.hint:focus-within .hint-bubble { display: block; }
-
-.hint-bubble strong { color: var(--text); }
-
-/* ---------------------------------------------------------------
    Callouts. Three tones, each one carrying a word as well as a
    colour, because the product's own UI rule (§ status is never
    colour alone) is a reasonable rule for its documentation too.
@@ -481,3 +401,231 @@ footer {
 }
 
 footer p { color: var(--text-faint); margin-bottom: 0.3rem; }
+
+/* -------------------------------------------------------------------
+   Command output, and an attention marker inside it.
+
+   A code block on this site is a thing you type. An output block is what
+   came back, and the two look identical without a label, so every output
+   block carries one.
+
+   The marker exists because a reader who has just run the install has
+   exactly one question, and it is about one string on the screen. The
+   bubble has to sit OUTSIDE the <pre>: pre is overflow-x: auto, and an
+   absolutely-positioned child of a scroll container is clipped by it, so
+   a bubble inside would be cut off at the first line it exceeded. It is
+   a sibling instead, positioned against .io, and :has() is what lets
+   hovering something inside the pre reveal something outside it.
+   ------------------------------------------------------------------- */
+.io-label {
+  margin: 0 0 0.3rem;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3, var(--text-2));
+}
+/* The bubble hangs BELOW the block, not over it. Anchored inside, it
+   covered the line it was describing: you hovered the link, the bubble
+   opened on top of it, and the thing you were pointing at disappeared
+   under the explanation of itself. */
+/* What came back, not what you type. The border is doing as much of the
+   separating as the fill: two panels a shade apart read as one surface
+   without it. */
+pre.io-out {
+  background: var(--code-bg-out);
+  border-color: var(--border-strong);
+}
+
+.io { position: relative; }
+
+.tip-term {
+  background: var(--hl-bg);
+  border-bottom: 1px dashed var(--ok);
+  border-radius: 3px;
+  padding: 0 0.15em;
+  color: inherit;
+  text-decoration: none;
+}
+.tip-term:hover, .tip-term:focus { background: var(--ok); color: #fff; }
+.tip-term::after {
+  content: " \2139";           /* an information source, not an emoji */
+  font-style: normal;
+  color: var(--ok);
+}
+.tip-term:hover::after, .tip-term:focus::after { color: #fff; }
+.tip-token { font-weight: 600; }
+
+.tip-bubble {
+  display: none;
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  max-width: 46rem;
+  padding: 0.8rem 2.1rem 0.8rem 1rem;
+  border: 1px solid var(--ok);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.tip-bubble p { margin: 0 0 0.5rem; }
+.tip-bubble p:last-child { margin-bottom: 0; }
+.tip-bubble .tip-heading {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ok);
+}
+
+/* Dismissible, so it needs a way to dismiss it. Sized to the 24px
+   minimum a pointer target wants rather than to the glyph. */
+.tip-close {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.35rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-2);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.tip-close:hover, .tip-close:focus { background: var(--ok-bg); color: var(--text); }
+
+/* With JavaScript, is-open is the ONLY thing that opens this, and that
+   is not tidiness. While CSS also opened it on :hover/:focus, the two
+   owners disagreed: the close control returns focus to the term so a
+   keyboard user is not dropped at the top of the document, the CSS focus
+   rule saw that focus, and the note reopened the instant it was
+   dismissed. Escape failed the same way. One owner, no argument.
+   
+   tooltip.js sets .tip-js on <html> before first paint, so the rules
+   below are what a reader with JavaScript off still gets: revealed on
+   hover and focus, just not sticky. */
+html:not(.tip-js) .io:has(.tip-term:hover) .tip-bubble,
+html:not(.tip-js) .io:has(.tip-term:focus) .tip-bubble,
+html:not(.tip-js) .io:has(.tip-bubble:hover) .tip-bubble,
+.tip-bubble.is-open { display: block; }
+
+/* Without :has() the bubble can never be revealed, so it stops being a
+   bubble and becomes a note under the block. Worse placement, same
+   information, and nobody is left with a marker that does nothing. */
+@supports not selector(:has(*)) {
+  .tip-bubble {
+    display: block;
+    position: static;
+    margin: 0 0 0.75rem;
+    box-shadow: none;
+  }
+}
+
+/* -------------------------------------------------------------------
+   The install section, given the weight of the thing it is.
+
+   It is the first section on the page and above the tutorial and
+   reference cards, because somebody arriving here wants to install this
+   before they want to read about it. A plain <section> in that position
+   still read as the first of several: the panel and the accent are what
+   say "this is the command", so the eye lands on it before the prose.
+   ------------------------------------------------------------------- */
+.install-hero {
+  margin: 0 0 2rem;
+  padding: 1.4rem 1.5rem 1.1rem;
+  border: 1px solid var(--border-strong);
+  border-left: 5px solid var(--primary);
+  border-radius: 10px;
+  /* --bg, not --surface, and the output block is why. On a white panel
+     the white output block had nothing to stand against and the typed
+     and returned blocks stopped reading as two things. Against --bg
+     there are three distinct steps in both schemes:
+
+       light   panel #f4f4f2  typed #ececea  output #ffffff
+       dark    panel #121312  typed #1e201e  output #0d0f0d
+
+     The panel is identified by its border and accent rather than by its
+     fill, which is what lets the fill do this job instead. */
+  background: var(--bg);
+}
+.install-hero > h2 {
+  margin-top: 0;
+  border-bottom: 0;
+  font-size: 1.55rem;
+}
+.install-hero > h2::before {
+  content: "Start here";
+  display: block;
+  margin-bottom: 0.35rem;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+/* The two commands themselves, which are the point of the section. */
+/* Named rather than positional: copy.js wraps each <pre>, so it stops
+   being a child of the section and :first-of-type stops matching. */
+.install-hero .cmd-primary {
+  border-color: var(--primary);
+  font-size: 0.92rem;
+}
+@media (max-width: 640px) {
+  .install-hero { padding: 1.1rem 1rem 0.9rem; }
+  .install-hero > h2 { font-size: 1.3rem; }
+}
+
+/* -------------------------------------------------------------------
+   The copy control on a command block. Injected by copy.js, so the
+   wrapper below never appears in the markup: every rule here has to be
+   written as if the <pre> gained a parent at runtime, which it did.
+   ------------------------------------------------------------------- */
+.code-wrap {
+  position: relative;
+  margin-bottom: 0.75rem;
+}
+/* The margin moved to the wrapper, or every block would carry both. */
+.code-wrap > pre { margin-bottom: 0; }
+
+.copy-btn {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  z-index: 2;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+/* Revealed on hover like the reference, and ALWAYS on a keyboard focus
+   or once it has been used: a control that only exists while a pointer
+   is over it does not exist for somebody tabbing through the page. */
+.code-wrap:hover .copy-btn,
+.copy-btn:focus,
+.copy-btn.is-copied { opacity: 1; }
+
+.copy-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+.copy-btn.is-copied { background: var(--ok); color: #fff; border-color: var(--ok); }
+
+/* Touch has no hover, so there is nothing to reveal it with. */
+@media (hover: none) {
+  .copy-btn { opacity: 1; }
+}

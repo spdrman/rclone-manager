@@ -45,6 +45,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -5370,36 +5371,53 @@ def enrolment_notice(base_url: str, token: str) -> str:
 
 
 class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
-    """Issue #714. docs/site/index.html's "Installing it" section used to
-    show two commands and then describe the result in prose. It now shows
-    the result, which means that page carries terminal output, and
-    terminal output copied into a page by hand is the thing that goes
-    stale without anybody noticing.
+    """Issue #714, and the half of it a page cannot keep on its own.
 
-    So the page does not carry a copy of the epilog, it carries the
-    epilog: this renders installed_epilog and cli_only_staged_epilog with
-    the sample prefix and address the page substitutes, and compares them
-    line for line. A word changed in the installer's success message and
-    not changed on the page fails here.
+    #716 put the output on docs/site/index.html: after each command, what
+    that command prints, labelled so it is not mistaken for something to
+    type. What it could not do by hand is keep it true. Every block was
+    typed out, so the `Compose:` line arrived hand-wrapped with a `\\` the
+    installer never emits and both blocks elided the compose invocation to
+    `docker compose -p rclone-manager ...`, which is an abbreviation
+    printed as though it were output. Output that is nearly right is worse
+    than none, because a reader compares it against their screen
+    character by character and concludes their install went wrong.
 
-    The enrolment link is a separate claim with its own history. Issue
-    #688: the link named `localhost`, which on a laptop reading it over
-    SSH is the laptop, and the token is single use and dies in 30
+    So the blocks are not copies of the epilogs, they are the epilogs:
+    installed_epilog, cli_only_staged_epilog and enroll_link_epilog are
+    rendered here against the sample prefix and address the page
+    substitutes, and compared line for line.
+
+    The enrolment line is a different surface and gets a different
+    source. The installer never prints it - the engine mints the token
+    during startup and writes the notice to its own log, which is why the
+    epilog prints the command that greps it back out - so the sentence is
+    held to the Fprintf format in apps/common/auth/local/service.go, with
+    the name it opens with read out of core/cliecho, where WebBinary is
+    derived from Binary precisely so the two cannot drift.
+
+    That last pin is #688 as a test. The installer used to print
+    `http://localhost:8080/enroll?token=...`, which on a laptop reading it
+    over SSH is the laptop; the token is single use and dies in 30
     minutes, so the first thing anybody does with a fresh install did not
-    work. #690 fixed it by probing the LAN address. The installer does not
-    print that line at all - the engine does, which is why the epilog
-    prints the command that greps it out - so the sentence is held to the
-    engine's own format string instead of to this file.
+    work. #690 fixed it by probing the LAN address. A page still showing
+    the old line now fails here rather than waiting to be noticed.
     """
 
-    # What the page substitutes for the two values a real run computes
-    # from the host it is running on. Everything else in both blocks is
+    # The two values a real run computes from the host it is running on,
+    # as the page substitutes them. Everything else in every block is
     # printed verbatim, which is what makes comparing them worth doing.
     SAMPLE_PREFIX = "/home/you/rclone-manager"
-    SAMPLE_BASE_URL = "http://192.168.0.10:8080"
-    TOKEN_STAND_IN = "<a long random string>"
+    SAMPLE_BASE_URL = "http://10.0.0.10:8080"
 
     ENROL_SECTION = "first-run.html#enrol"
+
+    # 24 random bytes, base64url, which is what first-run.html's own
+    # table tells a reader to expect.
+    TOKEN_SHAPE = re.compile(r"[A-Za-z0-9_-]{32}")
+    # Non-greedy rather than \\S+: one page shows a token and the other
+    # shows "<a long random string>", which has spaces in it.
+    TOKEN_IN_LINE = re.compile(r"\?token=(.+?) to create one")
 
     def page(self, name):
         path = REPO_ROOT / "docs" / "site" / name
@@ -5419,11 +5437,11 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
     def block_lines(region_text):
         """An output block's own lines, blank ends trimmed.
 
-        Nothing else is undone: an output block holds no markup, so a tag
-        appearing in one is a reason to look rather than something to
-        tolerate. The leading blank line the epilog opens with separates
-        it from `docker compose up`'s output in a terminal and separates
-        it from the paragraph above on the page, so it is not compared.
+        Only the HTML escapes are undone: an output block carries no
+        markup, so a tag appearing in one is a reason to look rather than
+        something to tolerate. The blank line each epilog opens with
+        separates it from the command's own output in a terminal and from
+        the label on the page, so it is not compared.
         """
         lines = html.unescape(region_text).split("\n")
         while lines and not lines[0].strip():
@@ -5436,25 +5454,22 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
     def sentence(region_text):
         """One line of program output out of a region that wraps it.
 
-        The page breaks a sentence too long for the block across three
-        lines and highlights the middle one, so the comparison is of
-        words rather than of layout. Anything between the TOOLTIP markers
-        is this site's annotation rather than the program's output and is
-        dropped before the tags are.
+        Both pages break this sentence across lines too long for the
+        block and mark part of it up - the link on one, three faint spans
+        on the other - so the comparison is of words rather than of
+        layout.
         """
-        stripped = re.sub(r"<!-- BEGIN TOOLTIP -->.*?<!-- END TOOLTIP -->", "",
-                          region_text, flags=re.DOTALL)
-        return " ".join(html.unescape(re.sub(r"<[^>]+>", "", stripped)).split())
+        return " ".join(html.unescape(re.sub(r"<[^>]+>", "", region_text)).split())
 
     def epilog(self, render):
         """One of the installer's epilogs, rendered against the page's
         sample values.
 
-        --project is deliberately left at its default, so that renaming
-        the Compose project fails here too: every `docker compose` line
-        on the page names it. The configuration directory is a path that
-        does not exist, because both blocks are a FIRST install, and a
-        real one is what first_run_epilog asks about.
+        --project is deliberately left at its default, so renaming the
+        Compose project fails here too: every `docker compose` line in
+        every block names it. The configuration directory is a path that
+        does not exist, because both install blocks are a FIRST install
+        and a real directory is what first_run_epilog asks about.
         """
         fx = Fixture(self)
         args = fx.args(command="install")
@@ -5463,14 +5478,22 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
         args.public_base_url = self.SAMPLE_BASE_URL
         return render(args)
 
+    def notice_and_token(self, name):
+        shown = self.sentence(self.region(name, "ENROL-LOG-LINE"))
+        found = self.TOKEN_IN_LINE.search(shown)
+        self.assertIsNotNone(found,
+                             f"docs/site/{name}'s enrolment line has no ?token=... in it, so it is "
+                             f"not the line the engine prints")
+        return shown, found.group(1)
+
     def test_the_install_output_block_is_the_epilog_this_installer_prints(self):
         printed = self.epilog(installer.installed_epilog)
         shown = self.block_lines(self.region("index.html", "INSTALL-OUTPUT"))
         self.assertEqual(shown, self.block_lines("\n".join(printed)),
                          "docs/site/index.html shows an install epilog this installer does not "
-                         "print. The page is what is wrong: it exists to show a reader which part "
-                         "of their screen matters, and output that is nearly right is worse than "
-                         "none, because it is read as exact.")
+                         "print. The page is what is wrong here: it exists to tell a reader which "
+                         "part of their screen matters, and it cannot do that with output that is "
+                         "only nearly right.")
 
     def test_the_cli_only_output_block_is_the_epilog_a_fresh_cli_only_install_prints(self):
         printed = self.epilog(installer.cli_only_staged_epilog)
@@ -5479,16 +5502,52 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
                          "docs/site/index.html shows a --cli-only epilog this installer does not "
                          "print")
 
+    def test_the_enroll_link_output_block_is_what_that_subcommand_prints(self):
+        """#716's own new subcommand, shown the same way and pinned the
+        same way. Its notice line is the engine's, echoed as the
+        container logged it, so it is checked as that sentence rather
+        than as a literal."""
+        shown = self.block_lines(self.region("index.html", "ENROLL-LINK-OUTPUT"))
+        notice = next((line for line in shown if installer.ENROLL_NOTICE_MARKER in line), "")
+        self.assertTrue(notice, "the enroll-link block shows no enrolment notice at all")
+        printed = self.block_lines("\n".join(
+            [installer.ENROLL_RESTART_SAY, installer.ENROLL_WAIT_SAY,
+             *installer.enroll_link_epilog(notice)]))
+        self.assertEqual(shown, printed,
+                         "docs/site/index.html shows an enroll-link transcript this installer does "
+                         "not print; the service name and the wait are its own constants")
+
+    def test_the_notice_in_the_enroll_link_block_is_the_engines_sentence(self):
+        shown = self.block_lines(self.region("index.html", "ENROLL-LINK-OUTPUT"))
+        notice = next(line for line in shown if installer.ENROLL_NOTICE_MARKER in line)
+        found = self.TOKEN_IN_LINE.search(notice)
+        self.assertIsNotNone(found, "the reissued notice has no ?token=... in it")
+        self.assertEqual(notice,
+                         enrolment_notice(self.SAMPLE_BASE_URL, found.group(1)).strip(),
+                         "the notice enroll-link is shown printing is not the one the engine emits")
+
+    def test_the_command_the_epilog_prints_is_the_command_the_page_then_runs(self):
+        """The block shows the grep command's result, so the prompt line
+        above that result has to be the command the epilog just told the
+        reader to run. Two hand-typed copies of one long invocation is
+        exactly where an elision gets introduced."""
+        epilog = self.epilog(installer.installed_epilog)
+        instruction = epilog[-1].strip()
+        echoed = self.sentence(self.region("index.html", "ENROL-COMMAND"))
+        self.assertEqual(echoed, instruction,
+                         "the command echoed above the enrolment line is not the one the install "
+                         "epilog prints")
+
     def test_the_cli_only_output_block_carries_no_enrolment_link(self):
         """The absence is the point of the block, not an oversight in it.
 
         A CLI-only deployment publishes no port and runs no web host, so
-        there is nothing to enrol into (#689, landed in #690). A link in
-        that block would be a lie, and one somebody would spend the
-        thirty minutes of a token trying to open.
+        there is nothing to enrol into (#689, landed in #690). A link
+        there would be a lie, and one somebody would spend the thirty
+        minutes of a token trying to open.
         """
         shown = self.region("index.html", "INSTALL-OUTPUT-CLI-ONLY")
-        for forbidden in ("enroll", "enrol", "hint-link", self.ENROL_SECTION):
+        for forbidden in ("enroll", "enrol", "tip-term", self.ENROL_SECTION):
             self.assertNotIn(forbidden, shown,
                              f"the --cli-only output block on docs/site/index.html names "
                              f"{forbidden!r}; that install has no web host to enrol into, so "
@@ -5497,16 +5556,26 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
     def test_both_pages_quote_the_sentence_the_engine_really_prints(self):
         """The line with the link in it, held to the engine rather than to
         this installer, because the engine is what prints it."""
-        # Collapsed rather than put through sentence(): the stand-in for
-        # the token is angle-bracketed, and sentence() strips markup, so
-        # running the expected side through it would delete the one part
-        # of the line a reader has to recognise.
-        expected = " ".join(enrolment_notice(self.SAMPLE_BASE_URL, self.TOKEN_STAND_IN).split())
         for name in ("index.html", "first-run.html"):
-            self.assertEqual(self.sentence(self.region(name, "ENROL-LOG-LINE")), expected,
+            shown, token = self.notice_and_token(name)
+            # The token is read back out of the page rather than fixed
+            # here: one page shows a real one and the other a stand-in,
+            # and which of those a page chooses is a matter of taste. The
+            # sentence around it is not.
+            expected = " ".join(enrolment_notice(self.SAMPLE_BASE_URL, token).split())
+            self.assertEqual(shown, expected,
                              f"docs/site/{name} quotes an enrolment log line the engine does not "
                              f"print. apps/common/auth/local/service.go is what prints it; the "
                              f"expiry, the single use and the host all come from there.")
+
+    def test_the_token_in_the_link_is_the_shape_the_engine_mints(self):
+        """index.html shows a real-looking token rather than a
+        placeholder, which is the better choice and only stays true while
+        it looks like one: 24 random bytes, base64url."""
+        _, token = self.notice_and_token("index.html")
+        self.assertRegex(token, self.TOKEN_SHAPE,
+                         "the token shown is not 32 base64url characters, so it is not the shape "
+                         "the engine's bootstrap token actually has")
 
     def test_the_deployment_note_quotes_it_too(self):
         """The third copy of the same sentence, found while pinning the
@@ -5514,27 +5583,39 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
         derived from `rbm`. Quoted against the shipped Compose default
         rather than an installed host's address, because that document is
         about standing the stack up by hand, where `localhost` really is
-        what `container/compose.yaml` sets.
+        what container/compose.yaml sets.
         """
         doc = (REPO_ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
         self.assertIn(enrolment_notice("http://localhost:8080", "..."), doc,
                       "docs/deployment.md quotes an enrolment notice the engine does not print")
 
     def test_the_link_is_highlighted_and_lands_on_the_first_run_section(self):
-        shown = self.region("index.html", "ENROL-LOG-LINE")
-        self.assertIn(f'class="hint-link" href="{self.ENROL_SECTION}"', shown,
+        doc = self.page("index.html")
+        self.assertIn(f'class="tip-term" href="{self.ENROL_SECTION}"', doc,
                       "the enrolment link in the output block is not a highlighted link to the "
                       "first-run page's section on creating the administrator")
-        self.assertIn('aria-describedby="enrol-hint"', shown)
-        self.assertIn('id="enrol-hint"', shown,
-                      "the link is described by an element that is not in the block")
-        self.assertIn(f'<a href="{self.ENROL_SECTION}"', shown,
-                      "the tooltip does not carry the link itself, so a reader who reads the "
-                      "tooltip rather than the URL has nothing to click")
+        bubble = re.search(r'<aside class="tip-bubble">(.*?)</aside>', doc, re.DOTALL)
+        self.assertIsNotNone(bubble, "the attention note is gone from docs/site/index.html")
+        note = bubble.group(1)
+        self.assertIn(f'href="{self.ENROL_SECTION}"', note,
+                      "the note does not carry the link itself, so a reader who reads the note "
+                      "rather than the URL has nothing to click")
         for claim in ("Single use", "30 minutes", "localhost"):
-            self.assertIn(claim, shown,
-                          f"the tooltip does not say {claim!r}; those three are what a reader "
-                          f"holding a dead link needed to have been told")
+            self.assertIn(claim, note,
+                          f"the note does not say {claim!r}; those three are what a reader holding "
+                          f"a dead link needed to have been told")
+
+    def test_the_note_opens_on_focus_and_not_only_on_hover(self):
+        """A note only a mouse can reach is one that half the readers of
+        the page never see, and it is carrying the only link in the
+        block. Both openers are checked because either one alone is the
+        whole mechanism when the other is unavailable: tooltip.js latches
+        it open, and the CSS reveals it on a page where that file did not
+        load."""
+        self.assertIn('term.addEventListener("focus", open)', self.page("tooltip.js"),
+                      "tooltip.js opens the attention note on hover only")
+        self.assertIn(".io:has(.tip-term:focus) .tip-bubble", self.page("theme.css"),
+                      "theme.css has no keyboard opener for the note on a page without JavaScript")
 
     def test_no_page_on_the_site_links_to_a_fragment_that_is_not_there(self):
         """Generalised from the one anchor #714 needed, because looking
@@ -5559,28 +5640,247 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
                     dead.append(f"{name} -> {href}")
         self.assertEqual(dead, [], f"these links on the site resolve to nothing: {dead}")
 
-    def test_the_tooltip_opens_on_focus_and_not_only_on_hover(self):
-        """A tooltip only a mouse can reach is one half the readers of the
-        page never see, and it is carrying the only link in the block."""
-        css = self.page("theme.css")
-        self.assertIn(".hint:focus-within .hint-bubble", css,
-                      "theme.css opens the enrolment tooltip on hover only; keyboard focus has to "
-                      "open it too")
-
     def test_the_extractors_can_actually_fail(self):
         """The positive control. block_lines returning nothing and
-        sentence returning "" would satisfy several of the assertions
-        above against any document at all."""
+        sentence returning "" would satisfy most of the assertions above
+        against any document at all."""
         self.assertEqual(self.block_lines("\n==&gt; Installed.\n    Web UI:  x\n\n"),
                          ["==> Installed.", "    Web UI:  x"])
         self.assertEqual(
             self.sentence('<span class="cm">Open</span>\n'
-                          '<a href="x">http://h/enroll?token=&lt;t&gt;</a>'
-                          '<!-- BEGIN TOOLTIP --><span>not output</span><!-- END TOOLTIP -->\n'
+                          '<a href="x">http://h/enroll?token=<span>abc</span></a>\n'
                           'to create one.'),
-            "Open http://h/enroll?token=<t> to create one.",
-            "sentence should join the wrapped lines, unescape, drop the markup and drop the "
-            "tooltip, and nothing else")
+            "Open http://h/enroll?token=abc to create one.",
+            "sentence should join the wrapped lines, unescape and drop the markup, and nothing "
+            "else")
+
+
+class TestTheSiteReferenceNamesEverySubcommandThisParserDeclares(unittest.TestCase):
+    """The gap #716 walked through, found by reading its own diff.
+
+    It added `enroll-link`, a seventh installer subcommand, and
+    reference.html still said "Its six subcommands" in two places with no
+    row for it. Every existing check was green: the flag table is held to
+    the parser's options and the command table to the `rbm` binary's
+    dispatch table, and neither of them has an opinion about how many
+    subcommands the installer has.
+
+    That is the same shape as the hole EPIC I fell into on the same page,
+    where nothing structural was missing because the epic added no route
+    and no command, and everything substantive was. A count in prose is a
+    claim, so it is checked like one.
+    """
+
+    REGION = "INSTALLER-COMMANDS"
+    NUMBER_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight",
+                    "nine", "ten", "eleven", "twelve")
+
+    def reference(self):
+        path = REPO_ROOT / "docs" / "site" / "reference.html"
+        self.assertTrue(path.is_file(), f"{path} is missing; this test reads it")
+        return path.read_text(encoding="utf-8")
+
+    def region(self, doc):
+        begin, end = f"<!-- BEGIN {self.REGION} -->", f"<!-- END {self.REGION} -->"
+        i, j = doc.find(begin), doc.find(end)
+        self.assertTrue(0 <= i < j,
+                        f"reference.html has no {begin} ... {end} region; this test reads that "
+                        f"region, so removing it removes the check")
+        return doc[i + len(begin):j]
+
+    @staticmethod
+    def subcommands_in_first_cell(region_text):
+        """Every subcommand named in the FIRST cell of every row, for the
+        reason the flag check reads only first cells: the prose columns
+        name other subcommands constantly."""
+        found = set()
+        for row in region_text.split("<tr>")[1:]:
+            first_cell = row.split("</td>")[0]
+            found.update(re.findall(r"<code>([a-z][a-z-]*)</code>", first_cell))
+        return found
+
+    @staticmethod
+    def declared_subcommands():
+        parser = installer.build_parser()
+        sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+        return set(sub.choices)
+
+    def test_every_subcommand_the_parser_declares_has_a_row(self):
+        missing = sorted(self.declared_subcommands() - self.subcommands_in_first_cell(
+            self.region(self.reference())))
+        self.assertEqual(missing, [],
+                         f"docs/site/reference.html's subcommand table omits subcommands the "
+                         f"installer accepts: {missing}. A subcommand that lands without a row is "
+                         f"how a page stays structurally complete and substantively stale.")
+
+    def test_no_row_names_a_subcommand_this_installer_does_not_accept(self):
+        extra = sorted(self.subcommands_in_first_cell(self.region(self.reference()))
+                       - self.declared_subcommands())
+        self.assertEqual(extra, [],
+                         f"docs/site/reference.html documents installer subcommands that do not "
+                         f"exist: {extra}")
+
+    def test_the_page_does_not_say_a_number_that_is_wrong(self):
+        """The heading counts them in words, and a count is the one part
+        of a table that stays wrong after the row is added."""
+        doc = self.reference()
+        actual = len(self.declared_subcommands())
+        for word in re.findall(r"Its (\w+) subcommands", doc):
+            self.assertEqual(word, self.NUMBER_WORDS[actual - 1],
+                             f"reference.html says the installer has {word} subcommands and it "
+                             f"declares {actual}")
+
+    def test_the_extractor_can_actually_fail(self):
+        """The positive control: every assertion above is an absence, and
+        an extractor reading nothing satisfies two of them."""
+        control = ('<tr><td colspan="3"><strong>heading</strong></td></tr>\n'
+                   '<tr><td><code>preflight</code></td><td>x</td><td>y, unlike <code>install</code></td></tr>\n')
+        self.assertEqual(self.subcommands_in_first_cell(control), {"preflight"},
+                         "the extractor should read the first cell only, and skip a colspan "
+                         "heading")
+
+
+class _FakeRun:
+    """Stands in for installer.run, answering by the verb it is given."""
+
+    def __init__(self, logs_stdout="", restart_rc=0):
+        self.logs_stdout, self.restart_rc = logs_stdout, restart_rc
+        self.calls = []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        verb = next((a for a in argv if a in ("logs", "restart", "up", "ps")), "")
+        if verb == "logs":
+            return types.SimpleNamespace(returncode=0, stdout=self.logs_stdout, stderr="")
+        if verb == "restart":
+            return types.SimpleNamespace(returncode=self.restart_rc, stdout="", stderr="nope")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+class TestReissuingAnEnrollmentLink(unittest.TestCase):
+    """`enroll-link` exists so that a lapsed link is one command rather
+    than two raw `docker compose` invocations plus an instruction to read
+    the right line out of the output.
+
+    The reading is the part worth having in code. A container keeps its
+    log across a restart, so after reissuing there are two notices in it
+    and the dead one is first: a reader told to grep gets both and no
+    reason to prefer either.
+    """
+
+    NOTICE = "rbm-web: no administrator account exists yet. Open {} to create one (valid 30 minutes, single use)."
+
+    def test_the_newest_notice_wins_not_the_first(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        old = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=OLDOLDOLD")
+        new = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=NEWNEWNEW")
+        fake = _FakeRun(logs_stdout="\n".join([old, "some other engine line", new]) + "\n")
+        with unittest.mock.patch.object(installer, "run", fake):
+            got = installer._newest_enrollment_notice(args)
+        self.assertIn("NEWNEWNEW", got)
+        self.assertNotIn("OLDOLDOLD", got,
+                         "the first notice in the log is the one the restart invalidated")
+
+    def test_no_notice_at_all_is_an_empty_answer_not_a_crash(self):
+        fx = Fixture(self)
+        fake = _FakeRun(logs_stdout="engine started\nnothing about enrollment here\n")
+        with unittest.mock.patch.object(installer, "run", fake):
+            self.assertEqual(installer._newest_enrollment_notice(fx.args(command="enroll-link")), "")
+
+    def test_an_existing_administrator_is_its_own_refusal(self):
+        """Not a 30 and not a retry. Enrollment is a one-time door, so a
+        script that keeps trying this would loop for ever, where one
+        retrying a runtime failure is being reasonable."""
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        (args.prefix / "compose.yaml").write_text("services: {}\n")
+        (args.prefix / ".env").write_text("PUID=1000\n")
+        args.state_dir.mkdir(parents=True, exist_ok=True)
+        (args.state_dir / "local-auth.json").write_text('{"username": "nas-admin"}')
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "rclone-manager"}], {})):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_ENROLLMENT_CLOSED)
+        self.assertIn("already exists", caught.exception.message)
+        self.assertIn("factory-reset", caught.exception.remedy,
+                      "somebody who has lost the password needs told the one way back")
+
+    def test_nothing_installed_refuses_before_touching_docker(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        fake = _FakeRun()
+        with unittest.mock.patch.object(installer, "detect_existing", lambda a: (False, [], {})), \
+             unittest.mock.patch.object(installer, "run", fake):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_PREREQ_PAYLOAD)
+        self.assertEqual(fake.calls, [], "it restarted something on a host with nothing installed")
+
+    def test_no_engine_container_says_how_to_get_one(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        fake = _FakeRun()
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "web-ui"}], {})), \
+             unittest.mock.patch.object(installer, "run", fake):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_RUNTIME)
+        self.assertIn("up -d", caught.exception.remedy)
+        self.assertEqual(fake.calls, [])
+
+    def test_the_happy_path_restarts_then_prints_the_new_link(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        old = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=OLDOLDOLD")
+        new = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=NEWNEWNEW")
+
+        seen = {"restarted": False}
+        real_logs = [old]
+
+        def fake_run(argv, **kwargs):
+            if "restart" in argv:
+                seen["restarted"] = True
+                real_logs.append(new)
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if "logs" in argv:
+                return types.SimpleNamespace(returncode=0, stdout="\n".join(real_logs), stderr="")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "rclone-manager"}], {})), \
+             unittest.mock.patch.object(installer, "run", fake_run):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = installer.cmd_enroll_link(args)
+        self.assertEqual(code, installer.EXIT_OK)
+        self.assertTrue(seen["restarted"], "a token is only minted by a restart")
+        printed = out.getvalue()
+        self.assertIn("NEWNEWNEW", printed)
+        self.assertNotIn("OLDOLDOLD", printed, "it printed the link its own restart just killed")
+        self.assertIn("works once", printed)
+
+    def test_a_restart_that_prints_nothing_new_is_a_refusal(self):
+        """The control on the assertion above. Without it, "prints the new
+        link" is also satisfied by a command that prints whatever was
+        already there and calls it fresh."""
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        old = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=OLDOLDOLD")
+        fake = _FakeRun(logs_stdout=old)
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "rclone-manager"}], {})), \
+             unittest.mock.patch.object(installer, "run", fake), \
+             unittest.mock.patch.object(installer, "ENROLL_NOTICE_WAIT", 0):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_VERIFY)
 
 
 if __name__ == "__main__":
