@@ -32,6 +32,7 @@ an archive class is not a place a tier can deliver to.
 | A medium can be DECLARED without hand-editing config.yaml, and proved before it is | Landed (#594): a wizard on the settings page, and `rbm medium list/show/import-credentials/add/edit/remove` |
 | The drive backups already land on is a destination like any other, a tier picks one without leaving the tier, and one destination is the default | Landed (#622): a picker under every tier in both editors, a `local` entry in the destinations list, `rbm medium default` and `settings patch --tier-medium` |
 | Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
+| Backends are declared by a bundled manifest the engine loads at startup, refusing a malformed one loudly | Landed (#665), nothing reads it yet |
 
 One limit is worth knowing before you write a chain, and it is the manager
 refusing to do something rather than doing it badly:
