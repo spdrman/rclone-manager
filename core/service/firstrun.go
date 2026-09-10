@@ -52,6 +52,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/mediumcheck"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
@@ -342,6 +343,18 @@ func (f *FirstRun) CreateInitialConfig(ctx context.Context, req CreateBackupSetR
 		State:        config.State{Database: f.defaults.StateDatabase},
 		Sources:      []config.Source{{Name: sourceName, BackupSets: []config.BackupSet{newSet}}},
 	}
+
+	// #670: the local hard drive becomes a real declared destination
+	// from first boot, rather than the implicit backstop it always was
+	// before. Its path is the backup root newSet just established, so
+	// nothing here asks an operator to name it. See
+	// seedLocalStorageMedium's own doc for why writing config.MediumLocal
+	// here is not the operator-facing hole CreateStorageMedium refuses.
+	localMedium, err := seedLocalStorageMedium(ctx, cfg, req.SkipConnectionCheck)
+	if err != nil {
+		return BackupSet{}, err
+	}
+	cfg.StorageMediums = append(cfg.StorageMediums, localMedium)
 	// Retention and Alerts are left at their zero values on purpose:
 	// config.Validate resolves both to this product's documented defaults
 	// (FR-18's tier chain, alerting off), which is exactly what a
@@ -526,4 +539,143 @@ func createConfigExclusivelyRemovingOnError(path string, b []byte) (retErr error
 		return fmt.Errorf("service: syncing the configuration directory: %w", err)
 	}
 	return nil
+}
+
+// seedLocalStorageMedium builds the ONE declared destination a fresh
+// install starts with (#670): the local hard drive, at cfg's own backup
+// root, PROVEN by mediumcheck's real probe rather than asserted.
+//
+// # Why this may write config.MediumLocal when CreateStorageMedium may not
+//
+// validateStorageMediums refuses an OPERATOR from ever declaring a medium
+// with this id: config.MediumLocal is the legacy spelling of "the backup
+// set's own local_path", and a caller minting a second, declared answer
+// to "where is local" is exactly the hazard MediumTypeLocalDir's own doc
+// names. This function is not an operator. It runs once, behind issue
+// #176's one-time door, asserting a directory the deployment's own
+// installer has already mounted and proved exists and is writable —
+// which is why it PROVES that claim itself, with the identical probe
+// PreflightStorageMedium(local) runs on demand later
+// (mediumcheck.RunLocal, the same steps #666's local_volume manifest
+// declares), rather than writing a mark nothing checked.
+//
+// # The probe is a VERDICT, and only a refusal when nobody opted out
+//
+// #670's acceptance is "verified without anybody pressing anything", and
+// that is still what an ordinary install gets: the probe runs, it has to
+// pass, and a first configuration naming a backup root nothing can reach
+// is refused exactly as the SSH connection check a few lines above
+// refuses one — the same hazard PR #628's review found on the source
+// side.
+//
+// What it must NOT do is refuse a write the operator explicitly asked
+// not to verify. `--no-verify` (SkipConnectionCheck) has one meaning
+// everywhere else in this product: nothing is proven, the thing is
+// written anyway, and it carries a mark saying so until a check passes.
+// Wired as an unconditional refusal, this probe made the flag mean
+// something different here, and the shape that produced was the one the
+// flag exists for: on a host whose backup root is not mounted yet,
+// `backup-set create --no-verify` could not write a first configuration
+// AT ALL. The same command printed "--no-verify was given, so nothing
+// was resolved" for the SSH half and then refused for this one.
+//
+// So the probe runs either way and its answer is RECORDED either way:
+// ConnectionUnverified is `!report.OK`, which makes the mark a true
+// statement about this destination rather than a hardcoded false (the
+// defect #670 was itself closing, from the other side) and rather than a
+// copy of the flag (which would badge a destination this deployment did
+// prove). Only the refusal is conditional.
+//
+// writeStorageMedium's own guard is the other half of what keeps this an
+// installer-only exception rather than a hole an API caller can walk
+// through: CreateStorageMedium refuses config.MediumLocal from every
+// request body, unconditionally, regardless of what this function writes
+// here.
+//
+// # Why writing it here is not the second answer MediumTypeLocalDir forbids
+//
+// MediumTypeLocalDir's doctrine fixes the BACKEND TYPE local artifacts are
+// written through: one answer to "what kind of thing is a local
+// directory". It says nothing about how many DESTINATIONS of that type a
+// deployment declares, which is #666's whole subject and #664's own
+// architecture decision. config.MediumLocal is the pre-EPIC-I id
+// reservation, from before a destination was a backend instance, and this
+// is the function EPIC I designates to carry it into the new model: the
+// seeded medium is instance zero of the local_volume backend, not a rival
+// to it.
+func seedLocalStorageMedium(ctx context.Context, cfg *config.Config, optedOutOfVerification bool) (config.StorageMedium, error) {
+	root := cfg.EffectiveBackupRoot()
+	// A relative root is refused here as the shape problem it is
+	// (matching config.Validate's own eventual rule for
+	// BackupSet.LocalPath) rather than left to reach the probe below:
+	// mediumcheck.RunLocal has no defensible interpretation of a
+	// relative path, and reporting a filesystem check's failure would
+	// bury the actual, cheaply-decidable mistake behind a confusing
+	// probe error.
+	if root != "" && !filepath.IsAbs(root) {
+		return config.StorageMedium{}, fmt.Errorf("%w: local_path %q must be an absolute path", ErrInvalidRequest, root)
+	}
+	report, err := mediumcheck.RunLocal(ctx, func(step mediumcheck.Step, err error) {
+		// The one place the underlying cause is allowed to go, exactly as
+		// app.Service.PreflightLocalMedium's own Observe is: an os error
+		// names a path on this host, and this runs before there is a
+		// configured service with a log of its own to send it to.
+		_ = err
+	}, mediumcheck.LocalTarget{
+		Root:              root,
+		SafetyMarginBytes: uint64(cfg.Capacity.SafetyMarginBytes),
+		CriticalFreeBytes: uint64(cfg.Capacity.CriticalFreeBytes),
+	})
+	// A probe that could not RUN, as opposed to one that ran and said
+	// no. It is still not a proof, so it is still not a refusal for an
+	// operator who opted out; for everybody else it is the same "this
+	// deployment cannot vouch for the root it is about to write" the
+	// failing report below is.
+	if err != nil {
+		if !optedOutOfVerification {
+			return config.StorageMedium{}, fmt.Errorf("service: proving the backup root before first use: %w", err)
+		}
+		return unprovenLocalStorageMedium(root), nil
+	}
+	if !report.OK {
+		if !optedOutOfVerification {
+			return config.StorageMedium{}, fmt.Errorf("%w: the backup root %s did not pass its own storage check (%s)",
+				ErrConnectionNotProven, root, firstFailedStepDetail(report))
+		}
+		return unprovenLocalStorageMedium(root), nil
+	}
+	return config.StorageMedium{
+		ID:   config.MediumLocal,
+		Type: config.StorageMediumTypeLocalVolume,
+		Path: root,
+	}, nil
+}
+
+// unprovenLocalStorageMedium is the seeded destination as it goes in
+// when its probe did not pass and the operator had opted out of
+// verification.
+//
+// Identical to the proven one but for the mark, which is the point: the
+// destination is declared, it is instance zero of local_volume like any
+// other seed, and the one difference is that the file now SAYS nothing
+// proved it. #636's badge, the "never proven" line on the destinations
+// card and `medium test-connection` clearing it on a pass all work off
+// that field already, so nothing further has to know this happened.
+func unprovenLocalStorageMedium(root string) config.StorageMedium {
+	return config.StorageMedium{
+		ID:                   config.MediumLocal,
+		Type:                 config.StorageMediumTypeLocalVolume,
+		Path:                 root,
+		ConnectionUnverified: true,
+	}
+}
+
+// firstFailedStepDetail names the first step seedLocalStorageMedium's
+// probe did not pass, so a first boot that cannot seed its own backup
+// root says which check to fix rather than only that one did.
+func firstFailedStepDetail(report mediumcheck.Report) string {
+	if failures := report.Failures(); len(failures) > 0 {
+		return fmt.Sprintf("%s: %s", failures[0].Step, failures[0].Detail)
+	}
+	return "unknown step"
 }

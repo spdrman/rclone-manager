@@ -39,6 +39,7 @@ import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
 import { bytes, stamp } from "@shared/utilities/format";
+import { artifactPath } from "@shared/utilities/routes";
 import type { BackupArtifact } from "@shared/types/backup";
 
 /** Called "Backups", never "Restore points" — the product does not perform
@@ -169,7 +170,10 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
                 {rows.map((a) => (
                   <tr
                     key={a.id}
-                    onClick={() => navigate("/backups/" + a.id)}
+                    // Through the builder, never by concatenation: an
+                    // artifact id spans three path segments and each one
+                    // has to be escaped on its own (issue #677).
+                    onClick={() => navigate(artifactPath(a.id))}
                     style={{ cursor: "pointer" }}
                   >
                     <td className="mono" style={{ whiteSpace: "nowrap", color: "var(--text-2)" }}>

@@ -35,6 +35,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/backend"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -424,6 +425,20 @@ func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Confi
 // returned BackupService.
 func Open(ctx context.Context, configPath string) (*BackupService, func() error, error) {
 	logger := obs.New(os.Stdout, obs.LevelInfo)
+
+	// Issue #665: loads the bundled backend manifests and refuses loudly
+	// if one is malformed, before anything else opens. Nothing reads the
+	// result yet - it is stored nowhere, and #666/#667 are the first
+	// real callers - so this line's only effect today is the refusal
+	// itself. Before OpenConfigAndJournal on purpose: a malformed
+	// manifest is a defect in what this binary carries, not in what an
+	// operator configured, and it should never present as a config or
+	// journal failure.
+	if _, err := backend.Bundled(); err != nil {
+		err = fmt.Errorf("service: loading the bundled backend manifests: %w", err)
+		logger.Error(ctx, "startup", err)
+		return nil, nil, err
+	}
 
 	cfg, journal, releaseJournal, err := OpenConfigAndJournal(ctx, configPath)
 	if err != nil {

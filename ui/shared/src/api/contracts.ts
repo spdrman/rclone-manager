@@ -849,6 +849,81 @@ export interface StorageMediumSpec {
 }
 
 /**
+ * One destination's configuration, in the vocabulary its backend's
+ * manifest declares (issue #669, EPIC I #664).
+ *
+ * This is the shape StorageMediumSpec above cannot be. That one
+ * enumerates S3's fields - `bucket` is required and there is no `path` -
+ * because it was written when S3 was the only destination anybody could
+ * declare, so it is a hand-transcribed copy of s3.json's field ids and
+ * cannot carry a local volume at all. #667 deletes that assumption from
+ * the engine; this is the wire's half of the same deletion, and it is
+ * additive rather than a rewrite so that #594's S3 wizard keeps working
+ * until it is retired.
+ *
+ * `values` is keyed by manifest field id, with every value as the string
+ * the engine validates: a bool is "true" or "false", which is what
+ * `backend.validateFieldValue` reads, and an omitted or empty entry
+ * means UNSET - never a default filled in by the caller, because a
+ * default written back into the record is a default frozen into the
+ * operator's file by the next save (#294).
+ *
+ * `credentials` is separate, and that separation is load-bearing rather
+ * than tidy. A credential is not a value: it is a reference this
+ * deployment minted, it is checked by a different rule, and a bag that
+ * COULD hold one is a bag something will eventually put material into.
+ * Keeping it out is what makes #665's C1-C5 hold on this path by
+ * construction. Absent means "keep the credential already configured",
+ * for StorageMediumSpec's reason: nothing reports a destination's
+ * credential back, not even its kind, so a form cannot resubmit what it
+ * never received.
+ */
+export interface StorageMediumConfiguration {
+  /**
+   * The backend this instance is an instance of, required when the id is
+   * not declared yet.
+   *
+   * It is here because a destination cannot exist unconfigured (P2,
+   * #669): `Registry.ValidateInstance` refuses an absent required field
+   * (core/internal/backend/validate.go:228-233), `config.Validate`
+   * delegates every per-field rule to it, and both bundled manifests
+   * have required fields. So there is no record to read a backend id
+   * off before the values exist, and the create and the configure are
+   * one write with one check in front of it.
+   */
+  backend?: string;
+  fields: Record<string, string>;
+  credentials?: StorageMediumCredentialsReference;
+}
+
+/**
+ * What one destination has configured right now, in its backend's
+ * vocabulary (issue #669).
+ *
+ * A form has to have this before it can offer an edit. This flow sends
+ * the WHOLE declared field set, so a form that started empty and saved
+ * would unset every field the operator did not retype - an empty form is
+ * not a neutral starting point here, and inferring the current values
+ * from StorageMedium's named fields in the browser would be a second,
+ * hand-transcribed copy of the field-id mapping the engine already owns
+ * (config's `storageMediumFieldValue`).
+ *
+ * An unset optional field is ABSENT rather than present as its
+ * `unset_means` value, which is the same #294 rule the write side obeys:
+ * a default resolved at read time must not travel as though somebody
+ * chose it, because then the next save freezes it into their file.
+ *
+ * `credentialConfigured` is a boolean and never the reference. Whether a
+ * credential exists is what a form needs - it decides whether the pair
+ * may be left empty - and it is not material, not a path, and not a
+ * variable name, so it is the most this may say (FR-33, #665's C3).
+ */
+export interface StorageMediumConfigurationState {
+  fields: Record<string, string>;
+  credentialConfigured: boolean;
+}
+
+/**
  * What the journal says is currently on one storage destination, per
  * backup set (FR-30).
  *
@@ -866,6 +941,166 @@ export interface StorageMediumUsage {
     placements: number;
     onlyCopyHere: number;
   }>;
+}
+
+/**
+ * What one value a backend collects IS (EPIC I, #664).
+ *
+ * The set is closed in the engine and a manifest may not add to it, so
+ * this union is a real closed set rather than a hint: a surface renders
+ * one control per kind, and a kind it does not know is a version
+ * mismatch to say out loud, not free text to fall back to.
+ *
+ * `credential` is the marker that routes an input to the credential
+ * import instead of into the instance body. It is a kind rather than a
+ * flag on a string field because a credential is not a value: the
+ * material never travels on the same path a value does, and a form that
+ * treated it as "a string with a secret flag" would be one refactor away
+ * from putting it there.
+ */
+export type BackendFieldKind =
+  | "string"
+  | "path"
+  | "url"
+  | "enum"
+  | "bool"
+  | "credential"
+  | "key_prefix";
+
+/**
+ * The same seven kinds at runtime.
+ *
+ * It exists so a renderer's own test can iterate the set and fail when a
+ * kind has no control, instead of a new kind rendering as nothing at all
+ * on a screen nobody re-opened. A union alone cannot be enumerated, and a
+ * second hand-written list beside it would be the drift this pair exists
+ * to prevent — so the type is derived from nothing and the array is
+ * checked against it by the compiler.
+ */
+export const BACKEND_FIELD_KINDS: readonly BackendFieldKind[] = [
+  "string",
+  "path",
+  "url",
+  "enum",
+  "bool",
+  "credential",
+  "key_prefix"
+];
+
+/**
+ * What a backend IS to this engine, as opposed to which rclone backend it
+ * dials. Closed in the engine, for BackendFieldKind's reason.
+ */
+export type BackendRole = "object_store" | "local_volume";
+
+/** One choice an `enum`-kind field offers: the value that is stored, and
+ *  the words to render for it. */
+export interface BackendEnumValue {
+  value: string;
+  label: string;
+}
+
+/**
+ * One thing an operator is asked for when they configure an instance of a
+ * backend.
+ *
+ * This is SHAPE and never a value. A `credential` field says a credential
+ * is needed here and says nothing about what one is, which is what makes
+ * the whole catalogue safe to hold in a browser at all.
+ */
+export interface BackendManifestField {
+  /** The key this value is stored under, and deliberately the same
+   *  spelling the configuration file uses for the same fact. It is what a
+   *  create request keys its values by, so nothing here has to translate
+   *  a label back into a field. */
+  id: string;
+  label: string;
+  help?: string;
+  kind: BackendFieldKind;
+  required: boolean;
+  /** The closed choice set, for `enum` fields and only for those. */
+  values?: BackendEnumValue[];
+  /** Anchored regular expression source, for `string` fields and only
+   *  for those; safe to pass to `new RegExp`. */
+  pattern?: string;
+  /** What the engine resolves this field to when an instance leaves it
+   *  empty.
+   *
+   *  Render it as "leave empty for X" and send NOTHING. It is not a
+   *  default to pre-fill: a default written into the request is a default
+   *  frozen into the operator's own file by the next settings save
+   *  (issue #294), which is why the engine resolves it with an accessor
+   *  rather than storing it. */
+  unsetMeans?: string;
+}
+
+/** One step of the verification vocabulary and whether this backend runs
+ *  it. `reason` is present exactly when `run` is false: a skipped step is
+ *  a first-class outcome and not a quiet pass, so it has to say why in
+ *  words an operator reads. */
+export interface BackendProbeStep {
+  step: string;
+  run: boolean;
+  reason?: string;
+}
+
+/**
+ * One registered backend, as data.
+ *
+ * A destination is an INSTANCE of one of these. That is the whole of EPIC
+ * I: several instances of one backend is the normal case rather than an
+ * edge, so a manifest carries what a picker needs to offer the backend
+ * and says nothing whatever about any particular destination.
+ */
+export interface BackendManifest {
+  /** The backend's name, and what a create request names. It is NOT
+   *  `rcloneBackend` below, and the two are separate because a future
+   *  second local-ish backend would dial the same rclone backend as the
+   *  first. */
+  id: string;
+  label: string;
+  summary: string;
+  role: BackendRole;
+  /** Which rclone backend an instance of this is dialed through,
+   *  reported for an operator's benefit. Constrained by the engine to
+   *  backends the build actually registers (FR-4). */
+  rcloneBackend: string;
+  fields: BackendManifestField[];
+  probe: { steps: BackendProbeStep[] };
+}
+
+/** A backend the engine understands and no manifest declares, so no
+ *  instance of one can exist.
+ *
+ *  Rendered, dimmed, rather than hidden. Somebody who came looking for
+ *  SFTP learns nothing from a menu that never mentions it and asks again
+ *  next month; a row saying the shape is understood and is not registered
+ *  is a real answer. Nothing about it can be submitted. */
+export interface UnregisteredBackend {
+  rcloneBackend: string;
+}
+
+/**
+ * Every backend an instance may be declared on, and the rules an instance
+ * id follows.
+ *
+ * The rules travel with the catalogue rather than being restated in a
+ * form, for RetentionSchema's stated reason: a form has to refuse exactly
+ * what a hand-edited configuration file would be refused for, and a
+ * client holding its own copy of the rule goes stale in one direction
+ * only — silently accepting a name the engine then rejects.
+ */
+export interface BackendCatalog {
+  registered: BackendManifest[];
+  unregistered: UnregisteredBackend[];
+  /** Anchored regular expression source; safe to pass to `new RegExp`. */
+  instanceIdPattern: string;
+  /** The one instance id no operator may choose. It names the drive this
+   *  deployment's backups land on, written by the first-boot seed as
+   *  instance zero of the local volume backend, and it is refused on
+   *  every operator-facing path. A form that offers it and then meets the
+   *  refusal is a worse experience than one that says so in the field. */
+  reservedInstanceId: string;
 }
 
 /**
@@ -1726,6 +1961,68 @@ export interface BackupManagerApi {
   createStorageMedium(spec: StorageMediumSpec): Promise<StorageMedium>;
   updateStorageMedium(mediumId: string, spec: StorageMediumSpec): Promise<StorageMedium>;
   removeStorageMedium(mediumId: string): Promise<void>;
+
+  /**
+   * EPIC I (#664): every backend a destination can be an instance of,
+   * and the rules an instance id follows.
+   *
+   * The add-a-destination picker reads this and holds no list of its
+   * own. A component with an array of backend names in it, or a switch
+   * on backend type, is the assumption this epic exists to remove — that
+   * a destination IS a backend type rather than an instance of one —
+   * re-asserted in the one surface the epic is about.
+   *
+   * Read-only: there is no route that adds to it, by design. A manifest
+   * decides what a destination may BE, including which rclone backend it
+   * dials, so a client-extensible catalogue would put FR-4's gate on the
+   * far side of the network from the binary it constrains.
+   */
+  listBackends(): Promise<BackendCatalog>;
+
+  /**
+   * Configure a destination in its backend's own vocabulary (issue
+   * #669, EPIC I #664), and prove it first.
+   *
+   * A read and two writes, and the writes are separate for the reason
+   * preflightStorageMediumCandidate exists beside createStorageMedium:
+   * a check that can only run against what is already written makes
+   * "declare it and find out" the supported flow, which is the ordering
+   * FR-30 exists to prevent. The preflight writes nothing whatever it
+   * answers and resolves with `ok` false when the destination does not
+   * work - a bucket that is not there is what an operator configured,
+   * not a request that broke.
+   *
+   * `configureStorageMedium` is create AND replace, which is what PUT
+   * means and which P2 makes necessary rather than convenient: a
+   * destination cannot exist unconfigured, because
+   * `Registry.ValidateInstance` refuses an absent required field
+   * (core/internal/backend/validate.go:228-233), `config.Validate`
+   * delegates every per-field rule to it, and both bundled manifests
+   * have required fields. So #668's confirm step names a backend and an
+   * instance and writes nothing, and this is the single create, after
+   * the check. `backend` on the request is required exactly then,
+   * because there is no record to read it off yet.
+   *
+   * `getStorageMediumConfiguration` exists because these writes replace
+   * the WHOLE declared field set: a form that started empty and saved
+   * would unset every field the operator did not retype.
+   *
+   * The engine runs the same check in front of the write and refuses
+   * with MEDIUM_CONNECTION_NOT_PROVEN when it fails (#636), so a
+   * destination cannot become configured-and-unproven by way of this
+   * path either - and a configuration naming no credential is checked
+   * with the one already stored, which is what lets an operator change
+   * a prefix on a destination whose access key they do not have.
+   */
+  getStorageMediumConfiguration(mediumId: string): Promise<StorageMediumConfigurationState>;
+  preflightStorageMediumConfiguration(
+    mediumId: string,
+    config: StorageMediumConfiguration
+  ): Promise<MediumPreflight>;
+  configureStorageMedium(
+    mediumId: string,
+    config: StorageMediumConfiguration
+  ): Promise<StorageMedium>;
 
   /** Make this the destination a NEWLY CREATED retention tier starts on
    *  (#622). It moves that and nothing else: no existing tier is

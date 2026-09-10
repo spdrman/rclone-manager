@@ -184,7 +184,26 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"POST /api/v1/storage-mediums":           true,
 	"POST /api/v1/storage-mediums/preflight": true,
 	"PUT /api/v1/storage-mediums/{id}":       true,
-	"DELETE /api/v1/storage-mediums/{id}":    true,
+
+	// I2.2 (issue #669): the same two tiers as their spec-shaped
+	// neighbours above, one line each rather than as a block, because
+	// they are exempt for the two different reasons already argued.
+	//
+	// PUT .../configuration writes configuration, which is what POST and
+	// PUT /storage-mediums do; it is create AND replace, because a
+	// destination cannot exist unconfigured (backend/validate.go:228-233),
+	// and creating one still MOVES NOTHING - artifacts arrive only once a
+	// retention tier names it.
+	//
+	// POST .../configuration/preflight is the candidate probe with a
+	// manifest-shaped body instead of an S3-shaped one, and every
+	// sentence of the preflight entry above applies to it unchanged: the
+	// only object it can write is one at a random key under a reserved
+	// segment no configured artifact can produce, and the only object it
+	// can delete is that same one.
+	"PUT /api/v1/storage-mediums/{id}/configuration":            true,
+	"POST /api/v1/storage-mediums/{id}/configuration/preflight": true,
+	"DELETE /api/v1/storage-mediums/{id}":                       true,
 
 	// H2.2 (issue #622): moving the destination a NEWLY CREATED retention
 	// tier starts on. It is the quietest write on this list and is

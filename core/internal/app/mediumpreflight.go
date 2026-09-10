@@ -239,7 +239,55 @@ func (s *Service) PreflightLocalMedium(ctx context.Context) (mediumcheck.Report,
 		s.logger().Error(ctx, "medium-preflight", fmt.Errorf("local storage destination, %s check: %w", step, err))
 	}, mediumcheck.LocalTarget{
 		Root:              s.Config.EffectiveBackupRoot(),
+		ID:                config.MediumLocal,
+		OtherRoots:        s.otherLocalDestinations(config.MediumLocal),
 		SafetyMarginBytes: s.Capacity.SafetyMarginBytes,
 		CriticalFreeBytes: s.Capacity.CriticalFreeBytes,
 	})
+}
+
+// PreflightLocalVolumeMedium proves one declared local_volume destination
+// works, through the identical local check the implicit backup root uses
+// (issue #666): a directory fails in exactly the ways RunLocal already
+// answers - gone, unwritable, full, or secretly the SAME disk as another
+// configured local destination reached by a different path. It is
+// dispatched by ROLE (core/service's PreflightStorageMedium chooses this
+// over the generic PreflightMedium/mediumcheck.Run for any medium whose
+// Type is StorageMediumTypeLocalVolume), not by id, because "local",
+// "second_disk" and "archive_disk" are all local_volume instances and all
+// prove the same four things the same way.
+func (s *Service) PreflightLocalVolumeMedium(ctx context.Context, m config.StorageMedium) (mediumcheck.Report, error) {
+	if s.Config == nil {
+		return mediumcheck.Report{}, fmt.Errorf("app: preflight: this instance has no configuration to read local destinations out of")
+	}
+	return mediumcheck.RunLocal(ctx, func(step mediumcheck.Step, err error) {
+		s.logger().Error(ctx, "medium-preflight", fmt.Errorf("local volume %q, %s check: %w", m.ID, step, err))
+	}, mediumcheck.LocalTarget{
+		Root:              m.Path,
+		ID:                m.ID,
+		OtherRoots:        s.otherLocalDestinations(m.ID),
+		SafetyMarginBytes: s.Capacity.SafetyMarginBytes,
+		CriticalFreeBytes: s.Capacity.CriticalFreeBytes,
+	})
+}
+
+// otherLocalDestinations is every local destination this deployment
+// already writes backups into, other than excludeID: the implicit backup
+// root under the reserved local id, and every other declared
+// local_volume instance under its own. It is what mediumcheck's
+// StepDistinctVolume weighs a candidate directory against, so a second
+// "destination" that turns out to be the same disk under a different
+// path is told apart from a genuinely separate one (#666).
+func (s *Service) otherLocalDestinations(excludeID string) map[string]string {
+	others := map[string]string{}
+	if root := s.Config.EffectiveBackupRoot(); root != "" && config.MediumLocal != excludeID {
+		others[config.MediumLocal] = root
+	}
+	for _, m := range s.Config.StorageMediums {
+		if m.Type != config.StorageMediumTypeLocalVolume || m.ID == excludeID {
+			continue
+		}
+		others[m.ID] = m.Path
+	}
+	return others
 }

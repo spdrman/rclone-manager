@@ -126,14 +126,56 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = SCRIPTS_DIR.parent
 GOLDEN_DIR = SCRIPTS_DIR / "tests" / "testdata"
 
-SUBJECTS = ["two-machine-backup", "run-machine-tier"]
+# A subject is a NAME, not a path, because I1.6 moved the ported drivers to
+# scripts/rcmtools/e2e/*.py and left an exec shim at each old
+# scripts/e2e/*.sh path. The help lives with the driver, not with the shim,
+# so this suite follows the driver: `subject_file` says where the
+# help-owning file is and `subject_interp` says what runs it.
+#
+# The table stays a TABLE, and `subject_interp` stays a real lookup rather
+# than a constant, precisely so a subject that is still bash does not need
+# this file restructured to keep being checked. three-machine-web-ui (#699,
+# and the driver #687's gate fix depends on) is that subject: never ported,
+# so its help-owning file and its bash entry point are the same file.
+#
+# This is the shape `main` restructured the bash suite into while this port
+# was in flight, carried forward deliberately. Collapsing it back to "every
+# subject is python3" would drop the third subject silently, which is a
+# capability disappearing in a port -- exactly what I1.6 exists to prevent.
+SUBJECTS = ["two-machine-backup", "run-machine-tier", "three-machine-web-ui"]
 
 _SUBJECT_FILE = {
     "two-machine-backup": "scripts/rcmtools/e2e/two_machine_backup.py",
     "run-machine-tier": "scripts/rcmtools/e2e/run_machine_tier.py",
+    "three-machine-web-ui": "scripts/e2e/three-machine-web-ui.sh",
 }
+_SUBJECT_INTERP = {
+    "two-machine-backup": "python3",
+    "run-machine-tier": "python3",
+    "three-machine-web-ui": "bash",
+}
+# The old scripts/e2e path that must still be a runnable entry point, or
+# nothing where there is no longer any reason for one.
+#
+# Not every ported driver keeps its old path, and which ones do is a fact
+# about who NAMES the path rather than a matter of consistency.
+# two-machine-backup.sh is still exec'd by scripts/ci-local.sh, reached by
+# .github/workflows/ci.yml through two-machine-ci.sh, driven by
+# scripts/tests/two-machine-exit-status.test.sh, and FABRICATED at that
+# literal path by scripts/tests/ci-local-gate.test.sh. run-machine-tier.sh
+# was named by nothing that runs it once its callers were repointed, so it
+# was deleted rather than left as a file whose only purpose is to be found.
+# three-machine-web-ui is neither: it was never ported, so `subject_file`
+# already points straight at its one and only entry point, and its "shim"
+# is that same file. The branch this feeds still exercises something real
+# for it -- A's "renders identically through <shim>" check runs the
+# identical file twice, through the same interpreter, which is weaker than
+# a real shim's comparison but not vacuous: a driver that read argv from
+# anything other than its own invocation (a stray cwd assumption, say)
+# would still fail it.
 _SUBJECT_SHIM = {
     "two-machine-backup": "scripts/e2e/two-machine-backup.sh",
+    "three-machine-web-ui": "scripts/e2e/three-machine-web-ui.sh",
 }
 
 INSERTED = "# An unrelated implementation note, added later, above the help block."
@@ -143,8 +185,11 @@ def subject_file(name: str) -> str:
     return _SUBJECT_FILE[name]
 
 
-def subject_interp(_name: str) -> str:
-    return "python3"
+def subject_interp(name: str) -> str:
+    """What runs `name`'s help-owning file. A lookup, not a constant: see
+    the table's own comment for why collapsing this is how the third
+    subject would vanish."""
+    return _SUBJECT_INTERP[name]
 
 
 def subject_shim(name: str) -> str:
@@ -163,17 +208,34 @@ def render(interp: str, script: Path, flag: str = "--help") -> tuple[str, int]:
 
 def sandbox_copy(tmpdirs: list[str], subject: str) -> Path:
     """A throwaway checkout holding one driver, its root resolution still
-    landing on a directory it can cd into, and the rcmtools package it
-    imports before it looks at argv (see this module's own hazard note)."""
+    landing on a directory it can cd into, and -- for a PORTED subject --
+    the rcmtools package it imports before it looks at argv.
+
+    Staging the package is not convenience. A ported driver does
+    `sys.path.insert(...); from rcmtools import harness` before it reads
+    argv, so a sandbox holding only the driver file dies on an ImportError
+    before its help is ever rendered. C and D2 would then fail for a
+    reason that is not what they measure, and D3 -- which only asks for a
+    NON-ZERO EXIT -- would PASS on that ImportError, pinning nothing at
+    all. That is the vacuous-green hazard this whole issue exists to watch
+    for, and check S below is what proves the sandbox renders before
+    anything mutates it.
+
+    An unported bash subject such as three-machine-web-ui (#699) is a
+    complete program on its own, so the package is NOT staged for it:
+    copying a package it never imports would be copying for its own sake,
+    and its file does not live under scripts/rcmtools/e2e, so the
+    directories below would be created for nothing.
+    """
     d = Path(tempfile.mkdtemp())
     tmpdirs.append(str(d))
     file = subject_file(subject)
     (d / Path(file).parent).mkdir(parents=True, exist_ok=True)
-    (d / "scripts" / "rcmtools").mkdir(parents=True, exist_ok=True)
-    (d / "scripts" / "rcmtools" / "e2e").mkdir(parents=True, exist_ok=True)
-    shutil.copy(REPO_ROOT / "scripts/rcmtools/__init__.py", d / "scripts/rcmtools/__init__.py")
-    shutil.copy(REPO_ROOT / "scripts/rcmtools/harness.py", d / "scripts/rcmtools/harness.py")
-    shutil.copy(REPO_ROOT / "scripts/rcmtools/e2e/__init__.py", d / "scripts/rcmtools/e2e/__init__.py")
+    if subject_interp(subject) == "python3":
+        (d / "scripts" / "rcmtools" / "e2e").mkdir(parents=True, exist_ok=True)
+        shutil.copy(REPO_ROOT / "scripts/rcmtools/__init__.py", d / "scripts/rcmtools/__init__.py")
+        shutil.copy(REPO_ROOT / "scripts/rcmtools/harness.py", d / "scripts/rcmtools/harness.py")
+        shutil.copy(REPO_ROOT / "scripts/rcmtools/e2e/__init__.py", d / "scripts/rcmtools/e2e/__init__.py")
     shutil.copy(REPO_ROOT / file, d / file)
     return d / file
 
@@ -249,8 +311,14 @@ underneath somebody, which is the whole of #514.""",
             # than moving it. The no-shim branch has to ASK the filesystem (#662)
             # rather than assert nothing about it.
             if not shim:
-                stale = REPO_ROOT / "scripts" / "e2e" / f"{subject}.sh"
-                if not stale.exists():
+                # Repo-relative, as `stale="scripts/e2e/$subject.sh"` was:
+                # the message is read by a human deciding whether to delete
+                # a file, and a /Users/... prefix is noise that also makes
+                # the line differ between checkouts. `stale_abs` is what
+                # asks the filesystem.
+                stale = f"scripts/e2e/{subject}.sh"
+                stale_abs = REPO_ROOT / stale
+                if not stale_abs.exists():
                     suite.ok(f"A {subject} needs no scripts/e2e entry point, and has none at {stale} to drift")
                 else:
                     suite.bad(

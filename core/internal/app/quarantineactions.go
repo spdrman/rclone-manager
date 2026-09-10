@@ -379,6 +379,28 @@ func (s *Service) ReinstateQuarantined(ctx context.Context, id model.ArtifactID,
 	// happens here rather than above the checks because `reinstate`
 	// writes nothing at all on a failing verdict, and that has to stay
 	// true for a FAILED artifact too.
+	//
+	// This is not decoration and the hop cannot be replaced with a direct
+	// FAILED -> COMMITTED (or -> REMOTE_RETAINED) edge, however tempting
+	// that looks once #663's badge fix makes the hop's own row stop
+	// misreporting as a fresh quarantine. FR-15's permanent forfeiture of
+	// the remote delete is not attached to this function; it is DERIVED
+	// from the edge shape, in machine.go's reinstatementEdges: every
+	// declared Transition whose From is a quarantine state and whose To
+	// is a durable restore point. FAILED is not a quarantine state, so a
+	// direct FAILED -> COMMITTED edge would be invisible to
+	// reinstatementEdges and to DeleteRemote's refusal built on it — an
+	// artifact re-trusted on this call's local hash comparison would stay
+	// remote-delete eligible, silently. And it would go unnoticed rather
+	// than merely unhandled:
+	// TestEveryQuarantineExitIntoADurableStateForfeitsRemoteDeletion
+	// computes its own coverage set from ReinstatementEdges(), so a new
+	// edge outside that derivation is not flagged as uncovered, it is
+	// simply never looked at. ADR 0004
+	// (docs/adr/0004-reinstating-a-quarantined-backup.md) already
+	// adjudicated this shape and rejected it for exactly that reason.
+	// Holding at QUARANTINED first is what keeps a FAILED artifact's
+	// reinstatement on the one edge shape the delete gate actually reads.
 	if cur == lifecycle.Failed {
 		if _, err := lifecycle.Advance(ctx, s.lifecycleDeps(), state.Transition{
 			Artifact: id,
@@ -518,10 +540,24 @@ func (s *Service) completeIngestionInPlace(
 	// hash that describe the bytes at the final name, replacing the empty
 	// read-back's answer, which is also what stops the next reconciliation
 	// pass condemning the file on it.
-	size := int64(0)
-	if info, statErr := os.Stat(final); statErr == nil {
-		size = info.Size()
+	//
+	// A stat that fails here is a hard failure, not one of the quiet
+	// declines above. Those mean "this is not the in-place case" and are
+	// right to write nothing and say nothing; this one means the case IS
+	// the in-place one and the measurement broke, on a file this same
+	// call read end to end a moment ago. Substituting a zero would put a
+	// byte count nothing measured beside a content hash with the
+	// checksummed flag set -- issue #662's own record, written by the
+	// code that exists to repair it, after which reconciliation condemns
+	// the file on it exactly as the issue describes. An operator can
+	// repeat a refusal; they cannot un-write a journal row.
+	info, statErr := os.Stat(final)
+	if statErr != nil {
+		return "", fmt.Errorf(
+			"app: retry failed ingestion: %s hashed clean a moment ago but measuring it failed: %w; "+
+				"refusing to record a byte count this manager did not measure (issue #662)", final, statErr)
 	}
+	size := info.Size()
 	if _, err := lifecycle.Advance(ctx, s.lifecycleDeps(), state.Transition{
 		Artifact: id,
 		Key:      fmt.Sprintf("app:retry-failed-in-place:%s:%s", id, s.now().Format(time.RFC3339Nano)),

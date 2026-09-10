@@ -32,6 +32,7 @@ func cmdReconcile(args []string) int {
 
 	reports := svc.ReconcileAll(ctx)
 	exitCode := 0
+	needsInvestigation := 0
 	for _, r := range reports {
 		if r.Err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", r.Set, r.Err)
@@ -42,13 +43,32 @@ func cmdReconcile(args []string) int {
 			if f.Changed() || f.NeedsInvestigation {
 				fmt.Printf("%s: %s -> %s: %s\n", f.Artifact, f.From, f.To, f.Reason)
 			}
+			if f.NeedsInvestigation {
+				needsInvestigation++
+			}
 		}
 		for _, e := range r.Report.Errors {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", e.Artifact, e.Err)
 			exitCode = 1
 		}
 	}
-	if exitCode == 0 {
+	// The summary line is conditional on there being nothing left for an
+	// operator to read above it (issue #663). "no unresolved findings"
+	// used to print whenever exitCode was 0, which is also true of a run
+	// that just printed a NeedsInvestigation finding: a settled
+	// self-contradictory row is not an error (exitCode stays exactly
+	// where two-machine-exit-status.test.sh pins it, moved only by r.Err
+	// and Report.Errors), but it is very much an unresolved finding, and
+	// a run that says "journal row needs repair" and then "no unresolved
+	// findings" in the next breath contradicts itself rather than merely
+	// under-reporting.
+	switch {
+	case exitCode != 0:
+		// Already reported above, one line per failure; the exit status
+		// carries the signal and nothing more needs saying.
+	case needsInvestigation > 0:
+		fmt.Printf("reconciliation complete; %d finding(s) need investigation, see above\n", needsInvestigation)
+	default:
 		fmt.Println("reconciliation complete; no unresolved findings")
 	}
 	return exitCode

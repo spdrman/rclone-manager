@@ -267,4 +267,28 @@ TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
 # #624, so #60's three cases are red over there until it moves to whatever
 # commit this branch merges as. That is the same manual half every paragraph
 # above keeps flagging.
-TESTS_REPO_SHA=bfbe51e542319482d388695f15b2597677f38d8e
+TESTS_REPO_SHA=bccd71cc54a51212df5237b5d92e30171d3c5e85
+#
+# Moved to bccd71c, rclone-manager-tests#65, off their merged main and not
+# off the branch, for the reason the paragraph about a794c38 above already
+# gives. It is #687's OPEN item: "suite/web-ui-real-backend is pushed and
+# green on the rig but nothing points at it." Suite B now drives a real
+# deployment over RM_BASE_URL instead of starting ui/shared's own Vite
+# dev server over a mock through RM_UI_DIR, which #65 retires along with
+# the fixture-driven suite it drove.
+#
+# The product half rides with it, in this same branch:
+# scripts/e2e/run-tests-repo-gate.sh now stands the deployment up with
+# scripts/e2e/three-machine-web-ui.sh and hands the checkout to it with
+# --suite, instead of picking a free port and exporting RM_UI_DIR. Either
+# half alone leaves the gate red: RM_UI_DIR is gone over there, and
+# nothing here called the rig before this bump.
+#
+# Verified before the bump, the way the notes above ask: 191 passed, 69
+# skipped, 8 expected failures (DISC-010, a real defect this move found:
+# an artifact id is three URL segments and its route is one, so a click
+# on a backup silently lands on the Dashboard), exit 0, run through
+# scripts/e2e/three-machine-web-ui.sh against this branch. Not yet filed
+# as its own issue on this side; recorded in this bump's PR instead
+# (rclone-manager-tests' findings/DISC-010.md has the full analysis and
+# a proposed fix).

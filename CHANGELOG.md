@@ -4,6 +4,30 @@
 
 ### Fixed
 
+- **`backup-set create --no-verify` can write a first configuration again**
+  (#670). Seeding the local hard drive as a declared destination at first boot
+  proves the backup root first, which is right — but the probe was wired as a
+  refusal rather than as a verdict, so it failed the whole first-run write even
+  when the operator had explicitly asked not to verify. On a host whose backup
+  root is not mounted yet, that made the first configuration unwritable by the
+  one flag that exists for the situation: the same command printed
+  &ldquo;`--no-verify` was given, so nothing was resolved&rdquo; for the SSH half and
+  then refused for this one. The probe now runs either way and its answer is
+  recorded either way — the seeded destination carries
+  `connection_unverified: true` when it did not pass, which the destinations
+  card already shows as **never proven** and which a passing test connection
+  clears. Only the refusal is conditional: an install nobody opted out of still
+  has to prove its backup root before anything is written.
+
+- **`rbm medium remove local` explains itself with the reason it actually
+  has** (#670). The CLI test still demanded the words &ldquo;cannot be
+  un-declared&rdquo;, the local-specific refusal deleted when `local` became a
+  declared destination; the engine had been answering the generic
+  is-default refusal, correctly, and the assertion had outlived the
+  behaviour. Retargeted, and strengthened to prove the refusal is about the
+  mark rather than the name: move the default elsewhere and the reason goes
+  away.
+
 - **A completed local copy is no longer recorded as zero bytes** (#662). The
   durable commit measured the file it had just linked into place and then wrote
   the transfer's own reported numbers instead, so a local read-back that came
@@ -25,6 +49,21 @@
   have written, and a refusal names the digest it measured. A copy that is
   genuinely wrong is still quarantined.
 
+- **A settled record fault (#662) reached no operator, and its own content
+  check was disabled forever** (#663). Reconciliation's fix for a
+  self-contradictory row (recorded remote size disagreeing with recorded
+  transfer size) rode a `noAction` finding that `rbm reconcile` never
+  printed, and the branch it took stopped at the size question, so the
+  content check FR-17 also runs never ran again on that row, on any later
+  pass. A settled record fault is now flagged `NeedsInvestigation`, so it
+  prints alongside the finding's reason, and `rbm reconcile`'s own summary
+  line no longer says "no unresolved findings" over a run that just printed
+  one. The row's durable local copy is also now hashed against the
+  discovery-time remote digest (when one was recorded, and this build can
+  compute it) rather than only re-checking its size, and the reason says so
+  either way — content-verified, or explicitly not, never silently one or
+  the other. Exit status is unchanged either way.
+
 - **A FAILED backup has a way out** (#662). `retry` on an artifact whose own
   durable local copy occupies its final name used to loop forever against
   FR-12's collision refusal, and no other verb accepted the artifact. `rbm
@@ -36,6 +75,43 @@
   revalidate` and `quarantine reinstate` now also accept a FAILED artifact, so
   `retry` can no longer take away a recovery option and leave the artifact as
   stuck as before. The FR-12 collision refusal itself is unchanged.
+
+- **A converged commit no longer certifies a damaged file, and no longer
+  risks leaving an artifact without a recovery manifest to make that
+  refusal** (#662, #663). Re-running `Commit` against an artifact already
+  `COMMITTED` re-measures the file and rewrites the sidecar recovery
+  manifest so a crash between the `COMMITTED` journal write and that write
+  can never leave the manifest missing forever. When the file no longer
+  matches the record, the manifest is now written from the record instead
+  of from the disagreeing measurement — the record was itself measured
+  from the file at commit time, so it is the trustworthy side of a
+  convergence-time disagreement, not the file underneath it — and the
+  disagreement is still reported as an error rather than being discarded.
+  `measureCommitted`'s corrective re-hash also now refuses to pair a size
+  from one read with a digest from a shorter one, instead of stamping
+  `verification_class: "content"` on a hash that describes fewer bytes
+  than the size beside it.
+- **The browser offers a stuck backup a way out, on the backup it is actually
+  stuck on** (#662). A backup's detail page had no control that reached any
+  recovery verb, and the card added to answer that was gated on a combination
+  no backend produces: a backup that failed an attempt carries no validation
+  verdict at all, so the API reports it as `pending`, and a FAILED row is not
+  quarantined either — so the card rendered for nothing real. It is gated on
+  the lifecycle state now, which the API already reported and the client
+  simply dropped. Pressing it re-enters the pipeline and the page re-reads the
+  backup, because the verb answers before the pipeline has run: it says the
+  request was accepted, never that the backup is recovered. A refused press
+  carries the service's own words, what to do next, and the correlation id an
+  operator can quote, instead of a bare error. Note that reaching this page at
+  all still needs #677: the route matches one path segment and an artifact id
+  has three.
+
+- **The docked terminal no longer contradicts its own advice on screen**
+  (#662). The suppression of a *"no rbm equivalent yet"* line printed under a
+  remedy that names a command was applied to what Copy and Save produce and,
+  separately, to what the panel draws — and only the first was ever exercised,
+  so the window an operator reads could disagree with the file they exported
+  from it. Both are now asserted against the rendered panel.
 
 ### Changed
 
@@ -51,6 +127,34 @@
   wired to the retry verb; the docked terminal no longer prints "no rbm
   equivalent yet" about an operation the same window has just handed the
   operator a command for (#662).
+- The Web UI's storage destinations list can hand the **default** from one
+  destination to another, and says what that costs before it does it (#671).
+  Every destination now carries **Make default**; the one that holds the mark
+  keeps the control and its **Remove**, both disabled, each pointing at the
+  sentence that says why it is off and what would turn it back on — a control
+  that is simply missing sends an operator hunting for a screen that does not
+  exist. The confirmation names both halves of what one click does, because
+  only one of them was asked for: the destination picked takes the mark and
+  stops being removable, and the one that had it becomes removable. It also
+  says what does not change — no tier is rewritten and no copy already
+  written is moved or deleted. A destination nobody has proven cannot take
+  the mark, and says so before the click rather than failing after it.
+- Removing the local destination is now reachable from the browser once
+  another destination holds the default (#670, #671). The list withheld
+  **Remove** from any entry flagged `isLocal`, which stopped being a proxy
+  for "not declared" when #670 made `local` a declared destination the engine
+  removes like any other; the button now follows the engine's own rule, which
+  is the default mark and nothing else.
+- The machine-tier end-to-end case for #662 (`--case empty-record`) asserts the
+  fix instead of the defect, and its own `--help` no longer tells operators it
+  is red on purpose. It was written to fail and said so in four places,
+  including the rendered help and the golden that is compared to it byte for
+  byte; with #662 fixed, the first person to see it fail would have read that
+  text and dismissed a regression as expected. It now requires the planted
+  empty record to leave the copy at a durable restore point, the recorded fault
+  to still reach an operator in words, and the file to be untouched. The
+  dead-end walk it replaced is retained rather than deleted, and runs if
+  reconciliation ever leaves the artifact outside a durable state.
 
 ### What you may need to do
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/spdrman/rclone-manager/core/internal/backend"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -90,12 +91,23 @@ func (r MediumResolver) Resolve(id string) (transport.Medium, placement.Class, e
 		if err != nil {
 			return transport.Medium{}, "", err
 		}
+		bucket := m.Bucket
+		if typ == transport.MediumTypeLocalDir {
+			// A local_volume medium's destination is its Path, not its
+			// (forbidden, per config.Validate) Bucket. transport.Medium.
+			// Bucket's own doc already carries this: "For
+			// MediumTypeLocalDir it is the directory that stands in for
+			// one" - true since before #666, for the in-tree test
+			// backend transport.MediumTypeLocalDir exists for; #666 is
+			// the first configuration that can actually reach it.
+			bucket = m.Path
+		}
 		return transport.Medium{
 			ID:           m.ID,
 			Type:         typ,
 			Region:       m.Region,
 			Endpoint:     m.Endpoint,
-			Bucket:       m.Bucket,
+			Bucket:       bucket,
 			Prefix:       m.Prefix,
 			StorageClass: m.EffectiveStorageClass(),
 			Credentials: transport.MediumCredentials{
@@ -108,17 +120,37 @@ func (r MediumResolver) Resolve(id string) (transport.Medium, placement.Class, e
 	return transport.Medium{}, "", fmt.Errorf("app: no storage medium %q is declared; this deployment declares %s", id, r.names())
 }
 
-// mediumType maps the schema's closed type set onto the transport's own.
-// The two are the same strings by construction (a test in internal/
-// transport pins that), and this is still a switch rather than a cast,
-// because a type this build cannot reach must be a refusal at the moment
-// something is about to be reached rather than a value handed onward.
+// mediumType maps a configured medium onto the transport's own dial
+// target.
+//
+// #667 moved this off a switch keyed on the literal type string
+// (`case config.StorageMediumTypeS3`): that was the same special case
+// this issue deleted from core/internal/config, just restated on this
+// side of the boundary. It now asks core/internal/backend's registry
+// which backend m.Type names and dispatches on that manifest's Role, a
+// set closed in Go for backend.doc.go's own reason, so adding a backend
+// with a role this switch already handles (a second object store, say)
+// needs no edit here at all - only a new manifest file. A role this
+// switch does not yet handle is still a refusal at the moment something
+// is about to be reached, exactly as the type-keyed switch was before it.
+// local_volume (issue #666) is exactly that case: RoleLocalVolume ->
+// transport.MediumTypeLocalDir, added below with no new switch shape.
 func mediumType(m config.StorageMedium) (transport.MediumType, error) {
-	switch m.Type {
-	case config.StorageMediumTypeS3:
+	reg, err := backend.Bundled()
+	if err != nil {
+		return "", fmt.Errorf("app: loading the backend registry: %w", err)
+	}
+	manifest, err := reg.Backend(m.Type)
+	if err != nil {
+		return "", fmt.Errorf("app: storage medium %q declares type %q, which this build has no backend for: %w", m.ID, m.Type, err)
+	}
+	switch manifest.Role {
+	case backend.RoleObjectStore:
 		return transport.MediumTypeS3, nil
+	case backend.RoleLocalVolume:
+		return transport.MediumTypeLocalDir, nil
 	default:
-		return "", fmt.Errorf("app: storage medium %q declares type %q, which this build has no backend for", m.ID, m.Type)
+		return "", fmt.Errorf("app: storage medium %q's backend %q has role %q, which this adapter does not yet dial", m.ID, m.Type, manifest.Role)
 	}
 }
 

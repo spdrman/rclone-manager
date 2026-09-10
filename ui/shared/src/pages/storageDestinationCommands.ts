@@ -60,6 +60,25 @@ export function importCredentialsCommand(): string {
   return "rbm medium import-credentials --stdin";
 }
 
+/**
+ * `medium add <id> --backend <backend>`: #668's confirm step.
+ *
+ * It names no field value, because at this point there are none. The
+ * add-a-destination wizard chooses a backend and names an instance, and
+ * that is the whole of what it writes; the values arrive in the configure
+ * step, which prints `medium edit`.
+ *
+ * Its own function rather than addCommand with an empty spec, for the
+ * reason addCommand's own doc gives about matching what is proven to what
+ * is written: addCommand renders the flags of a described destination, and
+ * rendering it against a spec with nothing in it would print a line
+ * claiming to declare a configured destination while its flag list
+ * quietly said otherwise.
+ */
+export function declareCommand(instanceId: string, backendId: string): string {
+  return `rbm medium add ${instanceId} --backend ${backendId}`;
+}
+
 /** `medium test-connection --candidate`: the wizard's step 3, proving a
  *  destination that has not been saved. It writes nothing whatever the
  *  report says, which is why it is safe to offer as a copy-pasteable line

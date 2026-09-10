@@ -55,6 +55,26 @@ const (
 	// them, and the moment they are worth carrying is the create, which
 	// proves the connection before it writes anything.
 	gapCandidateConnection = "there is no verb that checks a source that is not saved yet: `" + Binary + " backup-set create` proves the connection before it writes, and `" + Binary + " backup-set test-connection <source/backup-set>` re-checks one that exists"
+
+	// I2.2 (issue #669). Two gaps, and both are real rather than
+	// oversights, which is the distinction this table exists to make.
+	//
+	// `medium add` and `medium edit` take the flags they were written
+	// with - --type, --region, --endpoint, --bucket, --prefix,
+	// --storage-class, --upload-verification and the four credential
+	// spellings - and a manifest can declare a field none of them names.
+	// local_volume's `path` is exactly that, so a local volume cannot be
+	// configured from a terminal at all. Printing --path anyway would
+	// read correctly and fail on execution, which is worse than printing
+	// nothing: the entire reason these lines exist is that an operator
+	// can copy them.
+	gapConfigureMedium = "there is no verb that writes a destination's configuration in its backend's own field names: `" + Binary + " medium add` and `" + Binary + " medium edit` carry one flag per S3 field and have no --path, so a local volume cannot be configured from a terminal until they take a manifest's field ids"
+
+	// And a configuration that has not been written cannot be checked by
+	// id, because there is no id yet. `medium test-connection` checks
+	// what is SAVED, which is a different question and the one an
+	// operator would get a misleading answer to.
+	gapPreflightMediumConfiguration = "there is no verb that checks a destination's configuration before it is written: `" + Binary + " medium test-connection <medium-id>` checks the one already saved, and `" + Binary + " medium add` proves a destination as it declares it"
 )
 
 // positiveQuery reads a query parameter that is a count, and reports 0
@@ -714,6 +734,25 @@ var routes = map[string]entry{
 		build:    func(a Action) *cmd { return newCmd("medium", "test-connection", a.Params["id"]) },
 		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}, {Params: map[string]string{"id": "local"}}},
 	},
+	key("GET", "/storage-mediums/{id}/configuration"): {
+		// `medium show` again, for /usage's reason: there is no
+		// configuration-read verb and there does not need to be, because
+		// what `medium show` prints IS the destination's fields. Two
+		// routes answering to one command is the honest line.
+		build:    func(a Action) *cmd { return newCmd("medium", "show", a.Params["id"]) },
+		examples: []Action{{Params: map[string]string{"id": "offsite_s3"}}},
+	},
+	key("POST", "/storage-mediums/{id}/configuration/preflight"): {
+		// A whole-route gap and not a builder that refuses: there is no
+		// request on this route that HAS an equivalent, so the honest
+		// shape is no builder at all.
+		why:               gapPreflightMediumConfiguration,
+		namesShippedVerbs: []string{"medium"},
+	},
+	key("PUT", "/storage-mediums/{id}/configuration"): {
+		why:               gapConfigureMedium,
+		namesShippedVerbs: []string{"medium"},
+	},
 	key("PUT", "/storage-mediums/{id}/default"): {
 		// Moving the destination a newly created retention tier starts on
 		// (#622). One verb, one operand, and no flags: the whole content
@@ -758,6 +797,21 @@ var routes = map[string]entry{
 	key("GET", "/validators"): {
 		why:               "there is no verb that lists the registered validators; on a terminal an id is named on `backup-set create --validator-id` and refused if it is not one",
 		namesShippedVerbs: []string{"backup-set"},
+	},
+
+	// ------------------------------------------------------- backends ---
+	// EPIC I (#664). A gap entry rather than a command, and the gap is
+	// real: there is no verb that lists the registered backends at all.
+	// `medium add --backend <id>` takes one and refuses an id no manifest
+	// declares, so a terminal operator learns the set from a refusal
+	// rather than from a listing. Naming the missing verb here is the
+	// point of this table: a parity gap that is written down is a
+	// decision, and inventing a `medium backends` verb to satisfy this
+	// test would invert the rule, which exists so a missing verb is
+	// VISIBLE rather than absent.
+	key("GET", "/backends"): {
+		why:               "there is no verb that lists the registered backends; on a terminal one is named on `medium add --backend <id>` and refused if no manifest declares it",
+		namesShippedVerbs: []string{"medium"},
 	},
 
 	// ------------------------------------------------------------- ssh ---
