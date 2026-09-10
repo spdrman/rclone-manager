@@ -586,7 +586,7 @@ jobs:
       # it on a `publish: false` dispatch is the point: that is the run
       # whose whole job is to find this out before the registry does.
       - name: Prove the release manifest describes what this tree builds
-        run: bash scripts/release/verify-manifest-parity.sh
+        run: python3 scripts/rcmtools/release/verify_manifest_parity.py
 
       # DRY_RUN=1 runs every guard and stops before the push, so a
       # dispatch with publish left false still exercises the refusals
@@ -594,4 +594,4 @@ jobs:
       - name: Publish
         env:
           DRY_RUN: ${{ needs.decide.outputs.publish == 'true' && '0' || '1' }}
-        run: bash scripts/release/publish-image.sh
+        run: python3 scripts/rcmtools/release/publish_image.py
