@@ -697,9 +697,20 @@ func TestProviderStoreSubmissionPreflight(t *testing.T) {
 	// wrong: a row that is merely absent from the verdict could be a
 	// column nobody checks, and a row that is merely checked could still
 	// be holding Phase 5 open.
+	//
+	// The first half used to be "it reads NOT_YET_APPLICABLE", on the
+	// grounds that #83 had produced no .UPK. It has produced one, so the
+	// row is decided now, and asserting the old value would have turned
+	// this control into a demand that the package stay missing. What the
+	// assertion protects is the thing that did not change: the row is
+	// recorded and it is not in the gate. So it insists on a real verdict
+	// and refuses the one value that would mean nothing was preflighted.
 	ugreen := run.ReadinessOf("ugos")
-	if ugreen.Readiness != ReadyNotYetApplicable {
-		t.Errorf("the UGREEN row is recorded %s, and while EPIC D's #83 has produced no .UPK it must read %s", ugreen.Readiness, ReadyNotYetApplicable)
+	if ugreen.Readiness == "" {
+		t.Error("the UGREEN row has no recorded readiness verdict at all, and #178 refuses to submit without one")
+	}
+	if ugreen.Readiness == ReadyNotYetApplicable {
+		t.Errorf("the UGREEN row is recorded %s, and apps/ugos/upk is in the tree: a package that exists must be preflighted rather than deferred (%s)", ugreen.Readiness, ugreen.Why)
 	}
 	for _, id := range v.Providers {
 		if id == "ugos" {

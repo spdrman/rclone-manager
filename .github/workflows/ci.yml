@@ -204,8 +204,16 @@ jobs:
         # (#417): packaging is a static-analysis suite with no goroutine
         # anywhere in it, so the detector has nothing to find there and
         # multiplies the most CPU-bound package in the repository.
+        #
+        # -timeout 30m on the first line, because distribution/tests/adapterstacks
+        # brings up EVERY derived adapter's stack in one test function, so its
+        # cost is one image build plus one deployment per adapter and it grew
+        # past Go's 10m default the moment the ninth adapter arrived (#83). A
+        # per-package deadline is not something `go list` output can express, so
+        # the whole -race line carries it; nothing else in this module is
+        # anywhere near it.
         run: |
-          go test -race $(go list ./... | grep -v '/packaging$')
+          go test -race -timeout 30m $(go list ./... | grep -v '/packaging$')
           go test ./packaging/
 
   apps-generic-build-vet-test:

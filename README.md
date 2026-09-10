@@ -483,8 +483,11 @@ somebody adds will not be called `fonts.googleapis.com`.
   resolves its bundle at run time (`--ui-dir`, then `--ui-root/<profile>`, then the
   compiled-in one) and fails to start rather than falling back to the generic bridge, and
   the canonical image carries the five provider bundles the shipped adapters name. What is
-  still not exposed is a sixth: the image budget has room for these five and not another,
-  and `ugos` carries its own in EPIC D's UPK, which does not exist here.
+  still not exposed is a sixth: the image budget has room for these five and not another.
+  The UGOS UPK exists now (#83) and does not change that. It carries the canonical image
+  rather than a bundle of its own, so the app an operator installs from the App Center
+  serves the compiled-in bridge like every other deployment does, and the UGOS bridge is
+  still not the one anything loads.
 - This bullet used to say `serve` refuses to start without a valid config file and that an
   app-store install could not reach a setup screen. #176 fixed that (merged as #195):
   `core/service.Open` still refuses a config file that exists and does not validate, but no
@@ -816,9 +819,17 @@ real deployment can assert.
 repository has a TrueNAS, Unraid, OpenMediaVault, Synology, Proxmox VE, CasaOS, ZimaOS,
 Portainer or Dockge machine to execute them on. The procedures are written, reviewed and
 specific, and they are prose until somebody runs them. A UGREEN NAS running a generic
-Docker install is not any of those platforms' packaging, so it certifies none of them, and
-the UGOS procedure it could in principle certify has no `.UPK` to install yet, which is
-#83.
+Docker install is not any of those platforms' packaging, so it certifies none of them.
+
+The exception is UGOS, and it is a partial one.
+[`apps/ugos/docs/upk-acceptance-procedure.md`](apps/ugos/docs/upk-acceptance-procedure.md)
+was run against a real UGREEN NAS for #83: the release fetched by digest and verified for
+both architectures, `ugcli check` and `ugcli pack` producing a signed `.upk`, the bundled
+image loaded and its binaries hashed on the device to the release manifest's own values,
+both containers healthy, and the trusted-gateway boundary refusing a forged identity header
+from a direct peer while accepting one from the gateway. What was not run is everything
+downstream of the App Center install click, which needs a person at the UGOS desktop; §6 of
+that procedure is the standing record of what that leaves open.
 
 [`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md) is the generated
 record and it says the same thing from the other side: thirty-six cells across nine
@@ -873,10 +884,12 @@ need real UGREEN hardware and neither has had it.** #92 is the UGOS authenticati
 trusted-proxy boundary gate, #93 is private state and backup-root separation, #83 is the
 UPK thin adapter over the canonical release, #91 is a minimal UPK proof on real hardware,
 #89 is resource and hardware certification on real devices, and #178 is signing, the release
-channel and the App Center submission. The UGOS column in the conformance matrix is sixteen
-`BLOCKED` cells for exactly that reason, and they are reported in full rather than left out
-of the totals. The support table above says the same thing in one line: UGOS Pro ships the
-frontend bridge and nothing else, no `.UPK` and no packaging.
+channel and the App Center submission. #83 has since landed the package and run what a
+device without an App Center install can run, which took the UGOS column from sixteen
+`BLOCKED` cells to nine; they are reported in full rather than left out of the totals. The
+nine are two different blockers rather than one: the operator-lifecycle rows wait on the
+App Center install click, and the bridge-derived rows wait on bundle carriage, since the
+canonical image has no room for a sixth per-provider bundle.
 
 **#92 is not only EPIC C's problem.** It is the issue that owns opening the gate in front of
 destructive operations, so until it lands every deployment refuses every destructive HTTP
@@ -998,7 +1011,7 @@ it.
 | Dockge | Tier C | no packaging at all, by design: Dockge imports `container/compose.yaml` itself, and the deliverable is the workflow that keeps that true | [`apps/dockge/README.md`](apps/dockge/README.md) |
 | CasaOS | Tier B | one `docker-compose.yml` carrying an `x-casaos` block, which is both the runtime definition and the store submission | [`apps/casaos/README.md`](apps/casaos/README.md) |
 | ZimaOS | Tier B | the same `x-casaos` compose file again, for the CasaOS-derived store ZimaOS ships | [`apps/zimaos/README.md`](apps/zimaos/README.md) |
-| UGREEN UGOS Pro | Tier A | the frontend bridge and nothing else: no `.UPK`, no packaging | EPIC D, issue #83 |
+| UGREEN UGOS Pro | Tier A | a `ugcli` project that packages the canonical release: `project.yaml`, a derived Compose wrapper, and the release image fetched by digest and verified before it is packed | [`apps/ugos/README.md`](apps/ugos/README.md) |
 
 <!-- END SUPPORT-MODEL -->
 

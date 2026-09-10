@@ -671,8 +671,8 @@ func TestReadinessVerdictDistinguishesItsFiveStates(t *testing.T) {
 	s := MustLoadSubmission()
 	conf := s.AsConformance(MustLoadConformance())
 
-	build := func(id string, outcomes map[string]Outcome) *Matrix {
-		m := NewMatrix(conf)
+	buildIn := func(c Conformance, id string, outcomes map[string]Outcome) *Matrix {
+		m := NewMatrix(c)
 		for _, cap := range s.Capabilities {
 			o, ok := outcomes[cap.ID]
 			if !ok {
@@ -681,6 +681,28 @@ func TestReadinessVerdictDistinguishesItsFiveStates(t *testing.T) {
 			m.Record(Result{Provider: id, Capability: cap.ID, Outcome: o, Detail: "fixture"})
 		}
 		return m
+	}
+	build := func(id string, outcomes map[string]Outcome) *Matrix {
+		return buildIn(conf, id, outcomes)
+	}
+
+	// NOT_YET_APPLICABLE needs a target with nothing to preflight, and
+	// there is no longer a real one: UGOS was it until #83 shipped
+	// apps/ugos/upk. Planted for the same reason the blocked cell below
+	// is planted, and it is the better fixture either way: a control that
+	// borrows whichever real target happens to be empty today stops
+	// proving anything the day somebody packages it.
+	confEmpty := conf
+	confEmpty.Providers = map[string]Provider{}
+	for id, p := range conf.Providers {
+		confEmpty.Providers[id] = p
+	}
+	confEmpty.Providers[noArtifactProvider] = Provider{
+		DisplayName: "Selftest target with no artifact",
+		Metadata:    Metadata{Kind: "none", Root: "apps/selftest-no-artifact"},
+	}
+	if HasArtifact(confEmpty.Providers[noArtifactProvider]) {
+		t.Fatal("the planted target reports an artifact, so the NOT_YET_APPLICABLE row below would be reached by something other than the state it names")
 	}
 
 	// BLOCKED is the one state that needs a declaration as well as an
@@ -714,11 +736,15 @@ func TestReadinessVerdictDistinguishesItsFiveStates(t *testing.T) {
 		{"a hardware step outstanding", "truenas", s, map[string]Outcome{"materials-screenshots": OutcomePendingOperator}, ReadyPendingOperator},
 		{"a rule nobody can decide", "truenas", sBlocked, map[string]Outcome{"artifact-provenance": OutcomeBlocked}, ReadyBlocked},
 		{"a rule that failed", "truenas", s, map[string]Outcome{"no-privileged-mode": OutcomeFail}, ReadyNot},
-		{"no artifact to preflight", "ugos", s, nil, ReadyNotYetApplicable},
+		{"no artifact to preflight", noArtifactProvider, withNoArtifactProvider(s), nil, ReadyNotYetApplicable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ReadinessFor(build(tc.id, tc.outcomes), tc.sub, tc.id)
+			c := conf
+			if tc.id == noArtifactProvider {
+				c = confEmpty
+			}
+			got := ReadinessFor(buildIn(c, tc.id, tc.outcomes), tc.sub, tc.id)
 			if got.Readiness != tc.want {
 				t.Errorf("got %s, want %s (%s)", got.Readiness, tc.want, got.Why)
 			}
@@ -765,8 +791,14 @@ func TestReadinessVerdictDistinguishesItsFiveStates(t *testing.T) {
 func TestHasArtifactIsDerivedRatherThanDeclared(t *testing.T) {
 	c := MustLoadConformance()
 
-	if HasArtifact(c.Providers["ugos"]) {
-		t.Error("UGOS has an artifact today, which would mean #83 landed and this row should be decided rather than deferred")
+	// UGOS is the case this rule was written for, and it has flipped.
+	// #83 shipped apps/ugos/upk, so the row is decided now rather than
+	// deferred, and it got there with no edit to this package: the
+	// conformance metadata grew a kind and a pair of store artifacts and
+	// the derivation did the rest. That is the claim, so it is asserted
+	// in the direction it now points.
+	if !HasArtifact(c.Providers["ugos"]) {
+		t.Error("UGOS reports no artifact, and apps/ugos/upk is in the tree; a target whose package exists must be decided rather than deferred")
 	}
 	for _, id := range c.ProviderIDsFor(PhaseFourEpic) {
 		if !HasArtifact(c.Providers[id]) {
@@ -774,19 +806,48 @@ func TestHasArtifactIsDerivedRatherThanDeclared(t *testing.T) {
 		}
 	}
 
-	// The day EPIC D's package lands, the row starts being decided with
-	// no edit to this package: a metadata kind is enough, and so is a
-	// single store artifact.
-	ugos := c.Providers["ugos"]
-	ugos.Metadata.Kind = "compose"
-	if !HasArtifact(ugos) {
-		t.Error("declaring a packaging format is not enough to make a target real, so #83 landing would not switch its column on")
+	// The negative half, on a planted provider rather than on a real one.
+	// It used to be UGOS, and the day the UPK landed this control would
+	// have gone from proving something to proving nothing; a fixture
+	// nobody else can invalidate is what it should have been all along.
+	empty := Provider{Metadata: Metadata{Kind: "none", Root: "apps/does-not-exist"}}
+	if HasArtifact(empty) {
+		t.Error("a provider declaring no packaging kind and no store artifact reports an artifact, so nothing here defers and the whole rule is inert")
 	}
-	ugos = c.Providers["ugos"]
-	ugos.Metadata.StoreArtifacts = []string{"upk/INFO"}
-	if !HasArtifact(ugos) {
+
+	// And each half of the derivation on its own, so the rule is two
+	// reasons rather than one that happens to be satisfied twice.
+	kindOnly := empty
+	kindOnly.Metadata.Kind = "compose"
+	if !HasArtifact(kindOnly) {
+		t.Error("declaring a packaging format is not enough to make a target real")
+	}
+	artifactOnly := empty
+	artifactOnly.Metadata.StoreArtifacts = []string{"upk/INFO"}
+	if !HasArtifact(artifactOnly) {
 		t.Error("shipping a store artifact is not enough to make a target real")
 	}
+}
+
+// noArtifactProvider is the id of the planted target the readiness table
+// uses for its NOT_YET_APPLICABLE row. Planted rather than real for the
+// reason TestHasArtifactIsDerivedRatherThanDeclared gives: the last real
+// provider with nothing to preflight was UGOS, and #83 gave it something.
+const noArtifactProvider = "selftest-no-artifact"
+
+// withNoArtifactProvider registers that target in a Submission so
+// ReadinessFor has a store row to read for it. Everything else about it
+// is deliberately empty: the point is a target with nothing to preflight.
+func withNoArtifactProvider(s Submission) Submission {
+	out := s
+	out.Providers = map[string]SubmissionProvider{}
+	for id, p := range s.Providers {
+		out.Providers[id] = p
+	}
+	out.Providers[noArtifactProvider] = SubmissionProvider{
+		Store: Store{Kind: "catalog", Name: "Selftest store", Checklist: "docs/submission/README.md"},
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------

@@ -1,0 +1,175 @@
+# The UGOS Pro App Center deployment for Backup Manager (issue #83, D1.2).
+#
+# DERIVED from container/compose.yaml at runtime contract 1.2.0, never
+# authored beside it. Every runtime field below has one authoritative
+# value in distribution/packaging/canonical.json or in the canonical
+# compose definition it pins, and distribution/packaging/derive.go fails
+# the build naming the field that drifted. distribution/compose runs its
+# prohibition rules over this file too, which is why it is registered in
+# runtime-contract.json's `derived` list: an unregistered compose file is
+# not a failing artifact, it is an invisible one.
+#
+# UGOS loads the image tar out of rootfs_<arch>/images/ and brings this
+# file up. The image reference below is therefore both the tag that tar
+# carries and the canonical release reference, and those are the same
+# string on purpose: the tar is `docker save` of the canonical release
+# pulled BY DIGEST, so a tag that named anything else would be naming
+# bytes this package does not contain.
+#
+# No variables anywhere. UGOS deploys this file as it stands with no .env
+# beside it, so a ${STATE_DIR} here would be an unresolved reference at
+# install time rather than a knob. Every host path below is UGOS's own
+# layout: private application data under /volume1/docker, user data under
+# /volume1/backups. Both directories exist on a stock UGOS Pro NAS.
+
+services:
+  # The engine: local state, the versioned /api/v1 API and the scheduler
+  # in one process. Holds the catalogue and the credentials, and
+  # publishes no port at all.
+  backup-manager:
+    image: ghcr.io/spdrman/backup-manager:0.3.0
+    command: ["/backup-manager-web", "serve", "--profile=ugos"]
+
+    user: "1000:1000"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=1000,gid=1000
+
+    environment:
+      TMPDIR: "/tmp"
+      # Retention's calendar boundaries depend on this, so it is declared
+      # rather than left at the image's UTC default.
+      TZ: "UTC"
+      LISTEN_ADDR: ":8080"
+      PUBLIC_BASE_URL: "http://localhost:28080"
+      # Safe here specifically because this container joins only the
+      # private network below, whose only other member is the web UI.
+      # Never set on the web UI, which is the edge.
+      TRUST_FORWARDED_HEADERS: "true"
+      # This hop's trusted peer, and deliberately a DIFFERENT set from
+      # the web UI's TRUSTED_GATEWAY_CIDRS below. The engine's only
+      # possible peer is the web UI, so this names the internal network;
+      # the web UI's names the UGOS gateway, and a single value correct
+      # for one of them is wrong for the other. The subnet is pinned in
+      # the networks block at the bottom precisely so both of these can
+      # be exact rather than a guess at whatever Docker allocated.
+      TRUSTED_UPSTREAM_CIDRS: "172.29.83.0/24"
+
+    volumes:
+      - /volume1/docker/backup-manager/state:/data/state
+      - /volume1/backups/backup-manager:/data/backups
+      # A writable DIRECTORY holding config.yaml (issue #196), not a
+      # read-only single file: the engine replaces that file through a
+      # temp file created beside it, and its ssh_keys/ and known_hosts.d/
+      # stores are siblings of it.
+      - /volume1/docker/backup-manager/config:/etc/backup-manager/config
+      - /volume1/docker/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
+      - /volume1/docker/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
+
+    # The start gate, and a liveness question rather than a freshness
+    # verdict (issue #206): the web UI below waits on it, and
+    # `/backup-manager status` is non-zero on a fresh install by design,
+    # so gating on it means a just-installed app never gets a page.
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    restart: unless-stopped
+    stop_grace_period: 30s
+    networks:
+      - internal
+
+  # The web UI: the shared static bundle plus a reverse proxy to the
+  # engine. The only container with a published port, and the app UGOS
+  # opens when the tile is clicked.
+  backup-manager-ui:
+    image: ghcr.io/spdrman/backup-manager:0.3.0
+    command: ["/backup-manager-web", "serve-ui", "--profile=ugos"]
+
+    depends_on:
+      backup-manager:
+        condition: service_healthy
+
+    user: "1000:1000"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,uid=1000,gid=1000
+
+    environment:
+      TMPDIR: "/tmp"
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://backup-manager:8080"
+
+      # THE trust boundary for the ugos runtime profile. This is the only
+      # container with a published port, so this is the only hop where
+      # the network can still answer "did the UGOS gateway send this, or
+      # did somebody on the LAN". Two things make this value defensible
+      # rather than a hopeful CIDR:
+      #
+      #  - the published port is bound to 127.0.0.1 below, so the only
+      #    thing on this NAS that can reach it at all is a process on the
+      #    NAS itself, which for an `open_type: inner` app is the UGOS
+      #    gateway. Nothing on the LAN has a path to this port.
+      #  - Docker's userland publishing presents that loopback traffic to
+      #    this container as coming from the bridge gateway address, so
+      #    the peer set is that single address and nothing wider. It is a
+      #    /32, and it is NOT the internal subnet: a range containing the
+      #    engine or this container would be the LAN-forgery hole written
+      #    as configuration.
+      #
+      # A direct-LAN request carrying a forged X-Ugos-User therefore
+      # arrives from an address outside this range and has the header
+      # stripped before anything reads it (apps/common/platform/profile,
+      # CompiledGateway.Sanitize).
+      TRUSTED_GATEWAY_CIDRS: "172.29.83.1/32"
+
+      # The UGOS bridge, served at run time rather than compiled in
+      # (issue #180): one canonical binary carries every bundle and
+      # --profile=ugos selects which one this host serves. Neither UI_DIR
+      # nor UI_ROOT is set, so this container serves the bundle the
+      # profile names out of the binary itself.
+
+    # No volumes at all: this container never reads config.yaml, the SSH
+    # key, known_hosts, or either data directory.
+
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    # Loopback only, and the whole trust argument above rests on it. The
+    # host side matches project.yaml's `port`, which is what UGOS
+    # reverse-proxies; the container side is the canonical listen port.
+    ports:
+      - "127.0.0.1:28080:8080"
+
+    restart: unless-stopped
+    stop_grace_period: 15s
+    networks:
+      - internal
+
+# The subnet is pinned rather than left to Docker's allocator so that both
+# TRUSTED_UPSTREAM_CIDRS and TRUSTED_GATEWAY_CIDRS above can name an exact
+# peer set. Left unpinned, the only way to write a gateway range that
+# works is one wide enough to also cover the internal network, which is
+# the vulnerability restated as configuration.
+networks:
+  internal:
+    ipam:
+      config:
+        - subnet: 172.29.83.0/24

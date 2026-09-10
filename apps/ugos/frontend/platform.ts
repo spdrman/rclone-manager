@@ -11,8 +11,17 @@ export const ugosBridge: PlatformBridge = {
   integration: "native",
 
   deployment: {
+    // The backup root, and it moved here when the UPK was built (#83). It
+    // used to name /volume1/backup-manager, a top-level share that does
+    // not exist on a stock UGOS Pro NAS and that only the UGOS UI can
+    // create; /volume1/backups does exist, checked on a real device, and
+    // the app takes a dedicated child of it so an uninstall offering to
+    // remove the app's data cannot reach a share the operator already
+    // uses. Pinned to canonical.json's ugos entry, which the packaged
+    // Compose wrapper derives its host paths from, so the string an
+    // operator reads here is the directory the container actually writes.
     label: "UGOS package",
-    storageMount: "/volume1/backup-manager",
+    storageMount: "/volume1/backups/backup-manager",
     adapterVersion: "ugos 1.3.0"
   },
 

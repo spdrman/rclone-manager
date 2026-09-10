@@ -478,7 +478,13 @@ gate_step "apps/common golangci-lint"
 (cd apps/common && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 gate_docker_step "distribution go build, vet, test -race (every package but packaging, which runs next)"
-(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race $(GOWORK=off go list ./... | grep -v '/packaging$'))
+# -timeout 30m: distribution/tests/adapterstacks brings up every derived
+# adapter's stack in one test function, so it is one image build plus one
+# deployment per adapter, and the ninth adapter (#83, the UGOS UPK) pushed it
+# past Go's 10m default. The deadline is per package and `go list` output
+# cannot carry one, so the whole line takes it; nothing else in this module is
+# close.
+(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test -race -timeout 30m $(GOWORK=off go list ./... | grep -v '/packaging$'))
 
 # The one Go suite in this gate that does NOT run under the detector, and
 # the only one, which is why it gets a paragraph rather than a flag.

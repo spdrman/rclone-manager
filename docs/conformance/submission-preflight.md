@@ -47,11 +47,13 @@ staleness guard turns red, and it is why the same thing will happen to the four
 merges second re-derives them.
 
 **UGREEN is in the mechanism and out of the gate.** UGOS Pro's column is decided by exactly
-these rules and reported in full below. While EPIC D's #83 has produced no `.UPK` it has no
-artifact, so its artifact-dependent rules record not-yet-applicable rather than failing, and
-its shared listing materials record ready, because they are ready. Nothing in that column
-can hold EPIC B's Phase 5 open, and nothing in it going green can close it. EPIC D's #178
-consumes the verdict and the bundle; it does not re-run any of this.
+these rules and reported in full below. Its artifact-dependent rules used to record
+not-yet-applicable because there was no `.UPK` to preflight; EPIC D's #83 built one, so they
+are decided now, which is what this section always said would happen and needed no change to
+any rule to do. Nothing in that column can hold EPIC B's Phase 5 open, and nothing in it
+going green can close it: the reason was never the missing artifact, it is that the `.UPK`'s
+acceptance runs on hardware this repository does not own. EPIC D's #178 consumes the verdict
+and the bundle; it does not re-run any of this.
 
 ## External approval
 
@@ -69,7 +71,7 @@ these checks.
 
 | Target | Store or catalog | Gated by | Verdict | Undecided, tracked by | Needs the real platform |
 |---|---|---|---|---|---|
-| UGOS Pro | UGREEN App Center | EPIC D (reported here, gated there) | **NOT_YET_APPLICABLE** | none | nothing |
+| UGOS Pro | UGREEN App Center | EPIC D (reported here, gated there) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
 | CasaOS | CasaOS AppStore | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
 | Portainer CE | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
 | Synology DSM | Synology Package Center | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
@@ -83,7 +85,7 @@ these checks.
 
 Why each target reads the way it does:
 
-- **UGOS Pro** — UGOS Pro declares no package this repository can inspect and ships no store artifact, so there is nothing to preflight yet; its shared listing materials are recorded on their own merits above
+- **UGOS Pro** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
 - **CasaOS** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
 - **Portainer CE** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
 - **Synology DSM** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
@@ -99,38 +101,38 @@ Why each target reads the way it does:
 
 | Rule | UGOS Pro (EPIC D) | CasaOS (P6) | Portainer CE (P6) | Synology DSM | TrueNAS | Unraid | ZimaOS (P6) | Dockge (P6) | Generic Docker | OpenMediaVault | Proxmox VE |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| No self-update mechanism in the shipped package | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| No floating image tag | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| No privileged mode requested by the package | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| No mandatory telemetry endpoint | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: image reference | N/A | PASS | PASS | N/A | PASS | PASS | PASS | N/A | N/A | PASS | PASS |
-| Drift gate: required mounts | N/A | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: expected ports | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: health check | N/A | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: runtime profile | N/A | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: declared architecture support | N/A | PASS | N/A | PASS | N/A | N/A | PASS | N/A | N/A | N/A | N/A |
-| Drift gate: forbidden-privilege set | N/A | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: /api/v1 compatibility | N/A | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| No self-update mechanism in the shipped package | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| No floating image tag | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| No privileged mode requested by the package | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| No mandatory telemetry endpoint | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: image reference | PASS | PASS | PASS | N/A | PASS | PASS | PASS | N/A | N/A | PASS | PASS |
+| Drift gate: required mounts | PASS | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: expected ports | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: health check | PASS | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: runtime profile | PASS | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: declared architecture support | PASS | PASS | N/A | PASS | N/A | N/A | PASS | N/A | N/A | N/A | N/A |
+| Drift gate: forbidden-privilege set | PASS | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: /api/v1 compatibility | PASS | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Store description | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
 | Store icon | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
-| Store screenshots | N/A | OPERATOR | N/A | OPERATOR | OPERATOR | OPERATOR | OPERATOR | N/A | N/A | N/A | N/A |
+| Store screenshots | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR | OPERATOR | OPERATOR | N/A | N/A | N/A | N/A |
 | Release notes | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
 | Privacy disclosure | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
 | Permission rationale | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
 | Support, source and licence materials | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
 | Submission checklist complete against the tree | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Proactive alerts reach the administrator | N/A | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR |
+| Proactive alerts reach the administrator | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR |
 | Recovery documented without a terminal | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Submitted bytes traceable to a recorded build | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Submitted bytes traceable to a recorded build | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 
 ### Totals
 
 | Outcome | Cells |
 |---|---|
-| PASS | 173 |
-| PENDING_OPERATOR | 15 |
+| PASS | 186 |
+| PENDING_OPERATOR | 17 |
 | UNSUPPORTED | 0 |
-| NOT_APPLICABLE | 65 |
+| NOT_APPLICABLE | 50 |
 | BLOCKED | 0 |
 | FAIL | 0 |
 
@@ -141,10 +143,10 @@ Computed over the 10 targets EPIC B ships, and over nothing else: CasaOS, Portai
 **Met.** Every rule that applies to every one of those targets was decided here and held.
 External store approval stays outside this repository's control (§75).
 
-**UGOS Pro is EPIC D's column** (work package 4.2), and it is recorded **NOT_YET_APPLICABLE**.
+**UGOS Pro is EPIC D's column** (work package 4.2), and it is recorded **READY_PENDING_OPERATOR**.
 It is decided by these same checks, on the same terms as every other target, and it is in
 nobody's Phase 5 verdict: a rule EPIC D owns cannot hold EPIC B's Phase 5 open, and an
-EPIC D column that goes green cannot close it. UGOS Pro declares no package this repository can inspect and ships no store artifact, so there is nothing to preflight yet; its shared listing materials are recorded on their own merits above
+EPIC D column that goes green cannot close it. every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
 
 ### Every cell that is not a plain PASS
 
@@ -155,21 +157,8 @@ below, with why.
 
 | Rule | Outcome | Why |
 |---|---|---|
-| No self-update mechanism in the shipped package | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| No floating image tag | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| No privileged mode requested by the package | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| No mandatory telemetry endpoint | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| Drift gate: image reference | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| Drift gate: required mounts | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| Drift gate: expected ports | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| Drift gate: health check | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| Drift gate: runtime profile | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| Drift gate: declared architecture support | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| Drift gate: forbidden-privilege set | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| Drift gate: /api/v1 compatibility | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
-| Store screenshots | N/A | The shared bundle covers UGREEN App Center's listing like every other target's, and a screenshot is of the app running on the hardware. EPIC D's #83 has produced no .UPK, so there is nothing to install and nothing to photograph. The listing copy, the icon, the release notes, the privacy disclosure and the permission rationale are all recorded ready above, which is the bundle #178 consumes rather than assembling a second copy of. |
-| Proactive alerts reach the administrator | N/A | Same reason as the screenshots: docs/acceptance/store-submission-preflight.md carries UGOS Pro's section so EPIC D's #178 has the procedure waiting, and no operator can run it against a package that does not exist yet. |
-| Submitted bytes traceable to a recorded build | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
+| Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's UGOS Pro section covers "screenshot"; the hardware run has not happened |
+| Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's UGOS Pro section exercises all four; the hardware run has not happened |
 
 #### CasaOS (Tier B, CasaOS AppStore, gated by EPIC B's Phase 5)
 

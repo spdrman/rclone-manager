@@ -1,0 +1,18 @@
+# Fetched, not authored. build-upk.sh pulls the canonical release by
+# digest and saves it here; committing an exported image tar would put a
+# copy of the release in git, and a stale one the moment the release
+# moves. The sidecar goes with it: it describes the tar beside it and
+# means nothing without it. The sidecar sits at the project root rather
+# than beside its tar because `ugcli check` allows nothing but .tar files
+# under rootfs_<arch>/images and nothing but images/ under rootfs_<arch>.
+/rootfs_amd64/
+/rootfs_arm64/
+/image-source-amd64.json
+/image-source-arm64.json
+
+# Drawn by draw-icon.py, for the reasons in that file's own docstring.
+/rootfs_common/icon.png
+
+# ugcli's own output.
+/build_dir/
+*.upk
