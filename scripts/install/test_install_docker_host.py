@@ -39,10 +39,13 @@ import email.message
 import io
 import json
 import os
+import re
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -4732,6 +4735,488 @@ class TestTheUpdateCheckOnlyEverAddsALine(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     pf.check_for_a_newer_release()
                 self.assertEqual(registry.asked, [])
+
+
+
+class _FakeUDPSocket:
+    """A socket that records what was done to it and never leaves the box.
+
+    Here so the address probe can be tested for the property that matters
+    most and is invisible from its return value: that it sends nothing.
+    """
+
+    def __init__(self, local, *, connect_error=None):
+        self.local, self.connect_error = local, connect_error
+        self.calls = []
+
+    def connect(self, addr):
+        self.calls.append(("connect", addr))
+        if self.connect_error is not None:
+            raise self.connect_error
+
+    def getsockname(self):
+        self.calls.append(("getsockname", None))
+        return (self.local, 0)
+
+    def close(self):
+        self.calls.append(("close", None))
+
+
+class TestTheEnrolmentLinkNamesAnAddressSomebodyElseCanOpen(unittest.TestCase):
+    """The link this installer prints is opened from a DIFFERENT machine.
+
+    Both of the obvious defaults are wrong for that reader, which is why
+    this is asserted rather than left to whatever socket call is handy.
+    localhost is right only on the box that ran the install, so an
+    operator who installed over SSH reads a link to their own laptop. A
+    hostname is worse than it looks: it resolves on the machine it names
+    and, without mDNS or a DNS record somebody set up, nowhere else, so
+    the link fails for exactly the reader it was written for.
+    """
+
+    def test_the_default_is_this_machines_own_address(self):
+        with unittest.mock.patch.object(installer, "primary_lan_address", lambda: "10.1.2.3"):
+            args = installer.resolve(installer.build_parser().parse_args(
+                ["install", "--prefix", "/tmp/whatever"]))
+        self.assertEqual(args.public_base_url, "http://10.1.2.3:8080")
+
+    def test_the_port_it_names_is_the_published_one(self):
+        """The positive control for the line above: an address alone would
+        also satisfy it while naming a port nothing listens on."""
+        with unittest.mock.patch.object(installer, "primary_lan_address", lambda: "10.1.2.3"):
+            args = installer.resolve(installer.build_parser().parse_args(
+                ["install", "--prefix", "/tmp/whatever", "--listen-port", "9443"]))
+        self.assertEqual(args.public_base_url, "http://10.1.2.3:9443")
+
+    def test_a_host_with_no_default_route_still_gets_something_usable(self):
+        """An unrouted host is a real state, not an error state. It has no
+        address the probe can read, and refusing to finish an install over
+        that would be refusing over something the install does not need."""
+        with unittest.mock.patch.object(installer, "primary_lan_address", lambda: None), \
+             unittest.mock.patch.object(installer.socket, "gethostname", lambda: "the-nas"):
+            args = installer.resolve(installer.build_parser().parse_args(
+                ["install", "--prefix", "/tmp/whatever"]))
+        self.assertEqual(args.public_base_url, "http://the-nas:8080")
+
+    def test_a_supplied_url_is_never_overridden(self):
+        with unittest.mock.patch.object(installer, "primary_lan_address", lambda: "10.1.2.3"):
+            args = installer.resolve(installer.build_parser().parse_args(
+                ["install", "--prefix", "/tmp/whatever",
+                 "--public-base-url", "https://backups.example.org"]))
+        self.assertEqual(args.public_base_url, "https://backups.example.org")
+
+    def test_the_probe_sends_nothing(self):
+        """Connecting a UDP socket only asks the kernel to pick a route.
+        The moment this starts actually sending, the installer is emitting
+        a packet to a documentation address from every host it runs on."""
+        fake = _FakeUDPSocket("10.1.2.3")
+        with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: fake):
+            self.assertEqual(installer.primary_lan_address(), "10.1.2.3")
+        self.assertEqual([name for name, _ in fake.calls], ["connect", "getsockname", "close"])
+
+    def test_it_probes_a_reserved_address_that_is_routed_nowhere(self):
+        fake = _FakeUDPSocket("10.1.2.3")
+        with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: fake):
+            installer.primary_lan_address()
+        (_, addr), = [call for call in fake.calls if call[0] == "connect"]
+        self.assertEqual(addr[0], "192.0.2.1",
+                         "TEST-NET-1 (RFC 5737) is reserved for documentation and routed nowhere; "
+                         "any real address here would be this installer picking somebody's host to "
+                         "point at")
+
+    def test_a_loopback_answer_is_no_answer(self):
+        """The failure this catches is silent: a host where the route
+        lookup lands on lo hands back 127.0.0.1, which is a perfectly
+        valid address and is the exact thing this whole change exists to
+        stop printing."""
+        for local in ("127.0.0.1", "127.0.1.1", "0.0.0.0"):
+            with self.subTest(local=local):
+                fake = _FakeUDPSocket(local)
+                with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: fake):
+                    self.assertIsNone(installer.primary_lan_address())
+
+    def test_a_routable_answer_is_kept(self):
+        """The positive control for the line above. Without it, "loopback
+        becomes None" is also satisfied by a probe that answers None to
+        everything, and the fallback would be the only path ever taken."""
+        fake = _FakeUDPSocket("192.168.4.7")
+        with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: fake):
+            self.assertEqual(installer.primary_lan_address(), "192.168.4.7")
+
+    def test_an_unroutable_host_answers_none_rather_than_raising(self):
+        fake = _FakeUDPSocket("10.1.2.3", connect_error=OSError("network is unreachable"))
+        with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: fake):
+            self.assertIsNone(installer.primary_lan_address())
+        self.assertIn(("close", None), fake.calls, "the socket is closed on the failure path too")
+
+
+class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
+    """--cli-only means the rbm-web binary is not executed at all.
+
+    Not "the Web UI is hidden" and not "the port is bound to loopback":
+    the engine container runs /rbm daemon instead of /rbm-web serve, and
+    the only service with a `ports:` key is never started. Every
+    assertion below is about one of those two facts, because a CLI-only
+    install that quietly published a Web UI would be the one failure an
+    operator who asked for this would never think to check for.
+    """
+
+    def override(self, *extra):
+        fx = Fixture(self)
+        return installer.render_image_override(fx.args(*extra, command="install"))
+
+    def test_the_engine_runs_the_cli_and_not_the_web_binary(self):
+        rendered = self.override("--cli-only")
+        self.assertIn('command: ["/rbm", "daemon"]', rendered)
+        self.assertNotIn('"/rbm-web"', rendered)
+
+    def test_no_web_ui_service_is_pinned_at_all(self):
+        rendered = self.override("--cli-only")
+        self.assertNotIn("\n  web-ui:", rendered)
+
+    def test_a_full_install_still_pins_both(self):
+        """The positive control. Without it, "no web-ui in the override"
+        is also satisfied by a renderer that stopped emitting it for
+        everybody, and the default install would come up unpinned."""
+        rendered = self.override()
+        self.assertIn("\n  web-ui:", rendered)
+        self.assertNotIn("/rbm daemon", rendered)
+
+    def test_the_health_check_is_disabled_rather_than_left_to_fail(self):
+        """The canonical check is an HTTP liveness probe against
+        127.0.0.1:8080. A daemon with no listener fails it forever, so
+        inheriting it would mark every healthy CLI-only deployment
+        unhealthy."""
+        rendered = self.override("--cli-only")
+        self.assertIn("healthcheck:", rendered)
+        self.assertIn("disable: true", rendered)
+
+    def test_the_downgrade_guard_can_still_read_the_pinned_version(self):
+        """installed_image_tag falls back to this file when the stack is
+        down, and it reads it line by line. The extra keys CLI-only adds
+        are exactly the kind of thing that breaks a line-oriented read."""
+        fx = Fixture(self)
+        args = fx.args("--cli-only", "--image", "ghcr.io/spdrman/rclone-manager:9.9.9",
+                       command="install")
+        (args.prefix / "compose.image.yaml").write_text(
+            installer.render_image_override(args), encoding="utf-8")
+        self.assertEqual(installer._image_from_override(args.prefix),
+                         "ghcr.io/spdrman/rclone-manager:9.9.9")
+
+    def test_the_env_records_the_shape_so_a_bare_rerun_keeps_it(self):
+        fx = Fixture(self)
+        self.assertIn("CLI_ONLY=1", installer.render_env(fx.args("--cli-only", command="install")))
+        self.assertIn("CLI_ONLY=0", installer.render_env(fx.args(command="install")))
+
+    def test_a_bare_rerun_over_a_cli_only_install_stays_cli_only(self):
+        """The reason this is adopted rather than defaulted. The default
+        is the full stack, so without this a re-run with no flags would
+        start web-ui and publish a port on the LAN of a host somebody
+        deliberately installed without one. An upgrade is not the place to
+        change what a deployment exposes."""
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.adopt_installed_shape(args, {"CLI_ONLY": "1"})
+        self.assertIs(args.cli_only, True)
+
+    def test_a_bare_rerun_over_a_full_install_stays_full(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.adopt_installed_shape(args, {"CLI_ONLY": "0"})
+        self.assertIs(args.cli_only, False)
+
+    def test_an_env_written_before_the_flag_existed_is_a_full_install(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.adopt_installed_shape(args, {})
+        self.assertIs(args.cli_only, False)
+
+    def test_the_flag_that_was_typed_still_wins_in_both_directions(self):
+        fx = Fixture(self)
+        for typed, was, want in (("--cli-only", "0", True), ("--no-cli-only", "1", False)):
+            with self.subTest(typed=typed):
+                args = fx.args(typed, command="install")
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    installer.adopt_installed_shape(args, {"CLI_ONLY": was})
+                self.assertIs(args.cli_only, want)
+                self.assertIn("moves the deployment", out.getvalue(),
+                              "changing what a deployment exposes is said out loud, not quietly")
+
+    def test_the_host_port_is_not_checked_because_none_is_published(self):
+        """web-ui is the only service with a `ports:` key. Refusing a
+        CLI-only install because something else holds 8080 would be
+        refusing over a port this deployment never touches."""
+        fx = Fixture(self)
+        pf = installer.Preflight(fx.args("--cli-only", command="install"))
+        with unittest.mock.patch.object(installer.socket, "socket",
+                                        lambda *a, **k: self.fail("a port was probed")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                pf.check_port()
+
+    def test_a_full_install_does_check_the_port(self):
+        """The positive control: without it, the assertion above also
+        passes against a check_port that stopped probing for everyone."""
+        fx = Fixture(self)
+        pf = installer.Preflight(fx.args(command="install"))
+        probed = []
+
+        class _Probe:
+            def settimeout(self, _t):
+                pass
+
+            def connect_ex(self, addr):
+                probed.append(addr)
+                return 1
+
+            def close(self):
+                pass
+
+        with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: _Probe()):
+            with contextlib.redirect_stdout(io.StringIO()):
+                pf.check_port()
+        self.assertEqual(probed, [("127.0.0.1", 8080)])
+
+    def test_the_wrapper_is_the_interface_and_is_executable(self):
+        fx = Fixture(self)
+        args = fx.args("--cli-only", command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.stage_payload(args)
+        wrapper = args.prefix / "bin" / "rbm"
+        self.assertTrue(wrapper.is_file(), "a CLI-only install with no CLI is not an install")
+        self.assertEqual(wrapper.stat().st_mode & 0o111, 0o111)
+        body = wrapper.read_text(encoding="utf-8")
+        self.assertIn("--entrypoint /rbm", body)
+        self.assertIn("--no-deps", body,
+                      "without it a read starts the engine as a side effect of being run")
+        self.assertIn("run --rm", body,
+                      "exec would need a running container, and the first command anybody needs "
+                      "is the one that runs before anything is started")
+
+    def _staged_wrapper_and_stub_docker(self):
+        """A CLI-only install staged for real, with a docker on PATH that
+        records what it was asked and does nothing.
+
+        Driven by RUNNING the wrapper rather than by reading it, because
+        the defect this covers is invisible in the text: the script says
+        `run ... "$@"` either way, and what goes wrong is what docker
+        compose does when "$@" is empty.
+        """
+        fx = Fixture(self)
+        args = fx.args("--cli-only", command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.stage_payload(args)
+        stub_dir = args.prefix / "stubbin"
+        stub_dir.mkdir()
+        log = args.prefix / "docker-calls.log"
+        stub = stub_dir / "docker"
+        stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "' + str(log) + '"\nexit 0\n',
+                        encoding="utf-8")
+        os.chmod(stub, 0o755)
+        env = dict(os.environ, PATH=f"{stub_dir}:{os.environ['PATH']}")
+        return args.prefix / "bin" / "rbm", log, env
+
+    def test_the_wrapper_refuses_an_empty_invocation_instead_of_falling_through(self):
+        """`docker compose run` given no command runs the service's own
+        command, which on a CLI-only deployment is `/rbm daemon`. Without
+        the guard a bare `rbm` became `/rbm /rbm daemon` and reported an
+        unknown command nobody typed, so the guard is the behaviour and
+        docker must not be reached at all."""
+        wrapper, log, env = self._staged_wrapper_and_stub_docker()
+        proc = subprocess.run([str(wrapper)], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(proc.returncode, 2,
+                         "a missing command is exit 2 in rbm itself, and the wrapper standing in "
+                         "for it has to agree rather than invent a third answer")
+        self.assertIn("usage: rbm", proc.stderr)
+        self.assertFalse(log.exists(),
+                         "docker was invoked for an invocation that names no command; that is the "
+                         "fall-through this guard exists to stop")
+
+    def test_the_wrapper_passes_a_real_command_straight_through(self):
+        """The positive control. Without it, "refuses an empty invocation"
+        is also satisfied by a wrapper that refuses everything."""
+        wrapper, log, env = self._staged_wrapper_and_stub_docker()
+        proc = subprocess.run([str(wrapper), "status"], capture_output=True, text=True,
+                              env=env, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(log.exists(), "docker was never invoked for a real command")
+        called = log.read_text(encoding="utf-8")
+        self.assertIn("run --rm --no-deps --entrypoint /rbm rclone-manager status", called)
+
+    def test_a_full_install_stages_no_second_way_in(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.stage_payload(args)
+        self.assertFalse((args.prefix / "bin" / "rbm").exists())
+
+    def test_the_flag_exists_only_where_a_deployment_is_staged(self):
+        flags = {opt for a in _subparser(installer.build_parser(), "install")._actions
+                 for opt in a.option_strings}
+        self.assertTrue({"--cli-only", "--no-cli-only"} <= flags)
+        for command in ("status", "uninstall", "network-doctor", "network-undo"):
+            other = {opt for a in _subparser(installer.build_parser(), command)._actions
+                     for opt in a.option_strings}
+            self.assertNotIn("--cli-only", other, f"{command} never brings a deployment up")
+
+
+class TestARestartLoopIsNotAnInstall(unittest.TestCase):
+    """A CLI-only engine serves nothing, so there is no health endpoint to
+    ask and "the container is running" is the whole available claim.
+
+    Which is why it is sampled over a window rather than once. `rbm
+    daemon` refuses rather than starts when it is handed something it
+    cannot use, and for the first second of that the container genuinely
+    is running: a single sample would report an install that is really a
+    crash loop, on the one deployment shape that has no other way to
+    notice.
+    """
+
+    def states(self, sequence):
+        remaining = list(sequence)
+        return lambda args, service: remaining.pop(0) if remaining else sequence[-1]
+
+    def settled(self, sequence):
+        """Driven on a fake clock, which is not a speed trick: the thing
+        under test is a window measured in seconds, so a real clock would
+        make this suite either slow or timing-dependent, and both of those
+        end with somebody deleting the test."""
+        clock = [1000.0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with unittest.mock.patch.object(installer, "compose_service_state", self.states(sequence)), \
+             unittest.mock.patch.object(installer.time, "time", lambda: clock[0]), \
+             unittest.mock.patch.object(installer.time, "sleep", sleep):
+            return installer.wait_for_daemon_settled(argparse.Namespace(), 60)
+
+    def test_a_container_that_stays_up_settles(self):
+        self.assertEqual(self.settled(["running"] * 60), "running")
+
+    def test_a_container_that_flaps_never_settles(self):
+        """And the answer is never the last sample. A flapper is running
+        for part of every restart cycle, so whether the final sample lands
+        on "running" is down to where the deadline falls: this sequence
+        reported a healthy install exactly that way before the answer
+        stopped being "what I saw last"."""
+        answer = self.settled(["running", "running", "restarting", "exited"] * 60)
+        self.assertNotEqual(answer, "running")
+        self.assertIn("never stayed up", answer)
+
+    def test_a_container_that_never_starts_says_what_it_was_doing(self):
+        answer = self.settled(["exited"] * 60)
+        self.assertNotEqual(answer, "running")
+        self.assertIn("exited", answer, "the operator needs the state to know which log to read")
+
+
+
+class TestTheSiteReferenceNamesEveryFlagThisParserDeclares(unittest.TestCase):
+    """docs/site/reference.html sets out to be every flag, and a page that
+    says that is wrong the moment a flag lands without a row.
+
+    The Go side of the same page (distribution/packaging/site_reference_test.go)
+    holds its command table to the binary's dispatch table. This holds its
+    flag table to the parser in this file, which is the only thing that
+    actually knows what the installer accepts. Between them the page
+    cannot drift from either surface it documents.
+
+    Two flags are deliberately not on the page and are exempt here for
+    stated reasons rather than by being forgotten: -h/--help, which every
+    argparse parser has and no reader needs told about, and
+    --if-installed, which is not an option at all. It exists only so a
+    script still passing the flag it was told to pass gets a sentence
+    instead of argparse's "unrecognized arguments", it is suppressed from
+    --help for exactly that reason, and documenting it on a reference page
+    would be advertising a flag whose whole purpose is to be gone.
+    """
+
+    REGION = "INSTALLER-FLAGS"
+    EXEMPT = {"-h", "--help", "--if-installed"}
+
+    def reference(self):
+        path = REPO_ROOT / "docs" / "site" / "reference.html"
+        self.assertTrue(path.is_file(), f"{path} is missing; this test reads it")
+        return path.read_text(encoding="utf-8")
+
+    def region(self, doc):
+        begin, end = f"<!-- BEGIN {self.REGION} -->", f"<!-- END {self.REGION} -->"
+        i, j = doc.find(begin), doc.find(end)
+        self.assertTrue(0 <= i < j,
+                        f"reference.html has no {begin} ... {end} region; this test reads that "
+                        f"region, so removing it removes the check")
+        return doc[i + len(begin):j]
+
+    @staticmethod
+    def flags_in_first_cell(region_text):
+        """Every --flag in the FIRST cell of every row.
+
+        The first cell only, because the prose in the other two names
+        flags all the time ("defaults to what --prefix gave it"), and a
+        reader mentioning a flag is not the same claim as a row
+        documenting it. One row can still carry two, which is what
+        `--puid` / `--pgid` is.
+        """
+        found = set()
+        for row in region_text.split("<tr>")[1:]:
+            first_cell = row.split("</td>")[0]
+            found.update(re.findall(r"<code>(--[a-z0-9-]+)</code>", first_cell))
+        return found
+
+    def declared_flags(self):
+        parser = installer.build_parser()
+        sub = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)][0]
+        declared = set()
+        for sp in sub.choices.values():
+            for action in sp._actions:
+                declared.update(action.option_strings)
+        return declared - self.EXEMPT
+
+    def test_every_flag_the_parser_declares_has_a_row(self):
+        documented = self.flags_in_first_cell(self.region(self.reference()))
+        missing = sorted(self.declared_flags() - documented)
+        self.assertEqual(missing, [],
+                         f"docs/site/reference.html's flag table omits flags the installer accepts: "
+                         f"{missing}. That page says it is every flag, so a flag with no row is the "
+                         f"page lying rather than the page being short.")
+
+    def test_no_row_names_a_flag_this_installer_does_not_accept(self):
+        documented = self.flags_in_first_cell(self.region(self.reference()))
+        extra = sorted(documented - self.declared_flags() - self.EXEMPT)
+        self.assertEqual(extra, [],
+                         f"docs/site/reference.html documents flags the installer does not accept: "
+                         f"{extra}")
+
+    def test_the_exemptions_are_still_real(self):
+        """An exemption that stops naming anything is how a list like this
+        quietly grows: nobody removes an entry, so the next flag that
+        happens to collide with it is silently uncovered. Every name here
+        has to still be a flag the parser declares."""
+        declared = set()
+        parser = installer.build_parser()
+        sub = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)][0]
+        for sp in sub.choices.values():
+            for action in sp._actions:
+                declared.update(action.option_strings)
+        for flag in sorted(self.EXEMPT):
+            self.assertIn(flag, declared,
+                          f"{flag} is exempted from the reference page and is not a flag any "
+                          f"subcommand declares; the exemption is stale and is covering nothing")
+
+    def test_the_extractor_can_actually_fail(self):
+        """The positive control. Every assertion above is an absence, and
+        an extractor that reads zero flags out of every document satisfies
+        all of them."""
+        control = (
+            "<tr><td colspan=\"3\"><strong>a group heading</strong></td></tr>\n"
+            "<tr><td><code>--prefix</code></td><td>all six</td><td>and here --not-a-flag is prose</td></tr>\n"
+            "<tr><td><code>--puid</code> / <code>--pgid</code></td><td>x</td><td>y</td></tr>\n"
+        )
+        self.assertEqual(self.flags_in_first_cell(control), {"--prefix", "--puid", "--pgid"},
+                         "the extractor should read both flags out of a shared row, skip a colspan "
+                         "heading, and never read a flag named in the prose columns")
 
 
 if __name__ == "__main__":

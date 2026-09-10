@@ -255,7 +255,7 @@ export function App() {
             match a path with that extra segment in it (issue #285). */}
         <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={readOnly} />} />
         <Route path="/backups" element={<BackupsPage readOnly={readOnly} />} />
-        <Route path="/backups/:artifactId" element={<BackupDetailPage />} />
+        <Route path="/backups/:artifactId" element={<BackupDetailPage readOnly={readOnly} />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/quarantine" element={<QuarantinePage readOnly={readOnly} quarantine={quarantine} />} />
         <Route path="/settings" element={<SettingsPage readOnly={readOnly} />} />

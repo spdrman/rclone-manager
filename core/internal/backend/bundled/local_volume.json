@@ -1,0 +1,46 @@
+{
+  "id": "local_volume",
+  "label": "Local volume",
+  "summary": "A directory on a disk this NAS can see. A second internal drive, a USB disk, or an already-mounted network share.",
+  "role": "local_volume",
+  "rclone_backend": "local",
+  "fields": [
+    {
+      "id": "path",
+      "label": "Directory",
+      "help": "An absolute path this service can write to. A volume that is not mounted looks exactly like an empty directory, so the connection test writes a file and reads it back.",
+      "kind": "path",
+      "required": true
+    },
+    {
+      "id": "prefix",
+      "label": "Subdirectory",
+      "help": "A namespace inside the directory, so one volume can hold more than this product's artifacts. Leave empty to write at the top.",
+      "kind": "key_prefix",
+      "required": false
+    },
+    {
+      "id": "upload_verification",
+      "label": "How a copy is proven",
+      "kind": "enum",
+      "required": false,
+      "unset_means": "readback",
+      "values": [
+        { "value": "readback", "label": "Read the copy back and re-hash it" },
+        { "value": "attested", "label": "Believe the destination's own digest" }
+      ]
+    }
+  ],
+  "probe": {
+    "steps": [
+      { "step": "credentials", "run": false, "reason": "a local destination reads no credential: the backups are written by this service to a directory on this machine." },
+      { "step": "reach", "run": true },
+      { "step": "deliverable", "run": true },
+      { "step": "write", "run": true },
+      { "step": "read_back", "run": true },
+      { "step": "storage_class", "run": false, "reason": "a filesystem has no storage classes, so there is nothing here that could have landed in a different one than the configuration asked for." },
+      { "step": "verification", "run": true },
+      { "step": "delete", "run": true }
+    ]
+  }
+}

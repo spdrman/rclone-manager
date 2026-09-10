@@ -255,6 +255,19 @@ func TestRetryingFailureWithFreshGoodBackupIsDegradedNotFailing(t *testing.T) {
 	if got.State != Degraded {
 		t.Fatalf("State = %s, want %s (a scheduled retry is not yet a FAILING condition)", got.State, Degraded)
 	}
+
+	// #663 review finding F: decideState reading NextRetryAt is only half
+	// the discriminator. StuckFailures is compute.go's own display list
+	// for exactly this population ("FAILED artifacts with no retry
+	// scheduled"), and moving its append above the NextRetryAt check
+	// reddens no other test in this package: the State assertion above
+	// stays Degraded either way, because decideState never reads
+	// StuckFailures. An artifact with a retry scheduled listed there
+	// tells an operator to intervene by hand on something that will
+	// retry itself.
+	if len(got.StuckFailures) != 0 {
+		t.Fatalf("StuckFailures = %v, want none: retrying.dump has NextRetryAt set and must not be listed as needing a human", got.StuckFailures)
+	}
 }
 
 func TestPendingDeletesAndCurrentTransfersAreCounted(t *testing.T) {

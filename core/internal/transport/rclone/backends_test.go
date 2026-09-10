@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/rclone/rclone/fs"
+	"github.com/spdrman/rclone-manager/core/internal/backend"
 )
 
 // This file is what makes FR-4's "each backend is an architecture
@@ -72,4 +73,90 @@ func TestRequiredBackendsResolve(t *testing.T) {
 			t.Errorf("required backend %q did not resolve: %v", name, err)
 		}
 	}
+}
+
+// TestEveryBundledManifestNamesABackendThisBinaryRegisters is issue
+// #665's own cross-package pin, test 25: every manifest's
+// rclone_backend, and every member of backend.SupportedRcloneBackends,
+// has to resolve against the LIVE fs.Registry - the same registry
+// TestRegisteredBackendsExactSet checks the whole binary's set against,
+// not against a list either package could drift from independently.
+//
+// This is deliberately a SUBSET check, not the exact-set comparison
+// above: backend.SupportedRcloneBackends is narrower than
+// RequiredBackends on purpose (sftp is required as a SOURCE backend,
+// not yet offered as a destination - see backend/doc.go, "What is
+// genuinely weakened"), so it must resolve against what the binary
+// registers without needing to equal it.
+func TestEveryBundledManifestNamesABackendThisBinaryRegisters(t *testing.T) {
+	registered := map[string]bool{}
+	for _, name := range RegisteredBackendNames() {
+		registered[name] = true
+	}
+	if len(registered) == 0 {
+		t.Fatal("RegisteredBackendNames() returned nothing, so this test checks nothing")
+	}
+
+	for name := range backend.SupportedRcloneBackends {
+		if !registered[name] {
+			t.Errorf("backend.SupportedRcloneBackends names %q, and this binary's live fs.Registry does not register it", name)
+		}
+	}
+
+	reg, err := backend.Bundled()
+	if err != nil {
+		t.Fatalf("backend.Bundled(): %v", err)
+	}
+	checked := 0
+	for _, id := range reg.IDs() {
+		m, err := reg.Backend(id)
+		if err != nil {
+			t.Fatalf("backend.Backend(%q): %v", id, err)
+		}
+		checked++
+		if !registered[m.RcloneBackend] {
+			t.Errorf("manifest %q declares rclone_backend %q, and this binary's live fs.Registry does not register it", id, m.RcloneBackend)
+		}
+		if !backend.SupportedRcloneBackends[m.RcloneBackend] {
+			t.Errorf("manifest %q declares rclone_backend %q, which is not in backend.SupportedRcloneBackends", id, m.RcloneBackend)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("the bundled registry declared no backend, so this test checked nothing")
+	}
+}
+
+// TestSupportedRcloneBackendsIsNarrowerThanRequiredBackends pins section
+// 4.2's own claim structurally: backend.SupportedRcloneBackends must
+// never simply BE RequiredBackends (reusing that list directly would
+// make shipping SFTP as a destination a zero-review change - see
+// backend/doc.go), and it must always resolve as a SUBSET of it.
+func TestSupportedRcloneBackendsIsNarrowerThanRequiredBackends(t *testing.T) {
+	required := map[string]bool{}
+	for _, name := range RequiredBackends {
+		required[name] = true
+	}
+	for name := range backend.SupportedRcloneBackends {
+		if !required[name] {
+			t.Errorf("backend.SupportedRcloneBackends names %q, which is not even in RequiredBackends", name)
+		}
+	}
+	if reflect.DeepEqual(sortedKeys(backend.SupportedRcloneBackends), append([]string(nil), RequiredBackends...)) {
+		t.Error("backend.SupportedRcloneBackends now equals RequiredBackends: it must stay the narrower, reviewed list (issue #665 section 4.2), or sftp-as-destination silently stops being a reviewed decision")
+	}
+}
+
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	for i := range keys {
+		for j := i + 1; j < len(keys); j++ {
+			if keys[j] < keys[i] {
+				keys[i], keys[j] = keys[j], keys[i]
+			}
+		}
+	}
+	return keys
 }

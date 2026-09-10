@@ -155,6 +155,11 @@ type aggregate struct {
 	currentTransfers      []TransferInProgress
 	pendingDeletes        int
 	failures              int
+	// stuckFailures is the display half of evidence.hasStuckFailure:
+	// which artifacts, for a report an operator can act on (issue #662).
+	// It sits here rather than on evidence for the reason every other
+	// field here does: decideState must not be able to reach it.
+	stuckFailures         []model.ArtifactID
 	quarantinedCount      int
 	quarantinedLostCount  int
 	readOnlyRetainedCount int
@@ -267,6 +272,7 @@ func buildAggregate(records []state.Record, staleThreshold time.Duration, now ti
 			agg.failures++
 			if r.NextRetryAt == nil {
 				agg.hasStuckFailure = true
+				agg.stuckFailures = append(agg.stuckFailures, r.Artifact)
 			} else {
 				agg.hasRetryingFailure = true
 			}
@@ -334,6 +340,7 @@ func ComputeBackupSetHealth(set model.BackupSetID, records []state.Record, reins
 		CurrentTransfers: agg.currentTransfers,
 		PendingDeletes:   agg.pendingDeletes,
 		Failures:         agg.failures,
+		StuckFailures:    agg.stuckFailures,
 
 		QuarantinedCount:     agg.quarantinedCount,
 		QuarantinedLostCount: agg.quarantinedLostCount,

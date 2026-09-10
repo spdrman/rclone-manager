@@ -77,7 +77,7 @@ tests run inside a manager container on that network nothing publishes a
 port and the source is reached by alias. `Source.Addr()` answers correctly
 either way, so a test never has to know.
 
-`scripts/e2e/run-machine-tier.sh` (#451) is that second placement. It builds
+`scripts/rcmtools/e2e/run_machine_tier.py` (#451) is that second placement. It builds
 a manager machine from a Go toolchain with a docker client, mounts the
 repository at the same absolute path inside as out, joins it to the network
 as an ordinary user, and runs the machine-tier packages inside it. The
