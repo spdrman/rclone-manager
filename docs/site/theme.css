@@ -390,3 +390,93 @@ footer {
 }
 
 footer p { color: var(--text-faint); margin-bottom: 0.3rem; }
+
+/* -------------------------------------------------------------------
+   Command output, and an attention marker inside it.
+
+   A code block on this site is a thing you type. An output block is what
+   came back, and the two look identical without a label, so every output
+   block carries one.
+
+   The marker exists because a reader who has just run the install has
+   exactly one question, and it is about one string on the screen. The
+   bubble has to sit OUTSIDE the <pre>: pre is overflow-x: auto, and an
+   absolutely-positioned child of a scroll container is clipped by it, so
+   a bubble inside would be cut off at the first line it exceeded. It is
+   a sibling instead, positioned against .io, and :has() is what lets
+   hovering something inside the pre reveal something outside it.
+   ------------------------------------------------------------------- */
+.io-label {
+  margin: 0 0 0.3rem;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3, var(--text-2));
+}
+/* The bubble hangs BELOW the block, not over it. Anchored inside, it
+   covered the line it was describing: you hovered the link, the bubble
+   opened on top of it, and the thing you were pointing at disappeared
+   under the explanation of itself. */
+.io { position: relative; }
+
+.tip-term {
+  background: var(--warn-bg);
+  border-bottom: 1px dashed var(--warn);
+  border-radius: 3px;
+  padding: 0 0.15em;
+  color: inherit;
+  text-decoration: none;
+}
+.tip-term:hover, .tip-term:focus { background: var(--warn); color: #fff; }
+.tip-term::after {
+  content: " \2139";           /* an information source, not an emoji */
+  font-style: normal;
+  color: var(--warn);
+}
+.tip-term:hover::after, .tip-term:focus::after { color: #fff; }
+.tip-token { font-weight: 600; }
+
+.tip-bubble {
+  display: none;
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  max-width: 46rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--warn);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.tip-bubble p { margin: 0 0 0.5rem; }
+.tip-bubble p:last-child { margin-bottom: 0; }
+.tip-bubble .tip-heading {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--warn);
+}
+.io:has(.tip-term:hover) .tip-bubble,
+.io:has(.tip-term:focus) .tip-bubble,
+.io:has(.tip-bubble:hover) .tip-bubble { display: block; }
+
+/* Without :has() the bubble can never be revealed, so it stops being a
+   bubble and becomes a note under the block. Worse placement, same
+   information, and nobody is left with a marker that does nothing. */
+@supports not selector(:has(*)) {
+  .tip-bubble {
+    display: block;
+    position: static;
+    margin: 0 0 0.75rem;
+    box-shadow: none;
+  }
+}
