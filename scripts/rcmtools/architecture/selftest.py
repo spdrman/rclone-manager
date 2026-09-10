@@ -346,7 +346,14 @@ def test_the_harness_itself(st: Selftest) -> None:
     # control working, not the suite failing.
     def rejects(label: str, script: Path, expect: str) -> bool:
         before_failed, before_passed = st.tally.failed, st.tally.passed
-        st.expect_check_fails(label, bindir, expect, str(script))
+        # `quiet` while probing: these two rejections are the control
+        # WORKING, so printing them would put two lines reading
+        # "SELFTEST FAIL" at the top of an all-green run.
+        st.tally.quiet = True
+        try:
+            st.expect_check_fails(label, bindir, expect, str(script))
+        finally:
+            st.tally.quiet = False
         rejected = st.tally.failed == before_failed + 1
         st.tally.failed, st.tally.passed = before_failed, before_passed
         return rejected
