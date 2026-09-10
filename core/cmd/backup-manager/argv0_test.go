@@ -124,7 +124,7 @@ func checkArgv0(t *testing.T, path string) {
 			if dispatchSlice[ast.Node(sel)] {
 				return true
 			}
-			t.Errorf("%s:%d reads os.Args in a shape other than os.Args[1:].\n\nThe old command name is kept alive by a symlink beside this binary, so `rbm status` and `rbm status` are the same binary reached under two filenames and have to behave identically. Anything that can see argv[0] can make them differ, and the operator who finds out is one whose script broke after an upgrade. Take the argument from the parsed command line instead; if a build genuinely needs to know its own filename, that is a decision to argue in the commit rather than a line to slip past this test.",
+			t.Errorf("%s:%d reads os.Args in a shape other than os.Args[1:].\n\nThis binary is reached under more than one path - the image installs it at /rbm, a developer runs it straight out of go build under whatever name they chose, and the e2e harness copies it somewhere else again - and it has to behave identically under all of them. Anything that can see argv[0] can make them differ, and the operator who finds out is one whose script broke after an upgrade. Take the argument from the parsed command line instead; if a build genuinely needs to know its own filename, that is a decision to argue in the commit rather than a line to slip past this test.",
 				fset.Position(sel.Pos()).Filename, fset.Position(sel.Pos()).Line)
 		case "Executable":
 			t.Errorf("%s:%d calls os.Executable, which answers the same question os.Args[0] does and has the same problem: see the message above and this file's doc comment.",
