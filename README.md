@@ -2427,7 +2427,7 @@ commit, and prints a diff per package rather than a verdict.
 Its controls are a pair, and the pairing is what makes either half mean anything.
 `scripts/docs/selftest.sh` promotes a comment adjacent to `package` in the real
 `core/service/activity.go` and requires the package-doc check to go red and name the file;
-then it runs the *same* mutation past `scripts/docs/check-comments-only.sh`, which compares
+then it runs the *same* mutation past `scripts/rcmtools/docs/check_comments_only.py`, which compares
 token streams with comments dropped, and requires that one to stay silent. A promotion
 changes what `go doc` prints and changes no token, so the pair proves the two checks answer
 different questions rather than one of them firing on unrelated damage. A third control
