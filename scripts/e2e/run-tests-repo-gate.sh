@@ -14,7 +14,13 @@
 #
 #   1. the CLI smoke slice (55 of Suite A's 60 cases) against a
 #      rbm built from THIS working tree;
-#   2. the browser suite against THIS working tree's ui/shared.
+#   2. the browser suite against a real deployment built from THIS working
+#      tree, over the wire, through scripts/e2e/three-machine-web-ui.sh
+#      (#687: this used to run RM_UI_DIR against ui/shared's Vite dev
+#      server over a mock API, until the tests repository dropped
+#      RM_UI_DIR and moved Suite B onto RM_BASE_URL against a real
+#      deployment; that rig already existed in this file's own worktree,
+#      unwired to this gate, which is the other half of what #687 fixes).
 #
 # Both come from spdrman/rclone-manager-tests at the sha in tests-repo.pin,
 # so the tests are versioned independently of the product and a new test
@@ -146,59 +152,35 @@ RM_SOURCE_DIR="$repo_root" \
 
 # ------------------------------------------------------------ the browser half
 #
-# ui/shared has to be installed, which ci-local.sh's own preflight already
-# refuses without, so reaching here with it missing means this script was run
-# standalone. Say so rather than letting `npm run dev` fail sixty seconds
-# later inside a webServer timeout.
-[ -d ui/shared/node_modules ] \
-  || die "ui/shared has no installed dependencies, so its dev server cannot start." \
-         "Fix it with: cd ui/shared && npm ci"
-
-# A browser this machine does not have is the one capability question #197
-# left open. Refuse, name the fix, and let ci-local.sh ledger the opt-out.
-if ! (cd "$checkout/suites/web-ui" && node -e '
-const { chromium } = require("playwright-core");
-require("node:fs").accessSync(chromium.executablePath());
-' >/dev/null 2>&1); then
-  die "Playwright has no installed Chromium on this machine, so the browser suite cannot run." \
-      "Fix it with: cd $checkout/suites/web-ui && npx playwright install chromium"
-fi
-
-# The suite's own unit test of its port helper comes with it. In the old
-# home ui/shared's vitest ran it; nothing else does now, and it is the
-# thing that stops an E2E_PORT typo becoming port 0 or NaN.
+# #687: this used to start ui/shared's own Vite dev server over
+# createMockApi and drive it through RM_UI_DIR, so a case's pass or fail
+# was a claim about a component rendering given a fixture, and nothing in
+# it could go red on the path an operator actually meets (browser ->
+# serve-ui -> reverse proxy -> serve -> SQLite). The tests repository
+# retired RM_UI_DIR along with that suite (rclone-manager-tests#65) in
+# favour of RM_BASE_URL against a real deployment, and
+# scripts/e2e/three-machine-web-ui.sh is that deployment: three private
+# Docker networks, the product's own two containers built from this
+# working tree, a real sshd standing in for the machine being backed up,
+# and a client container carrying the browser and the Playwright runner
+# together, so nothing here needs a browser installed on the host.
+#
+# Its own exit code carries the same three-outcome vocabulary
+# two-machine-backup.sh uses: 0 passed, 3 is CANNOT RUN (a capability
+# this machine does not have, most often no reachable Docker daemon,
+# already required above ci-local.sh's own gate_require_docker), anything
+# else failed. 3 is translated into the named refusal below rather than
+# left to `set -e` so a capability gap still reads as "fix this" and not
+# as an unexplained nonzero.
 echo "==> e2e gate: the browser suite's own unit tests"
 (cd "$checkout/suites/web-ui" && npm run --silent unit)
 
-# One port, chosen here, and handed to the suite through E2E_PORT.
-#
-# Not decoration, and not the same thing as letting the suite derive its
-# own. Playwright re-evaluates playwright.config.ts inside every worker
-# process, so anything the config COMPUTES has to come out the same in the
-# runner and in each worker. The suite's default derivation probes for a
-# free port, and by the time a worker probes, the runner's own Vite is
-# already holding the one the runner picked, so the worker can walk to the
-# next slot and end up with a baseURL nothing is listening on. That is
-# exactly what happened on the first full gate run here: the runner said
-# 5930 and one worker navigated to 5931 and got ERR_CONNECTION_REFUSED, one
-# test out of 165.
-#
-# E2E_PORT is read from the environment rather than computed, so the runner
-# and every worker read the same number. The residual race (something else
-# grabs the port between this probe and Vite's bind) is loud rather than
-# silent: --strictPort makes Vite refuse to slide, and reuseExistingServer
-# is false, so a lost race fails to start instead of testing somebody
-# else's server.
-e2e_port="$(node -e '
-const { createServer } = require("node:net");
-const s = createServer();
-s.on("error", () => process.exit(1));
-s.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => {
-  const port = s.address().port;
-  s.close(() => process.stdout.write(String(port)));
-});
-')"
-[ -n "$e2e_port" ] || die "could not obtain a free port for the browser suite."
-
-echo "==> e2e gate: Suite B browser suite on port $e2e_port, against this working tree's ui/shared"
-(cd "$checkout/suites/web-ui" && RM_UI_DIR="$repo_root/ui/shared" E2E_PORT="$e2e_port" npm run --silent e2e)
+echo "==> e2e gate: Suite B browser suite, against a real deployment built from this working tree, over the wire"
+webui_status=0
+bash scripts/e2e/three-machine-web-ui.sh --suite "$checkout/suites/web-ui" || webui_status=$?
+if [ "$webui_status" = 3 ]; then
+  die "three-machine-web-ui.sh could not perform the proof on this machine (exit 3)." \
+      "Its own output above names the missing capability, most likely Docker."
+elif [ "$webui_status" != 0 ]; then
+  exit "$webui_status"
+fi
