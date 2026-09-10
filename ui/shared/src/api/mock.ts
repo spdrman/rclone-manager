@@ -2122,14 +2122,14 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             "confirmed copy of their artifact anywhere",
           correlationId: "cid_mockmedium409inuse"
         }));
-      if (settings.mediums[at].isLocal)
-        return Promise.reject(new BackupManagerError({
-          code: "MEDIUM_IS_DEFAULT",
-          message:
-            "service: storage medium is this deployment's default destination: local is the drive this deployment's " +
-            "backups land on. It is not declared in the configuration and cannot be un-declared",
-          correlationId: "cid_mockmedium409local"
-        }));
+      // There is deliberately no local-shaped refusal here any more
+      // (#670 deleted the engine's, #671 made the state reachable from
+      // the browser). local is a declared destination — instance zero of
+      // the local_volume backend — and it is undeletable exactly when,
+      // and because, it is the default, which the rule below this one
+      // states for every destination alike. A fixture that went on
+      // refusing it by name would teach a rule the engine no longer has,
+      // and would do it on the surface developers look at first.
       if (settings.mediums[at].isDefault)
         return Promise.reject(new BackupManagerError({
           code: "MEDIUM_IS_DEFAULT",

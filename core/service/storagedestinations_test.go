@@ -222,6 +222,84 @@ func TestSetDefaultStorageMedium_RefusesADestinationNothingDeclares(t *testing.T
 	}
 }
 
+// TestSetDefaultStorageMedium_NeverLeavesTheDeploymentWithoutADefault is
+// I2.3's (#671) hazard, asserted from the only side a test can reach it
+// from.
+//
+// Handing the mark over is two facts changing at once: one destination
+// stops being the default and another starts. Implemented as
+// clear-then-set, a crash between the halves leaves a deployment in
+// which every tier that follows the default resolves to nothing, and
+// nothing on any surface would say so — the file would simply be a
+// configuration nobody would write by hand.
+//
+// It cannot be implemented that way here: the move is one assignment
+// followed by one writeConfigBytesAtomically, so there is no instant at
+// which the file has been written without a default. Killing the process
+// between the halves is therefore not something this test can do, and
+// the equivalent is to fail the write itself and prove the deployment
+// still has exactly one default afterwards. A clear-then-set
+// implementation fails this: its first write has already landed.
+//
+// The write is failed by taking write permission off the directory the
+// configuration lives in, which is what the atomic write needs in order
+// to create its temporary file beside the target.
+func TestSetDefaultStorageMedium_NeverLeavesTheDeploymentWithoutADefault(t *testing.T) {
+	svc, configPath := localFixture(t)
+
+	dir := filepath.Dir(configPath)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if _, err := svc.SetDefaultStorageMedium(context.Background(), "offsite_s3"); err == nil {
+		t.Fatal("SetDefaultStorageMedium reported success against a configuration it could not write")
+	}
+
+	// The service that failed the write must not be carrying the new
+	// mark either. A surface reading from the running process would
+	// otherwise show a transfer that the file does not have, which is
+	// the same split-brain a crash between two writes produces, reached
+	// without any crash at all.
+	live, err := svc.ListStorageMediums(context.Background())
+	if err != nil {
+		t.Fatalf("ListStorageMediums on the service that refused: %v", err)
+	}
+	for _, m := range live {
+		if m.IsDefault && m.ID != StorageMediumLocalID {
+			t.Errorf("the running service reports %q as the default after a write it could not make", m.ID)
+		}
+	}
+
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatalf("Chmod back: %v", err)
+	}
+	// Re-read from the FILE rather than from this service's loaded copy:
+	// what the next process to start finds is the thing at stake.
+	reopened, closeReopened, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("reopening the service: %v", err)
+	}
+	t.Cleanup(func() { _ = closeReopened() })
+	mediums, err := reopened.ListStorageMediums(context.Background())
+	if err != nil {
+		t.Fatalf("ListStorageMediums: %v", err)
+	}
+	defaults := make([]string, 0, 1)
+	for _, m := range mediums {
+		if m.IsDefault {
+			defaults = append(defaults, m.ID)
+		}
+	}
+	if len(defaults) != 1 {
+		t.Fatalf("after a failed transfer the deployment has %d defaults (%v), want exactly 1: a tier created now would start nowhere", len(defaults), defaults)
+	}
+	if defaults[0] != StorageMediumLocalID {
+		t.Errorf("the default is now %q, want the one it started on (%q): a transfer that could not be written moved the mark anyway", defaults[0], StorageMediumLocalID)
+	}
+}
+
 // TestRemoveStorageMedium_RefusesTheDefault is the first invariant. It is
 // an ADDITIONAL refusal beside MEDIUM_IN_USE rather than a replacement,
 // which the next test pins from the other side.
