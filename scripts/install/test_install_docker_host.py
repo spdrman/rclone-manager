@@ -5508,6 +5508,18 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
                              f"print. apps/common/auth/local/service.go is what prints it; the "
                              f"expiry, the single use and the host all come from there.")
 
+    def test_the_deployment_note_quotes_it_too(self):
+        """The third copy of the same sentence, found while pinning the
+        other two and carrying the binary name from before `rbm-web` was
+        derived from `rbm`. Quoted against the shipped Compose default
+        rather than an installed host's address, because that document is
+        about standing the stack up by hand, where `localhost` really is
+        what `container/compose.yaml` sets.
+        """
+        doc = (REPO_ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
+        self.assertIn(enrolment_notice("http://localhost:8080", "..."), doc,
+                      "docs/deployment.md quotes an enrolment notice the engine does not print")
+
     def test_the_link_is_highlighted_and_lands_on_the_first_run_section(self):
         shown = self.region("index.html", "ENROL-LOG-LINE")
         self.assertIn(f'class="hint-link" href="{self.ENROL_SECTION}"', shown,
