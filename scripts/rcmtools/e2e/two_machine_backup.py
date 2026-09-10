@@ -159,68 +159,74 @@ renderer that has to guess whether the block it is reading was prefixed.
 #                   still there. Without those, an apply that deleted
 #                   nothing at all passes every other assertion here.
 #
-#   empty-record    #662, and the only case here that is RED ON PURPOSE.
-#                   It fails on a healthy build and it will keep failing
-#                   until #662 is fixed. It joins `all`, so
-#                   scripts/ci-local.sh is red for everyone until then;
-#                   that is correct for a red-test change and it is said
-#                   here rather than left to be discovered. Run it alone
-#                   with:
+#   empty-record    #662, and the case that reproduced it. It was written
+#                   RED, against a build where it could not pass, and it
+#                   is GREEN as of the fix in this same repository. It
+#                   joins `all` and scripts/ci-local.sh expects it to
+#                   PASS: a failure here is a REGRESSION of #662, not an
+#                   expected result, and must not be dismissed as one.
+#                   Run it alone with:
 #
 #                       scripts/e2e/two-machine-backup.sh --case empty-record
 #
-#                   Two parts. The first is a FENCE and passes today: for
-#                   every artifact the set produced, a fresh sha256 of the
-#                   committed file, computed inside the manager machine,
-#                   has to equal what the real `rbm` reports for it AND
-#                   what the sidecar recovery manifest records. Nothing in
-#                   this repository could say that before -- every other
-#                   test compares a record against another record, or
-#                   against a file the test itself wrote -- and it is the
+#                   Two parts. The first is a FENCE: for every artifact
+#                   the set produced, a fresh sha256 of the committed
+#                   file, computed inside the manager machine, has to
+#                   equal what the real `rbm` reports for it AND what the
+#                   sidecar recovery manifest records. Nothing in this
+#                   repository could say that before -- every other test
+#                   compares a record against another record, or against
+#                   a file the test itself wrote -- and it is the
 #                   assertion that would have caught #662 at the moment it
 #                   happened. The fence is then proven able to fail: a
 #                   record that disagrees with the bytes is planted, the
 #                   comparison is required to go red about that artifact
 #                   by name, and the record is put back.
 #
-#                   The second is the dead end, and it is the red half.
-#                   The deployment is put into the exact state the field
-#                   produced -- an empty record (size_bytes 0, and the
-#                   sha256 of no bytes at all, carrying
+#                   The second is the dead end, and it is the half the fix
+#                   inverted. The deployment is put into the exact state
+#                   the field produced -- an empty record (size_bytes 0,
+#                   and the sha256 of no bytes at all, carrying
 #                   verification_class "content") over a good file at its
-#                   final name -- the product's own `rbm reconcile` is
-#                   what quarantines it, and then every documented verb an
-#                   operator has is walked against the real distroless
-#                   `rbm` inside the manager machine: revalidate,
-#                   reinstate, validate, retry, a cycle, reconcile. One of
-#                   them has to end with the artifact at a durable restore
-#                   point. None does. It also walks the one-way door:
-#                   `quarantine reinstate` engages with the artifact
-#                   before `rbm retry` and is refused on state grounds
-#                   after it.
+#                   final name -- the product's own `rbm reconcile` is run
+#                   over it, and three things are then required. The copy
+#                   is NOT condemned: reconciliation finds nothing
+#                   unresolved and leaves the artifact at a durable
+#                   restore point. The recorded fault still REACHES AN
+#                   OPERATOR, in words, so a fix that settled the
+#                   contradiction in silence does not pass here. And the
+#                   file is untouched by all of it.
 #
-#                   Remedy-agnostic, exactly as the Go cases on the same
-#                   issue are. Widening `validate`, making `retry`
-#                   non-destructive of `reinstate`, or having the collision
-#                   refusal name the verb that resolves it would each turn
-#                   it green. The FR-12 collision refusal itself is
-#                   CORRECT and must not be weakened to achieve any of
-#                   them.
+#                   Before the fix, reconciliation condemned the copy at
+#                   that point by comparing two of its own records without
+#                   ever opening the file, and this part then walked every
+#                   documented verb an operator has -- revalidate,
+#                   reinstate, validate, retry, a cycle, reconcile -- to
+#                   prove that none of them ended at a durable restore
+#                   point. That walk is KEPT and stays reachable: if a
+#                   plant ever opens the dead end again, the walk is what
+#                   runs, and it fails naming every verb that refused. A
+#                   fence deleted the day it went green cannot measure the
+#                   regression it was built for.
+#
+#                   The FR-12 collision refusal is CORRECT and is not
+#                   weakened by any of this; that fence is held in
+#                   core/internal/lifecycle.
 #
 #                   The state is PLANTED, not raced for, and the case says
 #                   so where it does it. The field fault is transient (the
 #                   same artifacts re-transferred first try with nothing
 #                   about the host changed), so provoking it is not
-#                   reproducible -- and it does not need to be, because the
-#                   defect being reproduced is not that a read-back can be
-#                   wrong. It is that nothing ever checks the record
-#                   against the bytes, and that once the record is wrong
-#                   nothing can recover. Both are properties of the state,
-#                   not of how the state arose. What the plant must not do
-#                   is fake the evidence, so the file's own bytes are
-#                   measured and asserted good before anything is written,
-#                   and every mutation reports how many rows it changed and
-#                   refuses if that is none.
+#                   reproducible -- and it does not need to be, because
+#                   the defect being reproduced is not that a read-back
+#                   can be wrong. It is that nothing ever checked the
+#                   record against the bytes, and that once the record was
+#                   wrong nothing could recover. Both are properties of
+#                   the state, not of how the state arose. What the plant
+#                   must not do is fake the evidence, so the file's own
+#                   bytes are measured and asserted good before anything
+#                   is written, and every mutation reports how many rows it
+#                   changed and refuses if that is none.
 #
 # # Hygiene
 #
@@ -266,8 +272,10 @@ from rcmtools.harness import cannot_run, die, note, step, wait_or_die
 # ---------------------------------------------------------------------
 
 # The cases, in the order `--case all` runs them. `empty-record` is last
-# because it is the only one that is red on purpose (#662) and a red case
-# in the middle would hide the state of the ones behind it.
+# because it is the most expensive and the newest, so a run that dies in
+# it has already reported on everything cheaper. It used to be last for a
+# different reason -- it was the only case that was red on purpose (#662)
+# -- and that reason is gone with the fix.
 CASES = [
     "plain",
     "no-arguments",
@@ -322,6 +330,20 @@ EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 # restore point can be in (internal/app.ValidateArtifact's own list).
 ARTIFACTS = ["payload.bin", "schema.sql", "notes.txt"]
 DURABLE_STATES = ["COMMITTED", "REMOTE_DELETE_PENDING", "COMPLETE", "REMOTE_RETAINED"]
+
+# The two substrings that prove #662's recorded fault reached an operator
+# rather than being settled in silence.
+#
+# Substrings and not the whole sentence, on purpose. The reconciler emits
+# one line per finding whose tail varies with the verification tier it
+# could reach (whether a remote digest was recorded at discovery), and
+# with the state handler that produced it. These two phrases are the part
+# that is invariant across every one of those variants, so this asserts
+# the fault was reported without pinning the fixture's own tier.
+FAULT_REPORTED_PHRASES = [
+    "journal row needs repair",
+    "disagrees with recorded transfer size",
+]
 
 
 class Proof:
@@ -2220,10 +2242,10 @@ class Proof:
     def run_empty_record(self, mgr: str, prefix: str, backups: str) -> None:
         """Issue #662, at the machine tier, in two parts.
 
-        THIS CASE IS RED ON PURPOSE AND WILL STAY RED UNTIL #662 IS FIXED.
-        It joins `all`, so `scripts/ci-local.sh` is red for everyone until
-        then. That is correct for a red-test change and it is said here as
-        loudly as it is said in the help: run it alone with
+        THIS CASE WAS RED ON PURPOSE UNTIL #662 WAS FIXED, AND IS NOW THE
+        REGRESSION FENCE FOR THAT FIX. It joins `all` and
+        `scripts/ci-local.sh` expects it to PASS: a failure here is a
+        regression of #662, not an expected result. Run it alone with
 
             scripts/e2e/two-machine-backup.sh --case empty-record
 
@@ -2260,8 +2282,8 @@ class Proof:
         step("  #662 part A control: proving that fence can fail")
         self._prove_fence_can_fail(mgr, prefix, backups)
 
-        step("  #662 part B: the dead end, walked against the real rbm")
-        self._walk_the_dead_end(mgr, prefix, backups)
+        step("  #662 part B: the recorded fault is settled, and an operator is told")
+        self._settle_the_empty_record(mgr, prefix, backups)
 
     def _artifact_id(self, name: str) -> str:
         return "e2e/source/" + name
@@ -2531,19 +2553,25 @@ class Proof:
             placement["verification_class"] = "content"
         self._write_manifest(mgr, backups, name, manifest)
 
-    def _walk_the_dead_end(self, mgr: str, prefix: str, backups: str) -> None:
-        """Part B, and the red half.
+    def _settle_the_empty_record(self, mgr: str, prefix: str, backups: str) -> None:
+        """Part B, and the half the fix inverted.
 
-        Put the deployment into the exact state the field produced, then
-        walk every documented verb an operator has against the real
-        distroless `rbm` inside the manager machine, asserting on exit codes
-        and on what each one said. Some documented verb has to end with the
-        artifact at a durable restore point.
+        Put the deployment into the exact state the field produced, run the
+        product's own reconciliation over it, and require three things: the
+        good copy is not condemned, the recorded fault still reaches an
+        operator in words, and the file is untouched.
 
-        Remedy-agnostic, exactly as #663's Go cases are. Widening `validate`
-        to accept this case, making `retry` non-destructive of `reinstate`,
-        or having the collision refusal name the verb that resolves it would
-        each turn this green. Which one is not pinned here.
+        This was the red half. It walked every documented verb against the
+        real distroless `rbm` inside the manager machine and proved that
+        none of them ended at a durable restore point, which is #662's
+        third defect. The walk is not deleted now that it passes -- it is
+        kept, in `_walk_the_dead_end`, and runs if a plant ever opens the
+        dead end again.
+
+        Still remedy-agnostic about HOW the copy survives. Reading the file
+        before condemning it, widening `validate`, or making `retry`
+        non-destructive of `reinstate` would each satisfy this; which one
+        is not pinned here.
 
         The FR-12 collision refusal itself is CORRECT and must not be
         weakened to achieve any of them. That fence is held in
@@ -2604,26 +2632,27 @@ class Proof:
             f"over {disk_size} good bytes",
         )
 
-        # The product's own reconciliation is what quarantines it, exactly
-        # as it did in the field. Not written by hand: the QUARANTINED state
-        # this walk starts from has to be one the product decided on, or the
-        # walk is about a situation the product cannot actually reach.
-        # Two places the verdict can come from, and the run that found that
-        # out is why both are read. The engine reconciles on startup, so
-        # bringing it back up after the plant can quarantine the artifact
-        # before this script ever calls `reconcile` -- at which point the
-        # explicit call correctly prints "no unresolved findings", because
-        # there is nothing left unresolved. Asserting only on the CLI's
-        # output would have made this case fail on a deployment that had
-        # done exactly what the field did, one second earlier.
+        # The product's own reconciliation is what decides this, exactly as
+        # it did in the field. Not written by hand: the verdict this part
+        # turns on has to be one the product reached for itself, or this is
+        # about a situation the product cannot actually get into.
         #
-        # So the finding is looked for in the reconcile output OR in the
-        # sentence the journal recorded on the transition that moved the
-        # artifact, which is the same text either way (FR-17, and
-        # `rbm artifacts <id>` prints it as `reason:`). What is NOT relaxed
-        # is that the sentence must be there: the whole point of #662's
-        # defect 2 is which words that sentence uses, and both its operands
-        # being records is the defect.
+        # #662 INVERTED THIS, AND IT IS NOW THE REGRESSION FENCE FOR THE
+        # FIX. Before the fix, reconciliation condemned the copy right here
+        # by comparing two of its own records without ever opening the
+        # file, and the rest of part B was the walk below proving that no
+        # documented verb could undo it. Rather than delete assertions that
+        # went green, the same three facts are asserted with the verdict
+        # the other way up:
+        #
+        #   1. the planted record no longer condemns the copy:
+        #      reconciliation finds nothing unresolved and leaves the
+        #      artifact at a durable restore point;
+        #   2. the recorded fault still REACHES AN OPERATOR in words. A fix
+        #      that quietly settled the contradiction would satisfy 1 on
+        #      its own, and it would trade a dead end for a deployment
+        #      carrying a journal nobody knows disagreed with itself;
+        #   3. none of it touched the file.
         step("  the product's own reconciliation, over the planted record")
         reconciled = self.bm(mgr, prefix, "reconcile", "--config", "/etc/backup-manager/config", check=False)
         reconcile_out = _combined(reconciled)
@@ -2632,26 +2661,130 @@ class Proof:
         detail = self._journal_record(mgr, prefix, name)
         state_now = detail.get("state", "")
         recorded_reason = detail.get("reason", "")
-        verdict_text = reconcile_out + "\n" + recorded_reason
-        if "disagrees with recorded transfer size" not in verdict_text:
+
+        # 1a. If the dead end ever opens again, the dead end is the thing
+        #     worth measuring, not something to assert away in one line.
+        #     The walk reproduces #662's third defect in full and dies
+        #     naming every verb that refused.
+        if state_now not in DURABLE_STATES:
+            self._walk_the_dead_end(
+                mgr, prefix,
+                artifact=artifact, name=name, path=path,
+                disk_size=disk_size, disk_sha=disk_sha,
+                state_now=state_now, reconcile_out=reconcile_out,
+            )
+            return
+
+        # 1b. `reconcile` exits 0 exactly when it found nothing unresolved:
+        #     cmd/backup-manager/reconcile.go prints "reconciliation
+        #     complete; no unresolved findings" under `if exitCode == 0`,
+        #     and no finding moves exitCode -- only r.Err and Report.Errors
+        #     do. So the exit status IS that sentence, and it is the half of
+        #     it scripts/ci-local.sh and .github/workflows/ci.yml read.
+        #
+        #     The status is asserted and the sentence deliberately is not.
+        #     In this scenario that summary line is FALSE: there is a fault,
+        #     and it is reported on the line above it. Somebody is right to
+        #     come back and reword it, and pinning it here would make this
+        #     case go red at that improvement instead of at a regression.
+        if reconciled.returncode != 0:
             die(
-                "reconciliation did not produce #662's own finding over the planted record.",
-                "Expected the sentence the field produced: "
-                '"recorded remote size N disagrees with recorded transfer size 0".',
+                "reconciliation reported something unresolved over a record the product can now settle "
+                "for itself (#662).",
+                "`rbm reconcile` exited {} and said: {}".format(reconciled.returncode, reconcile_out),
+                "state: " + state_now,
+            )
+        note(
+            "reconciliation settled the planted record itself: {} is {}, a durable restore point".format(
+                artifact, state_now
+            )
+        )
+
+        # 2. The operator-visible half, and the one this case exists to
+        #    hold. #662's complaint is not only that two records were
+        #    believed over the bytes -- it is that the sentence an operator
+        #    was handed was built from both of them and gave no way to act.
+        #
+        #    Two surfaces are searched, and that is not a relaxation. The
+        #    engine reconciles on startup, so bringing it back up after the
+        #    plant reconciles once before this script ever calls the verb.
+        #    A fix that repaired the contradicted row would leave the
+        #    explicit call with nothing to say, correctly, and the sentence
+        #    would then only be on the transition the journal recorded,
+        #    which `rbm artifacts <id>` prints as `reason:` (FR-17).
+        #
+        #    Measured, not assumed: today it lands on the reconcile stdout
+        #    arm, every pass, forever. Reconciliation does NOT write the
+        #    row when the verdict is valid, so nothing is consumed and the
+        #    contradiction is re-derived and re-reported by every later
+        #    pass -- which is what lets an operator who was not watching
+        #    the terminal at second zero type `rbm reconcile` and be told.
+        #    The `reason:` arm is unreachable BY CONSTRUCTION: the clause
+        #    rides a no-action finding (From == To), a no-action finding
+        #    calls no lifecycle.Advance, and only the quarantining branches
+        #    write a Detail. It is asserted anyway, because if this ever
+        #    starts landing on that arm somebody has taught reconciliation
+        #    to write on a converged row, and that is worth knowing rather
+        #    than worth failing over.
+        told = reconcile_out + "\n" + recorded_reason
+        missing = [phrase for phrase in FAULT_REPORTED_PHRASES if phrase not in told]
+        if missing:
+            die(
+                "#662: the record was settled without the fault ever reaching an operator.",
+                "The copy is at a durable restore point, which is half the fix. But nothing said WHY, so "
+                "this deployment carries a journal that disagreed with itself and no operator was told.",
+                "absent from both operator-visible surfaces: " + ", ".join(repr(p) for p in missing),
                 "`rbm reconcile` said: " + reconcile_out,
                 "the journal records this reason: " + (recorded_reason or "(none)"),
                 "state: " + state_now,
             )
-        note("reconciliation condemned the copy over two of its own records, without opening the file")
-        note("the recorded reason is: " + (recorded_reason or reconcile_out.splitlines()[-1]))
+        note("the fault reached an operator, in words: " + _line_containing(told, FAULT_REPORTED_PHRASES[0]))
 
-        if state_now != "QUARANTINED":
+        # 3. And none of it touched the file. A fix that resolved the
+        #    contradiction by rewriting or re-fetching the bytes would
+        #    satisfy everything above and still have lost the only thing
+        #    #662 is arguing about.
+        still_size = self.size_of(mgr, path)
+        still_sha = self.sha256_of(mgr, path)
+        if still_sha != disk_sha or still_size != disk_size:
             die(
-                "the planted record did not leave the artifact QUARANTINED, so this walk would start somewhere "
-                "the field never was.",
-                "state after reconcile: " + state_now,
-                "`rbm reconcile` said: " + reconcile_out,
+                "reconciliation changed the file it was supposed to be deciding about.",
+                "before: {} bytes, sha256 {}".format(disk_size, disk_sha),
+                "after:  {} bytes, sha256 {}".format(still_size, still_sha),
             )
+        note("the file is untouched: {} is still {} bytes, sha256 {}".format(path, disk_size, still_sha))
+
+    def _walk_the_dead_end(
+        self,
+        mgr: str,
+        prefix: str,
+        *,
+        artifact: str,
+        name: str,
+        path: str,
+        disk_size: int,
+        disk_sha: str,
+        state_now: str,
+        reconcile_out: str,
+    ) -> None:
+        """#662's third defect, kept as a fence and reached only if it returns.
+
+        This was part B's whole body and it was RED ON PURPOSE: every
+        documented verb an operator has, walked against the real distroless
+        `rbm` inside the manager machine, with the requirement that one of
+        them end at a durable restore point. None did.
+
+        It is kept rather than deleted because a fence deleted the day it
+        goes green cannot measure the regression it was built for. It runs
+        when reconciliation leaves the planted artifact somewhere that is
+        not a durable restore point -- which is the dead end opening again
+        -- and it dies naming every verb that refused.
+        """
+        note(
+            "the dead end opened again: reconciliation left {} at {}, which is not a durable restore "
+            "point. Walking every verb an operator has, as #662 did.".format(artifact, state_now)
+        )
+        note("`rbm reconcile` said: " + reconcile_out)
 
         # ------------------------------------------------ the walk
         walk: list[str] = []
@@ -2787,6 +2920,18 @@ def _verdict(proc: subprocess.CompletedProcess[str]) -> str:
     kept = [line for line in _combined(proc).splitlines() if not line.startswith('{"time":')]
     said = " ".join(" ".join(kept).split())
     return "exit {} :: {}".format(proc.returncode, said if said else "(said nothing)")
+
+
+def _line_containing(text: str, phrase: str) -> str:
+    """The one line of a block that carries a phrase, for a note to quote.
+
+    A note that quoted the whole block would bury the sentence somebody is
+    being told to read under the engine's JSON startup preamble.
+    """
+    for line in text.splitlines():
+        if phrase in line:
+            return line.strip()
+    return text.strip()
 
 
 def _indent(text: str, width: int, *, bar: bool = False) -> str:
