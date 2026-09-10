@@ -1,6 +1,6 @@
 # The rclone-manager-tests commit this repository's gate runs its browser
 # e2e suite and its CLI smoke slice from. Moved by
-# scripts/e2e/bump-tests-pin.sh, and the commit that moves it is itself
+# scripts/rcmtools/e2e/bump_tests_pin.py, and the commit that moves it is itself
 # gated against the new pin, so a bad bump cannot land unnoticed.
 #
 # Why this repository pins that one, and that one pins a build of this one:

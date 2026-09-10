@@ -27,6 +27,59 @@
 #
 # Run directly (`bash scripts/tests/two-machine-exit-status.test.sh`) or
 # let the gate run it: scripts/ci-local.sh invokes it in every run.
+#
+# PORTED-CHECK HAZARD NOTE
+#
+# EPIC I / I1.6 (#672) moved the proof this drives from bash to
+# scripts/rcmtools/e2e/two_machine_backup.py, behind an exec shim at the old
+# path. A port can silently convert a check into one that CANNOT FAIL, and
+# this file is the worked example the epic cites, so every assertion it makes
+# answers for itself below.
+#
+# case 1: a machine with no reachable Docker still exits 3
+#   hazard in bash:   the proof stops saying "could not run" at all, and the
+#                     gate's INCOMPLETE ledger silently stops being fed.
+#   hazard in python: STILL EXISTS. cannot_run() raises CannotRun,
+#                     harness.finish() maps EXIT_CANNOT_RUN 97 -> 3. Delete
+#                     either half and this goes red.
+#   held by:          scripts/rcmtools/harness.py finish(), one translation
+#                     for every ported script.
+#
+# case 2: an unguarded command exiting 3 must NOT become the machine verdict
+#   hazard in bash:   `set -euo pipefail` propagates a subprocess's status, so
+#                     a `bm` call meeting the CLI's own exit 3 (#551) ended the
+#                     script with the number that means "this machine could
+#                     not try". A failed proof ledgered as a skip, and
+#                     .husky/pre-commit lets an INCOMPLETE gate commit.
+#   hazard in python: STILL EXISTS, BUT ONLY BY CONSTRUCTION. Python has no
+#                     `set -e`; a subprocess status nobody reads is discarded,
+#                     so this regression would have become impossible and this
+#                     case would have gone VACUOUSLY GREEN -- worse than a
+#                     deleted check, because nothing would say it had stopped
+#                     watching. harness.sh(check=True) therefore RESTORES the
+#                     propagation deliberately: it raises CommandFailed
+#                     carrying the status, and finish() decides what the
+#                     status means in one place.
+#   held by:          harness.sh + harness.finish. PROVEN RED, not assumed:
+#                     replacing finish()'s `if status == EXIT_INCOMPLETE`
+#                     branch with `if False` fails 2 of this file's 6 checks.
+#                     Re-run that mutation if you change either function.
+#
+# case 3: a status that means nothing here reaches the caller unchanged
+#   hazard in bash:   the translation degenerates to "anything that failed
+#                     becomes 1", which would make case 2 pass against a
+#                     script that had lost every other status it can report.
+#   hazard in python: STILL EXISTS. finish() returns the status untouched on
+#                     its default branch; collapsing that to EXIT_FAILED
+#                     reddens this.
+#   held by:          harness.finish()'s final `return status`.
+#
+# What the fake tools reach, and why that did not change: the stand-ins are
+# prepended to PATH, and the Python proof shells out to `docker` and `git`
+# through harness.sh, which resolves them on PATH exactly as the shell did.
+# The planted `git` is still reached at the build step, and case 2 asserts
+# that it was reached rather than assuming it.
+#
 set -uo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"

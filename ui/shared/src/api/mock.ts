@@ -273,6 +273,18 @@ export function resetMockFixtures(): void {
   }
 }
 
+/**
+ * The artifacts the dev server and the screenshots run on.
+ *
+ * `state` is not free: it is the lifecycle state the journal holds, and
+ * every other field on the row is a reading of that same row. A backend
+ * derives `quarantined` FROM the state and nothing else
+ * (core/service/artifacts.go), so a fixture that is QUARANTINED without a
+ * quarantine record, or carries one without being in that state, is a
+ * shape no server can produce. #662 is what a fixture that lies costs: a
+ * recovery card was gated on a combination only a fixture had, so it
+ * passed its test and rendered for no real backup.
+ */
 const ARTIFACTS: BackupArtifact[] = [
   {
     id: "art_01J9F4M2QK8Z", setId: "production/postgres-primary", setName: "Production PostgreSQL",
@@ -282,7 +294,7 @@ const ARTIFACTS: BackupArtifact[] = [
     producedAt: "2026-08-28T01:58:44+02:00", receivedAt: "2026-08-28T02:00:53+02:00",
     sizeBytes: 15246903296,
     checksum: "4f2a9c1e7b6d0835ae91cf4d2b7801e6c35a9f18d4b27e60ac139f5b8e2d7a04",
-    checksumAlgorithm: "sha256", validation: "verified",
+    checksumAlgorithm: "sha256", state: "COMPLETE", validation: "verified",
     retentionClasses: ["daily", "weekly", "protected"],
     retentionPolicy: "configured",
     remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null,
@@ -314,7 +326,7 @@ const ARTIFACTS: BackupArtifact[] = [
     producedAt: "2026-08-27T01:55:00+02:00", receivedAt: "2026-08-27T02:00:41+02:00",
     sizeBytes: 3650722201,
     checksum: "b81c0d5f4a29e7136c8b0f2d97a4e5106d3b7c8290fa41e6b52d7c3a9018ef42",
-    checksumAlgorithm: "sha256", validation: "verified",
+    checksumAlgorithm: "sha256", state: "COMPLETE", validation: "verified",
     retentionClasses: ["daily", "weekly"],
     retentionPolicy: "configured",
     remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null,
@@ -339,7 +351,7 @@ const ARTIFACTS: BackupArtifact[] = [
     producedAt: "2026-08-26T04:10:00+02:00", receivedAt: "2026-08-26T04:13:52+02:00",
     sizeBytes: 44040192,
     checksum: "c19f3ba7d0428e6591cf7d3b2801ea64c58a9f13d4b72e06ac931f5b8e7d2a40",
-    checksumAlgorithm: "sha256", validation: "failed",
+    checksumAlgorithm: "sha256", state: "QUARANTINED", validation: "failed",
     retentionClasses: ["daily"],
     retentionPolicy: "configured", remoteSourceRemovedAt: null,
     // Remote original stays put. Quarantine never triggers remote deletion.
@@ -368,7 +380,7 @@ const ARTIFACTS: BackupArtifact[] = [
     producedAt: "2026-08-24T01:55:00+02:00", receivedAt: "2026-08-24T02:17:30+02:00",
     sizeBytes: 3543348838,
     checksum: "e42b9c8f1a370d6512cf4b7d2098ae31c67d5f0a9b8241e3c07d5b6a2f918d04",
-    checksumAlgorithm: "sha256", validation: "failed",
+    checksumAlgorithm: "sha256", state: "QUARANTINED", validation: "failed",
     retentionClasses: [],
     retentionPolicy: "configured", remoteSourceRemovedAt: null,
     quarantine: {
@@ -399,7 +411,7 @@ const ARTIFACTS: BackupArtifact[] = [
     producedAt: "2026-08-25T01:00:00+02:00", receivedAt: "2026-08-25T04:41:19+02:00",
     sizeBytes: 1770035712819,
     checksum: "0a7c2e91b8d54f36ac1b9f0d27e4a5163d8b7c0f92a41e6b53d7c2a90187ef43",
-    checksumAlgorithm: "sha256", validation: "verified",
+    checksumAlgorithm: "sha256", state: "COMPLETE", validation: "verified",
     retentionClasses: ["weekly"],
     retentionPolicy: "configured",
     remoteSourceRemovedAt: "2026-08-25T04:43:02+02:00", quarantine: null,
@@ -428,7 +440,7 @@ const ARTIFACTS: BackupArtifact[] = [
     producedAt: "2026-08-12T03:30:00+02:00", receivedAt: "2026-08-12T03:34:27+02:00",
     sizeBytes: 14293651456,
     checksum: "7d0e4b91cf2a8635ae10df4b27c9015e6a3b8f2d94c17e05bd236a9f8e410c73",
-    checksumAlgorithm: "sha256", validation: "verified",
+    checksumAlgorithm: "sha256", state: "COMPLETE", validation: "verified",
     // The journal still remembers which tier last selected it, and no
     // chain will ever look at it again, so the cell shows the consequence
     // instead of the stale claim.

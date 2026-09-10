@@ -441,6 +441,30 @@ make_full_tree() {
   printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$TWO_MACHINE_STUB" \
     >"$tree/scripts/e2e/two-machine-backup.sh"
 
+  # The scripts/rcmtools lint step (EPIC I, I1.6 / #672), and this is the
+  # SEVENTH time the lesson above has had to be written down here. The step
+  # runs `ruff check scripts/rcmtools` and `mypy --strict ... scripts/rcmtools`;
+  # a synthetic tree has neither the package nor a reason to have it, so ruff
+  # exits 2 on a path that is not there, the gate runs under `set -e`, and
+  # every full-tree case below dies for a reason that has nothing to do with
+  # what it measures. That is precisely what happened when the step landed.
+  #
+  # Two halves, and both are needed. The DIRECTORY, so there is something to
+  # lint, and the TOOLS, stubbed on the tree's own PATH the same way `docker`
+  # is and for the same reason: whether a developer has ruff and mypy
+  # installed is a property of the machine, and every case here is about what
+  # the gate DOES, so measuring the host would make D1 pass or fail depending
+  # on who ran it. In the real tree the step ledgers when a tool is missing,
+  # which is the "the gate performed less than it was asked to" verdict, and
+  # a ledger entry is exactly what D1 asserts the absence of -- so without
+  # these stubs D1 would go red on every machine without both tools.
+  mkdir -p "$tree/scripts/rcmtools"
+  printf '"""A stub package, so the lint step has a directory to point at."""\n' \
+    >"$tree/scripts/rcmtools/__init__.py"
+  printf '#!/bin/sh\nexit 0\n' >"$tree/bin/ruff"
+  printf '#!/bin/sh\nexit 0\n' >"$tree/bin/mypy"
+  chmod +x "$tree/bin/ruff" "$tree/bin/mypy"
+
   printf '%s\n' "$tree"
 }
 
@@ -1021,14 +1045,39 @@ fi
 # Asserted on the source rather than by running a case, because running
 # one costs a container image build and this has to hold for a removal
 # site somebody adds later, not only for the two that exist today.
-proof_script="$(dirname "$0")/../e2e/two-machine-backup.sh"
+#
+# PORTED-CHECK HAZARD NOTE. EPIC I / I1.6 (#672) moved the proof to
+# scripts/rcmtools/e2e/two_machine_backup.py and left an exec shim at the old
+# path, and this check went to the shim. Both halves broke, in the two
+# opposite ways a port breaks a check:
+#
+#   "the proof says why -v is load-bearing" went RED, loudly, because the
+#   shim carries none of the explanation. Visible, and fixed by repointing.
+#
+#   "every docker rm removes the container's volumes too" went VACUOUSLY
+#   GREEN, silently, because a shim contains no `docker rm` at all and a
+#   grep that matches nothing has nothing to complain about. It would have
+#   gone on ticking forever over a file that cannot violate it.
+#
+# So the scan is repointed AND given a floor: the proof must contain at
+# least two `docker rm` sites (teardown and release_case), which is what
+# stops the absence of a finding from being mistaken for a clean result.
+proof_script="$(dirname "$0")/../rcmtools/e2e/two_machine_backup.py"
 if [ ! -f "$proof_script" ]; then
-  fail "I7 the two-machine proof script is where this expects it"
+  fail "I7 the two-machine proof is where this expects it" "no file at $proof_script"
 else
   # Comment lines are excluded, and the prose above the teardown quotes
   # `docker rm -f` on purpose to explain why it is wrong; a check that
   # cannot tell a command from its own explanation is not a check.
-  bare_removals="$(grep -vE '^[[:space:]]*#' "$proof_script" | grep -nE 'docker rm ' | grep -v -- '-fv' || true)"
+  code_only="$(grep -vE '^[[:space:]]*#' "$proof_script")"
+  removal_sites="$(printf '%s\n' "$code_only" | grep -cE '"docker", "rm"' || true)"
+  if [ "$removal_sites" -ge 2 ]; then
+    pass "I7 the proof still has removal sites to check ($removal_sites), so the scan below is not vacuous"
+  else
+    fail "I7 the proof still has removal sites to check, found $removal_sites" \
+      "A scan that matches nothing cannot fail. Either the removals moved, or this check has stopped watching."
+  fi
+  bare_removals="$(printf '%s\n' "$code_only" | grep -nE '"docker", "rm"' | grep -v -- '"-fv"' || true)"
   if [ -z "$bare_removals" ]; then
     pass "I7 every docker rm in the proof removes the container's volumes too"
   else

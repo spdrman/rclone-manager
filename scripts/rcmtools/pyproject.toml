@@ -1,0 +1,57 @@
+# Lint and type-check settings for scripts/rcmtools (EPIC I, I1.6 / #672).
+#
+# WHY THIS FILE IS HERE AND NOT AT THE REPOSITORY ROOT
+#
+# Nothing in this repository lints Python today. `scripts/ci-local.sh` runs
+# gofmt, go vet, golangci-lint and eslint, and for Python it runs one unittest
+# suite and nothing else. So a root-level configuration would be a new gate
+# over `scripts/install/install_docker_host.py` and its 4,700-line test suite,
+# neither of which this change touched, and the first thing anybody would see
+# is somebody else's file going red for a rule nobody agreed to. This file
+# scopes the new rules to the new package. Widening it is a decision somebody
+# makes on purpose, with the diff to look at.
+#
+# ruff discovers this file by walking up from each linted file, so
+# `ruff check scripts/rcmtools` picks it up from anywhere. mypy does not, so
+# `scripts/ci-local.sh` passes `--config-file` explicitly.
+
+[tool.ruff]
+# 120, not 88. These files are heavily commented by design -- the comments are
+# the record of why each refusal exists, which is the house style the bash
+# they replace established -- and reflowing prose to 88 columns to satisfy a
+# default would cost more in readability than it buys. 120 is what the
+# existing text already fits in.
+line-length = 120
+
+# 3.8 is the floor `scripts/install/install_docker_host.py` documents and
+# argues for: a NAS appliance may not let you install anything, so a script
+# with its own dependencies is a script that cannot run. The same rule binds
+# here, which means no match statements, no `X | Y` at runtime, and
+# `from __future__ import annotations` in every module.
+target-version = "py38"
+
+[tool.ruff.lint]
+# E and F are ruff's default. The rest are the rules that catch a real defect
+# in this kind of code rather than expressing a taste:
+#
+#   B    bugbear: mutable default arguments, `except` that swallows, loop
+#        variables captured by a closure -- the last one matters here because
+#        `wait_or_die` takes a lambda per call site.
+#   I    import order, so a merge between two porting agents does not turn
+#        into a diff about where an import went.
+#   UP   pyupgrade, pinned to py38 above so it cannot suggest anything the
+#        floor forbids.
+#   RUF  ruff's own, chiefly the mutable-class-attribute and unused-noqa
+#        checks. An unused `noqa` is how a real finding gets silenced by an
+#        exemption nobody rechecked.
+select = ["E", "F", "B", "I", "UP", "RUF"]
+
+[tool.mypy]
+strict = true
+# NOT the py38 floor, and it cannot be: mypy 2.x refuses any python_version
+# below 3.10 outright ("Python 3.8 is not supported (must be 3.10 or
+# higher)"). So the floor is enforced by ruff's target-version above, which
+# is what stops UP suggesting syntax 3.8 does not have, and mypy checks the
+# same code under a newer interpreter's rules. Stated rather than left as a
+# number that looks like it agrees with the line above and does not.
+python_version = "3.10"

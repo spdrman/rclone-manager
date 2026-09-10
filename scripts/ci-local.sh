@@ -59,7 +59,8 @@
 # A missing Playwright Chromium is the third instance of the same shape,
 # and gets the same answer: the browser e2e step refuses and names the
 # install command, and CI_LOCAL_SKIP_E2E=1 is the out-loud opt-out that
-# ledgers. See scripts/e2e/run-tests-repo-gate.sh, which is where that
+# ledgers. See scripts/e2e/run-tests-repo-gate.sh and the gate it execs,
+# scripts/rcmtools/e2e/run_tests_repo_gate.py, which is where that
 # suite now runs from (#158 moved it to spdrman/rclone-manager-tests, #197
 # is why it runs at all).
 #
@@ -292,6 +293,45 @@ bash scripts/architecture/check-unowned-go.sh
 # nothing and needs no Docker, and it costs about a second.
 gate_step "the e2e drivers' --help is still the text it was (#514)"
 bash scripts/tests/e2e-help.test.sh
+
+# scripts/rcmtools, the shared script code base EPIC I / I1.6 (#672) is
+# consolidating onto, held to a linter and a type checker.
+#
+# Nothing in this repository linted Python before this: the gate ran gofmt,
+# go vet, golangci-lint and eslint, and for Python it ran one unittest suite
+# and stopped. So this step is scoped to the new package rather than to the
+# tree, and the configuration lives at scripts/rcmtools/pyproject.toml rather
+# than at the root, for the reason that file gives at length: a root-level
+# rule would put scripts/install/install_docker_host.py and its 4,700-line
+# suite under a gate nobody agreed to, and the first thing anybody would see
+# is somebody else's untouched file going red.
+#
+# Neither tool is a dependency of this repository, and neither is going to be
+# installed on a NAS. A machine without them therefore LEDGERS rather than
+# passes: that is the same "the gate performed less than it was asked to"
+# verdict #160 exists for, and the difference between it and a silent skip is
+# that the run ends INCOMPLETE and says which tool was missing. It is not a
+# hard refusal because these tools arrived with this change and failing every
+# developer's gate until they install two things is not how a new check earns
+# its place.
+gate_step "scripts/rcmtools: ruff and mypy --strict (#672)"
+if command -v ruff >/dev/null 2>&1; then
+  ruff check scripts/rcmtools
+else
+  gate_note_skip "ruff over scripts/rcmtools (#672): ruff is not on PATH. Install it (pipx install ruff) and re-run."
+fi
+# `mypy` on PATH rather than `python3 -m mypy`, and that is a fixture
+# decision as much as an ergonomic one: scripts/tests/ci-local-gate.test.sh
+# drives this script against synthetic checkouts with $tree/bin first on
+# PATH, which is how it controls `docker`. A module invocation cannot be
+# stubbed that way, so every full-tree case in that suite would measure
+# whichever python3 the developer happened to have. `pipx install mypy` and
+# an activated virtualenv both put the binary on PATH.
+if command -v mypy >/dev/null 2>&1; then
+  mypy --strict --config-file scripts/rcmtools/pyproject.toml scripts/rcmtools
+else
+  gate_note_skip "mypy --strict over scripts/rcmtools (#672): mypy is not on PATH. Install it (pipx install mypy) and re-run."
+fi
 
 # The two-machine proof's exit statuses, which are this gate's own ledger
 # seen from the other end (#551). That script says "this machine cannot
