@@ -156,8 +156,16 @@ type syncFakeBackend struct {
 	// did cross the handler boundary, which is what makes "and it is not
 	// in the response" a claim about a code path rather than about a
 	// request that never carried anything.
-	mediums                       []service.StorageMediumSummary
-	mediumUsage                   service.StorageMediumUsage
+	mediums     []service.StorageMediumSummary
+	mediumUsage service.StorageMediumUsage
+	// The manifest-shaped configuration (issue #669), per medium id, plus
+	// the last one submitted. `lastMediumFields` is the same kind of
+	// witness lastMediumSpec above is: it proves the values really
+	// crossed the boundary, which is what makes an assertion about what
+	// is NOT in a response a claim about a code path.
+	mediumFields                  map[string]map[string]string
+	mediumCredentialConfigured    map[string]bool
+	lastMediumFields              map[string]string
 	lastMediumSpec                service.StorageMediumSpec
 	lastCandidate                 service.StorageMediumSpec
 	lastImportedAccessKeyID       string
@@ -890,6 +898,75 @@ func (f *syncFakeBackend) SetDefaultStorageMedium(_ context.Context, id string) 
 	return f.mediums[found], nil
 }
 
+// The three configuration operations (issue #669). The fake keeps the
+// field values it was handed rather than folding them onto the summary's
+// named fields: what a handler test is about is the projection at the
+// boundary, and a fake that re-implemented core/service's fold would be
+// asserting that implementation twice and the boundary once.
+//
+// CredentialConfigured is a bool and there is nowhere here a credential
+// reference could be held, which is the same structural absence
+// summaryOfSpec's doc describes: a fake that leaked one would not
+// compile.
+func (f *syncFakeBackend) StorageMediumConfigurationOf(_ context.Context, id string) (service.StorageMediumConfigurationState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.mediums {
+		if f.mediums[i].ID != id {
+			continue
+		}
+		fields := map[string]string{}
+		for field, value := range f.mediumFields[id] {
+			fields[field] = value
+		}
+		return service.StorageMediumConfigurationState{
+			Fields:               fields,
+			CredentialConfigured: f.mediumCredentialConfigured[id],
+		}, nil
+	}
+	return service.StorageMediumConfigurationState{}, fmt.Errorf("%w: %s", service.ErrMediumNotFound, id)
+}
+
+func (f *syncFakeBackend) PreflightStorageMediumConfiguration(_ context.Context, id string, cfg service.StorageMediumConfiguration) (service.MediumPreflight, error) {
+	if f.errOnMediumWrite != nil {
+		return service.MediumPreflight{}, f.errOnMediumWrite
+	}
+	f.mu.Lock()
+	f.lastMediumFields = cfg.Fields
+	f.mu.Unlock()
+	return service.MediumPreflight{Medium: id, OK: true}, nil
+}
+
+func (f *syncFakeBackend) ConfigureStorageMedium(_ context.Context, id string, cfg service.StorageMediumConfiguration) (service.StorageMediumSummary, error) {
+	if f.errOnMediumWrite != nil {
+		return service.StorageMediumSummary{}, f.errOnMediumWrite
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.mediums {
+		if f.mediums[i].ID != id {
+			continue
+		}
+		if f.mediumFields == nil {
+			f.mediumFields = map[string]map[string]string{}
+		}
+		kept := map[string]string{}
+		for field, value := range cfg.Fields {
+			kept[field] = value
+		}
+		f.mediumFields[id] = kept
+		f.lastMediumFields = cfg.Fields
+		if cfg.Credentials.ID != "" {
+			if f.mediumCredentialConfigured == nil {
+				f.mediumCredentialConfigured = map[string]bool{}
+			}
+			f.mediumCredentialConfigured[id] = true
+		}
+		return f.mediums[i], nil
+	}
+	return service.StorageMediumSummary{}, fmt.Errorf("%w: %s", service.ErrMediumNotFound, id)
+}
+
 // summaryOfSpec is the fake's own projection, and it deliberately drops
 // the credential exactly as the real one does: there is no field on
 // service.StorageMediumSummary a credential reference could land in, so a
@@ -1272,6 +1349,18 @@ func (f *asyncFakeBackend) ListActivity(context.Context, int) ([]service.Activit
 
 func (f *asyncFakeBackend) LiveActivity(context.Context, service.LiveActivityRequest) (service.LiveActivity, error) {
 	return service.LiveActivity{}, nil
+}
+
+func (f *asyncFakeBackend) StorageMediumConfigurationOf(context.Context, string) (service.StorageMediumConfigurationState, error) {
+	return service.StorageMediumConfigurationState{}, nil
+}
+
+func (f *asyncFakeBackend) PreflightStorageMediumConfiguration(context.Context, string, service.StorageMediumConfiguration) (service.MediumPreflight, error) {
+	return service.MediumPreflight{}, nil
+}
+
+func (f *asyncFakeBackend) ConfigureStorageMedium(context.Context, string, service.StorageMediumConfiguration) (service.StorageMediumSummary, error) {
+	return service.StorageMediumSummary{}, nil
 }
 
 func (f *asyncFakeBackend) ListOperations(context.Context, int) ([]service.Operation, error) {

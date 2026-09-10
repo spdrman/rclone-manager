@@ -381,6 +381,17 @@ type BackupServiceClient interface {
 	RemoveStorageMedium(ctx context.Context, id string) error
 	SetDefaultStorageMedium(ctx context.Context, id string) (service.StorageMediumSummary, error)
 
+	// The three configuration operations (I2.2, issue #669) speak in
+	// MANIFEST FIELD IDS rather than in StorageMediumSpec's fields,
+	// which are config.StorageMedium's and therefore S3's: `bucket` is
+	// required there and there is no `path`, so a local volume - the
+	// only destination a fresh install has (#670) - cannot be described
+	// in the shape the five above take. They are additive; nothing
+	// here replaces them.
+	StorageMediumConfigurationOf(ctx context.Context, id string) (service.StorageMediumConfigurationState, error)
+	PreflightStorageMediumConfiguration(ctx context.Context, id string, cfg service.StorageMediumConfiguration) (service.MediumPreflight, error)
+	ConfigureStorageMedium(ctx context.Context, id string, cfg service.StorageMediumConfiguration) (service.StorageMediumSummary, error)
+
 	// ListActivity backs GET /api/v1/activity: a read of the durable,
 	// append-only lifecycle record, not a second event stream.
 	ListActivity(ctx context.Context, limit int) ([]service.ActivityEvent, error)
