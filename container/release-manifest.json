@@ -1,25 +1,25 @@
 {
-  "version": "0.3.3",
-  "commit": "0af3521ef24a3f357f94614c8db5ee5b8221be85",
-  "generated_at": "2026-09-09T15:40:02Z",
-  "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script now refuses to record a commit that is not an ancestor of origin/main and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled. registry_digest is the digest ghcr.io assigns ghcr.io/spdrman/backup-manager on push (docker buildx build --push prints it, docker buildx imagetools inspect reads it back), and it is null on every architecture below because nothing has been pushed yet; distribution/packaging/canonical.json records the same fact as image.published false, and the two move together. local_image_id_sha256 is not a stand-in for it: it is the local Docker image ID this build produced, which identifies the image on the machine that built it and nowhere else. Filling registry_digest in from a real push, and signing and attesting what it points at, is issue #88's work, not this file's.",
+  "version": "0.4.0",
+  "commit": "77427012c8f6b23faa01713d59c0df8ba3bf1657",
+  "generated_at": "2026-09-10T05:27:04Z",
+  "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script now refuses to record a commit that is not an ancestor of origin/main and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled. registry_digest is the digest ghcr.io assigns ghcr.io/spdrman/backup-manager on push (docker buildx build --push prints it, docker buildx imagetools inspect reads it back).",
   "architectures": [
     {
       "architecture": "amd64",
       "binary_sha256": {
-        "rbm": "14a266acf3a7669637646a328d574164a81ca6468099635c5d86e5988e53270e",
-        "rbm-web": "374ffa20fe1246441f0a018847787fd3c1b20a2ca54f71daa0fdbeaa949c9578"
+        "rbm": "9fa565f4149da57dbc921cf960e60b7856f1af5fc928029cbf9c646acbfc6d80",
+        "rbm-web": "83dbecf16922f537f697ec65bc88a1748d05e37cec671700e95239e33fee56f6"
       },
-      "local_image_id_sha256": "1439498493eaab2139f6df795321e6778f0a383ea3ffdc337db477bbd0d57e39",
+      "local_image_id_sha256": "c0e45ba266a338d07063dbda5e0704649e0ed77d9ec473f492c24f14e7d46ef4",
       "registry_digest": null
     },
     {
       "architecture": "arm64",
       "binary_sha256": {
-        "rbm": "b16962e5b547792b0ccdbe27c6f588a9c1d3bfe5ace7e22a543518e83f18de9b",
-        "rbm-web": "57aaba167ec920e63155b4d2c5ddc336760930ba90f003c4271ef76c18abdca6"
+        "rbm": "b5741ced307a4c3cafd49aedecda1201cae791b406c5abedaf52ce435accfb0b",
+        "rbm-web": "e1bbeec4d77bab74b47ad96ff428ca67096f5102a992de9652dcaf14cdb1e944"
       },
-      "local_image_id_sha256": "428ff4a64792c213a3c58480770956268690c61c260ba6fd21dcae3f1301c0f7",
+      "local_image_id_sha256": "a0ec8ec8c19b7f9d339522977efd754e41b6d3f3d455092e55976acb3522131e",
       "registry_digest": null
     }
   ],

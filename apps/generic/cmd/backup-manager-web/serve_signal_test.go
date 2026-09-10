@@ -11,8 +11,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/spdrman/rclone-manager/core/cliecho"
 )
 
 // What the process actually exits with when it is signalled, which no
@@ -57,7 +55,13 @@ const (
 // core/cmd/backup-manager/daemon_signal_test.go pins "daemon_stop": what
 // this test is about is what an operator reading the container's logs
 // sees, so the assertion has to be against the text itself.
-var serveShutdownNotice = cliecho.WebBinary + ": shutdown complete"
+//
+// It moved from `backup-manager-web` to `rbm-web` with 0.3.3's rename, and
+// staying a literal is what makes that a visible move. A pin that read
+// cliecho.WebBinary would have followed the rename silently, and the
+// operator whose log-scraper matches this line would have found out from
+// production instead of from this diff.
+const serveShutdownNotice = "rbm-web: shutdown complete"
 
 // TestServeChildProcess is not a test. It is the entry point of the child
 // process TestServe_SIGTERMIsASuccessfulStop starts, and it skips itself
@@ -245,7 +249,7 @@ reading:
 	// proves this test really does read the child's stderr, so a missing
 	// shutdown notice is a missing line rather than a pipe that carried
 	// nothing at all.
-	if !strings.Contains(stderr.String(), cliecho.WebBinary+": runtime profile") {
+	if !strings.Contains(stderr.String(), "rbm-web: runtime profile") {
 		t.Errorf("serve never logged its startup line either, so this test read no stderr at all\nstderr:\n%s", stderr.String())
 	}
 }

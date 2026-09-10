@@ -20,7 +20,7 @@ python3 scripts/install/install_docker_host.py install \
     --prefix /volume1/backup-manager \
     --ssh-key /volume1/backup-manager/secrets/id_ed25519 \
     --known-hosts /volume1/backup-manager/secrets/known_hosts \
-    --image ghcr.io/spdrman/backup-manager:0.3.3
+    --image ghcr.io/spdrman/backup-manager:0.4.0
 ```
 
 **One file, and no checkout.** Copy
@@ -32,6 +32,84 @@ one thing an operator installing onto a NAS does not have. It now carries that
 definition itself (see [It derives from the canonical
 definition](#it-derives-from-the-canonical-definition-it-does-not-restate-it) below for
 what keeps the copy honest).
+
+### `enroll-link`: a fresh enrollment link when the old one lapsed
+
+```
+python3 scripts/install/install_docker_host.py enroll-link
+```
+
+The link an install prints lasts 30 minutes and works once. Nothing reissues it
+while the engine keeps running, so the way back from a lapsed one is to restart
+the engine: it issues a token during startup whenever no administrator exists
+yet. This does that and prints the notice it produced.
+
+It reads back the **last** notice in the log rather than the first, and that is
+the reason this exists as a command instead of as two lines of documentation. A
+container keeps its log across a restart, so afterwards there are two notices in
+it and the dead one comes first. Telling an operator to eyeball that is how
+somebody pastes an invalidated link into a browser and reads a refusal that does
+not explain itself.
+
+Three refusals, each with its own exit code, because they call for different
+reactions:
+
+- Nothing installed at `--prefix` (19). There is no engine to restart.
+- No engine container (30). Bring the deployment up first; the refusal prints the
+  command.
+- **An administrator already exists (53).** Enrollment is a one-time door and it
+  closed when that account was created. Sign in instead. If the password is lost,
+  `install --mode factory-reset` archives the administrator record, the catalog and
+  the configuration and reopens enrollment, leaving the retained backups on disk.
+  Its own exit code because retrying will never change the answer, where retrying
+  a 30 is reasonable.
+
+### `--cli-only`: the command line, and no web host at all
+
+```
+python3 scripts/install/install_docker_host.py install --cli-only
+```
+
+Everything above still happens (the directories, the keypair, the pinned image, every
+refusal), and then the deployment comes up a different shape. The engine container runs
+`/rbm daemon` instead of `/rbm-web serve`, the `web-ui` container is never started, and
+nothing publishes a port on the host, so no process in the deployment serves HTTP and
+the `rbm-web` binary is not executed anywhere. The installer writes a wrapper to
+`<prefix>/bin/rbm` and that is the interface:
+
+```
+~/rclone-manager/bin/rbm status
+~/rclone-manager/bin/rbm sources
+```
+
+It is `docker compose run --rm --no-deps --entrypoint /rbm rclone-manager`, not
+`exec`, deliberately. `exec` needs a running container, and the first command anybody
+needs on a fresh CLI-only host runs before anything has been started. A one-off
+container gets the same image, mounts, uid and network as the engine, so a command that
+has to reach a serving engine still reaches it, and `--no-deps` keeps a read from
+starting the engine as a side effect of being run.
+
+**A fresh `--cli-only` install starts nothing, and that is the design.** A full install
+has a first-run wizard, so it can come up with no configuration at all and hand you a
+link. `rbm daemon` has no such thing: it is refused rather than started when there is no
+`config.yaml`, so starting it on a fresh host would produce a container that exits, gets
+restarted, exits again, and an installer that either claims success over a crash loop or
+waits out its timeout for a state that can never arrive. So it stages everything, starts
+nothing, exits 0, and prints the command that writes the first configuration. Creating
+the first backup set writes the first `config.yaml` along with it (issue #176), so
+there is no file to hand-author first.
+
+Since there is nothing serving, there is no health endpoint to ask either. What the
+installer checks instead is that the container stays running for a settle window rather
+than for one sample: `rbm daemon` is running for part of every restart cycle, so a
+single `docker compose ps` would report a crash loop as an install about half the time.
+
+The shape is recorded as `CLI_ONLY` in the staged `.env` and adopted on a later run the
+same way the credential paths are (see [The credentials in that same
+`.env`](#the-credentials-in-that-same-env-are-kept-not-re-guessed) below). A bare re-run
+of a CLI-only deployment stays CLI-only, because an upgrade is not the place to start
+publishing a Web UI on the LAN of a host somebody deliberately installed without one.
+`--no-cli-only` converts it back, and says so.
 
 ### Compatibility: `--prefix` no longer defaults to `/volume1/backup-manager`
 
@@ -58,12 +136,12 @@ group- or world-writable, since anyone holding that bit can replace the key what
 key file's own mode says. Ancestors *above* `--prefix` belong to whoever set the machine
 up, so those are named in a warning with the exact `chmod go-w` rather than changed.
 
-Six subcommands: `preflight` checks and creates nothing, `install` checks then
-installs, `status` reports, `uninstall` removes what the installer made,
-`network-doctor` diagnoses (and, asked to, repairs) Docker bridge networking, and
-`network-undo` removes exactly what a repair added. See
-[Known-good, and known-bad](#known-good-and-known-bad) below for what the last two
-are for.
+Seven subcommands: `preflight` checks and creates nothing, `install` checks then
+installs, `status` reports, `enroll-link` mints a fresh enrollment link,
+`uninstall` removes what the installer made, `network-doctor` diagnoses (and,
+asked to, repairs) Docker bridge networking, and `network-undo` removes exactly
+what a repair added. See [Known-good, and known-bad](#known-good-and-known-bad)
+below for what the last two are for.
 
 Flags are scoped to the subcommand that reads them, so `<subcommand> --help` lists only
 what that subcommand actually uses. A flag valid on one is not necessarily valid on
@@ -133,7 +211,7 @@ and would start the UI before the engine was listening.
 carries:
 
 ```
-python3 install_docker_host.py install --release 0.3.0
+python3 install_docker_host.py install --release 0.3.3
 ```
 
 It fills the tag in `--image` and nothing else. It is not `--version`: that name
@@ -163,9 +241,9 @@ Preflight prints the reference it is about to install before anything is created
 and then proves it:
 
 ```
-  ok   installing ghcr.io/spdrman/backup-manager:0.3.3
-  ok   ghcr.io/spdrman/backup-manager:0.3.3 is sha256:..., the identity the release
-       manifest records for 0.3.3
+  ok   installing ghcr.io/spdrman/backup-manager:0.4.0
+  ok   ghcr.io/spdrman/backup-manager:0.4.0 is sha256:..., the identity the release
+       manifest records for 0.4.0
 ```
 
 A registry tag is a mutable pointer, which `scripts/release/publish-image.sh` says
@@ -182,18 +260,18 @@ is pushed, and in that window the manifest records `index_digest: null`, the ins
 carries no digest, and what preflight prints is this instead:
 
 ```
-  ok   installing ghcr.io/spdrman/backup-manager:0.3.3
-  !!   0.3.3 is cut and not pushed, so container/release-manifest.json records no
+  ok   installing ghcr.io/spdrman/backup-manager:0.4.0
+  !!   0.4.0 is cut and not pushed, so container/release-manifest.json records no
        identity for it and there is nothing here to hold
-       ghcr.io/spdrman/backup-manager:0.3.3 to.
+       ghcr.io/spdrman/backup-manager:0.4.0 to.
 ```
 
-That is 0.3.3 today. It is a warning and never a refusal, and the difference is the
-whole design: the alternative was to move the version and leave 0.3.0's digest behind,
-which compares a perfectly correct 0.3.3 image against the previous release's identity
+That is 0.4.0 today. It is a warning and never a refusal, and the difference is the
+whole design: the alternative was to move the version and leave 0.3.3's digest behind,
+which compares a perfectly correct 0.4.0 image against the previous release's identity
 and hands every operator exit 52 on a good install. The digest is filled in, and this
 installer reissued with it, when the release workflow has pushed and the digests are
-recorded back into the manifest. Until then, `--release 0.3.0` installs the last
+recorded back into the manifest. Until then, `--release 0.3.3` installs the last
 release this can prove, or `--image-archive` installs a build you made yourself.
 
 That proof only covers the release the installer carries, and a release cut after

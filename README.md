@@ -17,13 +17,12 @@ an operator can DO in the browser has an equivalent command, and that is a gate 
 an intention: a route with neither a command behind it nor a written reason there is none
 fails the build.
 
-**If you just want to run it:** [Installing it](#installing-it) is two containers and a
-Compose file, or one command from
+**If you just want to run it:** [Installing it](https://spdrman.github.io/rclone-manager/index.html#install)
+is two commands, or one command from
 [`scripts/install/install_docker_host.py`](scripts/install/install_docker_host.py) on a
 machine you have SSH on.
 
-**If you're here because a backup didn't arrive and it's 3am:** skip to
-[Recovery](#recovery-when-a-backup-did-not-arrive) below, or go straight to
+**If you're here because a backup didn't arrive and it's 3am:** go straight to
 [`docs/recovery.md`](docs/recovery.md).
 
 ## The rule everything else serves
@@ -54,15 +53,15 @@ connection to a source and the connection to a storage destination, and until 0.
 one of them was checked. Both are now proved before the product relies on them, both refuse
 on failure, both spell the escape hatch `--no-verify`, and both mark what was written under
 it as unverified until a passing check clears the mark. See
-[Proving a connection before anything depends on it](#proving-a-connection-before-anything-depends-on-it).
+[SSH and connections](https://spdrman.github.io/rclone-manager/ssh.html).
 
 **It says what it is doing while it does it.** Every operator-visible action reports a
 start and a completion carrying a real outcome, on one feed that the terminal docked to the
 browser window, each backup set's own page and `rbm activity --follow` are three readings
-of. See [What the browser actually gives you](#what-the-browser-actually-gives-you).
+of. See [the web interface in motion](https://spdrman.github.io/rclone-manager/web-ui.html).
 
-Every section below is either explaining how those rules are enforced or admitting where the
-enforcement doesn't exist yet.
+The published site at [spdrman.github.io/rclone-manager](https://spdrman.github.io/rclone-manager/)
+is where the rest of this is documented screen by screen and command by command.
 
 ## Status: what actually runs today
 
@@ -110,7 +109,7 @@ nothing below is a second surface: one binary, two names for it.
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place, hot-reloaded with no restart. `--policy-file` replaces the deployment's whole retention chain from a file holding the contents of a `retention:` block (`-` reads standard input), and `--tier-medium NAME=MEDIUM_ID` points one tier at a storage destination and leaves the rest of the chain exactly as it is, which is the command the picker under a tier in the web UI echoes. Sending a tier somewhere other than local for the first time needs `--acknowledge-medium-disclosure` (issues #277, #595, #622) |
 | `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
 | `medium` | declare and prove storage destinations without editing `config.yaml`. `medium list` and `medium show <medium-id>` report what is declared and what the journal says is on it, reporting no credential and not even which of the three sources one reads. `medium import-credentials --stdin` is the only command on this surface that ever holds a secret and it takes it on standard input, because there is deliberately no `--access-key-id` flag anywhere here. `medium add`, `edit` and `remove` are the writes, and `add` VERIFIES FIRST and writes nothing when verification fails. `medium test-connection <medium-id>` (`medium preflight` is the same verb under the older name, kept so anything scripted against it goes on working) proves one destination actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. It answers for `local` too, telling a missing path, an unwritable directory and a full filesystem apart. An archive class is refused at `deliverable` with nothing written, because an object there is billed for a minimum duration measured in months and that is not a thing to discover empirically. `medium preflight --candidate` runs the same checks against a destination that is not declared, so a setup flow can prove one before writing it down, and `medium default <medium-id>` moves the destination a newly created retention tier starts on (issues #443, #622, #636) |
-| `retry` | `retry <source/backup-set/artifact> [--note T]` puts one FAILED backup back into the pipeline so it is attempted again. FAILED means an attempt did not finish, which is not the same thing as quarantined, so this is its own command rather than a fourth quarantine verb. Nothing does it automatically: a blind re-transfer of gigabytes for a cause nothing has classified is a cost this manager does not take on its own (issue #419) |
+| `retry` | `retry <source/backup-set/artifact> [--note T]` puts one FAILED backup back into the pipeline so it is attempted again. FAILED means an attempt did not finish, which is not the same thing as quarantined, so this is its own command rather than a fourth quarantine verb. Nothing does it automatically: a blind re-transfer of gigabytes for a cause nothing has classified is a cost this manager does not take on its own (issue #419). When the artifact's own durable local copy is still intact this completes it in place instead of re-fetching, and that also forfeits any future remote delete, the same as `quarantine reinstate` (issue #662) |
 | `restore` | `restore <source/backup-set/artifact> --medium M [--days N] --acknowledge` asks the storage provider to make one archived copy readable again (EPIC E, FR-34). `--acknowledge` is required rather than a `--force` to skip, because a restore is billed and takes hours; `--days` defaults to 7 and is bounded to 1 to 30. `artifacts <id>` lists which medium each copy is on (issue #241) |
 | `version` | report the binary, Go and embedded rclone versions |
 
@@ -2427,7 +2426,7 @@ commit, and prints a diff per package rather than a verdict.
 Its controls are a pair, and the pairing is what makes either half mean anything.
 `scripts/docs/selftest.sh` promotes a comment adjacent to `package` in the real
 `core/service/activity.go` and requires the package-doc check to go red and name the file;
-then it runs the *same* mutation past `scripts/docs/check-comments-only.sh`, which compares
+then it runs the *same* mutation past `scripts/rcmtools/docs/check_comments_only.py`, which compares
 token streams with comments dropped, and requires that one to stay silent. A promotion
 changes what `go doc` prints and changes no token, so the pair proves the two checks answer
 different questions rather than one of them firing on unrelated damage. A third control
@@ -2502,7 +2501,7 @@ negative control where getting it wrong by hand would be silent: `KnownHostsFor`
 a machine's real host keys against a relay's address, and `DecoyKnownHostsFor` is the
 control that proves pinning the wrong one fails.
 
-`scripts/e2e/run-machine-tier.sh` (#451) is the second placement for that tier, run by hand
+`scripts/rcmtools/e2e/run_machine_tier.py` (#451) is the second placement for that tier, run by hand
 rather than by the gate: a manager machine built from a Go toolchain with a Docker client, the
 repository mounted at the same absolute path inside as out, joined to the network as an
 ordinary user, running the machine-tier packages from inside. On Docker Desktop for macOS a
@@ -2646,6 +2645,7 @@ core/internal/
   app/           the presentation-agnostic application service every command and handler calls
   archive/       what a storage class means for getting bytes back, and the restore that has to be asked for
   artifactstore/ where a committed artifact's bytes live, asked rather than composed from a directory string
+  backend/       the registry of declarative backend manifests a destination is an instance of
   capacity/      disk-space admission checks
   config/        YAML config schema, loading, validation (Load takes any path)
   discovery/     turns a raw remote listing into artifacts proven complete

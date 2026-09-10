@@ -5,24 +5,30 @@ This documents the container packaging for `core/cmd/backup-manager` (A3.9): wha
 than just asserting it. It's meant to be read next to `container/Dockerfile` and
 `container/compose.yaml`, which carry the same reasoning inline as comments.
 
-## The command is `rbm`, and `backup-manager` still works
+## The command is `rbm`, and `backup-manager` is gone
 
 0.3.3 renamed the command an operator types. The engine CLI is `rbm` and the web host is
 `rbm-web`, and inside the image those are the two real binaries at `/rbm` and `/rbm-web`.
 Everything in this file, in `container/compose.yaml` and in every adapter now names them.
 
-Nothing you already run breaks. `/rbm` and `/rbm-web` are still
-there and still resolve, as symlinks to the two binaries above, so an existing compose
-file, `docker run` line, cron entry or wrapper script keeps working with no edit at all.
-Upgrading to 0.3.3 is a tag bump and nothing else. `container/Dockerfile` carries the
-reasoning under "THE OLD NAMES", including why they are links rather than a second copy:
-two more copies of roughly 64 MB of Go binary would fail the image-size gate #643 added
-on the first run, and the distroless runtime has no shell to make the links in, so they
-are made in a builder stage and copied in.
+It is a clean cut, not an alias. `container/Dockerfile` copies `/rbm` and `/rbm-web` into
+the runtime stage and creates nothing else: there is no link under the old name beside
+either binary, the image's own `HEALTHCHECK` is `["/rbm", "status"]`, and the distroless
+runtime has no shell to resolve a name through in any case. So an existing compose file,
+`docker run` line, `docker exec`, cron entry or wrapper script that spells
+`backup-manager` or `backup-manager-web` stops working the moment the tag moves, with
+`exec /backup-manager: no such file or directory` and a container that never comes up.
 
-One thing to know if you script against the image rather than run it: `docker cp` copies
-a symlink as a symlink unless you pass `-L`, so anything pulling the binaries OUT of the
-image has to name `/rbm` and `/rbm-web`. `scripts/release/record-release-hashes.sh` and
+Upgrading is therefore a tag bump **plus** moving every one of those callers onto `rbm`
+and `rbm-web`. `container/Dockerfile` carries the reasoning under "THE BINARY NAMES",
+and `scripts/install/install_docker_host.py` refuses `--release` below 0.3.3 for the
+mirror-image reason: the compose definition it writes runs `/rbm-web`, which no image
+published before 0.3.3 contains.
+
+One thing to know if you script against the image rather than run it: the two binaries
+are real files rather than links, so `docker cp` needs no `-L`, and anything pulling
+them OUT of the image names `/rbm` and `/rbm-web`.
+`scripts/release/record-release-hashes.sh` and
 `scripts/release/verify-manifest-parity.sh` both do.
 
 What did NOT change is everything that names the project rather than the command: the
@@ -70,8 +76,8 @@ $ echo $?
 
 Exit 1 means zero matches, checked case-insensitively against the full file listing of
 the exported image filesystem (1447 entries: the distroless base's certs/tzdata/passwd
-plus exactly one executable, `/rbm`, which 0.3.3 renamed to `/rbm`).
-There's no file named `rclone`, no
+plus exactly one executable, then called `/backup-manager` and renamed to `/rbm` by
+0.3.3). There's no file named `rclone`, no
 `rclone` directory, nothing.
 
 The flip side, that rclone's packages are genuinely compiled into that one binary rather
@@ -417,7 +423,7 @@ would be a further hardening step beyond what this issue asked for.
 enrollment link straight to its own container log:
 
 ```
-backup-manager: no administrator account exists yet. Open http://localhost:8080/enroll?token=... to create one (valid 30 minutes, single use).
+rbm-web: no administrator account exists yet. Open http://localhost:8080/enroll?token=... to create one (valid 30 minutes, single use).
 ```
 
 `rclone-manager` has no published port of its own (see above), so its own `--listen`
@@ -429,7 +435,15 @@ actually is, and `container/compose.yaml` sets it by default to
 published `web-ui` on. `localhost` only resolves correctly when you open the link on
 the NAS itself; set `PUBLIC_BASE_URL` in `.env` to the NAS's real hostname/IP (see
 `container/.env.example`) to get a link that also works from another machine on the
-LAN. Leaving `PUBLIC_BASE_URL` unset entirely (outside of `compose.yaml`'s own default,
+LAN. `scripts/install/install_docker_host.py` already does that for you: with no
+`--public-base-url` it reads the address this machine's default route leaves by and
+writes that into the `.env` it generates, because the link is opened from a different
+machine on the same LAN and an address is the only form that works there with nothing
+configured. A hostname is not: it resolves on the box it names and, without mDNS or a
+DNS record somebody set up, nowhere else. On a host with no default route to read an
+address off, it falls back to the hostname. `compose.yaml` itself cannot do any of
+this, which is why its own default is still `localhost`: it has no way to ask the
+kernel anything. Leaving `PUBLIC_BASE_URL` unset entirely (outside of `compose.yaml`'s own default,
 e.g. when running `/rbm-web serve` directly) prints just the raw token
 instead of a clickable but wrong link.
 
@@ -635,18 +649,18 @@ copy of it in prose is a copy that goes stale without anything noticing.
 
 **What this records about the registry**: nothing yet, for the version currently cut.
 `distribution/packaging/canonical.json` records `image.published: false` for
-`ghcr.io/spdrman/backup-manager:0.3.3`, and the manifest carries a `registry_digest` of
+`ghcr.io/spdrman/backup-manager:0.4.0`, and the manifest carries a `registry_digest` of
 `null` per architecture and a null `index_digest` to say the same thing from the other
 side. `TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` holds the two
 together in both directions: a published flag with no digest and a digest with no
 published flag are both half-truths.
 
 They are filled in from a real push rather than from the push's own output. That is how
-`0.3.0` was recorded: `docker buildx imagetools inspect` read each architecture's digest
+`0.3.3` was recorded: `docker buildx imagetools inspect` read each architecture's digest
 back out of ghcr.io, because the push says what it believes it sent and the registry says
-what it holds, and the multi-architecture index those two sat under, `sha256:95e0bd37`,
+what it holds, and the multi-architecture index those two sat under, `sha256:bc3cbcd4`,
 was keylessly signed through the release workflow's own OIDC identity with the SBOM
-attested beside it. `0.3.3` gets the same treatment once the workflow pushes it.
+attested beside it. `0.4.0` gets the same treatment once the workflow pushes it.
 `local_image_id_sha256` stays what it always was, the local Docker image ID the
 recording build produced, which resolves nowhere but the machine that built it and is
 never a stand-in for a digest.

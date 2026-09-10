@@ -38,7 +38,7 @@ which costs one `docker image inspect`. See "Running it" at the bottom.
 |---|---|
 | `gate.json` | machine-readable: the designated host, the workload, which metrics must be recorded, and each gated metric's threshold |
 | `baselines/<host-id>.json` | one captured record per benchmark host |
-| `../../scripts/perf/capture-baseline.sh` | the capture driver |
+| `../../scripts/rcmtools/perf/capture_baseline.py` | the capture driver (`python3 scripts/rcmtools/perf/capture_baseline.py`) |
 | `../../scripts/perf/check-baseline.sh` | the gate, in presence mode and compare mode |
 | `../../scripts/perf/selftest.sh` | the gate's own positive controls |
 
@@ -401,13 +401,13 @@ tree, and there was no earlier commit that already contained it to capture from.
 
 ```sh
 # Capture (about six minutes; needs Docker for the image metric)
-scripts/perf/capture-baseline.sh --repeat 5
+python3 scripts/rcmtools/perf/capture_baseline.py --repeat 5
 
 # Presence: is there a complete, checked-in baseline for the designated host?
 scripts/perf/check-baseline.sh
 
 # Regression: does a fresh capture beat the checked-in one?
-scripts/perf/capture-baseline.sh --repeat 5 --out /tmp/candidate.json
+python3 scripts/rcmtools/perf/capture_baseline.py --repeat 5 --out /tmp/candidate.json
 scripts/perf/check-baseline.sh --compare /tmp/candidate.json
 
 # Positive controls for the gate itself

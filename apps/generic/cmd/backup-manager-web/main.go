@@ -1,19 +1,20 @@
 // Command backup-manager-web is the generic Web host's own executable
-// (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2): it runs alongside
-// cmd/backup-manager (core/cmd/backup-manager, unchanged by this issue)
+// (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2): it runs alongside the
+// CLI (core/cmd/backup-manager, unchanged by this issue) inside the same
+// canonical OCI image, and adds what that binary does not have: `serve`
+// (the engine - core service/scheduler, local authentication, and the
+// versioned /api/v1 API, sharing one process and one shutdown context per
+// §9.3) and `serve-ui` (the shared static UI plus a reverse proxy to the
+// engine).
 //
-// The directory keeps its name and this line keeps saying
-// backup-manager-web, because a Go package path is not operator-visible
-// and core/cliecho/cliname.go says so explicitly. What an operator types
-// IS renamed: 0.3.3 installs this binary as /rbm-web, and every string
-// this program prints about itself comes from cliecho.WebBinary rather
-// than a literal, so the two cannot drift.
-//
-// inside the same canonical OCI image, and adds what that binary does
-// not have: `serve` (the engine - core service/scheduler, local
-// authentication, and the versioned /api/v1 API, sharing one process and
-// one shutdown context per §9.3) and `serve-ui` (the shared static UI
-// plus a reverse proxy to the engine).
+// It is `rbm-web` to an operator and this directory is still
+// cmd/backup-manager-web, for the same reason `rbm` lives in
+// cmd/backup-manager: a Go package path is not operator-visible, and
+// core/cliecho/cliname.go says so explicitly. Every name this binary
+// prints for itself comes from core/cliecho.WebBinary rather than a
+// literal, so the two cannot drift. selfname_test.go beside this file is
+// what keeps it that way, and says why the paths under /etc and the image
+// reference deliberately do not follow.
 //
 // These two run as SEPARATE CONTAINERS in production
 // (container/compose.yaml), from the SAME image: `serve` has no
@@ -22,11 +23,7 @@
 // with a LAN-facing published port. Splitting them into two commands of
 // one binary, rather than two separate binaries or images, is the same
 // "one canonical image, vary command" principle already applied to
-// `/rbm` vs. `/rbm-web` themselves. Those two are the real files as of
-// 0.3.3; `/rbm` and `/rbm-web` are still there as
-// symlinks beside them, and the compose files this repo ships name the
-// old paths on purpose, because they are the only ones that also resolve
-// on the releases already on the registry.
+// `/rbm` vs. `/rbm-web` themselves.
 //
 // Every other execution mode (`run`, `daemon`, `check`, `status`, ...)
 // stays on cmd/backup-manager: this binary is deliberately narrow rather
@@ -180,14 +177,39 @@ func run(args []string) int {
 	}
 }
 
-// usage writes the command surface an operator reads. The text below is
-// pinned byte for byte by the compatibility corpus (FR-35 clause 4): a
-// reworded line here is a change to something somebody already has in a
-// runbook, so it is a deliberate act with a recorded reason rather than an
-// edit. Adding a command means adding a line, and a test asserts every
-// mode this binary carries appears here.
+// usage writes the command surface an operator reads. A reworded line
+// here is a change to something somebody already has in a runbook, so it
+// is a deliberate act with a recorded reason rather than an edit, and
+// adding a command means adding a line. Two tests hold that:
+// TestUsageDocumentsEveryModeTheBinaryCarries requires every mode this
+// binary carries to appear here, and TestUsageIntroducesThisBinaryByName
+// requires the first line to name it.
+//
+// It is NOT pinned byte for byte by the compatibility corpus, and this
+// comment said it was until 0.3.3. FR-35 clause 4 is core/tests/compat,
+// which builds ./cmd/backup-manager from the core module and runs THAT;
+// it has never built this binary and cannot, because core may not reach
+// into apps/. So the runbook promise above is held by the two tests named
+// beside this file and by nothing else, which is worth knowing before
+// relying on it: a wrong sentence about what guards a block is how a
+// rename crossed five pull requests without touching the block it was
+// about.
 func usage() {
-	fmt.Fprintf(os.Stderr, `usage: %[1]s <command> [flags]
+	// Fprintf over ONE raw literal, rather than the name concatenated into
+	// it at each of the three places this block spells a command.
+	//
+	// The three are unavoidable: the first line is this binary's own name,
+	// the healthcheck entry says which CLI command it stands in for, and
+	// the auth entry shows the invocation an operator types. Splicing a
+	// constant into any of them would close the literal there, and #648
+	// already paid for what that costs: distribution/packaging reads the
+	// CLI's command index straight out of its usage(), took the first
+	// backticked string, and a splice on the FIRST line made it read a list
+	// of zero commands. Nothing parses this block today, and the hazard is
+	// not that it does; it is that a splice below the command index would
+	// truncate a future reader silently rather than loudly. A literal with
+	// verbs in it stays one chunk however anybody reads it.
+	fmt.Fprintf(os.Stderr, `usage: %s <command> [flags]
 
 commands:
   serve       run the engine: local authentication, the versioned
@@ -200,8 +222,8 @@ commands:
               only one of the two meant to have a published port.
   healthcheck make a single HTTP GET against --url and exit 0 on a 2xx/3xx
               response, 1 otherwise - serve-ui's own HEALTHCHECK, since
-              it has no state database to run rbm status
-              against the way the engine container does.
+              it has no state database to run %s status against the way
+              the engine container does.
   auth create-admin --username U --password-stdin [--auth-store PATH]
               provision the first Web UI administrator directly in the
               local-auth store (apps/common/auth/local.CreateAdmin), with
@@ -337,9 +359,9 @@ auth create-admin flags:
   --password-stdin     read the administrator password from stdin
                        (required; nothing else reads it, so it never
                        appears in this process's own argument list -
-                       e.g. echo -n "$PASS" | %[1]s auth
-                       create-admin --username admin --password-stdin)
-`, cliecho.WebBinary)
+                       e.g. echo -n "$PASS" | %s auth create-admin
+                       --username admin --password-stdin)
+`, cliecho.WebBinary, cliecho.Binary, cliecho.WebBinary)
 }
 
 // cmdServe runs the engine: the API, the local-auth service, the backend
@@ -836,7 +858,7 @@ func cmdAuthCreateAdmin(args []string) int {
 		return exitUsage
 	}
 	if !*passwordStdin {
-		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": auth create-admin: --password-stdin is required (this command never accepts a password as a flag); pipe it in, e.g. echo -n \"$PASS\" | rbm-web auth create-admin --username U --password-stdin")
+		fmt.Fprintln(os.Stderr, cliecho.WebBinary+": auth create-admin: --password-stdin is required (this command never accepts a password as a flag); pipe it in, e.g. echo -n \"$PASS\" | "+cliecho.WebBinary+" auth create-admin --username U --password-stdin")
 		return exitUsage
 	}
 
@@ -893,10 +915,10 @@ func readPasswordFromStdin(r io.Reader) (string, error) {
 }
 
 // cmdHealthcheck is serve-ui's own HEALTHCHECK: since that container has
-// no config, no state database, and no `rbm status` to run
-// (that binary/subcommand belongs to the engine's own container, and
-// checks REAL backup health, not "is a web server listening"), this asks
-// the one question that actually applies here: does the UI host's own
+// no config, no state database, and no `rbm status` to run (that
+// binary/subcommand belongs to the engine's own container, and checks
+// REAL backup health, not "is a web server listening"), this asks the
+// one question that actually applies here: does the UI host's own
 // HTTP server answer at all. distroless has no shell and no curl/wget,
 // so this exists specifically to give HEALTHCHECK's exec-form CMD
 // something to invoke.
@@ -946,14 +968,13 @@ func localHealthcheckURL(listenAddr string) string {
 // The exit statuses this binary promises, in one place, because they are
 // a contract a supervisor branches on rather than an implementation
 // detail. Three of them have always been here; the fourth is issue #551,
-// and it is here because container/compose.yaml runs
-// `/rbm-web serve`, so the deployment shape that code was
-// justified by (a supervisor replacing a container while the outgoing
-// process has not let go of the serving lock yet, where waiting and
-// trying again is the right answer) is THIS binary's shape rather than
-// `rbm daemon`'s. Leaving it out would have published a
-// contract that holds for the binary an operator types by hand and not
-// for the one their orchestrator restarts.
+// and it is here because container/compose.yaml runs `/rbm-web serve`,
+// so the deployment shape that code was justified by (a supervisor
+// replacing a container while the outgoing process has not let go of the
+// serving lock yet, where waiting and trying again is the right answer)
+// is THIS binary's shape rather than `rbm daemon`'s. Leaving it out would
+// have published a contract that holds for the binary an operator types
+// by hand and not for the one their orchestrator restarts.
 //
 // # Why the numbers are written twice
 //

@@ -36,19 +36,25 @@ import argparse
 import ast
 import contextlib
 import email.message
+import html
 import io
 import json
 import os
+import re
 import socket
+import subprocess
 import sys
 import tempfile
+import types
 import unittest
+import unittest.mock
 from pathlib import Path
+from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import embed_compose  # noqa: E402
-import install_docker_host as installer  # noqa: E402
+import embed_compose
+import install_docker_host as installer
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CANONICAL_COMPOSE = REPO_ROOT / "container" / "compose.yaml"
@@ -447,13 +453,13 @@ class TestTheSourcePortIsAnInputAndNothingInfersOne(unittest.TestCase):
                   "--known-hosts", str(fx.known), "--compose-file", str(CANONICAL_COMPOSE)]
         stderr = io.StringIO()
         with source_port_in_the_environment(None), contextlib.redirect_stderr(stderr):
-            code = installer.main(prefix + ["--source-port", ""])
+            code = installer.main([*prefix, "--source-port", ""])
         self.assertEqual(code, installer.EXIT_PREREQ_CREDENTIALS)
         self.assertIn("no value", stderr.getvalue())
 
         stderr = io.StringIO()
         with source_port_in_the_environment(None), contextlib.redirect_stderr(stderr):
-            code = installer.main(prefix + ["--source-port", "not-a-port"])
+            code = installer.main([*prefix, "--source-port", "not-a-port"])
         self.assertEqual(code, installer.EXIT_PREREQ_CREDENTIALS)
         self.assertNotIn("not-a-port", stderr.getvalue(),
                          "even a wrong value is a value the operator typed, and it is not echoed")
@@ -1034,8 +1040,8 @@ class TestARunningCheckoutIsNotSilentlyIgnored(unittest.TestCase):
             copy.write_bytes(Path(installer.__file__).read_bytes())
             proc = installer.subprocess.run(
                 [sys.executable, "-c",
-                 "import sys; sys.path.insert(0, %r); import install_docker_host as i; "
-                 "print(i.checkout_compose_beside_this_installer())" % tmp],
+                 f"import sys; sys.path.insert(0, {tmp!r}); import install_docker_host as i; "
+                 "print(i.checkout_compose_beside_this_installer())"],
                 capture_output=True, text=True, timeout=120)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(proc.stdout.strip(), "None",
@@ -1289,7 +1295,7 @@ class TestVersionOrdering(unittest.TestCase):
     def test_a_registry_port_is_not_mistaken_for_a_tag(self):
         """A colon in a reference is not always a tag separator."""
         self.assertEqual(installer.image_tag("localhost:5000/backup-manager"), "")
-        self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.3.3"), "0.3.3")
+        self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.4.0"), "0.4.0")
 
     def test_the_carried_version_is_described_relative_to_what_is_installed(self):
         """Issue #588. compare_versions answers where the INSTALLED version
@@ -1297,17 +1303,17 @@ class TestVersionOrdering(unittest.TestCase):
         version the INSTALLER carries, so the two have to be asked in that
         order or the sentence says the opposite of what is true.
 
-        Upgrading a real NAS from 0.3.1 to 0.3.3 printed "This installer
-        carries 0.3.3 (older)", which is the one sentence that makes
+        Upgrading a real NAS from 0.3.1 to 0.4.0 printed "This installer
+        carries 0.4.0 (older)", which is the one sentence that makes
         somebody stop a correct upgrade."""
-        line = installer.describe_what_is_here(2, 2, "0.3.1", "the rclone-manager container", "0.3.3")
-        self.assertIn("0.3.3 (newer)", line)
-        self.assertNotIn("0.3.3 (older)", line)
+        line = installer.describe_what_is_here(2, 2, "0.3.1", "the rclone-manager container", "0.4.0")
+        self.assertIn("0.4.0 (newer)", line)
+        self.assertNotIn("0.4.0 (older)", line)
         # And the other direction, which is a real downgrade.
         self.assertIn("0.3.1 (older)",
-                      installer.describe_what_is_here(2, 2, "0.3.3", "", "0.3.1"))
-        self.assertIn("0.3.3 (same)",
-                      installer.describe_what_is_here(1, 1, "0.3.3", "", "0.3.3"))
+                      installer.describe_what_is_here(2, 2, "0.4.0", "", "0.3.1"))
+        self.assertIn("0.4.0 (same)",
+                      installer.describe_what_is_here(1, 1, "0.4.0", "", "0.4.0"))
 
     def test_ordering_is_numeric_and_not_lexical(self):
         self.assertEqual(installer.compare_versions("0.9.0", "0.10.0"), "older")
@@ -1769,9 +1775,10 @@ class TestAnUpgradeThatDiesHalfWayLeavesAWorkingInstall(unittest.TestCase):
         """Every file the deployment needs to start, by content, so a
         truncated or emptied one is as visible as a missing one."""
         seen = {}
-        for p in installer.archive_plan(args) + [args.prefix / "compose.yaml",
-                                                 args.prefix / "compose.image.yaml",
-                                                 args.prefix / ".env"]:
+        for p in [*installer.archive_plan(args),
+                  args.prefix / "compose.yaml",
+                  args.prefix / "compose.image.yaml",
+                  args.prefix / ".env"]:
             if p.is_file():
                 seen[str(p)] = p.read_bytes()
             elif p.is_dir():
@@ -2069,13 +2076,13 @@ class TestDestroyPreview(unittest.TestCase):
         args.state_dir.mkdir(parents=True, exist_ok=True)
         (args.state_dir / "local-auth.json").write_text('{"username":"rom"}')
         lines = installer.destroy_preview(args)
-        self.assertTrue(any("administrator" in l.lower() for l in lines),
+        self.assertTrue(any("administrator" in line.lower() for line in lines),
                         f"the administrator record has to be named: {lines}")
 
     def test_it_says_plainly_when_there_is_nothing_to_destroy(self):
         fx = Fixture(self)
         lines = installer.destroy_preview(fx.args(command="install"))
-        self.assertTrue(any("nothing" in l.lower() for l in lines), lines)
+        self.assertTrue(any("nothing" in line.lower() for line in lines), lines)
 
     def test_it_never_claims_the_retained_artifacts_are_destroyed(self):
         """factory-reset drops the catalog, not the backups themselves.
@@ -2885,7 +2892,8 @@ class TestPersistenceVerification(unittest.TestCase):
     printing "Fixed, and proven"; these pin its verdict directly, without
     needing a real systemd to produce the state it is reading."""
 
-    GOOD = dict(service_unit="rclone-manager-bridge.service", service_state="enabled",
+    GOOD: ClassVar[dict[str, str]] = dict(
+               service_unit="rclone-manager-bridge.service", service_state="enabled",
                service_active="inactive", timer_unit="rclone-manager-bridge.timer",
                timer_state="enabled", timer_active="active",
                timer_listed="Thu 2026-09-03 rclone-manager-bridge.timer")
@@ -3153,9 +3161,13 @@ class TestFixNetworkVocabulary(unittest.TestCase):
                 args = fx.args("--fix-network", mode, command="install")
                 calls = []
 
+                # `calls` and `installed` are bound as default arguments for the
+                # same reason the cleanups below are: both are rebound on every
+                # iteration of this loop, and a bare closure over either reads
+                # whichever list the LAST iteration made.
                 class RecordingSudo(installer.Sudo):
-                    def run_script(self, script, *, purpose, timeout=300):
-                        calls.append(purpose)
+                    def run_script(self, script, *, purpose, timeout=300, _calls=calls):
+                        _calls.append(purpose)
                         class P:
                             stdout = ""
                         return P()
@@ -3167,7 +3179,7 @@ class TestFixNetworkVocabulary(unittest.TestCase):
                     "gateway": True, "egress": True, "gateway_ip": "172.17.0.1", "raw": ""}
                 installer.BridgeDoctor.ensure_probe_image = lambda self: None
                 installed = []
-                installer.install_persistence = lambda d, a: installed.append(True)
+                installer.install_persistence = lambda d, a, _seen=installed: _seen.append(True)
                 # Bound as default arguments, not closed over bare: this is inside a
                 # `for mode in (...)` loop, so real_probe/real_image/real_install are
                 # reassigned every iteration and a bare closure reads whatever they
@@ -3589,7 +3601,7 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         """
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        prefix, key, known, env = self._installed(tmp)
+        prefix, key, _known, env = self._installed(tmp)
         args = installer.resolve(installer.build_parser().parse_args(
             ["preflight", "--prefix", str(prefix)]))
         out = io.StringIO()
@@ -3707,7 +3719,7 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         compose.yaml mounts it with `:?` anyway, so the stack cannot start."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        prefix, key, known, env = self._installed(tmp)
+        prefix, key, _known, env = self._installed(tmp)
         key.unlink()
 
         again = self._rerun(prefix)
@@ -3722,7 +3734,7 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         real operation; doing it without saying so is not."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        prefix, key, known, env = self._installed(tmp)
+        prefix, key, _known, env = self._installed(tmp)
         rotated = Path(tmp.name) / "home" / ".ssh" / "rotated_ed25519"
         rotated.write_text("the new key\n")
         os.chmod(rotated, 0o600)
@@ -3951,7 +3963,7 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
     # line, which is a different question about a different kind of
     # string, and it is named here rather than left looking like an
     # oversight.
-    MAY_SPLIT_ON_A_COLON = {"image_tag", "image_name", "_image_from_override"}
+    MAY_SPLIT_ON_A_COLON: ClassVar[set[str]] = {"image_tag", "image_name", "_image_from_override"}
 
     @staticmethod
     def _splits_on_a_colon(node) -> bool:
@@ -4339,7 +4351,7 @@ class _FakeRegistry:
     behaviour is a stub that can reach the network by accident.
     """
 
-    def __init__(self, *, digest: str = "", versions=(), fails: Exception = None) -> None:
+    def __init__(self, *, digest: str = "", versions=(), fails: Exception | None = None) -> None:
         self.digest = digest
         self.versions = list(versions)
         self.fails = fails
@@ -4380,7 +4392,7 @@ class TestTheRegistryClientSpeaksTheProtocol(unittest.TestCase):
         methods = {url.split("/v2/")[-1]: method for method, url, _, _ in http.requests if "/v2/" in url}
         self.assertEqual(list(methods.values()), ["HEAD"],
                          "a GET here drags whole manifests over the wire for a header")
-        manifest = [r for r in http.requests if "/manifests/" in r[1]][0]
+        manifest = next(r for r in http.requests if "/manifests/" in r[1])
         self.assertIn("image.index", manifest[2].get("Accept", ""),
                       "without an Accept a registry may convert the manifest, and a converted "
                       "manifest has a different and perfectly correct digest")
@@ -4455,7 +4467,7 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
     to the identity container/release-manifest.json recorded (issue #484).
 
     A tag is a mutable pointer, which this project's own release tooling
-    says in as many words, so "install 0.3.3" is a claim about a name
+    says in as many words, so "install 0.4.0" is a claim about a name
     until something compares the name to a recorded identity. One
     anonymous HEAD does that, and it is the reason a previous release can
     be named at all: an installer that floated onto a future tag could
@@ -4540,14 +4552,22 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
         self.assertIn("!!", printed)
 
     def test_a_release_this_installer_has_no_digest_for_says_so(self):
+        # Any release other than the one this installer carries. The
+        # digest proves exactly one version, so naming a different one
+        # is the case with nothing to compare against. Derived from
+        # CARRIED_RELEASE rather than written down: a literal becomes
+        # the carried release at some later cut and then this test
+        # silently checks the opposite of what it says.
+        major, minor = installer.CARRIED_RELEASE.split(".")[:2]
+        other = f"{major}.{int(minor) + 1}.0"
         registry = _FakeRegistry(digest=self.recorded)
-        pf = self.preflight("--release", "0.4.0", registry=registry)
+        pf = self.preflight("--release", other, registry=registry)
         printed = self.notes_from(pf)
         self.assertEqual(registry.asked, [],
-                         "there is nothing to compare a 0.4.0 digest against, and asking anyway "
-                         "would be theatre")
+                         f"there is nothing to compare a {other} digest against, and asking "
+                         "anyway would be theatre")
         self.assertIn("!!", printed)
-        self.assertIn("0.4.0", printed)
+        self.assertIn(other, printed)
 
     def test_a_reference_already_pinned_to_the_recorded_digest_needs_no_question(self):
         registry = _FakeRegistry(digest=self.recorded)
@@ -4732,6 +4752,1143 @@ class TestTheUpdateCheckOnlyEverAddsALine(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     pf.check_for_a_newer_release()
                 self.assertEqual(registry.asked, [])
+
+
+
+class _FakeUDPSocket:
+    """A socket that records what was done to it and never leaves the box.
+
+    Here so the address probe can be tested for the property that matters
+    most and is invisible from its return value: that it sends nothing.
+    """
+
+    def __init__(self, local, *, connect_error=None):
+        self.local, self.connect_error = local, connect_error
+        self.calls = []
+
+    def connect(self, addr):
+        self.calls.append(("connect", addr))
+        if self.connect_error is not None:
+            raise self.connect_error
+
+    def getsockname(self):
+        self.calls.append(("getsockname", None))
+        return (self.local, 0)
+
+    def close(self):
+        self.calls.append(("close", None))
+
+
+class TestTheEnrolmentLinkNamesAnAddressSomebodyElseCanOpen(unittest.TestCase):
+    """The link this installer prints is opened from a DIFFERENT machine.
+
+    Both of the obvious defaults are wrong for that reader, which is why
+    this is asserted rather than left to whatever socket call is handy.
+    localhost is right only on the box that ran the install, so an
+    operator who installed over SSH reads a link to their own laptop. A
+    hostname is worse than it looks: it resolves on the machine it names
+    and, without mDNS or a DNS record somebody set up, nowhere else, so
+    the link fails for exactly the reader it was written for.
+    """
+
+    def test_the_default_is_this_machines_own_address(self):
+        with unittest.mock.patch.object(installer, "primary_lan_address", lambda: "10.1.2.3"):
+            args = installer.resolve(installer.build_parser().parse_args(
+                ["install", "--prefix", "/tmp/whatever"]))
+        self.assertEqual(args.public_base_url, "http://10.1.2.3:8080")
+
+    def test_the_port_it_names_is_the_published_one(self):
+        """The positive control for the line above: an address alone would
+        also satisfy it while naming a port nothing listens on."""
+        with unittest.mock.patch.object(installer, "primary_lan_address", lambda: "10.1.2.3"):
+            args = installer.resolve(installer.build_parser().parse_args(
+                ["install", "--prefix", "/tmp/whatever", "--listen-port", "9443"]))
+        self.assertEqual(args.public_base_url, "http://10.1.2.3:9443")
+
+    def test_a_host_with_no_default_route_still_gets_something_usable(self):
+        """An unrouted host is a real state, not an error state. It has no
+        address the probe can read, and refusing to finish an install over
+        that would be refusing over something the install does not need."""
+        with unittest.mock.patch.object(installer, "primary_lan_address", lambda: None), \
+             unittest.mock.patch.object(installer.socket, "gethostname", lambda: "the-nas"):
+            args = installer.resolve(installer.build_parser().parse_args(
+                ["install", "--prefix", "/tmp/whatever"]))
+        self.assertEqual(args.public_base_url, "http://the-nas:8080")
+
+    def test_a_supplied_url_is_never_overridden(self):
+        with unittest.mock.patch.object(installer, "primary_lan_address", lambda: "10.1.2.3"):
+            args = installer.resolve(installer.build_parser().parse_args(
+                ["install", "--prefix", "/tmp/whatever",
+                 "--public-base-url", "https://backups.example.org"]))
+        self.assertEqual(args.public_base_url, "https://backups.example.org")
+
+    def test_the_probe_sends_nothing(self):
+        """Connecting a UDP socket only asks the kernel to pick a route.
+        The moment this starts actually sending, the installer is emitting
+        a packet to a documentation address from every host it runs on."""
+        fake = _FakeUDPSocket("10.1.2.3")
+        with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: fake):
+            self.assertEqual(installer.primary_lan_address(), "10.1.2.3")
+        self.assertEqual([name for name, _ in fake.calls], ["connect", "getsockname", "close"])
+
+    def test_it_probes_a_reserved_address_that_is_routed_nowhere(self):
+        fake = _FakeUDPSocket("10.1.2.3")
+        with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: fake):
+            installer.primary_lan_address()
+        (_, addr), = [call for call in fake.calls if call[0] == "connect"]
+        self.assertEqual(addr[0], "192.0.2.1",
+                         "TEST-NET-1 (RFC 5737) is reserved for documentation and routed nowhere; "
+                         "any real address here would be this installer picking somebody's host to "
+                         "point at")
+
+    def test_a_loopback_answer_is_no_answer(self):
+        """The failure this catches is silent: a host where the route
+        lookup lands on lo hands back 127.0.0.1, which is a perfectly
+        valid address and is the exact thing this whole change exists to
+        stop printing."""
+        for local in ("127.0.0.1", "127.0.1.1", "0.0.0.0"):
+            with self.subTest(local=local):
+                fake = _FakeUDPSocket(local)
+                with unittest.mock.patch.object(installer.socket, "socket", lambda *a, _fake=fake, **k: _fake):
+                    self.assertIsNone(installer.primary_lan_address())
+
+    def test_a_routable_answer_is_kept(self):
+        """The positive control for the line above. Without it, "loopback
+        becomes None" is also satisfied by a probe that answers None to
+        everything, and the fallback would be the only path ever taken."""
+        fake = _FakeUDPSocket("192.168.4.7")
+        with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: fake):
+            self.assertEqual(installer.primary_lan_address(), "192.168.4.7")
+
+    def test_an_unroutable_host_answers_none_rather_than_raising(self):
+        fake = _FakeUDPSocket("10.1.2.3", connect_error=OSError("network is unreachable"))
+        with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: fake):
+            self.assertIsNone(installer.primary_lan_address())
+        self.assertIn(("close", None), fake.calls, "the socket is closed on the failure path too")
+
+
+class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
+    """--cli-only means the rbm-web binary is not executed at all.
+
+    Not "the Web UI is hidden" and not "the port is bound to loopback":
+    the engine container runs /rbm daemon instead of /rbm-web serve, and
+    the only service with a `ports:` key is never started. Every
+    assertion below is about one of those two facts, because a CLI-only
+    install that quietly published a Web UI would be the one failure an
+    operator who asked for this would never think to check for.
+    """
+
+    def override(self, *extra):
+        fx = Fixture(self)
+        return installer.render_image_override(fx.args(*extra, command="install"))
+
+    def test_the_engine_runs_the_cli_and_not_the_web_binary(self):
+        rendered = self.override("--cli-only")
+        self.assertIn('command: ["/rbm", "daemon"]', rendered)
+        self.assertNotIn('"/rbm-web"', rendered)
+
+    def test_no_web_ui_service_is_pinned_at_all(self):
+        rendered = self.override("--cli-only")
+        self.assertNotIn("\n  web-ui:", rendered)
+
+    def test_a_full_install_still_pins_both(self):
+        """The positive control. Without it, "no web-ui in the override"
+        is also satisfied by a renderer that stopped emitting it for
+        everybody, and the default install would come up unpinned."""
+        rendered = self.override()
+        self.assertIn("\n  web-ui:", rendered)
+        self.assertNotIn("/rbm daemon", rendered)
+
+    def test_the_health_check_is_disabled_rather_than_left_to_fail(self):
+        """The canonical check is an HTTP liveness probe against
+        127.0.0.1:8080. A daemon with no listener fails it forever, so
+        inheriting it would mark every healthy CLI-only deployment
+        unhealthy."""
+        rendered = self.override("--cli-only")
+        self.assertIn("healthcheck:", rendered)
+        self.assertIn("disable: true", rendered)
+
+    def test_the_downgrade_guard_can_still_read_the_pinned_version(self):
+        """installed_image_tag falls back to this file when the stack is
+        down, and it reads it line by line. The extra keys CLI-only adds
+        are exactly the kind of thing that breaks a line-oriented read."""
+        fx = Fixture(self)
+        args = fx.args("--cli-only", "--image", "ghcr.io/spdrman/rclone-manager:9.9.9",
+                       command="install")
+        (args.prefix / "compose.image.yaml").write_text(
+            installer.render_image_override(args), encoding="utf-8")
+        self.assertEqual(installer._image_from_override(args.prefix),
+                         "ghcr.io/spdrman/rclone-manager:9.9.9")
+
+    def test_the_env_records_the_shape_so_a_bare_rerun_keeps_it(self):
+        fx = Fixture(self)
+        self.assertIn("CLI_ONLY=1", installer.render_env(fx.args("--cli-only", command="install")))
+        self.assertIn("CLI_ONLY=0", installer.render_env(fx.args(command="install")))
+
+    def test_a_bare_rerun_over_a_cli_only_install_stays_cli_only(self):
+        """The reason this is adopted rather than defaulted. The default
+        is the full stack, so without this a re-run with no flags would
+        start web-ui and publish a port on the LAN of a host somebody
+        deliberately installed without one. An upgrade is not the place to
+        change what a deployment exposes."""
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.adopt_installed_shape(args, {"CLI_ONLY": "1"})
+        self.assertIs(args.cli_only, True)
+
+    def test_a_bare_rerun_over_a_full_install_stays_full(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.adopt_installed_shape(args, {"CLI_ONLY": "0"})
+        self.assertIs(args.cli_only, False)
+
+    def test_an_env_written_before_the_flag_existed_is_a_full_install(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.adopt_installed_shape(args, {})
+        self.assertIs(args.cli_only, False)
+
+    def test_the_flag_that_was_typed_still_wins_in_both_directions(self):
+        fx = Fixture(self)
+        for typed, was, want in (("--cli-only", "0", True), ("--no-cli-only", "1", False)):
+            with self.subTest(typed=typed):
+                args = fx.args(typed, command="install")
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    installer.adopt_installed_shape(args, {"CLI_ONLY": was})
+                self.assertIs(args.cli_only, want)
+                self.assertIn("moves the deployment", out.getvalue(),
+                              "changing what a deployment exposes is said out loud, not quietly")
+
+    def test_the_host_port_is_not_checked_because_none_is_published(self):
+        """web-ui is the only service with a `ports:` key. Refusing a
+        CLI-only install because something else holds 8080 would be
+        refusing over a port this deployment never touches."""
+        fx = Fixture(self)
+        pf = installer.Preflight(fx.args("--cli-only", command="install"))
+        with unittest.mock.patch.object(installer.socket, "socket",
+                                        lambda *a, **k: self.fail("a port was probed")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                pf.check_port()
+
+    def test_a_full_install_does_check_the_port(self):
+        """The positive control: without it, the assertion above also
+        passes against a check_port that stopped probing for everyone."""
+        fx = Fixture(self)
+        pf = installer.Preflight(fx.args(command="install"))
+        probed = []
+
+        class _Probe:
+            def settimeout(self, _t):
+                pass
+
+            def connect_ex(self, addr):
+                probed.append(addr)
+                return 1
+
+            def close(self):
+                pass
+
+        with unittest.mock.patch.object(installer.socket, "socket", lambda *a, **k: _Probe()):
+            with contextlib.redirect_stdout(io.StringIO()):
+                pf.check_port()
+        self.assertEqual(probed, [("127.0.0.1", 8080)])
+
+    def test_the_wrapper_is_the_interface_and_is_executable(self):
+        fx = Fixture(self)
+        args = fx.args("--cli-only", command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.stage_payload(args)
+        wrapper = args.prefix / "bin" / "rbm"
+        self.assertTrue(wrapper.is_file(), "a CLI-only install with no CLI is not an install")
+        self.assertEqual(wrapper.stat().st_mode & 0o111, 0o111)
+        body = wrapper.read_text(encoding="utf-8")
+        self.assertIn("--entrypoint /rbm", body)
+        self.assertIn("--no-deps", body,
+                      "without it a read starts the engine as a side effect of being run")
+        self.assertIn("run --rm", body,
+                      "exec would need a running container, and the first command anybody needs "
+                      "is the one that runs before anything is started")
+
+    def _staged_wrapper_and_stub_docker(self):
+        """A CLI-only install staged for real, with a docker on PATH that
+        records what it was asked and does nothing.
+
+        Driven by RUNNING the wrapper rather than by reading it, because
+        the defect this covers is invisible in the text: the script says
+        `run ... "$@"` either way, and what goes wrong is what docker
+        compose does when "$@" is empty.
+        """
+        fx = Fixture(self)
+        args = fx.args("--cli-only", command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.stage_payload(args)
+        stub_dir = args.prefix / "stubbin"
+        stub_dir.mkdir()
+        log = args.prefix / "docker-calls.log"
+        stub = stub_dir / "docker"
+        stub.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "' + str(log) + '"\nexit 0\n',
+                        encoding="utf-8")
+        os.chmod(stub, 0o755)
+        env = dict(os.environ, PATH=f"{stub_dir}:{os.environ['PATH']}")
+        return args.prefix / "bin" / "rbm", log, env
+
+    def test_the_wrapper_refuses_an_empty_invocation_instead_of_falling_through(self):
+        """`docker compose run` given no command runs the service's own
+        command, which on a CLI-only deployment is `/rbm daemon`. Without
+        the guard a bare `rbm` became `/rbm /rbm daemon` and reported an
+        unknown command nobody typed, so the guard is the behaviour and
+        docker must not be reached at all."""
+        wrapper, log, env = self._staged_wrapper_and_stub_docker()
+        proc = subprocess.run([str(wrapper)], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(proc.returncode, 2,
+                         "a missing command is exit 2 in rbm itself, and the wrapper standing in "
+                         "for it has to agree rather than invent a third answer")
+        self.assertIn("usage: rbm", proc.stderr)
+        self.assertFalse(log.exists(),
+                         "docker was invoked for an invocation that names no command; that is the "
+                         "fall-through this guard exists to stop")
+
+    def test_the_wrapper_passes_a_real_command_straight_through(self):
+        """The positive control. Without it, "refuses an empty invocation"
+        is also satisfied by a wrapper that refuses everything."""
+        wrapper, log, env = self._staged_wrapper_and_stub_docker()
+        proc = subprocess.run([str(wrapper), "status"], capture_output=True, text=True,
+                              env=env, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(log.exists(), "docker was never invoked for a real command")
+        called = log.read_text(encoding="utf-8")
+        self.assertIn("run --rm --no-deps --entrypoint /rbm rclone-manager status", called)
+
+    def test_a_full_install_stages_no_second_way_in(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.stage_payload(args)
+        self.assertFalse((args.prefix / "bin" / "rbm").exists())
+
+    def test_the_flag_exists_only_where_a_deployment_is_staged(self):
+        flags = {opt for a in _subparser(installer.build_parser(), "install")._actions
+                 for opt in a.option_strings}
+        self.assertTrue({"--cli-only", "--no-cli-only"} <= flags)
+        for command in ("status", "uninstall", "network-doctor", "network-undo"):
+            other = {opt for a in _subparser(installer.build_parser(), command)._actions
+                     for opt in a.option_strings}
+            self.assertNotIn("--cli-only", other, f"{command} never brings a deployment up")
+
+
+class TestARestartLoopIsNotAnInstall(unittest.TestCase):
+    """A CLI-only engine serves nothing, so there is no health endpoint to
+    ask and "the container is running" is the whole available claim.
+
+    Which is why it is sampled over a window rather than once. `rbm
+    daemon` refuses rather than starts when it is handed something it
+    cannot use, and for the first second of that the container genuinely
+    is running: a single sample would report an install that is really a
+    crash loop, on the one deployment shape that has no other way to
+    notice.
+    """
+
+    def states(self, sequence):
+        remaining = list(sequence)
+        return lambda args, service: remaining.pop(0) if remaining else sequence[-1]
+
+    def settled(self, sequence):
+        """Driven on a fake clock, which is not a speed trick: the thing
+        under test is a window measured in seconds, so a real clock would
+        make this suite either slow or timing-dependent, and both of those
+        end with somebody deleting the test."""
+        clock = [1000.0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with unittest.mock.patch.object(installer, "compose_service_state", self.states(sequence)), \
+             unittest.mock.patch.object(installer.time, "time", lambda: clock[0]), \
+             unittest.mock.patch.object(installer.time, "sleep", sleep):
+            return installer.wait_for_daemon_settled(argparse.Namespace(), 60)
+
+    def test_a_container_that_stays_up_settles(self):
+        self.assertEqual(self.settled(["running"] * 60), "running")
+
+    def test_a_container_that_flaps_never_settles(self):
+        """And the answer is never the last sample. A flapper is running
+        for part of every restart cycle, so whether the final sample lands
+        on "running" is down to where the deadline falls: this sequence
+        reported a healthy install exactly that way before the answer
+        stopped being "what I saw last"."""
+        answer = self.settled(["running", "running", "restarting", "exited"] * 60)
+        self.assertNotEqual(answer, "running")
+        self.assertIn("never stayed up", answer)
+
+    def test_a_container_that_never_starts_says_what_it_was_doing(self):
+        answer = self.settled(["exited"] * 60)
+        self.assertNotEqual(answer, "running")
+        self.assertIn("exited", answer, "the operator needs the state to know which log to read")
+
+
+class TestTheInstallerStillTravelsAlone(unittest.TestCase):
+    """One file, copied onto a NAS, run there with nothing beside it.
+
+    This is the installer's oldest shipped property (issue #262) and the
+    reason its own docblock argues for a 3.8 floor: "a NAS appliance may
+    not let you install anything, so a script with its own dependencies
+    is a script that cannot run." Until this class existed, nothing
+    checked it. `test_an_installer_that_is_not_in_a_checkout_answers_
+    rather_than_raising` comes closest and does not: it copies the file
+    to a temp directory but runs `python3 -c` with this suite's own
+    directory still first on sys.path, so a repo-relative import would
+    have resolved and the case would still have passed. It also calls
+    exactly one function rather than running the program.
+
+    So the isolation here is deliberate on every axis:
+
+      * the copy is the only file in its directory;
+      * `-I` (isolated) drops PYTHONPATH, the user site directory and the
+        implicit path entry, so nothing but the standard library and the
+        real site-packages is reachable;
+      * cwd is the temp directory, so a relative path out to the checkout
+        cannot resolve either.
+
+    EPIC I / #672 folded twelve script domains onto scripts/rcmtools by
+    making them import a shared harness. This file is the one that cannot
+    be folded that way, and this is what says so in a form that fails.
+    """
+
+    def _alone(self):
+        """The installer, by itself, in an empty directory."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        copy = Path(tmp.name) / "install_docker_host.py"
+        copy.write_bytes(Path(installer.__file__).read_bytes())
+        self.assertEqual([p.name for p in Path(tmp.name).iterdir()], ["install_docker_host.py"],
+                         "the point of this fixture is that nothing else is there")
+        return copy
+
+    def _run(self, copy, *argv):
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        return subprocess.run([sys.executable, "-I", str(copy), *argv],
+                              capture_output=True, text=True, timeout=120,
+                              cwd=str(copy.parent), env=env)
+
+    def test_it_runs_at_all_with_nothing_beside_it(self):
+        """Import time and parser construction, which is where a
+        repo-relative import would land."""
+        proc = self._run(self._alone(), "--help")
+        self.assertEqual(proc.returncode, 0,
+                         f"the installer did not survive being copied out of the checkout:\n"
+                         f"{proc.stderr}")
+        self.assertIn("Install rclone-manager on a Docker host", proc.stdout)
+        for command in ("preflight", "install", "status", "uninstall"):
+            self.assertIn(command, proc.stdout, "every subcommand has to still be reachable")
+
+    def test_a_refusal_still_fires_with_nothing_beside_it(self):
+        """--help alone would also pass for a module that imports fine and
+        does nothing afterwards. This drives a real coded refusal through
+        argparse, the Refusal type and main()'s exit translation."""
+        copy = self._alone()
+        proc = self._run(copy, "install", "--if-installed", "converge",
+                         "--prefix", str(copy.parent / "prefix"),
+                         "--ssh-key", str(copy.parent / "key"),
+                         "--known-hosts", str(copy.parent / "known_hosts"))
+        self.assertEqual(proc.returncode, installer.EXIT_USAGE,
+                         f"stdout={proc.stdout}\nstderr={proc.stderr}")
+        self.assertIn("--if-installed was removed", proc.stdout + proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr,
+                         "a refusal, not an exception: an import that only fails at use time "
+                         "would surface exactly here")
+
+    def test_it_imports_nothing_outside_the_standard_library(self):
+        """The other half of the claim, and not implied by the two above:
+        `-I` still leaves the real site-packages reachable, so an
+        `import yaml` added to this file would pass both of them on a
+        developer's machine and fail on the appliance. This names every
+        distribution package the module pulls in, and there must be none.
+        """
+        copy = self._alone()
+        probe = (
+            "import sys\n"
+            "if not hasattr(sys, 'stdlib_module_names'):\n"
+            "    print('NO-CHECK'); raise SystemExit(0)\n"
+            "before = set(sys.modules)\n"
+            "sys.path.insert(0, " + repr(str(copy.parent)) + ")\n"
+            "import install_docker_host\n"
+            "roots = {m.split('.')[0] for m in set(sys.modules) - before}\n"
+            "print(','.join(sorted(r for r in roots\n"
+            "                      if r not in sys.stdlib_module_names\n"
+            "                      and r != 'install_docker_host')))\n"
+        )
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        proc = subprocess.run([sys.executable, "-I", "-c", probe],
+                              capture_output=True, text=True, timeout=120,
+                              cwd=str(copy.parent), env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        answer = proc.stdout.strip()
+        if answer == "NO-CHECK":
+            self.skipTest("sys.stdlib_module_names arrived in 3.10; the two cases above still ran")
+        self.assertEqual(answer, "",
+                         "the installer is copied to a NAS on its own (#262) and may import only "
+                         "the standard library; these are not standard library modules")
+
+
+class TestTheSiteReferenceNamesEveryFlagThisParserDeclares(unittest.TestCase):
+    """docs/site/reference.html sets out to be every flag, and a page that
+    says that is wrong the moment a flag lands without a row.
+
+    The Go side of the same page (distribution/packaging/site_reference_test.go)
+    holds its command table to the binary's dispatch table. This holds its
+    flag table to the parser in this file, which is the only thing that
+    actually knows what the installer accepts. Between them the page
+    cannot drift from either surface it documents.
+
+    Two flags are deliberately not on the page and are exempt here for
+    stated reasons rather than by being forgotten: -h/--help, which every
+    argparse parser has and no reader needs told about, and
+    --if-installed, which is not an option at all. It exists only so a
+    script still passing the flag it was told to pass gets a sentence
+    instead of argparse's "unrecognized arguments", it is suppressed from
+    --help for exactly that reason, and documenting it on a reference page
+    would be advertising a flag whose whole purpose is to be gone.
+    """
+
+    REGION = "INSTALLER-FLAGS"
+    # A frozenset, not a set literal: `port/672-install` widened `ruff` to
+    # all of scripts/, and RUF012 wants a mutable class attribute to be
+    # immutable. It is only ever read (`- self.EXEMPT`, and iterated in
+    # test_the_exemptions_are_still_real), so freezing it is free and says
+    # out loud that nothing mutates it.
+    EXEMPT = frozenset({"-h", "--help", "--if-installed"})
+
+    def reference(self):
+        path = REPO_ROOT / "docs" / "site" / "reference.html"
+        self.assertTrue(path.is_file(), f"{path} is missing; this test reads it")
+        return path.read_text(encoding="utf-8")
+
+    def region(self, doc):
+        begin, end = f"<!-- BEGIN {self.REGION} -->", f"<!-- END {self.REGION} -->"
+        i, j = doc.find(begin), doc.find(end)
+        self.assertTrue(0 <= i < j,
+                        f"reference.html has no {begin} ... {end} region; this test reads that "
+                        f"region, so removing it removes the check")
+        return doc[i + len(begin):j]
+
+    @staticmethod
+    def flags_in_first_cell(region_text):
+        """Every --flag in the FIRST cell of every row.
+
+        The first cell only, because the prose in the other two names
+        flags all the time ("defaults to what --prefix gave it"), and a
+        reader mentioning a flag is not the same claim as a row
+        documenting it. One row can still carry two, which is what
+        `--puid` / `--pgid` is.
+        """
+        found = set()
+        for row in region_text.split("<tr>")[1:]:
+            first_cell = row.split("</td>")[0]
+            found.update(re.findall(r"<code>(--[a-z0-9-]+)</code>", first_cell))
+        return found
+
+    def declared_flags(self):
+        parser = installer.build_parser()
+        sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+        declared = set()
+        for sp in sub.choices.values():
+            for action in sp._actions:
+                declared.update(action.option_strings)
+        return declared - self.EXEMPT
+
+    def test_every_flag_the_parser_declares_has_a_row(self):
+        documented = self.flags_in_first_cell(self.region(self.reference()))
+        missing = sorted(self.declared_flags() - documented)
+        self.assertEqual(missing, [],
+                         f"docs/site/reference.html's flag table omits flags the installer accepts: "
+                         f"{missing}. That page says it is every flag, so a flag with no row is the "
+                         f"page lying rather than the page being short.")
+
+    def test_no_row_names_a_flag_this_installer_does_not_accept(self):
+        documented = self.flags_in_first_cell(self.region(self.reference()))
+        extra = sorted(documented - self.declared_flags() - self.EXEMPT)
+        self.assertEqual(extra, [],
+                         f"docs/site/reference.html documents flags the installer does not accept: "
+                         f"{extra}")
+
+    def test_the_exemptions_are_still_real(self):
+        """An exemption that stops naming anything is how a list like this
+        quietly grows: nobody removes an entry, so the next flag that
+        happens to collide with it is silently uncovered. Every name here
+        has to still be a flag the parser declares."""
+        declared = set()
+        parser = installer.build_parser()
+        sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+        for sp in sub.choices.values():
+            for action in sp._actions:
+                declared.update(action.option_strings)
+        for flag in sorted(self.EXEMPT):
+            self.assertIn(flag, declared,
+                          f"{flag} is exempted from the reference page and is not a flag any "
+                          f"subcommand declares; the exemption is stale and is covering nothing")
+
+    def test_the_extractor_can_actually_fail(self):
+        """The positive control. Every assertion above is an absence, and
+        an extractor that reads zero flags out of every document satisfies
+        all of them."""
+        control = (
+            "<tr><td colspan=\"3\"><strong>a group heading</strong></td></tr>\n"
+            "<tr><td><code>--prefix</code></td><td>all six</td><td>and here --not-a-flag is prose</td></tr>\n"
+            "<tr><td><code>--puid</code> / <code>--pgid</code></td><td>x</td><td>y</td></tr>\n"
+        )
+        self.assertEqual(self.flags_in_first_cell(control), {"--prefix", "--puid", "--pgid"},
+                         "the extractor should read both flags out of a shared row, skip a colspan "
+                         "heading, and never read a flag named in the prose columns")
+
+
+def enrolment_notice(base_url: str, token: str) -> str:
+    """The sentence the engine prints while enrolment is still open,
+    rendered from the engine's own format strings rather than quoted.
+
+    Two files, because the line is assembled from two. The name it opens
+    with is derived in core/cliecho/cliname.go, deliberately, so that
+    `rbm` and `rbm-web` cannot drift apart; the sentence itself is the
+    Fprintf format in apps/common/auth/local/service.go's
+    PrintBootstrapNotice, which is the only thing that knows the expiry
+    and the single use it promises.
+    """
+    cliname = (REPO_ROOT / "core" / "cliecho" / "cliname.go").read_text(encoding="utf-8")
+    binary = re.search(r'\bBinary\s*=\s*"([^"]+)"', cliname)
+    suffix = re.search(r'\bWebBinary\s*=\s*Binary\s*\+\s*"([^"]+)"', cliname)
+    if binary is None or suffix is None:
+        raise AssertionError(
+            "core/cliecho/cliname.go no longer declares Binary and WebBinary the way this reader "
+            "expects; the site's enrolment-line check is reading it, so it has to be updated with it")
+
+    service = (REPO_ROOT / "apps" / "common" / "auth" / "local" / "service.go").read_text(encoding="utf-8")
+    formats = [m for m in re.findall(r'cliecho\.WebBinary\s*\+\s*"((?:[^"\\]|\\.)*)"', service)
+               if "/enroll?token=" in m]
+    if len(formats) != 1:
+        raise AssertionError(
+            f"expected exactly one enrolment-link format string in apps/common/auth/local/"
+            f"service.go, found {len(formats)}; that file is what the site's copy of the line is "
+            f"checked against")
+
+    literal = formats[0].replace("\\n", "\n").replace('\\"', '"')
+    return (binary.group(1) + suffix.group(1) + literal) % (base_url, token)
+
+
+class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
+    """Issue #714, and the half of it a page cannot keep on its own.
+
+    #716 put the output on docs/site/index.html: after each command, what
+    that command prints, labelled so it is not mistaken for something to
+    type. What it could not do by hand is keep it true. Every block was
+    typed out, so the `Compose:` line arrived hand-wrapped with a `\\` the
+    installer never emits and both blocks elided the compose invocation to
+    `docker compose -p rclone-manager ...`, which is an abbreviation
+    printed as though it were output. Output that is nearly right is worse
+    than none, because a reader compares it against their screen
+    character by character and concludes their install went wrong.
+
+    So the blocks are not copies of the epilogs, they are the epilogs:
+    installed_epilog, cli_only_staged_epilog and enroll_link_epilog are
+    rendered here against the sample prefix and address the page
+    substitutes, and compared line for line.
+
+    The enrolment line is a different surface and gets a different
+    source. The installer never prints it - the engine mints the token
+    during startup and writes the notice to its own log, which is why the
+    epilog prints the command that greps it back out - so the sentence is
+    held to the Fprintf format in apps/common/auth/local/service.go, with
+    the name it opens with read out of core/cliecho, where WebBinary is
+    derived from Binary precisely so the two cannot drift.
+
+    That last pin is #688 as a test. The installer used to print
+    `http://localhost:8080/enroll?token=...`, which on a laptop reading it
+    over SSH is the laptop; the token is single use and dies in 30
+    minutes, so the first thing anybody does with a fresh install did not
+    work. #690 fixed it by probing the LAN address. A page still showing
+    the old line now fails here rather than waiting to be noticed.
+    """
+
+    # The two values a real run computes from the host it is running on,
+    # as the page substitutes them. Everything else in every block is
+    # printed verbatim, which is what makes comparing them worth doing.
+    SAMPLE_PREFIX = "/home/you/rclone-manager"
+    SAMPLE_BASE_URL = "http://10.0.0.10:8080"
+
+    ENROL_SECTION = "first-run.html#enrol"
+
+    # 24 random bytes, base64url, which is what first-run.html's own
+    # table tells a reader to expect.
+    TOKEN_SHAPE = re.compile(r"[A-Za-z0-9_-]{32}")
+    # Non-greedy rather than \\S+: one page shows a token and the other
+    # shows "<a long random string>", which has spaces in it.
+    TOKEN_IN_LINE = re.compile(r"\?token=(.+?) to create one")
+
+    def page(self, name):
+        path = REPO_ROOT / "docs" / "site" / name
+        self.assertTrue(path.is_file(), f"{path} is missing; this test reads it")
+        return path.read_text(encoding="utf-8")
+
+    def region(self, name, marker):
+        doc = self.page(name)
+        begin, end = f"<!-- BEGIN {marker} -->", f"<!-- END {marker} -->"
+        i, j = doc.find(begin), doc.find(end)
+        self.assertTrue(0 <= i < j,
+                        f"docs/site/{name} has no {begin} ... {end} region; this test reads that "
+                        f"region, so removing it removes the check")
+        return doc[i + len(begin):j]
+
+    @staticmethod
+    def block_lines(region_text):
+        """An output block's own lines, blank ends trimmed.
+
+        Only the HTML escapes are undone: an output block carries no
+        markup, so a tag appearing in one is a reason to look rather than
+        something to tolerate. The blank line each epilog opens with
+        separates it from the command's own output in a terminal and from
+        the label on the page, so it is not compared.
+        """
+        lines = html.unescape(region_text).split("\n")
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return lines
+
+    @staticmethod
+    def sentence(region_text):
+        """One line of program output out of a region that wraps it.
+
+        Both pages break this sentence across lines too long for the
+        block and mark part of it up - the link on one, three faint spans
+        on the other - so the comparison is of words rather than of
+        layout.
+        """
+        return " ".join(html.unescape(re.sub(r"<[^>]+>", "", region_text)).split())
+
+    def epilog(self, render):
+        """One of the installer's epilogs, rendered against the page's
+        sample values.
+
+        --project is deliberately left at its default, so renaming the
+        Compose project fails here too: every `docker compose` line in
+        every block names it. The configuration directory is a path that
+        does not exist, because both install blocks are a FIRST install
+        and a real directory is what first_run_epilog asks about.
+        """
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        args.prefix = Path(self.SAMPLE_PREFIX)
+        args.config_dir = Path(fx.tmp.name) / "never-configured"
+        args.public_base_url = self.SAMPLE_BASE_URL
+        return render(args)
+
+    def notice_and_token(self, name):
+        shown = self.sentence(self.region(name, "ENROL-LOG-LINE"))
+        found = self.TOKEN_IN_LINE.search(shown)
+        self.assertIsNotNone(found,
+                             f"docs/site/{name}'s enrolment line has no ?token=... in it, so it is "
+                             f"not the line the engine prints")
+        return shown, found.group(1)
+
+    def test_the_install_output_block_is_the_epilog_this_installer_prints(self):
+        printed = self.epilog(installer.installed_epilog)
+        shown = self.block_lines(self.region("index.html", "INSTALL-OUTPUT"))
+        self.assertEqual(shown, self.block_lines("\n".join(printed)),
+                         "docs/site/index.html shows an install epilog this installer does not "
+                         "print. The page is what is wrong here: it exists to tell a reader which "
+                         "part of their screen matters, and it cannot do that with output that is "
+                         "only nearly right.")
+
+    def test_the_cli_only_output_block_is_the_epilog_a_fresh_cli_only_install_prints(self):
+        printed = self.epilog(installer.cli_only_staged_epilog)
+        shown = self.block_lines(self.region("index.html", "INSTALL-OUTPUT-CLI-ONLY"))
+        self.assertEqual(shown, self.block_lines("\n".join(printed)),
+                         "docs/site/index.html shows a --cli-only epilog this installer does not "
+                         "print")
+
+    def test_the_enroll_link_output_block_is_what_that_subcommand_prints(self):
+        """#716's own new subcommand, shown the same way and pinned the
+        same way. Its notice line is the engine's, echoed as the
+        container logged it, so it is checked as that sentence rather
+        than as a literal."""
+        shown = self.block_lines(self.region("index.html", "ENROLL-LINK-OUTPUT"))
+        notice = next((line for line in shown if installer.ENROLL_NOTICE_MARKER in line), "")
+        self.assertTrue(notice, "the enroll-link block shows no enrolment notice at all")
+        printed = self.block_lines("\n".join(
+            [installer.ENROLL_RESTART_SAY, installer.ENROLL_WAIT_SAY,
+             *installer.enroll_link_epilog(notice)]))
+        self.assertEqual(shown, printed,
+                         "docs/site/index.html shows an enroll-link transcript this installer does "
+                         "not print; the service name and the wait are its own constants")
+
+    def test_the_notice_in_the_enroll_link_block_is_the_engines_sentence(self):
+        shown = self.block_lines(self.region("index.html", "ENROLL-LINK-OUTPUT"))
+        notice = next(line for line in shown if installer.ENROLL_NOTICE_MARKER in line)
+        found = self.TOKEN_IN_LINE.search(notice)
+        self.assertIsNotNone(found, "the reissued notice has no ?token=... in it")
+        self.assertEqual(notice,
+                         enrolment_notice(self.SAMPLE_BASE_URL, found.group(1)).strip(),
+                         "the notice enroll-link is shown printing is not the one the engine emits")
+
+    def test_the_command_the_epilog_prints_is_the_command_the_page_then_runs(self):
+        """The block shows the grep command's result, so the prompt line
+        above that result has to be the command the epilog just told the
+        reader to run. Two hand-typed copies of one long invocation is
+        exactly where an elision gets introduced."""
+        epilog = self.epilog(installer.installed_epilog)
+        instruction = epilog[-1].strip()
+        echoed = self.sentence(self.region("index.html", "ENROL-COMMAND"))
+        self.assertEqual(echoed, instruction,
+                         "the command echoed above the enrolment line is not the one the install "
+                         "epilog prints")
+
+    def test_the_cli_only_output_block_carries_no_enrolment_link(self):
+        """The absence is the point of the block, not an oversight in it.
+
+        A CLI-only deployment publishes no port and runs no web host, so
+        there is nothing to enrol into (#689, landed in #690). A link
+        there would be a lie, and one somebody would spend the thirty
+        minutes of a token trying to open.
+        """
+        shown = self.region("index.html", "INSTALL-OUTPUT-CLI-ONLY")
+        for forbidden in ("enroll", "enrol", "tip-term", self.ENROL_SECTION):
+            self.assertNotIn(forbidden, shown,
+                             f"the --cli-only output block on docs/site/index.html names "
+                             f"{forbidden!r}; that install has no web host to enrol into, so "
+                             f"anything enrolment-shaped in that block is inventing one")
+
+    def test_both_pages_quote_the_sentence_the_engine_really_prints(self):
+        """The line with the link in it, held to the engine rather than to
+        this installer, because the engine is what prints it."""
+        for name in ("index.html", "first-run.html"):
+            shown, token = self.notice_and_token(name)
+            # The token is read back out of the page rather than fixed
+            # here: one page shows a real one and the other a stand-in,
+            # and which of those a page chooses is a matter of taste. The
+            # sentence around it is not.
+            expected = " ".join(enrolment_notice(self.SAMPLE_BASE_URL, token).split())
+            self.assertEqual(shown, expected,
+                             f"docs/site/{name} quotes an enrolment log line the engine does not "
+                             f"print. apps/common/auth/local/service.go is what prints it; the "
+                             f"expiry, the single use and the host all come from there.")
+
+    def test_the_token_in_the_link_is_the_shape_the_engine_mints(self):
+        """index.html shows a real-looking token rather than a
+        placeholder, which is the better choice and only stays true while
+        it looks like one: 24 random bytes, base64url."""
+        _, token = self.notice_and_token("index.html")
+        self.assertRegex(token, self.TOKEN_SHAPE,
+                         "the token shown is not 32 base64url characters, so it is not the shape "
+                         "the engine's bootstrap token actually has")
+
+    def test_the_deployment_note_quotes_it_too(self):
+        """The third copy of the same sentence, found while pinning the
+        other two and carrying the binary name from before `rbm-web` was
+        derived from `rbm`. Quoted against the shipped Compose default
+        rather than an installed host's address, because that document is
+        about standing the stack up by hand, where `localhost` really is
+        what container/compose.yaml sets.
+        """
+        doc = (REPO_ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
+        self.assertIn(enrolment_notice("http://localhost:8080", "..."), doc,
+                      "docs/deployment.md quotes an enrolment notice the engine does not print")
+
+    def test_the_link_is_highlighted_and_lands_on_the_first_run_section(self):
+        doc = self.page("index.html")
+        self.assertIn(f'class="tip-term" href="{self.ENROL_SECTION}"', doc,
+                      "the enrolment link in the output block is not a highlighted link to the "
+                      "first-run page's section on creating the administrator")
+        bubble = re.search(r'<aside class="tip-bubble">(.*?)</aside>', doc, re.DOTALL)
+        self.assertIsNotNone(bubble, "the attention note is gone from docs/site/index.html")
+        note = bubble.group(1)
+        self.assertIn(f'href="{self.ENROL_SECTION}"', note,
+                      "the note does not carry the link itself, so a reader who reads the note "
+                      "rather than the URL has nothing to click")
+        for claim in ("Single use", "30 minutes", "localhost"):
+            self.assertIn(claim, note,
+                          f"the note does not say {claim!r}; those three are what a reader holding "
+                          f"a dead link needed to have been told")
+
+    def test_the_note_opens_on_focus_and_not_only_on_hover(self):
+        """A note only a mouse can reach is one that half the readers of
+        the page never see, and it is carrying the only link in the
+        block. Both openers are checked because either one alone is the
+        whole mechanism when the other is unavailable: tooltip.js latches
+        it open, and the CSS reveals it on a page where that file did not
+        load."""
+        self.assertIn('term.addEventListener("focus", open)', self.page("tooltip.js"),
+                      "tooltip.js opens the attention note on hover only")
+        self.assertIn(".io:has(.tip-term:focus) .tip-bubble", self.page("theme.css"),
+                      "theme.css has no keyboard opener for the note on a page without JavaScript")
+
+    def test_no_page_on_the_site_links_to_a_fragment_that_is_not_there(self):
+        """Generalised from the one anchor #714 needed, because looking
+        for it found a link that was already dead: reference.html sent a
+        reader to index.html#install-cli-only, and the heading that would
+        have answered to it had no id. A fragment that resolves to
+        nothing scrolls nowhere and says nothing, so the reader concludes
+        the section does not exist.
+        """
+        pages = {p.name: p.read_text(encoding="utf-8")
+                 for p in (REPO_ROOT / "docs" / "site").glob("*.html")}
+        self.assertIn("index.html", pages, "read no pages out of docs/site")
+        ids = {name: set(re.findall(r'id="([^"]+)"', doc)) for name, doc in pages.items()}
+        dead = []
+        for name, doc in pages.items():
+            for href in re.findall(r'href="([^"]*#[^"]*)"', doc):
+                if href.startswith(("http://", "https://", "mailto:")):
+                    continue
+                page, _, fragment = href.partition("#")
+                target = page or name
+                if target not in ids or fragment not in ids[target]:
+                    dead.append(f"{name} -> {href}")
+        self.assertEqual(dead, [], f"these links on the site resolve to nothing: {dead}")
+
+    def test_the_extractors_can_actually_fail(self):
+        """The positive control. block_lines returning nothing and
+        sentence returning "" would satisfy most of the assertions above
+        against any document at all."""
+        self.assertEqual(self.block_lines("\n==&gt; Installed.\n    Web UI:  x\n\n"),
+                         ["==> Installed.", "    Web UI:  x"])
+        self.assertEqual(
+            self.sentence('<span class="cm">Open</span>\n'
+                          '<a href="x">http://h/enroll?token=<span>abc</span></a>\n'
+                          'to create one.'),
+            "Open http://h/enroll?token=abc to create one.",
+            "sentence should join the wrapped lines, unescape and drop the markup, and nothing "
+            "else")
+
+
+class TestTheSiteReferenceNamesEverySubcommandThisParserDeclares(unittest.TestCase):
+    """The gap #716 walked through, found by reading its own diff.
+
+    It added `enroll-link`, a seventh installer subcommand, and
+    reference.html still said "Its six subcommands" in two places with no
+    row for it. Every existing check was green: the flag table is held to
+    the parser's options and the command table to the `rbm` binary's
+    dispatch table, and neither of them has an opinion about how many
+    subcommands the installer has.
+
+    That is the same shape as the hole EPIC I fell into on the same page,
+    where nothing structural was missing because the epic added no route
+    and no command, and everything substantive was. A count in prose is a
+    claim, so it is checked like one.
+    """
+
+    REGION = "INSTALLER-COMMANDS"
+    NUMBER_WORDS = ("one", "two", "three", "four", "five", "six", "seven", "eight",
+                    "nine", "ten", "eleven", "twelve")
+
+    def reference(self):
+        path = REPO_ROOT / "docs" / "site" / "reference.html"
+        self.assertTrue(path.is_file(), f"{path} is missing; this test reads it")
+        return path.read_text(encoding="utf-8")
+
+    def region(self, doc):
+        begin, end = f"<!-- BEGIN {self.REGION} -->", f"<!-- END {self.REGION} -->"
+        i, j = doc.find(begin), doc.find(end)
+        self.assertTrue(0 <= i < j,
+                        f"reference.html has no {begin} ... {end} region; this test reads that "
+                        f"region, so removing it removes the check")
+        return doc[i + len(begin):j]
+
+    @staticmethod
+    def subcommands_in_first_cell(region_text):
+        """Every subcommand named in the FIRST cell of every row, for the
+        reason the flag check reads only first cells: the prose columns
+        name other subcommands constantly."""
+        found = set()
+        for row in region_text.split("<tr>")[1:]:
+            first_cell = row.split("</td>")[0]
+            found.update(re.findall(r"<code>([a-z][a-z-]*)</code>", first_cell))
+        return found
+
+    @staticmethod
+    def declared_subcommands():
+        parser = installer.build_parser()
+        sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+        return set(sub.choices)
+
+    def test_every_subcommand_the_parser_declares_has_a_row(self):
+        missing = sorted(self.declared_subcommands() - self.subcommands_in_first_cell(
+            self.region(self.reference())))
+        self.assertEqual(missing, [],
+                         f"docs/site/reference.html's subcommand table omits subcommands the "
+                         f"installer accepts: {missing}. A subcommand that lands without a row is "
+                         f"how a page stays structurally complete and substantively stale.")
+
+    def test_no_row_names_a_subcommand_this_installer_does_not_accept(self):
+        extra = sorted(self.subcommands_in_first_cell(self.region(self.reference()))
+                       - self.declared_subcommands())
+        self.assertEqual(extra, [],
+                         f"docs/site/reference.html documents installer subcommands that do not "
+                         f"exist: {extra}")
+
+    def test_the_page_does_not_say_a_number_that_is_wrong(self):
+        """The heading counts them in words, and a count is the one part
+        of a table that stays wrong after the row is added."""
+        doc = self.reference()
+        actual = len(self.declared_subcommands())
+        for word in re.findall(r"Its (\w+) subcommands", doc):
+            self.assertEqual(word, self.NUMBER_WORDS[actual - 1],
+                             f"reference.html says the installer has {word} subcommands and it "
+                             f"declares {actual}")
+
+    def test_the_extractor_can_actually_fail(self):
+        """The positive control: every assertion above is an absence, and
+        an extractor reading nothing satisfies two of them."""
+        control = ('<tr><td colspan="3"><strong>heading</strong></td></tr>\n'
+                   '<tr><td><code>preflight</code></td><td>x</td><td>y, unlike <code>install</code></td></tr>\n')
+        self.assertEqual(self.subcommands_in_first_cell(control), {"preflight"},
+                         "the extractor should read the first cell only, and skip a colspan "
+                         "heading")
+
+
+class _FakeRun:
+    """Stands in for installer.run, answering by the verb it is given."""
+
+    def __init__(self, logs_stdout="", restart_rc=0):
+        self.logs_stdout, self.restart_rc = logs_stdout, restart_rc
+        self.calls = []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        verb = next((a for a in argv if a in ("logs", "restart", "up", "ps")), "")
+        if verb == "logs":
+            return types.SimpleNamespace(returncode=0, stdout=self.logs_stdout, stderr="")
+        if verb == "restart":
+            return types.SimpleNamespace(returncode=self.restart_rc, stdout="", stderr="nope")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+class TestReissuingAnEnrollmentLink(unittest.TestCase):
+    """`enroll-link` exists so that a lapsed link is one command rather
+    than two raw `docker compose` invocations plus an instruction to read
+    the right line out of the output.
+
+    The reading is the part worth having in code. A container keeps its
+    log across a restart, so after reissuing there are two notices in it
+    and the dead one is first: a reader told to grep gets both and no
+    reason to prefer either.
+    """
+
+    NOTICE = "rbm-web: no administrator account exists yet. Open {} to create one (valid 30 minutes, single use)."
+
+    def test_the_newest_notice_wins_not_the_first(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        old = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=OLDOLDOLD")
+        new = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=NEWNEWNEW")
+        fake = _FakeRun(logs_stdout="\n".join([old, "some other engine line", new]) + "\n")
+        with unittest.mock.patch.object(installer, "run", fake):
+            got = installer._newest_enrollment_notice(args)
+        self.assertIn("NEWNEWNEW", got)
+        self.assertNotIn("OLDOLDOLD", got,
+                         "the first notice in the log is the one the restart invalidated")
+
+    def test_no_notice_at_all_is_an_empty_answer_not_a_crash(self):
+        fx = Fixture(self)
+        fake = _FakeRun(logs_stdout="engine started\nnothing about enrollment here\n")
+        with unittest.mock.patch.object(installer, "run", fake):
+            self.assertEqual(installer._newest_enrollment_notice(fx.args(command="enroll-link")), "")
+
+    def test_an_existing_administrator_is_its_own_refusal(self):
+        """Not a 30 and not a retry. Enrollment is a one-time door, so a
+        script that keeps trying this would loop for ever, where one
+        retrying a runtime failure is being reasonable."""
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        (args.prefix / "compose.yaml").write_text("services: {}\n")
+        (args.prefix / ".env").write_text("PUID=1000\n")
+        args.state_dir.mkdir(parents=True, exist_ok=True)
+        (args.state_dir / "local-auth.json").write_text('{"username": "nas-admin"}')
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "rclone-manager"}], {})):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_ENROLLMENT_CLOSED)
+        self.assertIn("already exists", caught.exception.message)
+        self.assertIn("factory-reset", caught.exception.remedy,
+                      "somebody who has lost the password needs told the one way back")
+
+    def test_nothing_installed_refuses_before_touching_docker(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        fake = _FakeRun()
+        with unittest.mock.patch.object(installer, "detect_existing", lambda a: (False, [], {})), \
+             unittest.mock.patch.object(installer, "run", fake):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_PREREQ_PAYLOAD)
+        self.assertEqual(fake.calls, [], "it restarted something on a host with nothing installed")
+
+    def test_no_engine_container_says_how_to_get_one(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        fake = _FakeRun()
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "web-ui"}], {})), \
+             unittest.mock.patch.object(installer, "run", fake):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_RUNTIME)
+        self.assertIn("up -d", caught.exception.remedy)
+        self.assertEqual(fake.calls, [])
+
+    def test_the_happy_path_restarts_then_prints_the_new_link(self):
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        old = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=OLDOLDOLD")
+        new = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=NEWNEWNEW")
+
+        seen = {"restarted": False}
+        real_logs = [old]
+
+        def fake_run(argv, **kwargs):
+            if "restart" in argv:
+                seen["restarted"] = True
+                real_logs.append(new)
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            if "logs" in argv:
+                return types.SimpleNamespace(returncode=0, stdout="\n".join(real_logs), stderr="")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "rclone-manager"}], {})), \
+             unittest.mock.patch.object(installer, "run", fake_run):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = installer.cmd_enroll_link(args)
+        self.assertEqual(code, installer.EXIT_OK)
+        self.assertTrue(seen["restarted"], "a token is only minted by a restart")
+        printed = out.getvalue()
+        self.assertIn("NEWNEWNEW", printed)
+        self.assertNotIn("OLDOLDOLD", printed, "it printed the link its own restart just killed")
+        self.assertIn("works once", printed)
+
+    def test_a_restart_that_prints_nothing_new_is_a_refusal(self):
+        """The control on the assertion above. Without it, "prints the new
+        link" is also satisfied by a command that prints whatever was
+        already there and calls it fresh."""
+        fx = Fixture(self)
+        args = fx.args(command="enroll-link")
+        old = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=OLDOLDOLD")
+        fake = _FakeRun(logs_stdout=old)
+        with unittest.mock.patch.object(installer, "detect_existing",
+                                        lambda a: (True, [{"Service": "rclone-manager"}], {})), \
+             unittest.mock.patch.object(installer, "run", fake), \
+             unittest.mock.patch.object(installer, "ENROLL_NOTICE_WAIT", 0):
+            with self.assertRaises(installer.Refusal) as caught:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    installer.cmd_enroll_link(args)
+        self.assertEqual(caught.exception.code, installer.EXIT_VERIFY)
 
 
 if __name__ == "__main__":

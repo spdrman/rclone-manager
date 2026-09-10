@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "10c5c6b0a9adfd30297dc337210bef132370228cbbff1b5e6c6c5e46f9598054"
+const ContractSHA256 = "bb45f33fb55cfb08530f2ea09af19ce89036701e9e94ee04a2102ea09164da12"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -326,6 +326,15 @@ var Endpoints = []Endpoint{
 		RequestSchema: "", ResponseSchema: "SessionResponse", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
+		},
+	},
+	{
+		ID: "listBackends", Method: "GET", Path: "/backends",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ListBackendsResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			500: {ErrorCodeInternal},
 		},
 	},
 	{
@@ -803,6 +812,38 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "getStorageMediumConfiguration", Method: "GET", Path: "/storage-mediums/{id}/configuration",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "MediumConfigurationResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeMediumNotFound},
+		},
+	},
+	{
+		ID: "configureStorageMedium", Method: "PUT", Path: "/storage-mediums/{id}/configuration",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "MediumConfigurationRequest", ResponseSchema: "StorageMediumSummary", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeMediumNotFound},
+			409: {ErrorCodeMediumConnectionNotProven},
+		},
+	},
+	{
+		ID: "preflightStorageMediumConfiguration", Method: "POST", Path: "/storage-mediums/{id}/configuration/preflight",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "MediumConfigurationRequest", ResponseSchema: "MediumPreflightResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeMediumNotFound},
+		},
+	},
+	{
 		ID: "setDefaultStorageMedium", Method: "PUT", Path: "/storage-mediums/{id}/default",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "StorageMediumSummary", SuccessStatus: 200,
@@ -993,6 +1034,66 @@ type AuthErrorResponse struct {
 	Code          ErrorCode `json:"code"`
 	CorrelationID string    `json:"correlationId"`
 	Message       string    `json:"message"`
+}
+
+// BackendEnumValue is one choice an `enum`-kind field offers: the value that is stored,
+// and the words a surface renders for it.
+type BackendEnumValue struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// BackendManifest is one registered backend, declared as data. A destination is an
+// INSTANCE of one of these, and several instances of one backend is
+// the normal case rather than an edge, which is why a manifest
+// carries a label and a summary for a picker and says nothing about
+// any particular destination.
+type BackendManifest struct {
+	Fields  []BackendManifestField `json:"fields"`
+	ID      string                 `json:"id"`
+	Label   string                 `json:"label"`
+	Probe   BackendProbe           `json:"probe"`
+	Role    string                 `json:"role"`
+	Summary string                 `json:"summary"`
+}
+
+// BackendManifestField is one thing an operator is asked for when they configure an instance
+// of this backend: what it is called, what KIND of value it is, and
+// whether it is required. It is a declaration of SHAPE and it never
+// carries a value. In particular a `credential`-kind field says only
+// that a credential is needed here; the material itself reaches the
+// engine as a reference (see StorageMediumCredentialsReference) and
+// has no spelling on this boundary at all, which is what makes
+// serving this catalogue to a browser safe.
+type BackendManifestField struct {
+	Help       string             `json:"help,omitempty"`
+	ID         string             `json:"id"`
+	Kind       string             `json:"kind"`
+	Label      string             `json:"label"`
+	Pattern    string             `json:"pattern,omitempty"`
+	Required   bool               `json:"required"`
+	UnsetMeans string             `json:"unset_means,omitempty"`
+	Values     []BackendEnumValue `json:"values,omitempty"`
+}
+
+// BackendProbe is how an instance of this backend is verified: which steps of the
+// closed vocabulary apply to it. It declares no procedure. There is
+// no script, no command and no expression anywhere in a manifest,
+// which is EPIC I's decision and not an omission, and it is the
+// reason this document can be served to a browser without handing
+// out an arbitrary-command surface.
+type BackendProbe struct {
+	Steps []BackendProbeStep `json:"steps"`
+}
+
+// BackendProbeStep is one step of the verification vocabulary, and whether this backend
+// runs it. A skipped step is a first-class outcome and not a quiet
+// pass, so one that does not run carries the sentence explaining
+// why.
+type BackendProbeStep struct {
+	Reason string `json:"reason,omitempty"`
+	Run    bool   `json:"run"`
+	Step   string `json:"step"`
 }
 
 // BackupSet is A persisted backup set as the API reports it.
@@ -1373,6 +1474,20 @@ type ListArtifactsResponse struct {
 	Artifacts []Artifact `json:"artifacts"`
 }
 
+// ListBackendsResponse is GET /backends. Read-only by design, for Validator's reason one
+// step further on: a client-extensible backend catalogue would be an
+// arbitrary-backend surface, and a manifest is the one thing in this
+// product that decides what a destination may be. It carries the
+// naming rules alongside the catalogue so the add-a-destination form
+// validates against the rule the server applies rather than a second
+// copy of it.
+type ListBackendsResponse struct {
+	Backends           []BackendManifest     `json:"backends"`
+	InstanceIDPattern  string                `json:"instance_id_pattern"`
+	ReservedInstanceID string                `json:"reserved_instance_id"`
+	Unregistered       []UnregisteredBackend `json:"unregistered"`
+}
+
 // ListBackupSetsResponse is GET /backup-sets. An object with one array field, never a bare
 // top-level array.
 type ListBackupSetsResponse struct {
@@ -1566,6 +1681,49 @@ type ManagerStorage struct {
 	UnknownReason     string `json:"unknown_reason"`
 	UsedBytes         uint64 `json:"used_bytes"`
 	WarningFreeBytes  uint64 `json:"warning_free_bytes"`
+}
+
+// MediumConfigurationRequest is one destination's configuration, in the vocabulary its backend's
+// manifest declares (#669). This is what StorageMediumRequest cannot
+// be: that one enumerates S3's fields, so bucket is required and
+// there is no path, and a local volume - the only destination a
+// fresh install has (#670) - cannot be described in it. credentials
+// stays its own reference object because a credential is not a
+// value: it is checked by a different rule, and a value bag that
+// could hold one is a value bag something eventually puts material
+// into (#665's C1-C5).
+type MediumConfigurationRequest struct {
+	Backend     string                            `json:"backend"`
+	Credentials StorageMediumCredentialsReference `json:"credentials"`
+	Fields      []MediumFieldValue                `json:"fields"`
+}
+
+// MediumConfigurationResponse is what one destination has configured right now, in its backend's
+// vocabulary. credential_configured is a boolean and never the
+// reference: whether a credential exists is what a form needs - it
+// decides whether the credential pair may be left empty - and it is
+// not material, not a path and not a variable name, which is the
+// most that may be said about it either way (FR-33, #665's C3).
+type MediumConfigurationResponse struct {
+	CredentialConfigured bool               `json:"credential_configured"`
+	Fields               []MediumFieldValue `json:"fields"`
+}
+
+// MediumFieldValue is one manifest-declared value, as a pair. A pair list rather than an
+// object keyed by field id, because no schema in this contract is a
+// map and the generator models additionalProperties as a bool only,
+// so a keyed object would arrive in both languages as an untyped
+// blob. An unset optional field is ABSENT from the list rather than
+// present with an empty value: absent is what a manifest's
+// unset_means resolves at read time, and an empty value written back
+// is a product default frozen into the operator's file by the next
+// save (#294). An EMPTY list is meaningful and is not the same as an
+// absent one - these writes replace the whole declared field set, so
+// empty means "this instance carries no values". The list is sorted
+// by field, so one configuration has one body.
+type MediumFieldValue struct {
+	Field string `json:"field"`
+	Value string `json:"value"`
 }
 
 // MediumPreflightCheck is one step of a storage-medium preflight. There is deliberately no
@@ -2100,6 +2258,18 @@ type TrustedHostKey struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
+// UnregisteredBackend is A transport this build's storage layer understands but which NO
+// manifest declares, so no instance of it can exist. Reported rather
+// than hidden: hiding it answers an operator worse, because somebody
+// who came looking for SFTP learns nothing from a menu that never
+// mentions it and asks again next month, whereas a row saying the
+// shape is understood and is not registered is a real answer. A
+// client renders these as unselectable; there is nothing to send,
+// since a create request naming one is refused by the registry.
+type UnregisteredBackend struct {
+	Transport string `json:"transport"`
+}
+
 // UpdateBackupSetRequest is PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
 // already-persisted backup set (issue #350): every property is
 // optional, and a property this body omits is left exactly as it is
@@ -2208,6 +2378,11 @@ var SchemaTypes = map[string]any{
 	"ArtifactCheckResponse":             ArtifactCheckResponse{},
 	"ArtifactReinstateResponse":         ArtifactReinstateResponse{},
 	"AuthErrorResponse":                 AuthErrorResponse{},
+	"BackendEnumValue":                  BackendEnumValue{},
+	"BackendManifest":                   BackendManifest{},
+	"BackendManifestField":              BackendManifestField{},
+	"BackendProbe":                      BackendProbe{},
+	"BackendProbeStep":                  BackendProbeStep{},
 	"BackupSet":                         BackupSet{},
 	"BackupSetEditHold":                 BackupSetEditHold{},
 	"BackupSetEditHoldState":            BackupSetEditHoldState{},
@@ -2239,6 +2414,7 @@ var SchemaTypes = map[string]any{
 	"ImportStorageCredentialsResponse":  ImportStorageCredentialsResponse{},
 	"ListActivityResponse":              ListActivityResponse{},
 	"ListArtifactsResponse":             ListArtifactsResponse{},
+	"ListBackendsResponse":              ListBackendsResponse{},
 	"ListBackupSetsResponse":            ListBackupSetsResponse{},
 	"ListOperationsResponse":            ListOperationsResponse{},
 	"ListSSHKeyCandidatesResponse":      ListSSHKeyCandidatesResponse{},
@@ -2253,6 +2429,9 @@ var SchemaTypes = map[string]any{
 	"LiveActivityResponse":              LiveActivityResponse{},
 	"LiveActivitySet":                   LiveActivitySet{},
 	"ManagerStorage":                    ManagerStorage{},
+	"MediumConfigurationRequest":        MediumConfigurationRequest{},
+	"MediumConfigurationResponse":       MediumConfigurationResponse{},
+	"MediumFieldValue":                  MediumFieldValue{},
 	"MediumPreflightCheck":              MediumPreflightCheck{},
 	"MediumPreflightResponse":           MediumPreflightResponse{},
 	"Operation":                         Operation{},
@@ -2290,6 +2469,7 @@ var SchemaTypes = map[string]any{
 	"TestConnectionRequest":             TestConnectionRequest{},
 	"TestConnectionResponse":            TestConnectionResponse{},
 	"TrustedHostKey":                    TrustedHostKey{},
+	"UnregisteredBackend":               UnregisteredBackend{},
 	"UpdateBackupSetRequest":            UpdateBackupSetRequest{},
 	"UpdateCapacitySettings":            UpdateCapacitySettings{},
 	"UpdateRetentionSettings":           UpdateRetentionSettings{},

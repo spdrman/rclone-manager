@@ -29,17 +29,18 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import deploy_generic  # noqa: E402
+import deploy_generic
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SFTP_USER = "backupuser"
 SFTP_UID = "1001"
 
 
-def _require_tools():
+def _require_tools() -> None:
     """Skip rather than fail when this machine cannot run the suite.
 
     Everything here is checked, docker included, and the daemon is
@@ -54,11 +55,14 @@ def _require_tools():
             raise unittest.SkipTest(f"{tool} not found on PATH")
     try:
         subprocess.run(["docker", "info"], capture_output=True, check=True, timeout=10)
-    except Exception as exc:  # noqa: BLE001 - any failure here means "skip", not "fail"
-        raise unittest.SkipTest(f"docker daemon not reachable: {exc}")
+    # Any exception at all means "skip", not "fail" -- see this function's
+    # docstring. `from exc` keeps the original in the traceback rather than
+    # letting the skip look like a failure raised while handling one.
+    except Exception as exc:
+        raise unittest.SkipTest(f"docker daemon not reachable: {exc}") from exc
 
 
-def _sh(*args: str, **kwargs) -> subprocess.CompletedProcess:
+def _sh(*args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
     """Run a command, capture both streams, and always under a timeout.
 
     The timeout is the reason this exists rather than bare
@@ -311,7 +315,7 @@ class DeployGenericIntegrationTest(unittest.TestCase):
     alongside the fast unit suite; the tool checks then decide whether
     an opted-in run can proceed at all.
     """
-    def setUp(self):
+    def setUp(self) -> None:
         _require_tools()
         self.tmp = Path(tempfile.mkdtemp(prefix="deploy-generic-it-"))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
@@ -331,7 +335,7 @@ class DeployGenericIntegrationTest(unittest.TestCase):
 
         self.addCleanup(self._compose_down)
 
-    def _compose_down(self):
+    def _compose_down(self) -> None:
         """Take the deployed stack down, volumes included.
 
         Volumes too, because the next run in this suite has to start from
@@ -378,7 +382,7 @@ class DeployGenericIntegrationTest(unittest.TestCase):
             "--project-name", self.project,
         ]
 
-    def test_deploys_a_working_container_and_completes_one_backup_cycle(self):
+    def test_deploys_a_working_container_and_completes_one_backup_cycle(self) -> None:
         self.fixture.seed_artifact("backup.dump", "integration test payload")
 
         code = deploy_generic.main(self._deploy_args())

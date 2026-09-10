@@ -114,6 +114,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import stat
@@ -123,6 +124,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import ClassVar
 
 # ---------------------------------------------------------------------
 # Exit codes
@@ -176,6 +178,13 @@ EXIT_PERSISTENCE_UNVERIFIED = 46
 EXIT_RELEASE_CONFLICT = 50
 EXIT_RELEASE_OFFLINE = 51
 EXIT_RELEASE_TOO_OLD = 52
+
+# Asking for an enrollment link on a deployment that already has an
+# administrator. Its own code because the answer is not "try again": the
+# door this reissues is the one that closes permanently the first time
+# somebody walks through it, and a script that keeps retrying a 30 is
+# right to, where one retrying this would loop for ever.
+EXIT_ENROLLMENT_CLOSED = 53
 
 # The release that renamed the binaries inside the image. The embedded
 # compose runs /rbm-web, which exists from here onwards and in no image
@@ -241,7 +250,7 @@ SOURCE_PORT_ENV = "RCLONE_MANAGER_SOURCE_PORT"
 #
 # The digest is what makes `--release` safe to offer at all. A tag is a
 # mutable pointer (scripts/release/publish-image.sh says so in its own
-# words), so "install 0.3.3" is a claim about a name until something
+# words), so "install 0.4.0" is a claim about a name until something
 # compares the name against a recorded identity. One anonymous HEAD does
 # that, with no cosign and no dependency, which is why the digest is here
 # and not derived.
@@ -261,7 +270,7 @@ SOURCE_PORT_ENV = "RCLONE_MANAGER_SOURCE_PORT"
 # It proves exactly one version: this one. A release cut after this
 # installer was written has no digest here and cannot get one, which is
 # the reason the --image default is pinned rather than floating.
-CARRIED_RELEASE = "0.3.3"
+CARRIED_RELEASE = "0.4.0"
 CARRIED_RELEASE_DIGEST = None
 
 # Where that release lives. Split into two halves rather than written as
@@ -316,6 +325,45 @@ class Refusal(Exception):
 # ---------------------------------------------------------------------
 
 
+def primary_lan_address():
+    """The address of the interface this machine's default route uses.
+
+    The enrolment link this installer prints is opened from SOMEBODY
+    ELSE'S machine, on the same LAN, minutes after the install finishes.
+    So the two obvious answers are both wrong. `localhost` is right only
+    on the box that ran the install, and an operator who ran it over SSH
+    reads a link to their own laptop. `socket.gethostname()` is worse
+    than it looks: a NAS hostname resolves on the NAS and, without mDNS
+    or a DNS entry somebody set up, nowhere else, so the link fails for
+    the one reader it is written for.
+
+    An IP on the LAN works from any machine on that LAN with nothing
+    configured, which is the property the link needs.
+
+    No packets are sent. Connecting a UDP socket only asks the kernel to
+    pick a route and bind a local address, and 192.0.2.1 is TEST-NET-1
+    (RFC 5737), reserved for documentation and routed nowhere. Reading
+    the local end back reports the interface the default route would
+    leave by, which is why this returns the LAN address rather than a
+    Docker bridge or a loopback: those are not on the default route.
+
+    Returns None when there is no default route to ask about, which is a
+    real answer on an air-gapped host and is why the caller keeps a
+    fallback rather than treating this as always available.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 1))
+        addr = probe.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        probe.close()
+    if not addr or addr.startswith("127.") or addr == "0.0.0.0":
+        return None
+    return addr
+
+
 def run(argv, *, check=True, timeout=None, cwd=None, env=None, input=None):
     """Run a command and keep BOTH streams.
 
@@ -336,8 +384,7 @@ def run(argv, *, check=True, timeout=None, cwd=None, env=None, input=None):
     try:
         proc = subprocess.run(
             argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             # utf-8/replace, not the platform-default strict decoding
             # text=True alone would use: a headless account on an
             # appliance can plausibly run under a C/POSIX locale, and
@@ -486,7 +533,15 @@ class Preflight:
         installing anything on the host, since installing a package is
         exactly what this account cannot do.
         """
-        if sys.version_info < (3, 8):
+        # The UP036 exemption below is deliberate. ruff is told
+        # target-version = py38 so that it never suggests syntax this
+        # file's floor forbids, and that same setting makes it read this
+        # block as dead. It is not. target-version is a
+        # statement about the syntax this SOURCE may use; this branch is a
+        # statement about the INTERPRETER a NAS may hand it, which is the
+        # one thing an installer cannot assume. Deleting it would delete
+        # EXIT_PREREQ_PYTHON's only trigger.
+        if sys.version_info < (3, 8):  # noqa: UP036
             raise Refusal(
                 EXIT_PREREQ_PYTHON,
                 f"this installer needs Python 3.8 or newer and is running on {sys.version.split()[0]}.",
@@ -690,7 +745,8 @@ class Preflight:
                 if not os.access(path, os.W_OK | os.X_OK):
                     raise Refusal(
                         EXIT_PREREQ_PATHS,
-                        f"{label} is {path}, which this account owns but cannot write to (mode {oct(st.st_mode & 0o777)}).",
+                        f"{label} is {path}, which this account owns but cannot write to "
+                        f"(mode {oct(st.st_mode & 0o777)}).",
                         "Fix its mode, or choose another path.",
                     )
             else:
@@ -899,6 +955,14 @@ class Preflight:
         the stack it installed is listening. So a bound port is only a
         refusal when the thing holding it is not this project.
         """
+        if getattr(self.args, "cli_only", False):
+            # Not a relaxation, an absence. web-ui is the only service with
+            # a `ports:` key, and CLI-only never starts it, so there is no
+            # host port to be in use and refusing over one somebody else
+            # holds would be refusing over a port this install will never
+            # touch.
+            self.note("no host port to check: --cli-only publishes none")
+            return
         port = self.args.listen_port
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1.5)
@@ -960,7 +1024,7 @@ class Preflight:
                 continue
             entries = entry if isinstance(entry, list) else [entry]
             for item in entries:
-                if f":{port}->" in (item.get("Publishers") and str(item.get("Publishers")) or ""):
+                if f":{port}->" in ((item.get("Publishers") and str(item.get("Publishers"))) or ""):
                     return True
                 for pub in item.get("Publishers") or []:
                     if isinstance(pub, dict) and pub.get("PublishedPort") == port:
@@ -1005,7 +1069,7 @@ class Preflight:
 
         Then the proof, which is what makes naming a release safe to
         offer at all. A tag is a mutable pointer, and this project says so
-        in its own release tooling, so "install 0.3.3" is a claim about a
+        in its own release tooling, so "install 0.4.0" is a claim about a
         name until something compares the name against a recorded
         identity. container/release-manifest.json records that identity at
         push time and CARRIED_RELEASE_DIGEST is a copy of it, so one
@@ -1227,8 +1291,73 @@ def render_env(args) -> str:
         f"VERSION={args.image_tag}",
         f"COMMIT={args.image_commit}",
         "",
+        "# Whether this deployment runs the Web UI. Compose never reads it;",
+        "# the installer does, so a later re-run with no flags keeps the shape",
+        "# the operator chose rather than quietly publishing a Web UI on a host",
+        "# that was deliberately installed without one.",
+        f"CLI_ONLY={'1' if getattr(args, 'cli_only', False) else '0'}",
+        "",
     ]
     return "\n".join(lines)
+
+
+def render_cli_wrapper(args) -> str:
+    """The `rbm` an operator types after a CLI-only install.
+
+    `run --rm`, not `exec`, and that is the design rather than a fallback.
+    A CLI-only install starts nothing until a config.yaml exists, so the
+    very first command anyone needs is the one that WRITES the first
+    configuration, and there is no container to exec into yet. A one-off
+    container off the same image gets the same mounts, the same uid and
+    the same network, so a command that has to reach a serving engine
+    still reaches it, and one that has to work with nothing running still
+    works.
+
+    --no-deps because a read should never start the engine as a side
+    effect: without it `compose run` brings up whatever the service
+    depends on, and `rbm status` would silently become `rbm status` plus a
+    deployment somebody did not ask to start.
+
+    The guard on an empty invocation is the awkward part, and it is not
+    defensive padding. `docker compose run` cannot express "no command":
+    given none it runs what the compose file says the service runs, which
+    on a CLI-only deployment is `/rbm daemon`. So a bare `rbm` would have
+    become `/rbm /rbm daemon`, and the operator would have read `unknown
+    command "/rbm"` naming something they did not type. rbm answers a bare
+    invocation with its own usage and exit 2, and there is no argv that
+    reproduces that through compose, so the wrapper says it itself and
+    exits the same 2 rather than letting the fall-through happen.
+
+    Rewritten on every run of the installer, like everything else it
+    stages, which is why it says so at the top rather than inviting edits.
+    """
+    quoted = " ".join(shlex.quote(part) for part in compose_argv(args))
+    return (
+        "#!/bin/sh\n"
+        "# Generated by scripts/install/install_docker_host.py --cli-only.\n"
+        "# Rewritten on every run of the installer, so keep your own edits elsewhere.\n"
+        "#\n"
+        "# Every rbm subcommand: `rbm status`, `rbm sources`, `rbm run`,\n"
+        "# `rbm backup-set create ...`.\n"
+        "set -e\n"
+        "\n"
+        "# docker compose run cannot express \"no command\": given none it runs\n"
+        "# what the compose file says this service runs, which here is\n"
+        "# `/rbm daemon`. A bare `rbm` would become `/rbm /rbm daemon` and\n"
+        "# report an unknown command nobody typed, so it stops here instead,\n"
+        "# with the same exit code rbm itself uses for a missing command.\n"
+        "if [ \"$#\" -eq 0 ]; then\n"
+        "  echo \"usage: rbm <command> [flags]\" >&2\n"
+        "  echo \"\" >&2\n"
+        "  echo \"This runs rbm inside the engine's own container and needs a\" >&2\n"
+        "  echo \"command to run. 'rbm status' is a safe first one; every command\" >&2\n"
+        "  echo \"is listed at https://spdrman.github.io/rclone-manager/reference.html\" >&2\n"
+        "  exit 2\n"
+        "fi\n"
+        "\n"
+        "exec " + quoted + " \\\n"
+        "  run --rm --no-deps --entrypoint /rbm " + ENGINE_SERVICE + " \"$@\"\n"
+    )
 
 
 def render_image_override(args) -> str:
@@ -1241,6 +1370,33 @@ def render_image_override(args) -> str:
     comes from the canonical file, unmodified, which is what keeps this a
     derivation rather than a tenth adapter.
     """
+    if getattr(args, "cli_only", False):
+        return (
+            "# Generated by scripts/install/install_docker_host.py --cli-only.\n"
+            "# Overlaid on the canonical container/compose.yaml, never in place of it.\n"
+            "#\n"
+            "# One service, because a CLI-only deployment has no Web UI. `web-ui` is\n"
+            "# still DEFINED by the canonical file, which is the runtime contract and\n"
+            "# not something a derivation gets to edit; it is simply never started, so\n"
+            "# nothing here publishes a port and nothing here serves HTTP.\n"
+            "#\n"
+            "# The two keys past image and pull_policy are the whole of what CLI-only\n"
+            "# means. `command:` runs /rbm daemon rather than /rbm-web serve, so the\n"
+            "# rbm-web binary is not executed anywhere in this deployment. Disabling\n"
+            "# the health check follows from that and is not a relaxation: the\n"
+            "# canonical check is an HTTP liveness probe against 127.0.0.1:8080, and a\n"
+            "# process with no listener would fail it forever. What replaces it is the\n"
+            "# installer's own check that the container is still running a while after\n"
+            "# it started rather than restarting, which is the only claim there is to\n"
+            "# make about a process that serves nothing.\n"
+            "services:\n"
+            f"  rclone-manager:\n"
+            f"    image: {args.image}\n"
+            "    pull_policy: never\n"
+            '    command: ["/rbm", "daemon"]\n'
+            "    healthcheck:\n"
+            "      disable: true\n"
+        )
     return (
         "# Generated by scripts/install/install_docker_host.py.\n"
         "# Overlaid on the canonical container/compose.yaml, never in place of it.\n"
@@ -1588,8 +1744,8 @@ def describe_what_is_here(container_count: int, running_count: int,
     it follows is the one this installer CARRIES, so the comparison is
     asked in that order. compare_versions answers where its first
     argument sits, so passing (here, target) here states the relationship
-    backwards: upgrading a real NAS from 0.3.1 to 0.3.3 printed "This
-    installer carries 0.3.3 (older)", which is issue #588 and is the one
+    backwards: upgrading a real NAS from 0.3.1 to 0.4.0 printed "This
+    installer carries 0.4.0 (older)", which is issue #588 and is the one
     sentence that stops somebody mid-upgrade. The other two callers of
     compare_versions ask about the installed version and pass it first,
     correctly.
@@ -2182,6 +2338,38 @@ def adopt_installed_credentials(args, installed_env: dict) -> None:
         # into it and gives it the same refusal an operator-typed path gets.
         setattr(args, f"{attr}_supplied", True)
         say(f"==> Keeping the {flag} this install already uses: {installed}")
+
+
+def adopt_installed_shape(args, installed_env: dict) -> None:
+    """Keep running the shape the deployment was installed as.
+
+    Same reasoning as adopt_installed_credentials above and the same
+    precedence: a flag that was typed wins, and a run that typed nothing
+    gets what is actually here rather than what the defaults would guess.
+
+    It matters more here than it looks. The default is the full stack, so
+    without this a bare `install` re-run on a host somebody deliberately
+    installed with --cli-only would start web-ui and publish a port on the
+    LAN, which is the one thing that operator asked for the absence of. An
+    upgrade is not the place to change what a deployment exposes.
+    """
+    if not hasattr(args, "cli_only"):
+        return
+    was = installed_env.get("CLI_ONLY")
+    if was is None:
+        # An .env written before this key existed. Silent, because every
+        # install that predates the flag is a full stack, which is also
+        # what the default already resolves to.
+        pass
+    elif args.cli_only is None:
+        args.cli_only = was.strip() == "1"
+        if args.cli_only:
+            say("==> Keeping this a CLI-only deployment, which is how it was installed. "
+                "--no-cli-only converts it.")
+    elif args.cli_only != (was.strip() == "1"):
+        moving = "to the full stack, publishing the Web UI" if not args.cli_only else "to CLI-only, with no Web UI"
+        say(f"==> This run moves the deployment {moving}.")
+    args.cli_only = bool(args.cli_only)
 
 
 def _other_containers_from_ps_ndjson(raw: str, project: str):
@@ -2988,7 +3176,7 @@ def ensure_credentials(args) -> None:
 
     for d in warn_about_writable_ancestors(args.ssh_key, args.prefix):
         say(f"     WARNING: {d} is group- or world-writable, and the engine walks the whole")
-        say(f"              ancestry when it validates the key. If the first cycle refuses with")
+        say("              ancestry when it validates the key. If the first cycle refuses with")
         say(f"              key_permissions, run: chmod go-w {d}")
 
 
@@ -3068,6 +3256,16 @@ def stage_payload(args) -> None:
     dest.write_bytes(incoming)
     (args.prefix / "compose.image.yaml").write_text(render_image_override(args), encoding="utf-8")
 
+    # Only on a CLI-only install, because only there is it the whole
+    # interface. A full install has a Web UI, and shipping a second way in
+    # that nothing tests and nothing documents is how the two drift.
+    if getattr(args, "cli_only", False):
+        bindir = args.prefix / "bin"
+        make_secure_dir(bindir)
+        wrapper = bindir / "rbm"
+        wrapper.write_text(render_cli_wrapper(args), encoding="utf-8")
+        os.chmod(wrapper, 0o755)
+
     env_path = args.prefix / ".env"
     env_path.write_text(render_env(args), encoding="utf-8")
     os.chmod(env_path, 0o600)
@@ -3086,12 +3284,15 @@ def wait_for_engine_health(args, timeout: int):
     deadline = time.time() + timeout
     last = "no container yet"
     while time.time() < deadline:
-        proc = run(compose_argv(args) + ["ps", "-q", "rclone-manager"], check=False, timeout=60,
+        proc = run([*compose_argv(args), "ps", "-q", "rclone-manager"], check=False, timeout=60,
                    cwd=str(args.prefix))
         cid = proc.stdout.strip().splitlines()
         if cid:
             inspect = run(
-                ["docker", "inspect", "-f", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", cid[0]],
+                ["docker", "inspect", "-f",
+                 "{{.State.Status}} "
+                 "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
+                 cid[0]],
                 check=False, timeout=60)
             last = inspect.stdout.strip()
             parts = last.split()
@@ -3196,7 +3397,7 @@ def stop_stack(args, *, remove: bool) -> None:
     """
     verb = "down" if remove else "stop"
     if (args.prefix / "compose.yaml").is_file() and (args.prefix / ".env").is_file():
-        argv = compose_argv(args) + [verb]
+        argv = [*compose_argv(args), verb]
         cwd = str(args.prefix)
     else:
         argv = ["docker", "compose", "-p", args.project, verb]
@@ -3368,7 +3569,11 @@ def cmd_install(args) -> int:
     # over a key that had already been generated. detect_existing reads
     # this file again below for the layout check; it is a handful of lines
     # and reading it twice is cheaper than threading it through.
-    adopt_installed_credentials(args, read_env_file(args.prefix / ".env"))
+    already_here = read_env_file(args.prefix / ".env")
+    adopt_installed_credentials(args, already_here)
+    # Beside it, and before Preflight rather than after, because Preflight
+    # checks the host port and a CLI-only deployment has none to check.
+    adopt_installed_shape(args, already_here)
 
     # Before Preflight, because Preflight VALIDATES these and this CREATES
     # them. A fresh host has neither, and validating first would refuse
@@ -3439,6 +3644,9 @@ def cmd_install(args) -> int:
         say(f"==> Loading {args.image_archive}")
         run(["docker", "load", "-i", str(args.image_archive)], timeout=1800)
 
+    if args.cli_only:
+        return finish_cli_only_install(args)
+
     say("==> docker compose up -d")
     # --no-build, not merely pull_policy: never. The canonical definition
     # carries a `build:` block, and Compose treats "do not pull" as "build
@@ -3449,7 +3657,7 @@ def cmd_install(args) -> int:
     # the image already loaded and sitting on the host. --no-build is
     # also the honest statement of intent, since an installed host is
     # never the place a release gets built.
-    up = run(compose_argv(args) + ["up", "-d", "--no-build", "--remove-orphans"], check=False, timeout=1800,
+    up = run([*compose_argv(args), "up", "-d", "--no-build", "--remove-orphans"], check=False, timeout=1800,
              cwd=str(args.prefix))
     if up.returncode != 0:
         raise Refusal(
@@ -3510,12 +3718,144 @@ def cmd_install(args) -> int:
             remedy,
         )
 
+    for line in installed_epilog(args):
+        say(line)
+    return EXIT_OK
+
+
+def compose_service_state(args, service: str) -> str:
+    """One compose service's state, lowercased, or what is true instead.
+
+    Reads through detect_existing rather than parsing `ps` again: that
+    function already answers on every `--format json` shape Compose has
+    emitted across versions, and a second reader would sooner or later
+    answer on fewer of them.
+    """
+    _, containers, _ = detect_existing(args)
+    for entry in containers:
+        if str(entry.get("Service", "")) == service:
+            return str(entry.get("State", "") or "unknown").lower()
+    return "not created"
+
+
+def wait_for_daemon_settled(args, timeout: int) -> str:
+    """A CLI-only engine serves nothing, so "still running" is the claim.
+
+    Sampled over a window rather than once, and that is the whole reason
+    this exists instead of a single `ps`. The failure it has to catch is a
+    daemon that starts, refuses whatever it was handed, and exits; for the
+    first second of that, `ps` says running, restart policy brings it
+    straight back, and a single sample would report a healthy install that
+    is really a restart loop. Staying running for the settle window is
+    what separates the two.
+    """
+    settle = max(5, min(15, timeout // 6))
+    deadline = time.time() + timeout
+    running_since = None
+    state = "not created"
+    while time.time() < deadline:
+        state = compose_service_state(args, ENGINE_SERVICE)
+        if state != "running":
+            running_since = None
+        elif running_since is None:
+            running_since = time.time()
+        elif time.time() - running_since >= settle:
+            return state
+        time.sleep(2)
+    # Never the last sample. A flapping container is running for part of
+    # every restart cycle, so whether the final sample lands on "running"
+    # is down to where the deadline happens to fall, and returning it
+    # would report a crash loop as an install roughly half the time. What
+    # did not happen is the whole answer here.
+    return f"never stayed up for {settle}s (last seen: {state})"
+
+
+def take_down_web_ui(args) -> None:
+    """Stop and remove a web-ui left over from when this was a full install.
+
+    `--remove-orphans` does not reach it and should not: web-ui is still a
+    service the canonical file defines, so it is not an orphan, it is
+    simply not something this deployment runs any more. Left alone it goes
+    on serving the LAN on the port the run that just finished promised to
+    publish nothing on, which is the one thing --cli-only is for.
+    """
+    _, containers, _ = detect_existing(args)
+    if not [c for c in containers if str(c.get("Service", "")) == "web-ui"]:
+        return
+    say("==> --cli-only: taking down the web-ui container this deployment used to run")
+    rm = run([*compose_argv(args), "rm", "--stop", "--force", "web-ui"],
+             check=False, timeout=300, cwd=str(args.prefix))
+    if rm.returncode != 0:
+        raise Refusal(
+            EXIT_RUNTIME,
+            "the web-ui container is still here and could not be taken down:\n"
+            + (rm.stderr or rm.stdout).strip(),
+            "Finishing anyway would leave a Web UI serving the LAN on exactly the port this "
+            "install just said it publishes none of, so it stops here instead. Nothing else "
+            "has been changed.",
+        )
+
+
+def finish_cli_only_install(args) -> int:
+    """Bring a CLI-only deployment up, or deliberately not, and say which.
+
+    The not-bringing-up half is the part worth reading. A full install has
+    a first-run wizard, so it can come up with no configuration at all and
+    hand the operator a link. `rbm daemon` has no such thing: it is
+    refused rather than started when there is no config.yaml, so starting
+    it on a fresh host would produce a container that exits, gets
+    restarted, exits again, and an installer that either claims success
+    over a restart loop or waits out its timeout for a state that can
+    never arrive.
+
+    So a fresh CLI-only install stages everything and starts nothing, and
+    that is a normal success rather than a refusal: everything the
+    operator asked for is on disk and correct, and the one thing missing
+    is a decision only they can make. What it prints is the command that
+    writes the first configuration, because `backup-set create` on an
+    instance with no config.yaml writes the first one with it (#176), so
+    there is no config file to hand-author before anything works.
+    """
+    take_down_web_ui(args)
+
+    wrapper = args.prefix / "bin" / "rbm"
+    compose = " ".join(compose_argv(args))
+
+    if not (args.config_dir / "config.yaml").is_file():
+        for line in cli_only_staged_epilog(args):
+            say(line)
+        return EXIT_OK
+
+    say(f"==> docker compose up -d {ENGINE_SERVICE}")
+    up = run([*compose_argv(args), "up", "-d", "--no-build", ENGINE_SERVICE],
+             check=False, timeout=1800, cwd=str(args.prefix))
+    if up.returncode != 0:
+        raise Refusal(
+            EXIT_RUNTIME,
+            "docker compose up failed:\n"
+            f"--- stdout ---\n{up.stdout.rstrip()}\n--- stderr ---\n{up.stderr.rstrip()}",
+            "The stack is left as it is rather than torn down, so the container and its logs are "
+            "still there to read.",
+        )
+    say(up.stdout.rstrip() or up.stderr.rstrip())
+
+    say(f"==> Waiting up to {args.timeout}s for the daemon to stay up")
+    state = wait_for_daemon_settled(args, args.timeout)
+    say(f"     {ENGINE_SERVICE}: {state}")
+    if state != "running":
+        raise Refusal(
+            EXIT_VERIFY,
+            f"the daemon did not stay running: {ENGINE_SERVICE} is {state}.",
+            "A CLI-only deployment serves nothing, so there is no health endpoint to ask and the "
+            "container's own logs are the whole answer. Read them with:\n"
+            f"  {compose} logs --tail=100 {ENGINE_SERVICE}",
+        )
+
     say("")
     say("==> Installed.")
-    say(f"    Web UI:  {args.public_base_url}")
-    say(f"    Compose: {' '.join(compose_argv(args))}")
-    for line in first_run_epilog(args):
-        say(line)
+    say(f"    CLI:     {wrapper}")
+    say(f"    Compose: {compose}")
+    say("    No Web UI, no published port, and nothing in this deployment serving HTTP.")
     return EXIT_OK
 
 
@@ -3544,6 +3884,54 @@ def first_run_epilog(args: argparse.Namespace) -> list[str]:
         "    precisely so that a fresh install does not need one hand-written before it starts.",
         "    Open the Web UI and follow it. The enrollment link is in the engine's log:",
         f"      {' '.join(compose_argv(args))} logs rclone-manager | grep enroll",
+    ]
+
+
+def installed_epilog(args: argparse.Namespace) -> list[str]:
+    """Everything a full install prints once its last check has passed.
+
+    A list rather than a run of say() calls, for the reason
+    first_run_epilog is already one: docs/site/index.html shows this
+    output to a reader who has just run the install, and terminal output
+    copied into a page by hand drifts from the program silently. The
+    site's check renders these lines and compares, so the page cannot
+    claim an epilog this installer does not print.
+    """
+    return [
+        "",
+        "==> Installed.",
+        f"    Web UI:  {args.public_base_url}",
+        f"    Compose: {' '.join(compose_argv(args))}",
+        *first_run_epilog(args),
+    ]
+
+
+def cli_only_staged_epilog(args: argparse.Namespace) -> list[str]:
+    """What a fresh --cli-only install prints, having started nothing.
+
+    Separate from installed_epilog rather than a flag on it, because the
+    two say different things: this one has no Web UI line and no
+    enrolment link at all, which is the whole point of the flag (#689),
+    and the site shows it precisely to make that absence visible.
+    """
+    wrapper = args.prefix / "bin" / "rbm"
+    compose = " ".join(compose_argv(args))
+    return [
+        "",
+        "==> Installed. Nothing is running yet, and that is what --cli-only means here:",
+        "    `rbm daemon` is refused rather than started without a config.yaml, and a CLI-only",
+        "    install has no first-run wizard to write one. Creating the first backup set writes",
+        "    the first config.yaml with it:",
+        f"      {wrapper} backup-set create <source>/<backup-set> \\",
+        "          --host HOST --user USER --remote-path /remote/path --local-path /backups/path \\",
+        "          --ssh-key-file /etc/rclone-manager/id_ed25519 --trust-host-key \\",
+        "          --completion-strategy stable",
+        "",
+        "    Then start the scheduler:",
+        f"      {compose} up -d --no-build {ENGINE_SERVICE}",
+        "",
+        f"    CLI:     {wrapper}",
+        f"    Compose: {compose}",
     ]
 
 
@@ -4649,6 +5037,145 @@ def cmd_network_undo(args) -> int:
     return EXIT_OK
 
 
+ENROLL_NOTICE_MARKER = "no administrator account exists yet"
+
+# How long to wait for the restarted engine to print its notice. A
+# constant rather than a flag: the only thing being waited for is one
+# process reaching the line it prints during startup, and a deployment
+# where that takes longer than this has a problem no flag would fix.
+ENROLL_NOTICE_WAIT = 90
+
+
+def _newest_enrollment_notice(args):
+    """The last enrollment notice in the engine's log, or "".
+
+    The LAST one, and that is the whole reason this exists rather than a
+    grep in the documentation. A container keeps its log across a
+    restart, so after reissuing there are two notices in it and the dead
+    one is first. Telling an operator to eyeball that is how somebody
+    pastes an invalidated link into a browser and reads a refusal that
+    does not explain itself.
+    """
+    proc = run([*compose_argv(args), "logs", "--tail", "400", ENGINE_SERVICE],
+               check=False, timeout=60, cwd=str(args.prefix))
+    if proc.returncode != 0:
+        return ""
+    found = ""
+    for line in (proc.stdout + proc.stderr).splitlines():
+        if ENROLL_NOTICE_MARKER in line:
+            found = line.strip()
+    return found
+
+
+def cmd_enroll_link(args) -> int:
+    """Mint a fresh enrollment link and print it.
+
+    The link the install prints lasts 30 minutes and works once, and
+    nothing reissues it while the engine keeps running. Until this
+    existed, the documented way back from a lapsed one was two raw
+    `docker compose` invocations plus an instruction to read the last
+    matching line, which is a lot of machinery to hand somebody whose
+    actual problem is that they went to make a cup of tea.
+
+    A restart is what mints one: the service issues a token during
+    startup whenever no administrator exists yet. So this restarts the
+    engine and reads back the notice, and it refuses in the one case
+    where a restart would accomplish nothing.
+    """
+    payload, containers, _env = detect_existing(args)
+    if not payload:
+        raise Refusal(
+            EXIT_PREREQ_PAYLOAD,
+            f"nothing is installed at {args.prefix}, so there is no engine to reissue a link for.",
+            "Point --prefix at the deployment, or install one first.",
+        )
+
+    admin = args.state_dir / "local-auth.json"
+    if admin.is_file():
+        raise Refusal(
+            EXIT_ENROLLMENT_CLOSED,
+            "an administrator account already exists on this deployment, so there is no "
+            "enrollment link to issue.",
+            "Enrollment is the one-time door onto a deployment that has nobody on it yet, and it "
+            "closed when that account was created. Sign in with it instead. If the password is "
+            "lost, `install --mode factory-reset` archives the administrator record, the catalog "
+            "and the configuration and reopens enrollment; it leaves the retained backups on "
+            "disk, and it is not something to reach for to save a browser refresh.",
+        )
+
+    if not [c for c in containers if str(c.get("Service", "")) == ENGINE_SERVICE]:
+        raise Refusal(
+            EXIT_RUNTIME,
+            f"this deployment has no {ENGINE_SERVICE} container, so nothing can mint a token.",
+            f"Bring it up first:\n  {' '.join(compose_argv(args))} up -d --no-build {ENGINE_SERVICE}",
+        )
+
+    # Captured BEFORE the restart so the wait below can tell the new
+    # notice from the old one by content. Timestamps would be the other
+    # way, and they would depend on the host clock agreeing with the
+    # container's; two tokens never collide.
+    previous = _newest_enrollment_notice(args)
+
+    say(ENROLL_RESTART_SAY)
+    restart = run([*compose_argv(args), "restart", ENGINE_SERVICE],
+                  check=False, timeout=300, cwd=str(args.prefix))
+    if restart.returncode != 0:
+        raise Refusal(
+            EXIT_RUNTIME,
+            f"could not restart {ENGINE_SERVICE}:\n" + (restart.stderr or restart.stdout).strip(),
+            "Nothing was reissued, so the link you already had is still whatever it was.",
+        )
+
+    say(ENROLL_WAIT_SAY)
+    deadline = time.time() + ENROLL_NOTICE_WAIT
+    notice = ""
+    while time.time() < deadline:
+        notice = _newest_enrollment_notice(args)
+        if notice and notice != previous:
+            break
+        time.sleep(2)
+
+    if not notice or notice == previous:
+        raise Refusal(
+            EXIT_VERIFY,
+            f"{ENGINE_SERVICE} restarted and printed no new enrollment notice within "
+            f"{ENROLL_NOTICE_WAIT}s.",
+            "The engine only issues a token while no administrator exists, so the usual cause is "
+            "that one was created between the check above and now. Read the log directly:\n"
+            f"  {' '.join(compose_argv(args))} logs --tail=50 {ENGINE_SERVICE}",
+        )
+
+    for line in enroll_link_epilog(notice):
+        say(line)
+    return EXIT_OK
+
+
+# The two lines `enroll-link` prints while it works, and the block it
+# prints when it has one. Named rather than inline for the reason
+# installed_epilog is: docs/site/index.html shows this transcript, and a
+# page holding a hand-copy of program output drifts from the program
+# without anybody noticing. The site's check renders these.
+ENROLL_RESTART_SAY = f"==> Restarting {ENGINE_SERVICE}, which is what mints a token"
+ENROLL_WAIT_SAY = f"==> Waiting up to {ENROLL_NOTICE_WAIT}s for the new notice"
+
+
+def enroll_link_epilog(notice: str) -> list[str]:
+    """What to print once a fresh notice is in hand.
+
+    The notice itself is passed in rather than read here: it is the
+    engine's own line, echoed exactly as the container logged it, and
+    this function's job is only the two sentences around it that say
+    what has just happened to every earlier link.
+    """
+    return [
+        "",
+        notice,
+        "",
+        "    Valid 30 minutes, and it works once. Every link printed before this one is now dead,",
+        "    including any still in your scrollback.",
+    ]
+
+
 def cmd_status(args) -> int:
     """What is installed here, what is running, and can it still talk.
 
@@ -4665,7 +5192,9 @@ def cmd_status(args) -> int:
         say("no containers for project " + args.project)
         return EXIT_OK
     for c in containers:
-        say(f"  {c.get('Service', '?'):<16} {c.get('State', '?'):<10} {c.get('Health', '') or 'no healthcheck':<10} {c.get('Status', '')}")
+        health = c.get("Health", "") or "no healthcheck"
+        say(f"  {c.get('Service', '?'):<16} {c.get('State', '?'):<10} "
+            f"{health:<10} {c.get('Status', '')}")
 
     # The rules install may have inserted are raw iptables inserts: a
     # reboot loses them, and so does the host firewall rewriting its own
@@ -4728,7 +5257,7 @@ def cmd_uninstall(args) -> int:
         say("nothing to uninstall: no payload and no containers for project " + args.project)
         return EXIT_OK
     if payload:
-        down = run(compose_argv(args) + ["down", "--remove-orphans"], check=False, timeout=600,
+        down = run([*compose_argv(args), "down", "--remove-orphans"], check=False, timeout=600,
                    cwd=str(args.prefix))
     else:
         down = run(["docker", "compose", "-p", args.project, "down", "--remove-orphans"],
@@ -4866,7 +5395,7 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
                               "test, so this installer needs no checkout on the host. Supply it to install "
                               "a locally modified runtime from a checkout; naming a path that does not "
                               "exist is still a refusal.")
-    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.3.3",
+    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.4.0",
                          action=_RecordsThatItWasSupplied,
                          help="Image reference both services run.")
     runtime.add_argument("--release", default=CARRIED_RELEASE,
@@ -4890,8 +5419,25 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
     runtime.add_argument("--listen-port", type=int, default=DEFAULT_LISTEN_PORT,
                          help="Host port the Web UI is published on. The engine publishes nothing.")
     runtime.add_argument("--public-base-url", default=None,
-                         help="Externally reachable base URL, used for the one-time enrollment link. Defaults "
-                              "to http://<this host's name>:<listen port>.")
+                         help="Externally reachable base URL, used for the one-time enrollment link. "
+                              "Defaults to http://<this machine's LAN address>:<listen port>, because "
+                              "that link is opened from another machine and an address is the only form "
+                              "that works there with nothing configured. Falls back to this host's name "
+                              "when there is no default route to read an address off.")
+    runtime.add_argument("--cli-only", action="store_true", default=None, dest="cli_only",
+                         help="Install the command line and nothing else. The engine container runs "
+                              "`rbm daemon` instead of `rbm-web serve`, the web-ui container is never "
+                              "started, and no port is published on this host at all, so nothing in the "
+                              "deployment serves HTTP and the rbm-web binary is not executed. What drives "
+                              "it is the rbm wrapper this writes to <prefix>/bin/rbm. There is no "
+                              "enrollment link and no first-run wizard, so on a host with no config.yaml "
+                              "yet this stages everything, starts nothing, and prints the one command "
+                              "that writes the first configuration. Re-running without this flag on a "
+                              "deployment already installed this way keeps it that way; --no-cli-only "
+                              "converts it back to the full stack.")
+    runtime.add_argument("--no-cli-only", action="store_false", default=None, dest="cli_only",
+                         help="Convert a CLI-only deployment back to the full stack: the engine goes back "
+                              "to `rbm-web serve` and the Web UI is published on --listen-port again.")
     runtime.add_argument("--profile", default="generic",
                          help="Runtime profile, from container/compose.yaml's x-canonical-runtime.profiles.")
     runtime.add_argument("--timezone", default=None,
@@ -4961,7 +5507,7 @@ class _IfInstalledRemoved(argparse.Action):
     message it can act on.
     """
 
-    TRANSLATION = {"converge": "--mode upgrade", "refuse": "--mode fresh"}
+    TRANSLATION: ClassVar[dict[str, str]] = {"converge": "--mode upgrade", "refuse": "--mode fresh"}
 
     def __init__(self, option_strings, dest, **kwargs):
         kwargs.pop("nargs", None)
@@ -5023,7 +5569,7 @@ def build_parser() -> argparse.ArgumentParser:
             "      --prefix /volume1/backup-manager \\\n"
             "      --ssh-key /volume1/backup-manager/secrets/id_ed25519 \\\n"
             "      --known-hosts /volume1/backup-manager/secrets/known_hosts \\\n"
-            "      --image ghcr.io/spdrman/backup-manager:0.3.3\n"
+            "      --image ghcr.io/spdrman/backup-manager:0.4.0\n"
         ),
     )
     _add_shared_groups(sp_install)
@@ -5067,6 +5613,21 @@ def build_parser() -> argparse.ArgumentParser:
                             "so it needed its own policy rather than borrowing a flag whose name promises "
                             "a fix.")
     _add_probe_flags(sp_status)
+
+    sp_enroll = subparsers.add_parser(
+        "enroll-link", formatter_class=_HelpFormatter,
+        help="Mint a fresh enrollment link and print it. Restarts the engine, which is what "
+             "issues a token.",
+        epilog=(
+            "The link an install prints lasts 30 minutes and works once, and nothing reissues\n"
+            "it while the engine keeps running. This restarts the engine, which issues a token\n"
+            "whenever no administrator exists yet, and prints the notice it produced.\n"
+            "\n"
+            "It refuses on a deployment that already has an administrator: enrollment is a\n"
+            "one-time door and it closed when that account was created.\n"
+        ),
+    )
+    _add_shared_groups(sp_enroll)
 
     sp_uninstall = subparsers.add_parser(
         "uninstall", formatter_class=_HelpFormatter,
@@ -5137,11 +5698,11 @@ def resolve_source_port(args) -> None:
         raise Refusal(
             EXIT_PREREQ_CREDENTIALS,
             f"{origin} was supplied with no value.",
-            f"This is what `--source-port \"$SSH_PORT\"` does when SSH_PORT is not exported, so it is "
-            f"treated as the mistake it is rather than as silence. Nothing here falls back to 22: the "
-            f"port a source listens on is an input, and guessing one is how a deployment ends up "
-            f"pointed somewhere nobody named. Supply it, or drop the flag entirely if this deployment "
-            f"has no SFTP source on a non-default port.",
+            "This is what `--source-port \"$SSH_PORT\"` does when SSH_PORT is not exported, so it is "
+            "treated as the mistake it is rather than as silence. Nothing here falls back to 22: the "
+            "port a source listens on is an input, and guessing one is how a deployment ends up "
+            "pointed somewhere nobody named. Supply it, or drop the flag entirely if this deployment "
+            "has no SFTP source on a non-default port.",
         )
     if not text.isdigit() or not 1 <= int(text) <= 65535:
         raise Refusal(
@@ -5182,7 +5743,7 @@ def resolve_release(args) -> None:
             EXIT_USAGE,
             f"--release is {args.release!r}, which is not a version.",
             "It takes a released X.Y.Z, and a prerelease suffix if that is what you mean "
-            "(0.3.3-rc.1). It deliberately does not take a moving name like `latest`: that "
+            "(0.4.0-rc.1). It deliberately does not take a moving name like `latest`: that "
             "tag orders against nothing, so it would be written into the .env as the "
             "installed version and leave this host un-orderable by every later installer. "
             "Name the version you want.",
@@ -5311,7 +5872,12 @@ def resolve(args):
         tzfile = Path("/etc/timezone")
         args.timezone = tzfile.read_text().strip() if tzfile.is_file() else "UTC"
     if hasattr(args, "public_base_url") and args.public_base_url is None:
-        args.public_base_url = f"http://{socket.gethostname()}:{args.listen_port}"
+        # An IP first, because the enrolment link is opened from another
+        # machine and only an IP works there with nothing configured. The
+        # hostname is the fallback rather than the default: it resolves on
+        # this box and, without mDNS or a DNS entry, nowhere else.
+        host = primary_lan_address() or socket.gethostname()
+        args.public_base_url = f"http://{host}:{args.listen_port}"
     if hasattr(args, "image"):
         # _RecordsThatItWasSupplied only fires when the flag is on the
         # command line, so the attribute is simply absent otherwise.
@@ -5343,6 +5909,7 @@ def main(argv) -> int:
         "install": cmd_install,
         "status": cmd_status,
         "uninstall": cmd_uninstall,
+        "enroll-link": cmd_enroll_link,
         "network-doctor": cmd_network_doctor,
         "network-undo": cmd_network_undo,
     }

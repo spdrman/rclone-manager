@@ -515,7 +515,7 @@ second proxy would double a cost that is already about half the read.
 ## Performance evidence for this change
 
 All seven metrics EPIC B #81's performance contract names, measured with
-`scripts/perf/capture-baseline.sh --repeat 5` on the designated benchmark host
+`python3 scripts/rcmtools/perf/capture_baseline.py --repeat 5` on the designated benchmark host
 `darwin-arm64-mac17-2`, workload `phase6-baseline-v1`, and compared against
 #165's committed baseline with `scripts/perf/check-baseline.sh --compare`.
 Nothing was re-baselined.

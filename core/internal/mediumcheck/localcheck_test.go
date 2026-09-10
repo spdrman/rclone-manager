@@ -361,3 +361,98 @@ func TestRunLocal_LeavesItsOwnProbeDirectoryBehind(t *testing.T) {
 		t.Errorf("the probe directory still holds %d entr(ies); the FILE has to go even though the directory stays: %+v", len(entries), entries)
 	}
 }
+
+// TestRunLocal_DistinctFilesystemPassesWithNothingToCompareAgainst is the
+// control the two collision cases below depend on: an empty OtherRoots is
+// the ordinary state before a second local destination exists, and it
+// must read as a genuine pass, not a skip and not a failure.
+func TestRunLocal_DistinctFilesystemPassesWithNothingToCompareAgainst(t *testing.T) {
+	report := localReport(t, LocalTarget{Root: t.TempDir()})
+	if got := checkFor(t, report, StepDistinctVolume).Outcome; got != Passed {
+		t.Errorf("distinct_volume = %s, want passed: nothing to collide with is a positive answer, not an untried step", got)
+	}
+}
+
+// TestRunLocal_SameFilesystemAsAnotherDestinationFailsDistinctVolume is
+// #666's fourth check: two directories on the SAME disk under different
+// paths are refused, and the refusal names which destination they
+// collide with. Two temp directories from t.TempDir() are always on the
+// same filesystem in this test environment, which is exactly the
+// ordinary mistake #666 exists to catch (a second path that turns out to
+// be the same disk as the first).
+func TestRunLocal_SameFilesystemAsAnotherDestinationFailsDistinctVolume(t *testing.T) {
+	root := t.TempDir()
+	sibling := t.TempDir()
+	report := localReport(t, LocalTarget{
+		Root:       root,
+		OtherRoots: map[string]string{"second_disk": sibling},
+	})
+	if report.OK {
+		t.Fatal("the check passed against a directory sharing a filesystem with an already-configured destination")
+	}
+	check := checkFor(t, report, StepDistinctVolume)
+	if check.Outcome != Failed {
+		t.Fatalf("distinct_volume = %s, want failed", check.Outcome)
+	}
+	if !strings.Contains(check.Detail, "second_disk") {
+		t.Errorf("distinct_volume detail does not name the colliding destination: %q", check.Detail)
+	}
+}
+
+// TestRunLocal_DifferentDeviceIDPassesDistinctVolume proves the other
+// branch without needing two real filesystems mounted on the machine
+// running the test: deviceIDOf is swapped for a fake that reports two
+// genuinely different devices, mirroring how TestRunLocal_
+// NoRoomFailsItsOwnStep drives the safety margin instead of filling a
+// real disk.
+func TestRunLocal_DifferentDeviceIDPassesDistinctVolume(t *testing.T) {
+	root := t.TempDir()
+	sibling := t.TempDir()
+
+	orig := deviceIDOf
+	deviceIDOf = func(path string) (uint64, error) {
+		if path == root {
+			return 1, nil
+		}
+		return 2, nil
+	}
+	t.Cleanup(func() { deviceIDOf = orig })
+
+	report := localReport(t, LocalTarget{
+		Root:       root,
+		OtherRoots: map[string]string{"second_disk": sibling},
+	})
+	if !report.OK {
+		t.Fatalf("a genuinely distinct filesystem did not pass: %+v", report.Failures())
+	}
+	if got := checkFor(t, report, StepDistinctVolume).Outcome; got != Passed {
+		t.Errorf("distinct_volume = %s, want passed", got)
+	}
+}
+
+// TestRunLocal_AnUnreachableOtherRootIsNotThisChecksProblem: a sibling
+// destination that is itself gone or unmounted is that destination's own
+// StepReach failure when IT is checked, and must not also fail THIS
+// destination's distinct_volume step, which would report a fact about a
+// disk this check never touched.
+func TestRunLocal_AnUnreachableOtherRootIsNotThisChecksProblem(t *testing.T) {
+	root := t.TempDir()
+	report := localReport(t, LocalTarget{
+		Root:       root,
+		OtherRoots: map[string]string{"archive_disk": filepath.Join(t.TempDir(), "never-mounted")},
+	})
+	if !report.OK {
+		t.Fatalf("an unreachable sibling should not fail this destination's own check: %+v", report.Failures())
+	}
+}
+
+// TestRunLocal_DistinctVolumeIsSkippedWhenTheRootItselfCannotBeReached
+// keeps the "was never tried" rule StepWrite/StepReadBack/StepVerification
+// already hold: a step downstream of reach is a hole, not a silent pass,
+// when reach itself never happened.
+func TestRunLocal_DistinctVolumeIsSkippedWhenTheRootItselfCannotBeReached(t *testing.T) {
+	report := localReport(t, LocalTarget{Root: filepath.Join(t.TempDir(), "never-mounted")})
+	if got := checkFor(t, report, StepDistinctVolume).Outcome; got != Skipped {
+		t.Errorf("distinct_volume = %s, want skipped: the root itself could not be reached", got)
+	}
+}

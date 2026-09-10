@@ -20,8 +20,16 @@ train: community
 # app_version is the upstream application version; version is this catalog
 # entry's own. Both are pinned, and neither is `latest`: §8's canonical
 # image rule forbids deploying a floating tag.
-app_version: "0.1.0"
-version: "0.1.0"
+#
+# app_version tracks distribution/packaging/canonical.json's image.tag,
+# because it is a claim about which release of this product the entry
+# deploys. Nothing in CI checks it, which is exactly why it said 0.1.0
+# through 0.2.0, 0.3.0, 0.3.1, 0.3.2 and 0.3.3. A release cut moves it.
+# version is the entry's own revision and moves whenever anything in this
+# directory changes, which is what the catalog uses to notice there is a
+# new revision at all.
+app_version: "0.4.0"
+version: "0.1.1"
 
 categories:
   - backup

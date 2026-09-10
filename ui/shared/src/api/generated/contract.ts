@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "10c5c6b0a9adfd30297dc337210bef132370228cbbff1b5e6c6c5e46f9598054";
+export const CONTRACT_SHA256 = "bb45f33fb55cfb08530f2ea09af19ce89036701e9e94ee04a2102ea09164da12";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -313,6 +313,23 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     successStatus: 200,
     errorCodes: {
       401: ["UNAUTHENTICATED"],
+    }
+  },
+  {
+    id: "listBackends",
+    method: "GET",
+    path: "/backends",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListBackendsResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
     }
   },
   {
@@ -1126,6 +1143,62 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "getStorageMediumConfiguration",
+    method: "GET",
+    path: "/storage-mediums/{id}/configuration",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "MediumConfigurationResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["MEDIUM_NOT_FOUND"],
+    }
+  },
+  {
+    id: "configureStorageMedium",
+    method: "PUT",
+    path: "/storage-mediums/{id}/configuration",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "MediumConfigurationRequest",
+    responseSchema: "StorageMediumSummary",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND"],
+      409: ["MEDIUM_CONNECTION_NOT_PROVEN"],
+    }
+  },
+  {
+    id: "preflightStorageMediumConfiguration",
+    method: "POST",
+    path: "/storage-mediums/{id}/configuration/preflight",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "MediumConfigurationRequest",
+    responseSchema: "MediumPreflightResponse",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["MEDIUM_NOT_FOUND"],
+    }
+  },
+  {
     id: "setDefaultStorageMedium",
     method: "PUT",
     path: "/storage-mediums/{id}/default",
@@ -1385,6 +1458,66 @@ export interface WireAuthErrorResponse {
   code: ApiErrorCode;
   correlationId: string;
   message: string;
+}
+
+/** One choice an `enum`-kind field offers: the value that is stored,
+ *  and the words a surface renders for it. */
+export interface WireBackendEnumValue {
+  label: string;
+  value: string;
+}
+
+/** One registered backend, declared as data. A destination is an
+ *  INSTANCE of one of these, and several instances of one backend is
+ *  the normal case rather than an edge, which is why a manifest
+ *  carries a label and a summary for a picker and says nothing about
+ *  any particular destination. */
+export interface WireBackendManifest {
+  fields: WireBackendManifestField[];
+  id: string;
+  label: string;
+  probe: WireBackendProbe;
+  role: "object_store" | "local_volume";
+  summary: string;
+}
+
+/** One thing an operator is asked for when they configure an instance
+ *  of this backend: what it is called, what KIND of value it is, and
+ *  whether it is required. It is a declaration of SHAPE and it never
+ *  carries a value. In particular a `credential`-kind field says only
+ *  that a credential is needed here; the material itself reaches the
+ *  engine as a reference (see StorageMediumCredentialsReference) and
+ *  has no spelling on this boundary at all, which is what makes
+ *  serving this catalogue to a browser safe. */
+export interface WireBackendManifestField {
+  help?: string;
+  id: string;
+  kind: "string" | "path" | "url" | "enum" | "bool" | "credential" | "key_prefix";
+  label: string;
+  pattern?: string;
+  required: boolean;
+  unset_means?: string;
+  values?: WireBackendEnumValue[];
+}
+
+/** How an instance of this backend is verified: which steps of the
+ *  closed vocabulary apply to it. It declares no procedure. There is
+ *  no script, no command and no expression anywhere in a manifest,
+ *  which is EPIC I's decision and not an omission, and it is the
+ *  reason this document can be served to a browser without handing
+ *  out an arbitrary-command surface. */
+export interface WireBackendProbe {
+  steps: WireBackendProbeStep[];
+}
+
+/** One step of the verification vocabulary, and whether this backend
+ *  runs it. A skipped step is a first-class outcome and not a quiet
+ *  pass, so one that does not run carries the sentence explaining
+ *  why. */
+export interface WireBackendProbeStep {
+  reason?: string;
+  run: boolean;
+  step: string;
 }
 
 /** A persisted backup set as the API reports it. */
@@ -1763,6 +1896,20 @@ export interface WireListArtifactsResponse {
   artifacts: WireArtifact[];
 }
 
+/** GET /backends. Read-only by design, for Validator's reason one
+ *  step further on: a client-extensible backend catalogue would be an
+ *  arbitrary-backend surface, and a manifest is the one thing in this
+ *  product that decides what a destination may be. It carries the
+ *  naming rules alongside the catalogue so the add-a-destination form
+ *  validates against the rule the server applies rather than a second
+ *  copy of it. */
+export interface WireListBackendsResponse {
+  backends: WireBackendManifest[];
+  instance_id_pattern: string;
+  reserved_instance_id: string;
+  unregistered: WireUnregisteredBackend[];
+}
+
 /** GET /backup-sets. An object with one array field, never a bare
  *  top-level array. */
 export interface WireListBackupSetsResponse {
@@ -1956,6 +2103,49 @@ export interface WireManagerStorage {
   unknown_reason: "" | "no_backup_root" | "not_created" | "unreadable" | "misconfigured";
   used_bytes: number;
   warning_free_bytes: number;
+}
+
+/** One destination's configuration, in the vocabulary its backend's
+ *  manifest declares (#669). This is what StorageMediumRequest cannot
+ *  be: that one enumerates S3's fields, so bucket is required and
+ *  there is no path, and a local volume - the only destination a
+ *  fresh install has (#670) - cannot be described in it. credentials
+ *  stays its own reference object because a credential is not a
+ *  value: it is checked by a different rule, and a value bag that
+ *  could hold one is a value bag something eventually puts material
+ *  into (#665's C1-C5). */
+export interface WireMediumConfigurationRequest {
+  backend?: string;
+  credentials?: WireStorageMediumCredentialsReference;
+  fields: WireMediumFieldValue[];
+}
+
+/** What one destination has configured right now, in its backend's
+ *  vocabulary. credential_configured is a boolean and never the
+ *  reference: whether a credential exists is what a form needs - it
+ *  decides whether the credential pair may be left empty - and it is
+ *  not material, not a path and not a variable name, which is the
+ *  most that may be said about it either way (FR-33, #665's C3). */
+export interface WireMediumConfigurationResponse {
+  credential_configured: boolean;
+  fields: WireMediumFieldValue[];
+}
+
+/** One manifest-declared value, as a pair. A pair list rather than an
+ *  object keyed by field id, because no schema in this contract is a
+ *  map and the generator models additionalProperties as a bool only,
+ *  so a keyed object would arrive in both languages as an untyped
+ *  blob. An unset optional field is ABSENT from the list rather than
+ *  present with an empty value: absent is what a manifest's
+ *  unset_means resolves at read time, and an empty value written back
+ *  is a product default frozen into the operator's file by the next
+ *  save (#294). An EMPTY list is meaningful and is not the same as an
+ *  absent one - these writes replace the whole declared field set, so
+ *  empty means "this instance carries no values". The list is sorted
+ *  by field, so one configuration has one body. */
+export interface WireMediumFieldValue {
+  field: string;
+  value: string;
 }
 
 /** One step of a storage-medium preflight. There is deliberately no
@@ -2488,6 +2678,18 @@ export interface WireTestConnectionResponse {
 export interface WireTrustedHostKey {
   algorithm: string;
   fingerprint: string;
+}
+
+/** A transport this build's storage layer understands but which NO
+ *  manifest declares, so no instance of it can exist. Reported rather
+ *  than hidden: hiding it answers an operator worse, because somebody
+ *  who came looking for SFTP learns nothing from a menu that never
+ *  mentions it and asks again next month, whereas a row saying the
+ *  shape is understood and is not registered is a real answer. A
+ *  client renders these as unselectable; there is nothing to send,
+ *  since a create request naming one is refused by the registry. */
+export interface WireUnregisteredBackend {
+  transport: string;
 }
 
 /** PATCH /backup-sets/{source}/{set}. A SPARSE edit of one

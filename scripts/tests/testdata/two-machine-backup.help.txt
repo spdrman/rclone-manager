@@ -149,6 +149,75 @@ the version and commit that were installed.
                   still there. Without those, an apply that deleted
                   nothing at all passes every other assertion here.
 
+  empty-record    #662, and the case that reproduced it. It was written
+                  RED, against a build where it could not pass, and it
+                  is GREEN as of the fix in this same repository. It
+                  joins `all` and scripts/ci-local.sh expects it to
+                  PASS: a failure here is a REGRESSION of #662, not an
+                  expected result, and must not be dismissed as one.
+                  Run it alone with:
+
+                      scripts/e2e/two-machine-backup.sh --case empty-record
+
+                  Two parts. The first is a FENCE: for every artifact
+                  the set produced, a fresh sha256 of the committed
+                  file, computed inside the manager machine, has to
+                  equal what the real `rbm` reports for it AND what the
+                  sidecar recovery manifest records. Nothing in this
+                  repository could say that before -- every other test
+                  compares a record against another record, or against
+                  a file the test itself wrote -- and it is the
+                  assertion that would have caught #662 at the moment it
+                  happened. The fence is then proven able to fail: a
+                  record that disagrees with the bytes is planted, the
+                  comparison is required to go red about that artifact
+                  by name, and the record is put back.
+
+                  The second is the dead end, and it is the half the fix
+                  inverted. The deployment is put into the exact state
+                  the field produced -- an empty record (size_bytes 0,
+                  and the sha256 of no bytes at all, carrying
+                  verification_class "content") over a good file at its
+                  final name -- the product's own `rbm reconcile` is run
+                  over it, and three things are then required. The copy
+                  is NOT condemned: reconciliation finds nothing
+                  unresolved and leaves the artifact at a durable
+                  restore point. The recorded fault still REACHES AN
+                  OPERATOR, in words, so a fix that settled the
+                  contradiction in silence does not pass here. And the
+                  file is untouched by all of it.
+
+                  Before the fix, reconciliation condemned the copy at
+                  that point by comparing two of its own records without
+                  ever opening the file, and this part then walked every
+                  documented verb an operator has -- revalidate,
+                  reinstate, validate, retry, a cycle, reconcile -- to
+                  prove that none of them ended at a durable restore
+                  point. That walk is KEPT and stays reachable: if a
+                  plant ever opens the dead end again, the walk is what
+                  runs, and it fails naming every verb that refused. A
+                  fence deleted the day it went green cannot measure the
+                  regression it was built for.
+
+                  The FR-12 collision refusal is CORRECT and is not
+                  weakened by any of this; that fence is held in
+                  core/internal/lifecycle.
+
+                  The state is PLANTED, not raced for, and the case says
+                  so where it does it. The field fault is transient (the
+                  same artifacts re-transferred first try with nothing
+                  about the host changed), so provoking it is not
+                  reproducible -- and it does not need to be, because
+                  the defect being reproduced is not that a read-back
+                  can be wrong. It is that nothing ever checked the
+                  record against the bytes, and that once the record was
+                  wrong nothing could recover. Both are properties of
+                  the state, not of how the state arose. What the plant
+                  must not do is fake the evidence, so the file's own
+                  bytes are measured and asserted good before anything
+                  is written, and every mutation reports how many rows it
+                  changed and refuses if that is none.
+
 # Hygiene
 
 Every container and the network are torn down on success, on failure and
@@ -160,6 +229,13 @@ hangs forever on a cold machine is worse than one that fails.
 # Cost, written down rather than left to be rediscovered
 
 One case is about seventy seconds on the machine this was written on,
-once the image under test is built. The image build is the expensive
-part on a cold Docker cache (minutes: it compiles the Go binaries and
-builds the UI bundle) and is done once for the whole run.
+once the image under test is built. Measured on an M5 with a warm image
+cache: plain 1m40s, empty-record 1m49s, so the #662 case costs about ten
+seconds more than the install-and-back-up it shares with plain. The plant
+itself is milliseconds; the ten seconds are the two backup cycles the
+dead-end walk has to actually perform against a real source, and the
+nine `rbm` invocations it walks.
+
+The image build is the expensive part on a cold Docker cache (minutes:
+it compiles the Go binaries and builds the UI bundle) and is done once
+for the whole run.

@@ -1,42 +1,26 @@
 #!/usr/bin/env bash
-# EPIC-B WP1.1 behavioral contract: "core/ builds and its full test suite
-# passes with apps/ deleted entirely." (docs/EPIC-B-multi-nas.md §7.1, §69
-# WP1.1). Proves it by actually deleting apps/ in a throwaway worktree,
-# rather than trusting a static import scan to have caught every path.
+# EPIC-B WP1.1: "core/ builds and its full test suite passes with apps/
+# deleted entirely" (docs/EPIC-B-multi-nas.md §7.1, §69 WP1.1), proved by
+# actually deleting apps/ in a throwaway worktree rather than by trusting a
+# static import scan to have caught every path.
+#
+# The check itself is scripts/rcmtools/architecture/verify_core_without_apps.py
+# now (EPIC I, I1.6 / #672 / #697). This file stays because the path is load
+# bearing:
+#
+#   * scripts/ci-local.sh and .github/workflows/ci.yml run
+#     `bash scripts/architecture/verify-core-without-apps.sh`;
+#   * scripts/tests/ci-local-gate.test.sh FABRICATES a file at this literal
+#     path to drive the gate step it stubs;
+#   * scripts/architecture/selftest.sh drives THIS path from inside each
+#     mutant copy of the tree, so the shim is exercised by every control.
+#
+# `exec`, so the exit status is the check's own.
+#
+# NOTE: no `cd` here, deliberately. The check resolves its target tree with
+# `git rev-parse --show-toplevel` of the CURRENT WORKING DIRECTORY, exactly
+# as the bash original's `cd "$(git rev-parse --show-toplevel)"` did, which
+# is what lets the self-test point it at a mutant copy.
 set -euo pipefail
-cd "$(git rev-parse --show-toplevel)"
-# shellcheck source=./lib.sh
-source scripts/architecture/lib.sh
 
-wt=""
-# Trapped on EXIT rather than run at the end, because this check deletes
-# whole directories inside the worktree and then runs a build in it: an
-# interrupt or a failing build partway through would otherwise leave a
-# registered git worktree full of holes behind, and the next run inherits
-# it. The guard is for the interrupt that lands before the worktree
-# exists.
-cleanup() { [ -n "$wt" ] && arch::cleanup_worktree "$wt"; }
-trap cleanup EXIT
-
-arch::make_worktree wt
-
-if [ ! -d "$wt/core" ]; then
-  echo "FAIL: core/ module does not exist yet." >&2
-  exit 1
-fi
-
-rm -rf "$wt/apps"
-
-# GOWORK=off: the repo root's go.work also lists ./apps/common (for local
-# multi-module development convenience), and apps/ is now gone in this
-# worktree. Without this, `go build` would walk up to that go.work file and
-# fail on the missing apps/common — a workspace-tooling artifact, not the
-# thing this check exists to prove. core/'s own go.mod is what must stand
-# alone.
-echo "==> go build ./... (core/, with apps/ deleted entirely)"
-(cd "$wt/core" && GOWORK=off go build ./...)
-
-echo "==> go test ./... (core/, with apps/ deleted entirely)"
-(cd "$wt/core" && GOWORK=off go test ./...)
-
-echo "OK: core/ builds and its full test suite passes with apps/ deleted entirely."
+exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/rcmtools/architecture/verify_core_without_apps.py" "$@"
