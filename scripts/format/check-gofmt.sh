@@ -16,7 +16,7 @@
 # `cd apps/common && ...`), and two Go files in this repository live
 # outside every module and outside go.work:
 #
-#   scripts/api/gen-bindings.go        (run by scripts/api/lib.sh)
+#   scripts/api/gen-bindings.go        (run by scripts/rcmtools/api/lib.py)
 #   scripts/architecture/ownership.go  (run by the layer-ownership check)
 #
 # No per-module lint run has ever been able to see either of them, and the

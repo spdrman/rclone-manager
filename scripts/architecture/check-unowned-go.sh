@@ -5,7 +5,7 @@
 # "Unowned" here means exactly one thing: no directory at or above the file
 # contains a go.mod. Two files in this repository are unowned today:
 #
-#   scripts/api/gen-bindings.go        (run by scripts/api/lib.sh)
+#   scripts/api/gen-bindings.go        (run by scripts/rcmtools/api/lib.py)
 #   scripts/architecture/ownership.go  (run by check-layer-ownership.sh)
 #
 # That is not a defect on its own. They are single-file `package main`
