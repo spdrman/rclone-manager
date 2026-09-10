@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  BackendCatalog,
   BackupManagerApi,
   BackupSetRetention,
   CapacitySettings,
@@ -1182,6 +1183,175 @@ const VALIDATORS: ValidatorCatalogEntry[] = [
 ];
 
 /**
+ * The backend catalogue this fixture serves (EPIC I, #664), transcribed
+ * from core/internal/backend/bundled/*.json field for field.
+ *
+ * A literal for VALIDATORS' reason, and one step more strongly: on the
+ * backend it is not per-deployment data either, it is JSON embedded at
+ * build time. Transcribed in full rather than abridged, because an
+ * abridged fixture cannot show the thing a manifest-driven form is for —
+ * the seven kinds, the enum choice sets, the unset_means sentences, and
+ * the skipped probe steps with their reasons. A picker driven by three
+ * fields and no help text renders green here and wrong against the real
+ * registry.
+ *
+ * `unregistered` carries sftp because the engine's transport layer asks
+ * for it (FR-4's RequiredBackends) and no manifest declares it, which is
+ * exactly the "understood, not registered" row #668's picker dims.
+ */
+const BACKEND_CATALOG: BackendCatalog = {
+  registered: [
+    {
+      id: "local_volume",
+      label: "Local volume",
+      summary:
+        "A directory on a disk this NAS can see. A second internal drive, a USB disk, or an already-mounted network share.",
+      role: "local_volume",
+      rcloneBackend: "local",
+      fields: [
+        {
+          id: "path",
+          label: "Directory",
+          help: "An absolute path this service can write to. A volume that is not mounted looks exactly like an empty directory, so the connection test writes a file and reads it back.",
+          kind: "path",
+          required: true
+        },
+        {
+          id: "prefix",
+          label: "Subdirectory",
+          help: "A namespace inside the directory, so one volume can hold more than this product's artifacts. Leave empty to write at the top.",
+          kind: "key_prefix",
+          required: false
+        },
+        {
+          id: "upload_verification",
+          label: "How a copy is proven",
+          kind: "enum",
+          required: false,
+          unsetMeans: "readback",
+          values: [
+            { value: "readback", label: "Read the copy back and re-hash it" },
+            { value: "attested", label: "Believe the destination's own digest" }
+          ]
+        }
+      ],
+      probe: {
+        steps: [
+          {
+            step: "credentials",
+            run: false,
+            reason:
+              "a local destination reads no credential: the backups are written by this service to a directory on this machine."
+          },
+          { step: "reach", run: true },
+          { step: "deliverable", run: true },
+          { step: "write", run: true },
+          { step: "read_back", run: true },
+          {
+            step: "storage_class",
+            run: false,
+            reason:
+              "a filesystem has no storage classes, so there is nothing here that could have landed in a different one than the configuration asked for."
+          },
+          { step: "verification", run: true },
+          { step: "delete", run: true }
+        ]
+      }
+    },
+    {
+      id: "s3",
+      label: "S3 or S3-compatible",
+      summary:
+        "Amazon S3, or any service that speaks its API: MinIO, Ceph, Backblaze B2, Wasabi, a private gateway.",
+      role: "object_store",
+      rcloneBackend: "s3",
+      fields: [
+        {
+          id: "bucket",
+          label: "Bucket",
+          help: "A bucket with no key namespace in it. A subdirectory inside the bucket belongs in the prefix field.",
+          kind: "string",
+          required: true,
+          pattern: "^[^/]+$"
+        },
+        {
+          id: "region",
+          label: "Region",
+          help: "Passed to the provider unexamined. This product holds no list of legal regions, because a list here would be a second, staler copy that refuses a region that works.",
+          kind: "string",
+          required: false
+        },
+        {
+          id: "endpoint",
+          label: "Endpoint",
+          help: "Only for an S3-compatible service. Leave empty for Amazon's own endpoint for the region.",
+          kind: "url",
+          required: false
+        },
+        {
+          id: "prefix",
+          label: "Key namespace",
+          help: "So one bucket can hold more than this product's artifacts. Leave empty to write at the root.",
+          kind: "key_prefix",
+          required: false
+        },
+        {
+          id: "storage_class",
+          label: "Storage class",
+          kind: "enum",
+          required: false,
+          unsetMeans: "STANDARD",
+          values: [
+            { value: "STANDARD", label: "Standard" },
+            { value: "STANDARD_IA", label: "Standard, infrequent access" },
+            { value: "ONEZONE_IA", label: "One zone, infrequent access" },
+            { value: "INTELLIGENT_TIERING", label: "Intelligent tiering" },
+            { value: "GLACIER_IR", label: "Glacier instant retrieval" },
+            { value: "GLACIER", label: "Glacier (a restore takes hours)" },
+            { value: "DEEP_ARCHIVE", label: "Deep Archive (a restore takes hours)" }
+          ]
+        },
+        {
+          id: "upload_verification",
+          label: "How a copy is proven",
+          kind: "enum",
+          required: false,
+          unsetMeans: "readback",
+          values: [
+            { value: "readback", label: "Download the copy again and re-hash it" },
+            { value: "attested", label: "Believe the destination's own full-object digest" }
+          ]
+        },
+        {
+          id: "credentials",
+          label: "Access key",
+          help: "Stored once, in a file only this service can read. It is never shown again and never leaves this host in a response.",
+          kind: "credential",
+          required: true
+        }
+      ],
+      probe: {
+        steps: [
+          { step: "credentials", run: true },
+          { step: "reach", run: true },
+          { step: "deliverable", run: true },
+          { step: "write", run: true },
+          { step: "read_back", run: true },
+          { step: "storage_class", run: true },
+          { step: "verification", run: true },
+          { step: "delete", run: true }
+        ]
+      }
+    }
+  ],
+  unregistered: [{ rcloneBackend: "sftp" }],
+  // config.StorageMediumIDPattern, which is RetentionTierNamePattern
+  // itself rather than a second copy of the same expression.
+  instanceIdPattern: "^[a-z][a-z0-9_]*$",
+  reservedInstanceId: "local"
+};
+
+/**
  * The settings fixture GET/PATCH /api/v1/settings serves here.
  *
  * `retention.tiers` is the RESOLVED default chain, spelled exactly the
@@ -1695,6 +1865,11 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       });
     },
     listValidators: (): Promise<ValidatorCatalogEntry[]> => delay(VALIDATORS.map((v) => ({ ...v }))),
+    // structuredClone rather than a shallow copy: the catalogue is
+    // nested three deep, and a fixture that handed out shared field
+    // objects would let one caller's mutation reach the next one's
+    // render.
+    listBackends: (): Promise<BackendCatalog> => delay(structuredClone(BACKEND_CATALOG)),
     importSSHKey: (): Promise<SSHKeyImportResult> =>
       delay({ id: "key_mock_" + Math.random().toString(36).slice(2, 10), algorithm: "ssh-ed25519", fingerprint: mockImportedKeyFingerprint }),
     probeHostKey: (): Promise<HostKeyProbeResult> =>

@@ -71,6 +71,8 @@ import type {
   WireListStorageStatusResponse,
   WireManagerStorage,
   WireImportStorageCredentialsResponse,
+  WireBackendManifest,
+  WireListBackendsResponse,
   WireListStorageMediumsResponse,
   WireMediumPreflightResponse,
   WireStorageMediumSummary,
@@ -91,6 +93,7 @@ import type {
 import type {
   ApiError,
   AppSettings,
+  BackendManifest,
   BackupManagerApi,
   BackupSetRetention,
   BackupSetPatch,
@@ -832,6 +835,42 @@ function fromWireStorageMedium(m: WireStorageMediumSummary): StorageMedium {
     // default: absence means "nothing here says this destination's check
     // was skipped", never "this destination was proven".
     connectionUnverified: m.connection_unverified ?? false
+  };
+}
+
+/**
+ * The backend catalogue's wire form, camelCased (EPIC I, #664).
+ *
+ * Every optional string is passed through as-is rather than defaulted:
+ * absent and empty mean different things for all three. An absent
+ * `unset_means` says the field has no resolved-at-read-time value, and an
+ * empty one would read as "it resolves to the empty string", which is a
+ * different claim about the engine's behaviour.
+ *
+ * The one place a default IS applied is the arrays, because a manifest
+ * with no enum choices omits `values` entirely and a caller iterating it
+ * should not have to ask.
+ */
+function fromWireBackendManifest(m: WireBackendManifest): BackendManifest {
+  return {
+    id: m.id,
+    label: m.label,
+    summary: m.summary,
+    role: m.role,
+    rcloneBackend: m.rclone_backend,
+    fields: (m.fields ?? []).map((f) => ({
+      id: f.id,
+      label: f.label,
+      help: f.help,
+      kind: f.kind,
+      required: f.required,
+      values: f.values ? f.values.map((v) => ({ value: v.value, label: v.label })) : undefined,
+      pattern: f.pattern,
+      unsetMeans: f.unset_means
+    })),
+    probe: {
+      steps: (m.probe?.steps ?? []).map((s) => ({ step: s.step, run: s.run, reason: s.reason }))
+    }
   };
 }
 
@@ -2129,6 +2168,14 @@ export const httpApi: BackupManagerApi = {
         placements: s.placements,
         onlyCopyHere: s.only_copy_here
       }))
+    })),
+
+  listBackends: () =>
+    request<WireListBackendsResponse>("/backends").then((r) => ({
+      registered: (r.backends ?? []).map(fromWireBackendManifest),
+      unregistered: (r.unregistered ?? []).map((u) => ({ rcloneBackend: u.rclone_backend })),
+      instanceIdPattern: r.instance_id_pattern,
+      reservedInstanceId: r.reserved_instance_id
     })),
 
   // Verify before save. It writes nothing whatever the report says, and

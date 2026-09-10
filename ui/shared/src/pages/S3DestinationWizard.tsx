@@ -116,10 +116,22 @@ interface Draft {
 
 export function S3DestinationWizard({
   editing,
+  presetId,
   onClose,
   onSaved
 }: {
   editing?: StorageMedium;
+  /** The instance name already settled by the add-a-destination wizard's
+   *  naming step (EPIC I, #664; #668's step 2).
+   *
+   *  It is a starting value and not a lock, because this component is the
+   *  interim configure surface and #669's manifest-driven renderer
+   *  replaces it: the id field stays where it is rather than growing a
+   *  read-only mode that would be deleted in the same pair of PRs.
+   *
+   *  Ignored on an edit, where the id comes from the destination being
+   *  edited and cannot change at all. */
+  presetId?: string;
   onClose(): void;
   /** Called once the destination is written, with the destination the
    *  engine answered with.
@@ -136,7 +148,10 @@ export function S3DestinationWizard({
   const api = useApi();
   const fieldId = useId();
   const [step, setStep] = useState(1);
-  const [draft, setDraft] = useState<Draft>(() => draftOf(editing));
+  const [draft, setDraft] = useState<Draft>(() => {
+    const base = draftOf(editing);
+    return editing || !presetId ? base : { ...base, id: presetId };
+  });
 
   // "unchanged" is only reachable on an edit, and it is the DEFAULT there
   // for the reason this file's doc gives: the credential is the one field

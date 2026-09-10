@@ -96,11 +96,29 @@ function renderCard(overrides: Partial<ReturnType<typeof createMockApi>>) {
   return api;
 }
 
+/**
+ * Reaches this wizard the way an operator now does (EPIC I, #668).
+ *
+ * "Add a destination" opens the add wizard — choose a backend, name the
+ * instance, confirm — and the configure step this file tests is what
+ * follows it. Only the NAVIGATION changed: every assertion below is
+ * unchanged, because the property they pin is unchanged. This wizard is
+ * still the one and only thing that writes a destination, and it still
+ * writes nothing until the destination has been proven.
+ *
+ * The `role="group"` name is the same on both wizards, so the wait after
+ * the last click is for a control only the configure step has.
+ */
 async function openTheWizard(api: Partial<ReturnType<typeof createMockApi>>) {
   const built = renderCard({ listStorageMediums: vi.fn(() => Promise.resolve([])), ...api });
   const add = await screen.findByRole("button", { name: "Add a destination" });
   fireEvent.click(add);
-  await screen.findByRole("group", { name: "Add a destination" });
+  fireEvent.click(await screen.findByRole("radio", { name: /^S3 or S3-compatible/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Next: name this instance" }));
+  fireEvent.change(await screen.findByLabelText("Instance name"), { target: { value: "offsite_s3" } });
+  fireEvent.click(screen.getByRole("button", { name: "Next: confirm" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Next: configure it" }));
+  await screen.findByLabelText("Destination id");
   return built;
 }
 

@@ -232,8 +232,18 @@ describe("the S3 destination wizard driven against the unmodified fixture", () =
       </ApiProvider>
     );
 
+    // The add-a-destination wizard's three steps come first now (EPIC I,
+    // #668): choose a backend, name the instance, confirm. Only the
+    // navigation changed — everything asserted below is about the
+    // configure step this file exists to drive against the unmodified
+    // fixture.
     fireEvent.click(await screen.findByRole("button", { name: "Add a destination" }));
-    await screen.findByRole("group", { name: "Add a destination" });
+    fireEvent.click(await screen.findByRole("radio", { name: /^S3 or S3-compatible/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Next: name this instance" }));
+    fireEvent.change(await screen.findByLabelText("Instance name"), { target: { value: "candidate_s3" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next: confirm" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Next: configure it" }));
+    await screen.findByLabelText("Destination id");
 
     fireEvent.change(screen.getByLabelText("Destination id"), { target: { value: "candidate_s3" } });
     fireEvent.change(screen.getByLabelText("Region"), { target: { value: "us-east-1" } });

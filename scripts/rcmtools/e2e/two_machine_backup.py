@@ -2691,13 +2691,11 @@ class Proof:
             die(
                 "reconciliation reported something unresolved over a record the product can now settle "
                 "for itself (#662).",
-                "`rbm reconcile` exited {} and said: {}".format(reconciled.returncode, reconcile_out),
+                f"`rbm reconcile` exited {reconciled.returncode} and said: {reconcile_out}",
                 "state: " + state_now,
             )
         note(
-            "reconciliation settled the planted record itself: {} is {}, a durable restore point".format(
-                artifact, state_now
-            )
+            f"reconciliation settled the planted record itself: {artifact} is {state_now}, a durable restore point"
         )
 
         # 2. The operator-visible half, and the one this case exists to
@@ -2749,10 +2747,10 @@ class Proof:
         if still_sha != disk_sha or still_size != disk_size:
             die(
                 "reconciliation changed the file it was supposed to be deciding about.",
-                "before: {} bytes, sha256 {}".format(disk_size, disk_sha),
-                "after:  {} bytes, sha256 {}".format(still_size, still_sha),
+                f"before: {disk_size} bytes, sha256 {disk_sha}",
+                f"after:  {still_size} bytes, sha256 {still_sha}",
             )
-        note("the file is untouched: {} is still {} bytes, sha256 {}".format(path, disk_size, still_sha))
+        note(f"the file is untouched: {path} is still {disk_size} bytes, sha256 {still_sha}")
 
     def _walk_the_dead_end(
         self,
@@ -2781,8 +2779,8 @@ class Proof:
         -- and it dies naming every verb that refused.
         """
         note(
-            "the dead end opened again: reconciliation left {} at {}, which is not a durable restore "
-            "point. Walking every verb an operator has, as #662 did.".format(artifact, state_now)
+            f"the dead end opened again: reconciliation left {artifact} at {state_now}, which is not a durable restore "
+            "point. Walking every verb an operator has, as #662 did."
         )
         note("`rbm reconcile` said: " + reconcile_out)
 
