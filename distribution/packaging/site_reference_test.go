@@ -125,3 +125,185 @@ func TestTheSiteReferenceRegionMarkersAreThere(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------
+// 4. Every route App.tsx actually mounts has a documented screen
+// ---------------------------------------------------------------------
+//
+// The web interface cannot be generated the way the command and flag
+// tables above are: there is no dispatch table for a screen, only a
+// component tree. The realistic floor is narrower and it is this: every
+// route App.tsx mounts is named in a map below, and the section or
+// anchor that name points at actually exists in the file it names. A
+// route added to App.tsx and left out of the map fails as a missing
+// route; a route removed from App.tsx and left in the map fails too,
+// the same way declaredAbsentPaths in readme_claims_test.go is made to
+// expire on its own rather than silently cover for a page that moved on.
+
+var routePath = regexp.MustCompile(`path="([^"]+)"`)
+
+// routesInAppTSX is every distinct route path ui/shared/src/App.tsx
+// mounts, authenticated or not. Two literal Routes, in two separate
+// <Routes> blocks, both spell their path "*" — the unauthenticated
+// catch-all that renders LoginPage, and the authenticated catch-all that
+// redirects home — and a regex over the whole file cannot tell them
+// apart. Both are covered by the single "*" exemption below, for the
+// two different, stated reasons.
+func routesInAppTSX(t *testing.T) []string {
+	t.Helper()
+	src, err := os.ReadFile(Path("ui/shared/src/App.tsx"))
+	if err != nil {
+		t.Fatalf("read ui/shared/src/App.tsx: %v", err)
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range routePath.FindAllStringSubmatch(string(src), -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		out = append(out, m[1])
+	}
+	sort.Strings(out)
+	return out
+}
+
+type documentedRoute struct {
+	file, anchor string
+}
+
+// routeSections is where every route App.tsx mounts is documented. Not
+// every one gets its own reference.html section: "/sets/new" opens the
+// six-step wizard first-run.html already walks screen by screen, and
+// pointing at its first step is truer than a second, shorter retelling
+// on this page.
+var routeSections = map[string]documentedRoute{
+	"/":                    {"reference.html", "web-dashboard"},
+	"/sets":                {"reference.html", "web-sets"},
+	"/sets/new":            {"first-run.html", "step1"},
+	"/sets/:source/:set":   {"reference.html", "web-set-detail"},
+	"/backups":             {"reference.html", "web-backups"},
+	"/backups/:artifactId": {"reference.html", "web-backup-detail"},
+	"/activity":            {"reference.html", "web-activity"},
+	"/quarantine":          {"reference.html", "web-quarantine"},
+	"/settings":            {"reference.html", "web-settings"},
+	"/catalog-recovery":    {"reference.html", "web-catalog"},
+	"/enroll":              {"first-run.html", "enrol"},
+}
+
+// routeExemptions are routes deliberately left out of routeSections,
+// each with the reason it is not a screen a reader looks something up
+// by. "*" is the only one: a redirect home for an authenticated request
+// that matched nothing (not a screen at all) and, in the other <Routes>
+// block, the unauthenticated catch-all that renders LoginPage, which
+// first-run.html#again already pictures and describes.
+var routeExemptions = map[string]string{
+	"*": "two different catch-alls share this literal path in App.tsx: an authenticated redirect home, which is not a screen, and the unauthenticated fallback that renders LoginPage, pictured at first-run.html#again",
+}
+
+func hasHTMLAnchor(doc, id string) bool {
+	return strings.Contains(doc, `id="`+id+`"`)
+}
+
+func TestTheSiteReferenceDocumentsExactlyTheAppsRoutes(t *testing.T) {
+	routes := routesInAppTSX(t)
+	if len(routes) == 0 {
+		t.Fatal("read no <Route path=\"...\"> out of ui/shared/src/App.tsx")
+	}
+
+	documented := make([]string, 0, len(routeSections))
+	for r := range routeSections {
+		documented = append(documented, r)
+	}
+	for r := range routeExemptions {
+		documented = append(documented, r)
+	}
+	sort.Strings(documented)
+
+	missing, extra := diffSets(routes, documented)
+	if len(missing) > 0 {
+		t.Errorf("App.tsx mounts routes that routeSections/routeExemptions in site_reference_test.go does not account for: %v. "+
+			"A route with nobody documenting it is exactly the gap this test exists to close.", missing)
+	}
+	if len(extra) > 0 {
+		t.Errorf("routeSections/routeExemptions in site_reference_test.go names routes App.tsx no longer mounts: %v. "+
+			"That entry is now covering nothing; remove it the way readme_claims_test.go's declaredAbsentPaths asks its own stale entries to be removed.", extra)
+	}
+
+	// Every exemption still has to name a route App.tsx actually mounts,
+	// for the same reason readme_claims_test.go re-checks
+	// declaredAbsentPaths: an exemption nothing matches any more is
+	// silently covering for whatever now collides with its name.
+	routeSet := map[string]bool{}
+	for _, r := range routes {
+		routeSet[r] = true
+	}
+	for r := range routeExemptions {
+		if !routeSet[r] {
+			t.Errorf("routeExemptions names %q, which App.tsx no longer mounts; the exemption is stale", r)
+		}
+	}
+}
+
+func TestTheSiteReferenceRouteAnchorsExist(t *testing.T) {
+	docs := map[string]string{}
+	for _, section := range routeSections {
+		if _, ok := docs[section.file]; ok {
+			continue
+		}
+		data, err := os.ReadFile(Path("docs/site/" + section.file))
+		if err != nil {
+			t.Fatalf("read docs/site/%s: %v", section.file, err)
+		}
+		docs[section.file] = string(data)
+	}
+	for route, section := range routeSections {
+		if !hasHTMLAnchor(docs[section.file], section.anchor) {
+			t.Errorf("route %q is mapped to %s#%s, which does not exist; the section it once named moved or was renamed", route, section.file, section.anchor)
+		}
+	}
+}
+
+func TestTheSiteReferenceRouteExtractorsCanActuallyFail(t *testing.T) {
+	// routesInAppTSX's regex, over a control document naming three
+	// routes, has to read exactly three, in the two-Routes-blocks shape
+	// the real file uses.
+	control := `
+      <Routes>
+        <Route path="/enroll" element={<A />} />
+        <Route path="*" element={<B />} />
+      </Routes>
+      <Routes>
+        <Route
+          path="/widgets"
+        />
+      </Routes>`
+	seen := map[string]bool{}
+	var got []string
+	for _, m := range routePath.FindAllStringSubmatch(control, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		got = append(got, m[1])
+	}
+	sort.Strings(got)
+	want := []string{"*", "/enroll", "/widgets"}
+	if len(got) != len(want) {
+		t.Fatalf("route extractor read %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("route extractor read %v, want %v", got, want)
+		}
+	}
+
+	// hasHTMLAnchor: present and absent both have to come back right, or
+	// TestTheSiteReferenceRouteAnchorsExist could pass by always saying yes.
+	if !hasHTMLAnchor(`<h3 id="web-dashboard">Dashboard</h3>`, "web-dashboard") {
+		t.Fatal("hasHTMLAnchor missed an id that is there")
+	}
+	if hasHTMLAnchor(`<h3 id="web-dashboard">Dashboard</h3>`, "web-nowhere") {
+		t.Fatal("hasHTMLAnchor found an id that is not there")
+	}
+}

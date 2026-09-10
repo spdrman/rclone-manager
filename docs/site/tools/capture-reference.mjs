@@ -22,7 +22,7 @@
 // SURFACE, so its order is the navigation's, and each screen is reached
 // by its own URL rather than by clicking through the previous one. A
 // screen that fails to render therefore takes down its own capture and
-// nothing else, which is what makes it safe to shoot eleven of them in
+// nothing else, which is what makes it safe to shoot ten of them in
 // one run.
 
 import { spawn, spawnSync } from "node:child_process";
@@ -205,7 +205,9 @@ async function main() {
     const SCREENS = [
       ["ref-01-dashboard", "/", text(/Recent activity/i)],
       ["ref-02-backup-sets", "/sets", text(/Backup sets|backup set/i)],
+      ["ref-09-set-detail", "/sets/production/postgres-primary", heading(/Production PostgreSQL/i)],
       ["ref-03-backups", "/backups", text(/Backups|artifact/i)],
+      ["ref-10-backup-detail", "/backups/art_01J9F4M2QK8Z", text(/postgres-prod-20260828\.dump\.zst/)],
       ["ref-04-activity", "/activity", text(/Activity/i)],
       ["ref-05-quarantine", "/quarantine", text(/Quarantine/i)],
       ["ref-06-settings", "/settings", text(/Notifications/i)],

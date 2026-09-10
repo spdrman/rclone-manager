@@ -164,13 +164,39 @@
           <tr><td><strong>Retention</strong></td><td>Deployment policy / This set&rsquo;s own policy</td><td>Which chain governs it. A set with its own policy is not merged with the deployment's, it replaces it.</td></tr>
           <tr><td><strong>Retained</strong></td><td>32 &middot; 421.0 GB</td><td>How many copies this set is keeping and what they cost.</td></tr>
           <tr><td><strong>Expected every</strong></td><td>24h</td><td>What makes it stale when it is exceeded.</td></tr>
-          <tr><td><strong>Open</strong></td><td>a button</td><td>The set's own screen: its artifacts, its retention card, its live activity.</td></tr>
+          <tr><td><strong>Open</strong></td><td>a button</td><td>Goes to <a href="#web-set-detail">the set's own screen</a>: its artifacts, its retention card, its live activity.</td></tr>
           <tr><td><strong>Test connection</strong></td><td>a button</td><td>Resolve, connect, check the host key, offer the key, authenticate, list the folder. Six named outcomes, and the same check <code>rbm backup-set test-connection</code> runs.</td></tr>
           <tr><td><strong>Disable</strong></td><td>a button</td><td>Stops the scheduler running it. Keeps the configuration and every retained copy.</td></tr>
           <tr><td><strong>Remove&hellip;</strong></td><td>a button</td><td>Configuration only. The backups it collected stay on storage and stay listed under Backups, and creating the set again with the same id takes them back.</td></tr>
         </tbody>
       </table>
     </div>
+
+    <h3 id="web-set-detail">Backup set detail</h3>
+    <figure>
+      <img src="screens/ref-09-set-detail.png" alt="The Backup set detail screen for production/postgres-primary: header actions Run this backup set, Run all enabled sets, Test connection, Edit and Preview retention, an overview grid, and cards for retention, connection and live activity" loading="lazy">
+      <figcaption>Reached from <strong>Open</strong> on <a href="#web-sets">Backup sets</a>. Everything about one set: its overview, its own retention card, its connection, and the same live activity panel the dashboard shows for it.</figcaption>
+    </figure>
+    <div class="scroll-x">
+      <table class="fields">
+        <thead><tr><th>Control</th><th>What it does</th><th>What it costs</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Run this backup set</strong></td><td>Runs one pass over this set only.</td><td>A real transfer cycle. Unavailable while the set is disabled, because a sweep would not have visited it either.</td></tr>
+          <tr><td><strong>Run all enabled sets</strong></td><td>The same deployment-wide run the Dashboard and Backup sets list offer.</td><td>A cycle over every enabled set, not only this one &mdash; the label says so because this button sits on one set's own page.</td></tr>
+          <tr><td><strong>Test connection</strong></td><td>Resolve, connect, check the host key, authenticate, list the folder.</td><td>Nothing is written. The six-step trace lands in <a href="#web-terminal">the docked terminal</a>, where a refusal is written too rather than silently swallowed.</td></tr>
+          <tr><td><strong>Edit</strong></td><td>Opens edit mode, one field at a time.</td><td>Nothing yet. Each field keeps its own <strong>Save</strong>, which writes that one field immediately rather than waiting for the rest of the form.</td></tr>
+          <tr><td><strong>Save anyway</strong> / <strong>Leave it as it was</strong></td><td>Answers a refusal a per-field save came back with (an unproven host key, a completion-method change mid-transfer).</td><td><strong>Save anyway</strong> writes the same patch again over the refusal. <strong>Leave it as it was</strong> writes nothing and returns the field to what it was.</td></tr>
+          <tr><td><strong>SAVE ALL &amp; EXIT EDIT</strong></td><td>Writes every field changed since Edit was pressed and returns to view mode.</td><td>One write per changed field. Anything not touched this session is left alone.</td></tr>
+          <tr><td><strong>CANCEL &amp; EXIT EDIT MODE</strong></td><td>Leaves edit mode without saving what is still typed.</td><td>Nothing written. The confirmation lists exactly what would be discarded; a field a per-field <strong>Save</strong> already wrote earlier in the same session is not undone, because that write already happened.</td></tr>
+          <tr><td><strong>Preview retention</strong></td><td>What the current policy would delete for this set, as a reviewed plan.</td><td>Nothing. It is a preview, the same dialog the Backups screen opens.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note danger">
+      <span class="note-label">Editing a set that is mid-transfer</span>
+      <p>Pressing <strong>Edit</strong> on a set with a backup in flight stops it first and says so on screen: the confirmation reads &ldquo;Stop it to edit this backup set?&rdquo;, and the interrupted backup stays incomplete rather than counting as a finished one. The next cycle after edit mode closes picks it up again.</p>
+    </div>
+
 
     <h3 id="web-backups">Backups</h3>
     <figure>
@@ -190,9 +216,21 @@
         </tbody>
       </table>
     </div>
+    <p>Each row opens <a href="#web-backup-detail">that artifact's own detail page</a>.</p>
     <div class="note danger">
       <span class="note-label">What this screen is not</span>
       <p>There is no restore here and there is no download. The footer of the table says so: these are retained, verified copies, and recovering a backup into an application is a documented manual procedure this product deliberately does not carry out.</p>
+    </div>
+
+    <h3 id="web-backup-detail">Backup detail</h3>
+    <figure>
+      <img src="screens/ref-10-backup-detail.png" alt="The Backup detail screen for postgres-prod-20260828.dump.zst: an Artifact card with the id, checksum and retention fields, a Lifecycle timeline card, and a list of its two copies with their verification class" loading="lazy">
+      <figcaption>Reached by opening a row on <a href="#web-backups">Backups</a>. Read-only: nothing on this screen writes anything.</figcaption>
+    </figure>
+    <p>Two cards and a list, and no button among them. <strong>Artifact</strong> is the recorded facts: id, remote original path, the ingestion path (a path on disk, not proof a readable file is sitting there), producer and received timestamps, size, checksum, and which retention classes selected it. <strong>Lifecycle</strong> is the same timeline the dashboard's live view feeds, at rest: discovered, transferred, verified, committed, remote source removed. Below both, the copies list names where the bytes actually are, one row per storage medium, each with its own verification class and whether reading it back needs a restore first.</p>
+    <div class="note ok">
+      <span class="note-label">Why there is nothing to press</span>
+      <p>This screen answers &ldquo;is this backup safe, and where is it&rdquo;, and every one of those answers is something the engine already decided. Restoring a backup into an application is a documented manual procedure this product deliberately does not carry out, so there is no download and no restore button to be missing.</p>
     </div>
 
     <h3 id="web-activity">Activity</h3>
