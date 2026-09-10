@@ -2,13 +2,13 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "Backup Manager 0.3.3",
+  "name": "rclone-manager 0.3.3",
   "documentNamespace": "https://github.com/spdrman/rclone-manager/spdx/0af3521ef24a3f357f94614c8db5ee5b8221be85",
   "creationInfo": {
     "created": "2026-09-09T15:40:02Z",
     "creators": [
-      "Tool: backup-manager-provenance",
-      "Organization: The Backup Manager Authors"
+      "Tool: rclone-manager-provenance",
+      "Organization: Roman Goldmann"
     ]
   },
   "packages": [
