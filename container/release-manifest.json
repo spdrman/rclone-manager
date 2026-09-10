@@ -11,7 +11,7 @@
         "rbm-web": "90180bf71b929e27d6cb4aeb23c0eafb7303c151c07af30d7c22d964fef3c0c1"
       },
       "local_image_id_sha256": "c0e45ba266a338d07063dbda5e0704649e0ed77d9ec473f492c24f14e7d46ef4",
-      "registry_digest": null
+      "registry_digest": "sha256:c698b442490048188c9e480606bcf09a9640a7f703f840d114795a641219ef71"
     },
     {
       "architecture": "arm64",
@@ -20,8 +20,8 @@
         "rbm-web": "cc3bd1a7be26b67315de8d6edfa5927c80348f9e149bb74e34664d8867163cbb"
       },
       "local_image_id_sha256": "a0ec8ec8c19b7f9d339522977efd754e41b6d3f3d455092e55976acb3522131e",
-      "registry_digest": null
+      "registry_digest": "sha256:23da2c764e560f99db15901d5a5a5697a72b48f052cd4e3fea766b705ce696ae"
     }
   ],
-  "index_digest": null
+  "index_digest": "sha256:394ec10b495978a6c59831745a3bd6c9a875ee2d62d0fac6a0206f14768c4a71"
 }
