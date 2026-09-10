@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# The two end-to-end drivers' --help is operator-visible text, and this pins
-# it (issue #514).
+# The end-to-end drivers' --help is operator-visible text, and this pins it
+# (issue #514).
 #
-# What it is guarding against. Both scripts used to render their help by
-# reading their own header BY LINE NUMBER:
+# What it is guarding against. The two that existed when #514 was written
+# used to render their help by reading their own header BY LINE NUMBER:
 #
 #   sed -n '2,110p' "$0"     two-machine-backup.sh
 #   sed -n '2,84p'  "$0"     run-machine-tier.sh
@@ -104,7 +104,7 @@ SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
 GOLDEN_DIR="$SCRIPTS_DIR/testdata"
 
-# The two drivers, and the golden each one's help is pinned against.
+# The drivers, and the golden each one's help is pinned against.
 #
 # A subject is a NAME, not a path, because EPIC I / I1.6 moved the drivers to
 # scripts/rcmtools/e2e/*.py and left an exec shim at each old scripts/e2e/*.sh
@@ -113,13 +113,16 @@ GOLDEN_DIR="$SCRIPTS_DIR/testdata"
 # suite follows the driver: subject_file says where the help-owning file is
 # and subject_interp says what runs it. Both are python3 today; the table
 # stays a table so a subject that is still bash does not need this file
-# restructured to keep being checked.
-SUBJECTS="two-machine-backup run-machine-tier"
+# restructured to keep being checked. three-machine-web-ui (#687) is that
+# subject: unported, so its help-owning file and its bash entry point are
+# the same file.
+SUBJECTS="two-machine-backup run-machine-tier three-machine-web-ui"
 
 subject_file() { # <subject> -> path, relative to the repository root
   case "$1" in
-    two-machine-backup) printf '%s\n' "scripts/rcmtools/e2e/two_machine_backup.py" ;;
-    run-machine-tier)   printf '%s\n' "scripts/rcmtools/e2e/run_machine_tier.py" ;;
+    two-machine-backup)   printf '%s\n' "scripts/rcmtools/e2e/two_machine_backup.py" ;;
+    run-machine-tier)     printf '%s\n' "scripts/rcmtools/e2e/run_machine_tier.py" ;;
+    three-machine-web-ui) printf '%s\n' "scripts/e2e/three-machine-web-ui.sh" ;;
     *) return 1 ;;
   esac
 }
@@ -127,6 +130,7 @@ subject_file() { # <subject> -> path, relative to the repository root
 subject_interp() { # <subject> -> the interpreter its help-owning file needs
   case "$1" in
     two-machine-backup|run-machine-tier) printf '%s\n' "python3" ;;
+    three-machine-web-ui)                printf '%s\n' "bash" ;;
     *) return 1 ;;
   esac
 }
@@ -142,9 +146,18 @@ subject_interp() { # <subject> -> the interpreter its help-owning file needs
 # literal path by scripts/tests/ci-local-gate.test.sh. run-machine-tier.sh
 # was named by nothing that runs it once its callers were repointed, so it
 # was deleted rather than left as a file whose only purpose is to be found.
+# three-machine-web-ui is neither: it was never ported, so subject_file
+# above already points straight at its one and only entry point, and its
+# "shim" is that same file. The branch this feeds still exercises
+# something real for it -- A's "renders identically through $shim" check
+# runs the identical file twice, through the same interpreter, which is a
+# weaker check than a real shim's but not a vacuous one: a driver that
+# reads argv from anything other than its own invocation (a stray cwd
+# assumption, say) would still fail it.
 subject_shim() { # <subject> -> path relative to the repository root, or ""
   case "$1" in
-    two-machine-backup) printf '%s\n' "scripts/e2e/two-machine-backup.sh" ;;
+    two-machine-backup)   printf '%s\n' "scripts/e2e/two-machine-backup.sh" ;;
+    three-machine-web-ui) printf '%s\n' "scripts/e2e/three-machine-web-ui.sh" ;;
     *) printf '%s\n' "" ;;
   esac
 }
@@ -197,10 +210,19 @@ sandbox_copy() { # <subject>
   dir="$(mktemp -d)"
   tmpdirs+=("$dir")
   file="$(subject_file "$1")"
-  mkdir -p "$dir/$(dirname "$file")" "$dir/scripts/rcmtools"
-  cp "$REPO_ROOT/scripts/rcmtools/__init__.py" "$dir/scripts/rcmtools/__init__.py"
-  cp "$REPO_ROOT/scripts/rcmtools/harness.py" "$dir/scripts/rcmtools/harness.py"
-  cp "$REPO_ROOT/scripts/rcmtools/e2e/__init__.py" "$dir/scripts/rcmtools/e2e/__init__.py"
+  mkdir -p "$dir/$(dirname "$file")"
+  # Only a ported (python3) subject needs the package staged: an unported
+  # bash subject such as three-machine-web-ui (#687) is a complete program
+  # on its own, and staging a package it never imports would be copying
+  # for its own sake -- and, for a subject whose file does not live under
+  # scripts/rcmtools/e2e, a `cp` into a directory the mkdir above never
+  # had reason to create.
+  if [ "$(subject_interp "$1")" = "python3" ]; then
+    mkdir -p "$dir/scripts/rcmtools/e2e"
+    cp "$REPO_ROOT/scripts/rcmtools/__init__.py" "$dir/scripts/rcmtools/__init__.py"
+    cp "$REPO_ROOT/scripts/rcmtools/harness.py" "$dir/scripts/rcmtools/harness.py"
+    cp "$REPO_ROOT/scripts/rcmtools/e2e/__init__.py" "$dir/scripts/rcmtools/e2e/__init__.py"
+  fi
   cp "$REPO_ROOT/$file" "$dir/$file"
   printf '%s\n' "$dir/$file"
 }

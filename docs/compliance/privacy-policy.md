@@ -1,6 +1,6 @@
 # Privacy policy
 
-Backup Manager, `com.iasbuilt.backupmanager`. This is the privacy disclosure
+Backup Manager, `com.iasbuilt.rclonemanager`. This is the privacy disclosure
 §73 Work Package 5.2 and §45.5 require, and it is the content the `privacy`
 link in `distribution/packaging/compliance.json` resolves to.
 

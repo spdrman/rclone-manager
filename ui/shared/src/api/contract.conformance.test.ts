@@ -311,6 +311,11 @@ describe("every request the shared client makes is a declared operation", () => 
         include: [], completionStrategy: "rename"
       })],
       ["listValidators", () => httpApi.listValidators()],
+      // EPIC I (#664): the registered-backend catalogue the
+      // add-a-destination picker renders. Driven here for the reason the
+      // comment below gives — a client method nobody drives from this
+      // list could call any path it liked and nothing would notice.
+      ["listBackends", () => httpApi.listBackends()],
       ["importSSHKey", () => httpApi.importSSHKey("pem")],
       ["probeHostKey", () => httpApi.probeHostKey("h", 22)],
       // Issue #592: the two reads and the second import. Listed here for
@@ -386,7 +391,6 @@ describe("every request the shared client makes is a declared operation", () => 
         })],
       ["removeStorageMedium", () => httpApi.removeStorageMedium("offsite_s3")],
       ["setDefaultStorageMedium", () => httpApi.setDefaultStorageMedium("offsite_s3")],
-      ["listBackends", () => httpApi.listBackends()],
       ["getStorageMediumConfiguration", () => httpApi.getStorageMediumConfiguration("offsite_s3")],
       ["preflightStorageMediumConfiguration", () => httpApi.preflightStorageMediumConfiguration("offsite_s3", {
         fields: { bucket: "nas-backups" },
