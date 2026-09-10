@@ -595,3 +595,69 @@ jobs:
         env:
           DRY_RUN: ${{ needs.decide.outputs.publish == 'true' && '0' || '1' }}
         run: bash scripts/release/publish-image.sh
+
+  # `release` is where the digests actually recorded by a push live
+  # (issue #260's history: "Record 0.3.3's real build hashes at the
+  # commit it landed as" and its like), and `main` does not get them
+  # until something merges them back. Without this, the next cut
+  # branches off a `main` that still says `published: false` about a
+  # release that has, by the time this job runs, actually published,
+  # and every reader of `main`'s own `distribution/packaging/canonical.json`
+  # is looking at a stale answer to the one question that file exists to
+  # hold current.
+  #
+  # Runs only after a real publish, not after a dry run: `needs: publish`
+  # makes it depend on that job's success, and `needs.decide.outputs.publish
+  # == 'true'` keeps a `publish: false` dispatch (which still runs `publish`
+  # in DRY_RUN mode and reports success) from merging anything back. Only a
+  # push to `release` sets that output true, so this job only ever runs
+  # behind an image that was actually pushed, signed and attested by the
+  # job above it.
+  #
+  # No pull request: `main` carries no branch protection ruleset (unlike
+  # `release`, which refuses anything that is not a pull request past a
+  # green `release gate`), so the merge this job makes is pushed directly,
+  # the same act a maintainer doing this by hand has always performed
+  # (see e.g. "Merge release back into main after publishing 0.3.3"). A
+  # merge conflict here means `main` changed something `release` also
+  # touched since the cut, which `docs/release-branch.md`'s rule 3 says
+  # should not happen; this job fails loudly rather than guess a
+  # resolution, and the fix is to merge `release` into `main` by hand,
+  # the same way this job does it, and push that.
+  merge-back-to-main:
+    name: merge release into main, now that it has published
+    needs: [decide, publish]
+    if: needs.decide.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Read the tag this run published
+        id: tag
+        run: |
+          tag="$(sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' distribution/packaging/canonical.json | head -n1)"
+          if [ -z "$tag" ]; then
+            echo "::error::distribution/packaging/canonical.json names no image.tag on main; nothing to name the merge commit after."
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge the published commit into main
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          PUBLISHED_SHA: ${{ github.sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git merge --no-ff "$PUBLISHED_SHA" \
+            -m "Merge release into main after publishing ${TAG}" \
+            -m "Automated by .github/workflows/release.yml's merge-back-to-main job, so main carries the digests and the published:true flag this run just recorded rather than waiting for somebody to do it by hand."
+
+      - name: Push
+        run: git push origin HEAD:main
