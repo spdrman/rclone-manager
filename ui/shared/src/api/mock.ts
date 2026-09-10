@@ -1208,7 +1208,6 @@ const BACKEND_CATALOG: BackendCatalog = {
       summary:
         "A directory on a disk this NAS can see. A second internal drive, a USB disk, or an already-mounted network share.",
       role: "local_volume",
-      rcloneBackend: "local",
       fields: [
         {
           id: "path",
@@ -1265,7 +1264,6 @@ const BACKEND_CATALOG: BackendCatalog = {
       summary:
         "Amazon S3, or any service that speaks its API: MinIO, Ceph, Backblaze B2, Wasabi, a private gateway.",
       role: "object_store",
-      rcloneBackend: "s3",
       fields: [
         {
           id: "bucket",
@@ -1345,7 +1343,7 @@ const BACKEND_CATALOG: BackendCatalog = {
       }
     }
   ],
-  unregistered: [{ rcloneBackend: "sftp" }],
+  unregistered: [{ transport: "sftp" }],
   // config.StorageMediumIDPattern, which is RetentionTierNamePattern
   // itself rather than a second copy of the same expression.
   instanceIdPattern: "^[a-z][a-z0-9_]*$",

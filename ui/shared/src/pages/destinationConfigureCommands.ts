@@ -89,7 +89,16 @@ export function editConfigurationCommand(
   // printed is that an operator can copy them.
   const parts = [`rbm medium ${creating ? "add" : "edit"} ${destinationId}`];
   const fieldsWithNoFlag: string[] = [];
-  if (creating) parts.push(`--type ${manifest.rcloneBackend}`);
+  // `--type` takes the BACKEND ID and not the rclone backend, which is a
+  // distinction this line got wrong until #81 measured it:
+  // `medium add --type` sets StorageMediumSpec.Type, which is
+  // config.StorageMedium.Type, which IS the registry key the manifest is
+  // looked up by (core/service resolves it with reg.Backend(m.Type)).
+  // The two coincide for s3 and diverge for local_volume, where the
+  // rclone backend is `local` and the manifest id is `local_volume`, so
+  // the old spelling printed a line that failed on execution for the one
+  // destination a fresh install has.
+  if (creating) parts.push(`--type ${manifest.id}`);
 
   for (const field of manifest.fields) {
     if (field.kind === "credential") continue;
