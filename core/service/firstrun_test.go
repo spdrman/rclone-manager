@@ -779,17 +779,65 @@ func TestCreateInitialConfig_NoVerifyStillRecordsAProbeThatPassed(t *testing.T) 
 	}
 }
 
+// The directory a backup set owns is created by this product, and the
+// seed is not the one place that refuses to.
+//
+// On a FIRST create the backup root is EffectiveBackupRoot() over
+// exactly one backup set, which is that set's own subdirectory — never
+// the mount. Nothing creates it before first use: pipeline.go's
+// admitCapacity MkdirAlls it immediately before the transfer that needs
+// it ("nothing upstream of this call has created bs.LocalPath"),
+// config.Validate only checks the path is absolute and traversal-free,
+// and storage.go names StorageUnavailableNotCreated "the benign
+// first-run case". A seed that refused it made this product's own
+// posture into a refusal, and it refused a create whose six connection
+// steps had all just passed: scripts/e2e/three-machine-web-ui.sh could
+// not stand a deployment up at all.
+//
+// So the leaf is created and then probed, which is not the same as
+// probing whatever a MkdirAll would conjure — see the case below.
+func TestSeedLocalStorageMedium_CreatesTheLeafItOwnsAndThenProvesIt(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "vps")
+	cfg := &config.Config{Capacity: config.Capacity{BackupRoot: root}}
+
+	medium, err := seedLocalStorageMedium(context.Background(), cfg, false)
+	if err != nil {
+		t.Fatalf("seedLocalStorageMedium against a backup root whose parent is there: %v", err)
+	}
+	if medium.ConnectionUnverified {
+		t.Error("the seeded destination is marked unverified, though its probe ran against a directory this call created and passed")
+	}
+	if info, statErr := os.Stat(root); statErr != nil || !info.IsDir() {
+		t.Errorf("the backup root was not created: stat err = %v", statErr)
+	}
+}
+
 // And the refusal itself is intact for the ordinary install, which is
 // #670's own acceptance: verified without anybody pressing anything.
+//
+// The shape here is the one #670 is actually about, and it is why the
+// leaf above is created with a single-level Mkdir rather than MkdirAll:
+// a volume that did not mount leaves its own mount point missing, so the
+// parent of the backup root is absent too. Mkdir fails with ENOENT
+// there, `reach` fails, and the write is refused — where MkdirAll would
+// have built the whole chain on the system disk and let every later
+// check pass against an empty directory behind an empty mount point.
+// `reach` is the ONLY step that catches this: distinct_volume compares
+// against other declared local roots and passes when there are none.
+//
 // Called directly rather than through CreateInitialConfig because with
 // the opt-out off the SSH check refuses first, and this case is about
 // the seed's own verdict.
 func TestSeedLocalStorageMedium_StillRefusesWhenNobodyOptedOut(t *testing.T) {
-	absent := filepath.Join(t.TempDir(), "not-mounted-yet")
+	// Two levels missing: the mount point itself is not there.
+	absent := filepath.Join(t.TempDir(), "not-mounted", "vps")
 	cfg := &config.Config{Capacity: config.Capacity{BackupRoot: absent}}
 
 	if _, err := seedLocalStorageMedium(context.Background(), cfg, false); !errors.Is(err, ErrConnectionNotProven) {
 		t.Fatalf("seedLocalStorageMedium(optedOut=false) against an absent root: err = %v, want one matching ErrConnectionNotProven", err)
+	}
+	if _, statErr := os.Stat(absent); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("the refused seed created %s anyway (stat err = %v): a volume that did not mount would now be a directory on the system disk", absent, statErr)
 	}
 
 	// The same call with the opt-out on writes the medium instead, and

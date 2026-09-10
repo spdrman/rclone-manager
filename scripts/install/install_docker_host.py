@@ -5025,7 +5025,7 @@ def _newest_enrollment_notice(args):
     pastes an invalidated link into a browser and reads a refusal that
     does not explain itself.
     """
-    proc = run(compose_argv(args) + ["logs", "--tail", "400", ENGINE_SERVICE],
+    proc = run([*compose_argv(args), "logs", "--tail", "400", ENGINE_SERVICE],
                check=False, timeout=60, cwd=str(args.prefix))
     if proc.returncode != 0:
         return ""
@@ -5086,7 +5086,7 @@ def cmd_enroll_link(args) -> int:
     previous = _newest_enrollment_notice(args)
 
     say(f"==> Restarting {ENGINE_SERVICE}, which is what mints a token")
-    restart = run(compose_argv(args) + ["restart", ENGINE_SERVICE],
+    restart = run([*compose_argv(args), "restart", ENGINE_SERVICE],
                   check=False, timeout=300, cwd=str(args.prefix))
     if restart.returncode != 0:
         raise Refusal(
