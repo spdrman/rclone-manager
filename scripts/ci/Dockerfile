@@ -58,3 +58,43 @@ RUN set -eux; \
 # dubious ownership and the gate's first git call fails. Set in the image
 # rather than in the user's own config, which this must never write to.
 RUN git config --system --add safe.directory '*'
+
+# A writable home for whatever uid the wrapper runs as, which is the
+# HOST's uid rather than root's.
+#
+# Running as root was the obvious choice and it silently cost a test.
+# TestArchivingIsInsideTheRefusalContract sets a directory unwritable and
+# checks the installer refuses instead of raising, and root ignores the
+# mode, so the case cannot be set up and skips itself. It said so plainly
+# in the output and it would have gone on saying so for ever, which is
+# the kind of coverage that disappears without anyone deciding to drop
+# it. A non-root uid gets the assertion back.
+#
+# 0777 rather than a chown to a fixed uid: the wrapper passes the host
+# user's own uid, which differs between machines, and a named volume
+# takes its permissions from the image directory it first shadows.
+ENV HOME=/ci \
+    GOPATH=/ci/go \
+    GOCACHE=/ci/.cache/go-build \
+    GOMODCACHE=/ci/go/pkg/mod \
+    npm_config_cache=/ci/.npm \
+    XDG_CACHE_HOME=/ci/.cache
+
+# The uid the wrapper will run as, which is the host user's, so that a
+# file this creates on the bind mount belongs to the person who ran it.
+#
+# It needs a real passwd entry and not just a numeric --user, which is
+# where the first attempt at this failed: ssh-keygen resolves the
+# invoking uid and refuses with "No user exists for uid 501", so the
+# installer's own credential tests error rather than run. Anything that
+# calls getpwuid does the same, so the entry has to exist rather than the
+# callers having to cope.
+ARG CI_UID=1000
+ARG CI_GID=1000
+RUN set -eux; \
+    if ! getent group "${CI_GID}" >/dev/null; then groupadd -g "${CI_GID}" ci; fi; \
+    useradd -o -u "${CI_UID}" -g "${CI_GID}" -d /ci -s /bin/bash -M ci; \
+    mkdir -p /ci/.cache/go-build /ci/go/pkg/mod /ci/.npm /ci/.cache/rclone-manager-tests-gate; \
+    chown -R "${CI_UID}:${CI_GID}" /ci; \
+    chmod -R 0775 /ci; \
+    getent passwd "${CI_UID}"
