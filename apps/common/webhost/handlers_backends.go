@@ -84,22 +84,34 @@ type backendProbeResponse struct {
 }
 
 // backendResponse is one registered backend on the wire.
+//
+// It reports no transport. The manifest format carries one and the
+// engine enforces it at load time (backend.SupportedRcloneBackends, the
+// FR-4 floor), but that enforcement has already happened or already
+// refused the manifest by the time a client reads this, so a copy on the
+// wire could enforce nothing and only served as disclosure. #81's
+// standing constraint forbids naming an implementation on /api/v1, and
+// `role` is the product answer to what a backend is.
 type backendResponse struct {
-	ID            string                 `json:"id"`
-	Label         string                 `json:"label"`
-	Summary       string                 `json:"summary"`
-	Role          string                 `json:"role"`
-	RcloneBackend string                 `json:"rclone_backend"`
-	Fields        []backendFieldResponse `json:"fields"`
-	Probe         backendProbeResponse   `json:"probe"`
+	ID      string                 `json:"id"`
+	Label   string                 `json:"label"`
+	Summary string                 `json:"summary"`
+	Role    string                 `json:"role"`
+	Fields  []backendFieldResponse `json:"fields"`
+	Probe   backendProbeResponse   `json:"probe"`
 }
 
-// unregisteredBackendResponse is a backend this build understands and no
-// manifest declares. An object with one field rather than a bare string,
-// so the reason a backend is unregistered can be added later without
-// changing the type a client already parses.
+// unregisteredBackendResponse is a storage shape this build understands
+// and no manifest declares. An object with one field rather than a bare
+// string, so the reason a shape is unregistered can be added later
+// without changing the type a client already parses.
+//
+// Transport, not the manifest id backendResponse carries, because the
+// whole point of this row is that no manifest declares it, so there is
+// no id to name it by. `sftp` is a protocol, which is why the field can
+// be spelled at product level at all.
 type unregisteredBackendResponse struct {
-	RcloneBackend string `json:"rclone_backend"`
+	Transport string `json:"transport"`
 }
 
 // listBackendsResponse is GET /api/v1/backends' body: an object with
@@ -154,13 +166,12 @@ func (h *handlers) listBackends(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, b := range catalog.Backends {
 		out := backendResponse{
-			ID:            b.ID,
-			Label:         b.Label,
-			Summary:       b.Summary,
-			Role:          b.Role,
-			RcloneBackend: b.RcloneBackend,
-			Fields:        make([]backendFieldResponse, 0, len(b.Fields)),
-			Probe:         backendProbeResponse{Steps: make([]backendProbeStepResponse, 0, len(b.Probe))},
+			ID:      b.ID,
+			Label:   b.Label,
+			Summary: b.Summary,
+			Role:    b.Role,
+			Fields:  make([]backendFieldResponse, 0, len(b.Fields)),
+			Probe:   backendProbeResponse{Steps: make([]backendProbeStepResponse, 0, len(b.Probe))},
 		}
 		for _, f := range b.Fields {
 			field := backendFieldResponse{
@@ -186,7 +197,7 @@ func (h *handlers) listBackends(w http.ResponseWriter, r *http.Request) {
 		resp.Backends = append(resp.Backends, out)
 	}
 	for _, name := range catalog.Unregistered {
-		resp.Unregistered = append(resp.Unregistered, unregisteredBackendResponse{RcloneBackend: name})
+		resp.Unregistered = append(resp.Unregistered, unregisteredBackendResponse{Transport: name})
 	}
 
 	writeJSON(w, http.StatusOK, resp)

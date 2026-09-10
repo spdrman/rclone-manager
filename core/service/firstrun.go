@@ -615,6 +615,44 @@ func seedLocalStorageMedium(ctx context.Context, cfg *config.Config, optedOutOfV
 	if root != "" && !filepath.IsAbs(root) {
 		return config.StorageMedium{}, fmt.Errorf("%w: local_path %q must be an absolute path", ErrInvalidRequest, root)
 	}
+
+	// The leaf this deployment owns is created before the probe looks at
+	// it, because creating it is this product's job and not the
+	// operator's. On a first create EffectiveBackupRoot() is the common
+	// ancestor of exactly one backup set, which is that set's own
+	// subdirectory rather than the mount, and three independent places
+	// already say nothing creates it in advance: pipeline.go's
+	// admitCapacity MkdirAlls it immediately before the transfer that
+	// needs it ("nothing upstream of this call has created
+	// bs.LocalPath"), config.Validate only asks that the path is
+	// absolute and traversal-free, and storage.go names
+	// StorageUnavailableNotCreated "the benign first-run case". Probing
+	// before creating turned that posture into a refusal, and it refused
+	// creates whose every connection step had just passed:
+	// scripts/e2e/three-machine-web-ui.sh could not stand a deployment
+	// up at all.
+	//
+	// Mkdir and deliberately NOT MkdirAll. `reach` is the only step that
+	// catches a volume that did not mount — distinct_volume compares
+	// against OTHER declared local roots and passes when there are none,
+	// so it is not a mount check — and MkdirAll would build the whole
+	// chain on the system disk and let every later check pass against an
+	// empty directory behind an empty mount point, which is the exact
+	// hazard #670's reach failure is worded about. One level creates only
+	// the leaf and fails with ENOENT when the parent is missing, so:
+	// mounted, the subdirectory is created and write, space and distinct
+	// run for real on the actual volume; not mounted, the refusal stands
+	// unchanged.
+	//
+	// The error is dropped on purpose. Whatever it was — the parent is
+	// absent, the volume is read-only, something is already there and is
+	// not a directory — the probe below reports that condition in
+	// mediumcheck's own vocabulary, and a second sentence about the same
+	// filesystem in this function's words would only be a worse spelling
+	// of it.
+	if root != "" {
+		_ = os.Mkdir(root, 0o755)
+	}
 	report, err := mediumcheck.RunLocal(ctx, func(step mediumcheck.Step, err error) {
 		// The one place the underlying cause is allowed to go, exactly as
 		// app.Service.PreflightLocalMedium's own Observe is: an os error

@@ -238,10 +238,14 @@ function ChooseBackendPane({
   const registered = catalog.registered.filter(
     (b) =>
       needle === "" ||
-      [b.id, b.label, b.summary, b.rcloneBackend].some((h) => h.toLowerCase().includes(needle))
+      // No transport in the haystack, because a manifest no longer
+      // reports one (#81). Nothing was lost: for both bundled manifests
+      // every substring of the transport is already a substring of the
+      // id, so no needle changed result.
+      [b.id, b.label, b.summary].some((h) => h.toLowerCase().includes(needle))
   );
   const unregistered = catalog.unregistered.filter(
-    (u) => needle === "" || u.rcloneBackend.toLowerCase().includes(needle)
+    (u) => needle === "" || u.transport.toLowerCase().includes(needle)
   );
 
   return (
@@ -294,8 +298,13 @@ function ChooseBackendPane({
                 <span style={{ fontSize: "var(--text-xs)", color: "var(--text-3)" }}>
                   {/* The manifest id, because it is what the command line
                       and the configuration file both spell, and an
-                      operator who reads it here recognises it there. */}
-                  {b.id} · dialed through rclone's {b.rcloneBackend}
+                      operator who reads it here recognises it there.
+                      It used to be followed by the rclone backend this
+                      dials; that named an implementation on a screen and
+                      on the wire behind it, which #81 forbids, and the
+                      product answer to what a backend is is its label,
+                      its summary and its role. */}
+                  {b.id}
                 </span>
               </span>
             </label>
@@ -315,8 +324,8 @@ function ChooseBackendPane({
           >
             {unregistered.map((u) => (
               <li
-                key={u.rcloneBackend}
-                aria-label={u.rcloneBackend}
+                key={u.transport}
+                aria-label={u.transport}
                 aria-disabled="true"
                 style={{
                   display: "flex",
@@ -328,7 +337,7 @@ function ChooseBackendPane({
                   color: "var(--text-3)"
                 }}
               >
-                <strong style={{ fontSize: 13 }}>{u.rcloneBackend}</strong>
+                <strong style={{ fontSize: 13 }}>{u.transport}</strong>
                 <span style={{ fontSize: 12 }}>not registered</span>
                 <span style={{ fontSize: "var(--text-xs)" }}>
                   This build knows the shape of it and ships no description of one, so no destination can be

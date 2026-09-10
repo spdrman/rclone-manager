@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "f08ab42ee75da18e8a8be2fab0611c9f41c8ff754dd241df73281c0660e0a8dc";
+export const CONTRACT_SHA256 = "bb45f33fb55cfb08530f2ea09af19ce89036701e9e94ee04a2102ea09164da12";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1477,7 +1477,6 @@ export interface WireBackendManifest {
   id: string;
   label: string;
   probe: WireBackendProbe;
-  rclone_backend: string;
   role: "object_store" | "local_volume";
   summary: string;
 }
@@ -2681,7 +2680,7 @@ export interface WireTrustedHostKey {
   fingerprint: string;
 }
 
-/** A backend this build's transport layer understands but which NO
+/** A transport this build's storage layer understands but which NO
  *  manifest declares, so no instance of it can exist. Reported rather
  *  than hidden: hiding it answers an operator worse, because somebody
  *  who came looking for SFTP learns nothing from a menu that never
@@ -2690,7 +2689,7 @@ export interface WireTrustedHostKey {
  *  client renders these as unselectable; there is nothing to send,
  *  since a create request naming one is refused by the registry. */
 export interface WireUnregisteredBackend {
-  rclone_backend: string;
+  transport: string;
 }
 
 /** PATCH /backup-sets/{source}/{set}. A SPARSE edit of one

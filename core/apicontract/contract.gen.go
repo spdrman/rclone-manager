@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "f08ab42ee75da18e8a8be2fab0611c9f41c8ff754dd241df73281c0660e0a8dc"
+const ContractSHA256 = "bb45f33fb55cfb08530f2ea09af19ce89036701e9e94ee04a2102ea09164da12"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1049,13 +1049,12 @@ type BackendEnumValue struct {
 // carries a label and a summary for a picker and says nothing about
 // any particular destination.
 type BackendManifest struct {
-	Fields        []BackendManifestField `json:"fields"`
-	ID            string                 `json:"id"`
-	Label         string                 `json:"label"`
-	Probe         BackendProbe           `json:"probe"`
-	RcloneBackend string                 `json:"rclone_backend"`
-	Role          string                 `json:"role"`
-	Summary       string                 `json:"summary"`
+	Fields  []BackendManifestField `json:"fields"`
+	ID      string                 `json:"id"`
+	Label   string                 `json:"label"`
+	Probe   BackendProbe           `json:"probe"`
+	Role    string                 `json:"role"`
+	Summary string                 `json:"summary"`
 }
 
 // BackendManifestField is one thing an operator is asked for when they configure an instance
@@ -2259,7 +2258,7 @@ type TrustedHostKey struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
-// UnregisteredBackend is A backend this build's transport layer understands but which NO
+// UnregisteredBackend is A transport this build's storage layer understands but which NO
 // manifest declares, so no instance of it can exist. Reported rather
 // than hidden: hiding it answers an operator worse, because somebody
 // who came looking for SFTP learns nothing from a menu that never
@@ -2268,7 +2267,7 @@ type TrustedHostKey struct {
 // client renders these as unselectable; there is nothing to send,
 // since a create request naming one is refused by the registry.
 type UnregisteredBackend struct {
-	RcloneBackend string `json:"rclone_backend"`
+	Transport string `json:"transport"`
 }
 
 // UpdateBackupSetRequest is PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
