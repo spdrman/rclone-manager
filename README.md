@@ -6,9 +6,11 @@
 </p>
 
 
-A backup lifecycle manager for a NAS. It pulls completed backup artifacts off a remote
-server over SFTP, verifies them, commits them durably, and only then deletes the remote
-copy.
+A backup producer somewhere writes a dump, an archive or a snapshot to disk. That machine
+has finite space, so something has to move the artifact off it and something has to delete
+the original. rclone-manager is the half of that job that runs on the NAS: it discovers
+finished artifacts on the remote server over SFTP, pulls them, verifies them, commits them
+durably, records that it did, and only then removes the remote copy.
 
 It is a standalone Go binary that **embeds pinned rclone Go packages**. It does not fork
 rclone, and it does not shell out to the `rclone` CLI for normal data movement. There are
@@ -17,13 +19,293 @@ an operator can DO in the browser has an equivalent command, and that is a gate 
 an intention: a route with neither a command behind it nor a written reason there is none
 fails the build.
 
-**If you just want to run it:** [Installing it](https://spdrman.github.io/rclone-manager/index.html#install)
-is two commands, or one command from
-[`scripts/install/install_docker_host.py`](scripts/install/install_docker_host.py) on a
-machine you have SSH on.
+**If you just want to run it:** [Installing it](#installing-it) is two commands on any
+machine with Docker.
 
-**If you're here because a backup didn't arrive and it's 3am:** go straight to
+**If you're here because a backup didn't arrive and it's 3am:** skip to
+[Recovery](#recovery-when-a-backup-did-not-arrive) below, or go straight to
 [`docs/recovery.md`](docs/recovery.md).
+
+**The same material as pages, with pictures**, is the published site: [the first-run
+tutorial](https://spdrman.github.io/rclone-manager/first-run.html), [the web interface in
+motion](https://spdrman.github.io/rclone-manager/web-ui.html), [SSH and
+connections](https://spdrman.github.io/rclone-manager/ssh.html), and [the
+reference](https://spdrman.github.io/rclone-manager/reference.html), which carries every
+screen of the browser interface and every `rbm` command with its flags. It is generated
+from [`docs/site/`](docs/site/) in this repository. The site is the source of truth for how
+to install the product and how to drive it; this document is the engineering account behind
+it, and where the two ever disagree about install or operator surfaces, the site is right.
+
+## Installing it
+
+Two commands, no arguments, on any machine with Docker:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py
+python3 install_docker_host.py install
+```
+
+[`scripts/install/install_docker_host.py`](scripts/install/install_docker_host.py) (#262)
+is one file, and that is the point: it needs no checkout beside it, nothing else from this
+project on disk, and nothing outside the Python standard library, because an operator
+installing onto a NAS does not have a git clone there. The canonical Compose runtime is
+embedded in it, generated from [`container/compose.yaml`](container/compose.yaml) and held
+to that file byte for byte by a test.
+
+```text
+==> Installed.
+    Web UI:  http://10.0.0.10:8080
+    Compose: docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml
+
+    No config.yaml was written, on purpose. Issue #176 shipped a first-run setup flow
+    precisely so that a fresh install does not need one hand-written before it starts.
+    Open the Web UI and follow it. The enrollment link is in the engine's log:
+      docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml logs rclone-manager | grep enroll
+```
+
+It picks every path for you — `~/rclone-manager`, with `backups`, `state`, `config` and
+`secrets` under it — generates the SSH keypair the engine will use, pins the exact image it
+was built against, and refuses before it changes anything if the machine cannot run it.
+Nothing needs deciding up front, and everything it chose can be changed afterwards. A
+**defaulted** credential path that does not exist is created; an **explicitly named** one
+that does not exist is still a refusal, because generating a different key under a path you
+typed would hand you one the far host has never seen while reporting success, and an
+existing key is never regenerated whatever its age. Directories it creates are born `0700`,
+and ones that already exist only lose group and world write, because the engine refuses an
+SSH key whose whole ancestry is not tight, not just the key file.
+
+`python3 install_docker_host.py preflight` runs every one of those checks and installs
+nothing.
+
+### The enrolment link is minted by the engine, not by the installer
+
+The last line of that epilog is a command rather than a result, and it is the one that
+matters. The engine mints the enrolment token during startup and writes the notice to its
+own log, so the installer prints the line that reads it back out:
+
+```text
+rbm-web: no administrator account exists yet. Open
+http://10.0.0.10:8080/enroll?token=4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6
+to create one (valid 30 minutes, single use).
+```
+
+That link claims the administrator account, and it is the only thing that can: reaching the
+port is deliberately not enough. The token proves you can read the container's own log,
+which is what somebody else on the network cannot do. It is single use, it expires in
+thirty minutes, and the address in it is this machine's own rather than `localhost`,
+because the link is opened from whichever computer you are sitting at — printing
+`localhost` was #688, and over SSH on a laptop `localhost` is the laptop.
+
+Nothing reissues that link while the engine keeps running, so a lapsed one has its own
+command:
+
+```bash
+python3 install_docker_host.py enroll-link
+```
+
+It restarts the engine, which is what mints a token, waits for the notice, and prints the
+**newest** one rather than the first: the container keeps its log across the restart, and
+the earlier link is the one that restart just killed. Every link printed before it is now
+dead, including any still in your scrollback. On a deployment that already has an
+administrator it refuses with its own exit code instead, because enrolment is a one-time
+door and it closed when that account was created.
+
+[The first-run tutorial](https://spdrman.github.io/rclone-manager/first-run.html) picks up
+at that screen and walks every step of the wizard, with an example for every field.
+
+### Command line only, no web interface
+
+Same two commands, one flag on the second one:
+
+```bash
+python3 install_docker_host.py install --cli-only
+```
+
+The engine container runs `rbm daemon` instead of `rbm-web serve`, the `web-ui` container is
+never started, and no port is published on this host at all, so nothing in the deployment
+serves HTTP and the `rbm-web` binary is never executed. What drives it is the `rbm` wrapper
+the installer writes to `<prefix>/bin/rbm`, which takes every command in
+[the CLI table below](#the-engine-and-the-cli-are-real).
+
+There is no enrolment link on such a host and nothing to enrol into, and there is no
+first-run wizard either, which is why a fresh CLI-only install stages everything, starts
+nothing, and prints the one command that writes the first configuration: creating the first
+backup set writes the first `config.yaml` along with it. Re-running the installer later with
+no flags keeps the deployment this shape; `--no-cli-only` converts it to the full stack.
+
+### The seven subcommands
+
+`preflight` checks and creates nothing. `install` checks and then installs. `status` reports
+what is here and whether bridge networking still works, and only ever reads. `enroll-link`
+mints a fresh enrolment link. `uninstall` takes the stack down and removes `compose.yaml`,
+`compose.image.yaml` and `.env` — never the backups, never the state, never the
+configuration, and never the firewall rules a repair added. `network-doctor` diagnoses
+Docker bridge networking and repairs it when `--fix-network` says to, and `network-undo`
+removes exactly what a repair added and nothing else.
+
+Installing over an install that is already there is a decision rather than a default.
+`--mode upgrade` keeps every user, backup set and catalogued artifact, archiving them first,
+and converges when the version already matches. `--mode factory-reset`, which needs
+`--confirm-factory-reset` off a terminal, discards the administrator record, the catalog and
+the configuration, archiving them first, and leaves the retained backups on disk. Left unset
+with an install already here, it asks on a terminal and refuses without one, because
+guessing between keeping the data and wiping it is not an installer's decision. The default,
+`fresh`, refuses to run over an existing install at all.
+
+Every flag with its default, and every exit code, is on [the reference
+page](https://spdrman.github.io/rclone-manager/reference.html#installer) and in
+[`docs/install.md`](docs/install.md). This is the path #263 used on the UGREEN NAS.
+
+### What the browser looks like while it works
+
+Three clips from [the web interface in
+motion](https://spdrman.github.io/rclone-manager/web-ui.html), which has seven more.
+**Every picture this project publishes is recorded against the development server's
+in-memory fixture API rather than against a running engine**: the layout, the copy, the flow
+and the interaction are the real ones, and the data is not.
+
+**The terminal is docked to the window, not to the end of the page** (#617). One backup
+set's page scrolled from the top to the bottom and back, with the panel staying put and the
+content column reserving room under itself so the last row of a long table can still be
+scrolled clear of it.
+
+![The backup set page scrolling from top to bottom while the terminal stays fixed to the bottom of the window](docs/site/screens/ui-terminal-pinned.gif)
+
+**A run reports an outcome, and the command it was equivalent to** (#597, #620). The press,
+the notice, the same line arriving in the docked terminal, the *This browser* chip isolating
+it, and the close control that a banner you have read needs.
+
+![Pressing Run this backup set, the notice appearing with the equivalent command, the same line arriving in the docked terminal, the This browser filter isolating it, then closing the notice](docs/site/screens/ui-run-controls.gif)
+
+**Dark mode, including the native controls** (#618). The settings page is the worst case and
+so it is the one in shot: it is mostly native `select`s and number inputs, which is exactly
+what the application used to leave at the browser's default and paint black on black.
+
+![The settings page switching to dark mode, scrolling through a form of native selects and number inputs, then switching back](docs/site/screens/ui-dark-mode.gif)
+
+### What it sets up, and doing it by hand
+
+There is one product here, not eleven. Every platform below wraps the same
+multi-architecture OCI image and the same Compose topology, and the differences between them
+are host paths and metadata formats. [`container/compose.yaml`](container/compose.yaml) is
+that topology, and [`docs/deployment.md`](docs/deployment.md) is the reasoning behind every
+setting in it.
+
+Two services, one image. `rclone-manager` runs `/rbm-web serve`: the core service, the
+scheduler, local authentication and `/api/v1`, in one process on one shutdown context, with
+**no published port at all**. `web-ui` runs `/rbm-web serve-ui`: the static UI plus a
+reverse proxy to the engine, and it is the only service with a LAN-facing port. They meet on
+a private project-scoped bridge network, which is what makes the engine's isolation a
+topology rather than a convention. The same image also carries `rbm` itself, the headless
+CLI, for a deployment that wants no web listener at all.
+
+Standing that up by hand from a checkout, rather than with the installer, is three commands:
+
+```bash
+cd container
+cp .env.example .env      # then edit: PUID/PGID, the host paths, LISTEN_PORT
+docker compose up -d
+```
+
+Both containers run non-root as `PUID:PGID`, with a read-only root filesystem, all
+capabilities dropped and `no-new-privileges`. The runtime image is distroless, with no shell
+and no init step, and a bind mount does not chown its source, so **the host paths have to
+exist and be owned by that uid/gid before the first start**; nothing in the container will
+chown them for you. The installer above already does this.
+
+### Which mount holds what, and why they are never the same directory
+
+Every platform mounts three separate places for three different jobs, and conflating any two
+of them is the mistake this section exists to prevent.
+
+| Mount | Holds | Written by | `.env` key |
+|---|---|---|---|
+| Private application state | the SQLite journal and its `-wal`/`-shm` files | the app, constantly | `STATE_DIR` |
+| Backup data | the retained artifacts and their sidecar recovery manifests | the app, on commit | `BACKUP_DIR` |
+| Configuration | `config.yaml`, whoever wrote it: the first-run flow, the API, the CLI, or you | the app, and you | `CONFIG_DIR` |
+| Credentials | the SSH private key and the pinned `known_hosts`, mounted `:ro` a file at a time | you, out of band | `SSH_KEY_FILE`, `KNOWN_HOSTS_FILE` |
+
+The configuration mount is a writable **directory**, not a read-only file, and that is
+deliberate: a directory is the only shape that can honestly be empty, which is what lets an
+install that has never been configured reach the setup screen instead of refusing to start
+(#196). The two credential files are the read-only ones, and they are mounted individually.
+
+The SSH private key is the one that matters. It lives with the configuration, mounted
+read-only, and it must **not** be inside the backup root: put it there and every backup of
+that directory carries the key that can read and delete the source. The backup root on every
+platform below is a dedicated child directory rather than a share you already use, for the
+same reason.
+
+One sizing note for a deployment with a retention chain that puts two tiers on two
+different storage mediums. A hop from one medium to another stages through a `.moves`
+directory under the backup set's own `local_path`, so the backup mount needs room for the
+largest artifact that will ever hop, transiently, on top of whatever it retains
+permanently. A hop that will not fit is refused before anything is downloaded, and the copy
+it would have moved stays where it is. See
+[Where a durable copy actually lives](#where-a-durable-copy-actually-lives-epic-e).
+
+`distribution/packaging/canonical.json` is the single source of truth for these paths, and
+this repository's own test suite fails the build if any platform's metadata disagrees with
+it.
+
+### What "supported" means for each target
+
+<!-- BEGIN SUPPORT-MODEL -->
+
+| Target | Tier | What ships in this repository today | Where the paths are defined |
+|---|---|---|---|
+| Generic Docker and Linux | Tier C | the canonical image, `container/compose.yaml`, and `apps/generic`'s own Go module for the web host | `container/compose.yaml` |
+| TrueNAS | Tier B | a custom-app Compose file plus a TrueNAS Apps catalog entry, metadata only | [`apps/truenas/README.md`](apps/truenas/README.md) |
+| Unraid | Tier B | two Community Applications Docker templates, metadata only | [`apps/unraid/README.md`](apps/unraid/README.md) |
+| Synology DSM | Tier B | a real `.spk` built by `apps/synology`, wrapping the release binaries unchanged and checking their digest against `container/release-manifest.json` | [`apps/synology/README.md`](apps/synology/README.md) |
+| OpenMediaVault | Tier C | a Compose deployment profile, metadata only | [`apps/openmediavault/README.md`](apps/openmediavault/README.md) |
+| Proxmox VE | Tier C | the same Compose profile for a dedicated container-host guest, metadata only | [`apps/proxmox/README.md`](apps/proxmox/README.md) |
+| Portainer CE | Tier B | a version 3 App Template plus the Compose stack it deploys, metadata only | [`apps/portainer/README.md`](apps/portainer/README.md) |
+| Dockge | Tier C | no packaging at all, by design: Dockge imports `container/compose.yaml` itself, and the deliverable is the workflow that keeps that true | [`apps/dockge/README.md`](apps/dockge/README.md) |
+| CasaOS | Tier B | one `docker-compose.yml` carrying an `x-casaos` block, which is both the runtime definition and the store submission | [`apps/casaos/README.md`](apps/casaos/README.md) |
+| ZimaOS | Tier B | the same `x-casaos` compose file again, for the CasaOS-derived store ZimaOS ships | [`apps/zimaos/README.md`](apps/zimaos/README.md) |
+| UGREEN UGOS Pro | Tier A | the frontend bridge and nothing else: no `.UPK`, no packaging | EPIC D, issue #83 |
+
+<!-- END SUPPORT-MODEL -->
+
+The tiers come from `docs/EPIC-B-multi-nas.md`'s support-tier list, from `canonical.json`,
+which declares nine platforms and the seven runtime profiles behind them, and from
+`conformance.json`, which declares all eleven targets with their tiers. The gate checks
+every row of this table against those two files rather than trusting the table, and it
+checks in both directions: a row here that neither file declares is a failure, and so is a
+target they declare that this table has dropped.
+
+Two things about the Proxmox row are worth saying out loud. Its paths are inside the guest,
+not on the PVE host: the supported model is a dedicated container-host guest with one host
+directory or dataset shared into it, and running the app on the PVE host itself is ruled
+out. And the Unraid row is the one profile where the engine's isolation is weaker than the
+others, because both Unraid templates join a durable, host-wide, generically named bridge
+the operator creates by hand; every container on such a bridge can reach every port of every
+other one, so the engine does not trust forwarded headers there and rate-limits on the
+proxy's own address instead. `apps/unraid/README.md` says so too.
+
+### What is deliberately not being built
+
+EPIC B commits to a support model, and the deferrals are part of it. New Synology `.spk`
+work, native DSM SSO, a native OpenMediaVault Workbench plugin, a Proxmox Web UI plugin, a
+Portainer plugin or API extension, a Dockge plugin, a second application server for any
+provider, provider-specific backup engines and provider-specific copies of the React
+application are all explicitly out of scope unless one of them is later proven necessary.
+
+The Synology line reads like a contradiction and is not one. #85 shipped an `.spk` in Phase
+4 because Phase 4 shipped as written, and the deferral is about **new** `.spk` work; #169
+adds a Container Manager Compose path alongside the shipped package rather than replacing
+it. Retiring shipped packaging would be a product decision and nobody has made one.
+
+Portainer, CasaOS, ZimaOS and Dockge were the four EPIC B's Phase 6 support model named as
+targets that get a documented deployment profile, and this paragraph used to say none of
+them was in the tree. All four are, they are rows in the table above, and the gate would
+fail if they were not: `apps/portainer/` is an App Template plus its Compose stack,
+`apps/casaos/` and `apps/zimaos/` are the same `x-casaos` Compose file for two stores, and
+`apps/dockge/` deliberately ships no packaging because Dockge imports
+`container/compose.yaml` itself. What none of them has is a hardware run, which is the
+[conformance matrix's](#what-has-actually-been-exercised-on-real-hardware) business, not
+this section's.
 
 ## The rule everything else serves
 
@@ -53,15 +335,15 @@ connection to a source and the connection to a storage destination, and until 0.
 one of them was checked. Both are now proved before the product relies on them, both refuse
 on failure, both spell the escape hatch `--no-verify`, and both mark what was written under
 it as unverified until a passing check clears the mark. See
-[SSH and connections](https://spdrman.github.io/rclone-manager/ssh.html).
+[Proving a connection before anything depends on it](#proving-a-connection-before-anything-depends-on-it).
 
 **It says what it is doing while it does it.** Every operator-visible action reports a
 start and a completion carrying a real outcome, on one feed that the terminal docked to the
 browser window, each backup set's own page and `rbm activity --follow` are three readings
-of. See [the web interface in motion](https://spdrman.github.io/rclone-manager/web-ui.html).
+of. See [What the browser actually gives you](#what-the-browser-actually-gives-you).
 
-The published site at [spdrman.github.io/rclone-manager](https://spdrman.github.io/rclone-manager/)
-is where the rest of this is documented screen by screen and command by command.
+Every section below is either explaining how those rules are enforced or admitting where the
+enforcement doesn't exist yet.
 
 ## Status: what actually runs today
 
@@ -78,12 +360,18 @@ commands, and the list below is checked against the dispatch table in
 `core/cmd/backup-manager/main.go` on every run of the gate, so it cannot quietly go stale
 the way its predecessor did.
 
-**The command is called `rbm` as of 0.3.3, and `backup-manager` still works.** That is the
-one thing to know before upgrading, and it is the whole of it: the old name is kept as an
-alias rather than deprecated, so a cron entry, a Compose healthcheck or a provisioning
-script written against `backup-manager` runs unchanged and keeps running. Every example in
-this document uses the new name because that is what a new operator should be typing, and
-nothing below is a second surface: one binary, two names for it.
+**The command is called `rbm` as of 0.3.3, and `backup-manager` stops working.** That is
+the one thing to know before upgrading, and it is the whole of it: the old name was retired
+rather than aliased, and nothing stands in for it. `container/Dockerfile` copies exactly
+`/rbm` and `/rbm-web` into the runtime stage and creates no link beside either, the image's
+own `HEALTHCHECK` runs `/rbm status`, and the wrapper the installer writes on a CLI-only
+host is called `rbm` too, so an invocation of the old name fails outright rather than
+quietly working. The published site says the same thing in the same words. What it costs an
+operator is one search and replace over everything outside this repository that types the
+name — a cron entry, a `docker compose exec` line, a healthcheck or Compose command of your
+own, a provisioning script, a wrapper on somebody's `$PATH` — done once, at the upgrade,
+rather than discovered later. Every example in this document uses the new name, and nothing
+below is a second surface: one binary, one name for it.
 
 <!-- BEGIN CLI-COMMANDS -->
 
@@ -108,7 +396,7 @@ nothing below is a second surface: one binary, two names for it.
 | `unconfigured` | list the backup sets the journal remembers and the configuration no longer names, what they still hold on storage, and the retention policy governing them, which is none. `unconfigured clear <source/backup-set> --acknowledge` clears the `.partial` residue a removal stranded mid-transfer and ends the journal rows nothing will ever advance; it never touches a retained backup (issue #418) |
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place, hot-reloaded with no restart. `--policy-file` replaces the deployment's whole retention chain from a file holding the contents of a `retention:` block (`-` reads standard input), and `--tier-medium NAME=MEDIUM_ID` points one tier at a storage destination and leaves the rest of the chain exactly as it is, which is the command the picker under a tier in the web UI echoes. Sending a tier somewhere other than local for the first time needs `--acknowledge-medium-disclosure` (issues #277, #595, #622) |
 | `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
-| `medium` | declare and prove storage destinations without editing `config.yaml`. `medium list` and `medium show <medium-id>` report what is declared and what the journal says is on it, reporting no credential and not even which of the three sources one reads. `medium import-credentials --stdin` is the only command on this surface that ever holds a secret and it takes it on standard input, because there is deliberately no `--access-key-id` flag anywhere here. `medium add`, `edit` and `remove` are the writes, and `add` VERIFIES FIRST and writes nothing when verification fails. `medium test-connection <medium-id>` (`medium preflight` is the same verb under the older name, kept so anything scripted against it goes on working) proves one destination actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. It answers for `local` too, telling a missing path, an unwritable directory and a full filesystem apart. An archive class is refused at `deliverable` with nothing written, because an object there is billed for a minimum duration measured in months and that is not a thing to discover empirically. `medium preflight --candidate` runs the same checks against a destination that is not declared, so a setup flow can prove one before writing it down, and `medium default <medium-id>` moves the destination a newly created retention tier starts on (issues #443, #622, #636) |
+| `medium` | declare and prove storage destinations without editing `config.yaml`. `medium list` and `medium show <medium-id>` report what is declared and what the journal says is on it, reporting no credential and not even which of the three sources one reads. `medium import-credentials --stdin` is the only command on this surface that ever holds a secret and it takes it on standard input, because there is deliberately no `--access-key-id` flag anywhere here. `medium add`, `edit` and `remove` are the writes, and `add` VERIFIES FIRST and writes nothing when verification fails. `medium test-connection <medium-id>` (`medium preflight` is the same verb under the older name, kept so anything scripted against it goes on working) proves one destination actually works before a cycle carrying a real backup does: credentials and reach answered separately, then deliverable, write, read-back byte for byte, the storage class the endpoint really reports against the one the config claims, verification asked live, and the probe object confirmed deleted. It answers for `local` too, telling a missing path, an unwritable directory and a full filesystem apart. An archive class is refused at `deliverable` with nothing written, because an object there is billed for a minimum duration measured in months and that is not a thing to discover empirically. `medium preflight --candidate` runs the same checks against a destination that is not declared, so a setup flow can prove one before writing it down, and `medium default <medium-id>` moves the destination a newly created retention tier starts on. The one destination operation missing here is declaring a local one: `medium add` takes `--bucket` and a `--type` defaulting to `s3` and has no `--path`, so an instance of the `local_volume` backend can be declared from the browser and not from a terminal (issues #443, #622, #636, #664) |
 | `retry` | `retry <source/backup-set/artifact> [--note T]` puts one FAILED backup back into the pipeline so it is attempted again. FAILED means an attempt did not finish, which is not the same thing as quarantined, so this is its own command rather than a fourth quarantine verb. Nothing does it automatically: a blind re-transfer of gigabytes for a cause nothing has classified is a cost this manager does not take on its own (issue #419). When the artifact's own durable local copy is still intact this completes it in place instead of re-fetching, and that also forfeits any future remote delete, the same as `quarantine reinstate` (issue #662) |
 | `restore` | `restore <source/backup-set/artifact> --medium M [--days N] --acknowledge` asks the storage provider to make one archived copy readable again (EPIC E, FR-34). `--acknowledge` is required rather than a `--force` to skip, because a restore is billed and takes hours; `--days` defaults to 7 and is bounded to 1 to 30. `artifacts <id>` lists which medium each copy is on (issue #241) |
 | `version` | report the binary, Go and embedded rclone versions |
@@ -292,6 +580,16 @@ record, quarantine plus its revalidate, retry and reinstate actions, the operati
 enabling and disabling a backup set, the FR-24 health verdict, and catalog scan and
 rebuild.
 
+**EPIC I added one route, and it is the one that stops the browser guessing at the
+product.** `GET /api/v1/backends` serves the backend registry: every backend a manifest
+declares, what role it plays, and every field an instance of it has to be given. That is
+what lets the add- and configure-destination flows render whatever the build bundles rather
+than a literal list of their own, so a third manifest reaches the browser with no frontend
+change at all. It is registered in `apps/common/webhost/router.go`, declared as
+`listBackends` in `api/v1/openapi.json`, and
+`apps/common/webhost/handlers_backends_test.go` is the contract suite that holds those two
+to each other.
+
 **What keeps it that way is a check, not this paragraph.**
 `scripts/api/check-client-paths.sh` reads `ui/shared/src/api/client.ts` statically, reduces
 every request path it builds back to a `(method, path)` pattern, and requires each one to be
@@ -427,6 +725,39 @@ mismatch is ticking an acknowledgement scoped to the fingerprint that was shown,
 probe returning something else clears it. A wizard is exactly the shape of thing that
 quietly acquires a trust-on-first-use default in the name of being friendly, and this one
 does not.
+
+**Adding a destination is three steps, and the first two are deliberately not one.** Choose
+a backend from the registry `GET /api/v1/backends` serves, name this instance, confirm. A
+destination is an INSTANCE of a backend rather than a backend itself, so "pick S3" and "call
+it cold_archive" are two acts rather than one, and the naming step lists the instances that
+backend already has, so an operator sees why a name is taken instead of meeting a validation
+error about it. Backends the engine understands and no manifest declares are rendered dimmed
+and cannot be chosen, because somebody who came here for SFTP learns more from a row saying
+the shape is understood and not registered than from a menu that never mentions it.
+`ui/shared/src/pages/AddDestinationWizard.tsx` is the flow, and
+`ui/shared/src/test/add-destination-wizard.test.tsx` drives it against a manifest for a
+backend that does not exist, which is how "no branch anywhere on which backend was chosen"
+is checked rather than asserted.
+
+**Configuring one is driven by the manifest, and nothing is written until it has been
+proven.** The form is whatever fields that backend declares, rendered from seven field kinds
+— `string`, `path`, `url`, `enum`, `bool`, `credential` and `key_prefix` — with the rule for
+each one coming from the engine, so the browser refuses exactly what a hand-edited
+`config.yaml` would be refused for. The order is fill, test, review, and the pass is keyed to
+the values that earned it: editing an endpoint after a successful check makes that pass stale
+by construction and Save goes away, rather than a changed field inheriting an old proof. The
+typed secret goes to the credential import once, in exchange for an opaque id, and every
+later request in the flow carries the id instead.
+`ui/shared/src/pages/DestinationConfigureWizard.tsx` is the flow and
+`ui/shared/src/test/destination-configure-wizard.test.tsx` is where that ordering is held.
+
+**Retention shows the whole plan before any of it happens.** The dialog renders the plan the
+server issued, per artifact, with the tiers that kept each one and what selected it for each,
+and it never recomputes, filters or applies a subset: an operator confirms the exact deletion
+set they were shown, or nothing happens. A plan that went stale disables apply rather than
+quietly fetching a fresh one, because swapping the list underneath would mean confirming
+something nobody read. `ui/shared/src/pages/RetentionPreviewDialog.tsx` is it, and
+`ui/shared/src/test/retention-preview-dialog.test.tsx` is the check.
 
 **Dark mode works on native controls, which it did not.** Nothing declared `color-scheme`,
 so the browser assumed light for every `input`, `textarea`, `select` and `button` whatever
@@ -748,6 +1079,19 @@ policy of its own, and `--inherit` takes it back off. It is the same three opera
 the Web UI draws, all through one method in `core/service`. See [One backup set on its own
 retention policy](#one-backup-set-on-its-own-retention-policy).
 
+**EPIC I introduced the one exception this section did not have, and it runs the other way
+for once.** `medium add` and `medium edit` carry one flag per S3 field — `--bucket`, a
+`--type` that defaults to `s3`, `--region`, `--endpoint`, `--prefix`, `--storage-class`,
+`--upload-verification` and the four credential spellings — and there is no `--path` among
+them, so an instance of the `local_volume` backend cannot be declared from a terminal at
+all. `core/cmd/backup-manager/main.go`'s own usage text is where that flag set is spelled,
+and `core/cliecho/routes.go` carries the gap as an explicit entry with that reason, which is
+what stops the web UI echoing a `--path` that would read correctly and fail on execution.
+Declaring a local volume is therefore a browser act until those verbs take a manifest's own
+field ids; everything else about a destination — listing, showing, proving, importing a
+credential, editing an S3 instance, removing one, moving the default — is on this surface
+already.
+
 **What is not covered by `rbm`: authentication and account management.** `/auth/enroll`,
 `/auth/login` and `/auth/password` are genuinely out of scope for the engine CLI, not
 merely undocumented. They are `apps/common/auth/local`'s session/cookie/CSRF/rate-limit
@@ -828,32 +1172,51 @@ providers is **build-supported and uncertified**. A green conformance matrix pro
 packaging metadata is well-formed and mutually consistent, and it proves nothing whatsoever
 about how any of these platforms behaves.
 
-The image is published, which is the other thing this section used to deny, and the
-version this tree declares is not the published one. EPIC F cut v0.1.0 and then v0.2.0 to
-`ghcr.io/spdrman/backup-manager`, and v0.3.0, v0.3.1 and v0.3.2 followed them there, every
-one of them keyless-signed with the SBOM attested beside it. `0.3.2`'s image index is
-`sha256:e657370c`. `0.3.3` is cut and not pushed, which is what a release looks like
-between the cut and the push: `distribution/packaging/canonical.json` records
-`published: false` and `container/release-manifest.json` is back to a null `index_digest`
-and a null `registry_digest` per architecture. That flag and those digests move together,
-and a test refuses either one without the other, because a flag with no digest is a
-half-truth. So until the push lands, run 0.3.2 or build your own: every acceptance
-procedure keeps its step 0 for a deployment that cannot reach ghcr.io, and every profile
-keeps the reference substitutable.
+The image is published, and the version this tree declares is not the published one. EPIC F
+cut v0.1.0 and then v0.2.0 to `ghcr.io/spdrman/backup-manager`, and v0.3.0, v0.3.1, v0.3.2
+and v0.3.3 followed them there, every one of them keyless-signed with the SBOM attested
+beside it. `0.3.3` is the newest tag that resolves. `0.4.0` is cut and not pushed, which is
+what a release looks like between the cut and the push:
+`distribution/packaging/canonical.json` records `published: false`, and
+`container/release-manifest.json` records this commit and the SHA-256 of the two binaries
+built from it with a null `index_digest` and a null `registry_digest` per architecture.
+That flag and those digests move together, and a test refuses either one without the
+other, because a flag with no digest is a half-truth. The installer carries the same
+admission rather than papering over it: it pins `0.4.0` and, with no recorded digest to
+pin it to, `preflight` says so instead of passing over it. So until the push lands, install
+`--release 0.3.3` or build your own image: every acceptance procedure keeps its step 0 for
+a deployment that cannot reach ghcr.io, and every profile keeps the reference
+substitutable.
 
-### There are no screenshots in this document
+### The pictures come from a mock, and every one of them says so
 
-There should be, and issue #112 asks for them per provider. There still are none, and I
-would rather say so than ship something that looks like evidence and is not. `docs/assets/`
-holds the two logo files and nothing else. The only screenshots this tree produces on its
-own are of the mock API in a dev server, which is exactly the kind of picture that makes a
-reader believe a claim this document has just spent a section retracting.
+There are pictures now, which is a change from the previous version of this section, and the
+disclosure that travels with them matters more than the count. `docs/site/screens/` holds
+thirty-four PNGs and ten GIFs, generated by the four capture tools in
+[`docs/site/tools/`](docs/site/tools/) — `capture-first-run.mjs`, `capture-reference.mjs`,
+`capture-ssh.mjs` and `capture-web-ui.mjs` — and all of them are published on the site.
+**Every one was recorded against the development server's in-memory fixture API rather than
+against a running engine.** That is the standing disclosure on the site's own status list,
+it is repeated on each page that carries a capture, and three of those clips are in this
+document's install section above.
 
-What used to block them no longer does: this paragraph named #196 and #166, both of which
-landed, and #263 has now had a real packaged deployment up on a real NAS. So the honest
-version is that nobody has gone back and captured any, per provider or otherwise, not that
-it cannot be done. Provider logos are a separate question and a trademark one, so they are
-the project owner's call rather than mine.
+What that buys and what it does not is worth being exact about, because a screenshot is the
+easiest thing in a repository to read as evidence. The layout, the copy, the flow and the
+interaction are the real ones: each capture drives the real React application through the
+real routes, so a control that moved, a sentence that changed or a step that was removed
+changes the picture. The data is not real, and no picture here is offered as proof that a
+cycle has ever run. What has actually been exercised on hardware is
+[the section above's](#what-has-actually-been-exercised-on-real-hardware) business, and it
+says what it says.
+
+`docs/assets/` still holds the two logo files and nothing else. The captures live under
+`docs/site/screens/` because they belong to the published site rather than to this document,
+which embeds three of them and no more. What remains unmet of issue #112 is its other half:
+nobody has captured a per-provider picture, of this product installed through TrueNAS's
+catalog or Unraid's Community Applications, because that needs one of those machines and is
+blocked on exactly what every provider acceptance procedure is blocked on. Provider logos
+are a separate question and a trademark one, so they are the project owner's call rather
+than mine.
 
 [`docs/design/`](docs/design/) is not the exception it looks like. EPIC G designed its
 surfaces as standalone HTML mockups first, and the PNGs beside them are renders of those
@@ -863,10 +1226,13 @@ any of it looks that way on a real deployment.
 
 ### What is left, and what each of them is waiting on
 
-Five epics have closed: #1, the engine itself; #81, the multi-NAS support model; #232,
+Six epics have closed: #1, the engine itself; #81, the multi-NAS support model; #232,
 alternative storage mediums; #590, making the work visible and setup something a new operator
-can do; and #623, what running 0.3.3 on real hardware found. Three are open, and each is open
-for a reason worth stating rather than leaving to be inferred from a quiet section.
+can do; #623, what running 0.3.3 on real hardware found; and #664, which turned a storage
+destination into an instance of a registered backend, put that registry behind
+`GET /api/v1/backends`, and made declaring one a wizard driven by the chosen backend's own
+manifest rather than a form with S3's fields written into it. Three are open, and each is
+open for a reason worth stating rather than leaving to be inferred from a quiet section.
 
 **EPIC C (UGOS platform runtime boundary) and EPIC D (UGOS UPK artifact lifecycle) both
 need real UGREEN hardware and neither has had it.** #92 is the UGOS authentication and
@@ -894,152 +1260,8 @@ and pointing the installer at a real source is configuration rather than a code 
 What is missing is the last acceptance criterion: a real backup run from each production
 host, with anything the account cannot read reported rather than worked around.
 
-**The provider acceptance procedures are still prose**, and the screenshots are still
-absent, both as the two sections above say.
-
-## Installing it
-
-### The canonical Compose runtime is the install path
-
-There is one product here, not eleven. Every platform below wraps the same multi-architecture
-OCI image and the same Compose topology, and the differences between them are host paths and
-metadata formats. `container/compose.yaml` is that topology, and
-[`docs/deployment.md`](docs/deployment.md) is the reasoning behind every setting in it.
-
-Two services, one image. `rclone-manager` runs `/rbm-web serve`: the core
-service, the scheduler, local authentication and `/api/v1`, in one process on one shutdown
-context, with **no published port at all**. `web-ui` runs `/rbm-web serve-ui`:
-the static UI plus a reverse proxy to the engine, and it is the only service with a
-LAN-facing port. They meet on a private project-scoped bridge network, which is what makes
-the engine's isolation a topology rather than a convention. The same image also carries
-`rbm` itself, the headless CLI, for a deployment that wants no web listener at all.
-
-```bash
-cd container
-cp .env.example .env      # then edit: PUID/PGID, the host paths, LISTEN_PORT
-docker compose up -d
-```
-
-Both containers run non-root as `PUID:PGID`, with a read-only root filesystem, all
-capabilities dropped and `no-new-privileges`. The image has no shell and no init step, so
-**the host paths have to exist and be owned by that uid/gid before the first start**;
-nothing in the container will chown them for you.
-
-### Or let the installer do it
-
-`scripts/install/install_docker_host.py` (#262) is that same topology brought up on a
-machine you have SSH on, or refused with the exact prerequisite that stopped it:
-
-```bash
-python3 scripts/install/install_docker_host.py install
-```
-
-That is the whole command on a bare host. It installs under `~/rclone-manager`, generates
-an SSH keypair and an empty `known_hosts` under `<prefix>/secrets` if they are not there,
-and prints the public half with a note that it belongs in the `authorized_keys` of the host
-being backed up. It is one file and needs no checkout beside it, nothing else from this
-project on disk, and nothing outside the Python standard library, because an operator
-installing onto a NAS does not have a git clone there. A **defaulted** credential path that
-does not exist is created; an **explicitly named** one that does not exist is still a
-refusal, because generating a different key under a path you typed would hand you one the
-far host has never seen while reporting success, and an existing key is never regenerated
-over whatever its age. Directories it creates are born `0700`, and ones that already exist
-only lose group and world write, because the engine refuses an SSH key whose whole ancestry
-is not tight, not just the key file.
-
-Six subcommands: `preflight` checks and creates nothing, `install` checks then installs,
-`status` reports, `uninstall` removes what the installer made, `network-doctor` diagnoses
-and optionally repairs Docker bridge networking, and `network-undo` removes exactly what a
-repair added. [`docs/install.md`](docs/install.md) is the whole of it, and this is the path
-#263 used on the UGREEN NAS.
-
-### Which mount holds what, and why they are never the same directory
-
-Every platform mounts three separate places for three different jobs, and conflating any two
-of them is the mistake this section exists to prevent.
-
-| Mount | Holds | Written by | `.env` key |
-|---|---|---|---|
-| Private application state | the SQLite journal and its `-wal`/`-shm` files | the app, constantly | `STATE_DIR` |
-| Backup data | the retained artifacts and their sidecar recovery manifests | the app, on commit | `BACKUP_DIR` |
-| Credentials and configuration | `config.yaml`, the SSH private key, the pinned `known_hosts` | you, out of band, read-only | `CONFIG_FILE`, `SSH_KEY_FILE`, `KNOWN_HOSTS_FILE` |
-
-The SSH private key is the one that matters. It lives with the configuration, mounted
-read-only, and it must **not** be inside the backup root: put it there and every backup of
-that directory carries the key that can read and delete the source. The backup root on every
-platform below is a dedicated child directory rather than a share you already use, for the
-same reason.
-
-One sizing note for a deployment with a retention chain that puts two tiers on two
-different storage mediums. A hop from one medium to another stages through a `.moves`
-directory under the backup set's own `local_path`, so the backup mount needs room for the
-largest artifact that will ever hop, transiently, on top of whatever it retains
-permanently. A hop that will not fit is refused before anything is downloaded, and the copy
-it would have moved stays where it is. See
-[Where a durable copy actually lives](#where-a-durable-copy-actually-lives-epic-e).
-
-`distribution/packaging/canonical.json` is the single source of truth for these paths, and
-this repository's own test suite fails the build if any platform's metadata disagrees with
-it.
-
-### What "supported" means for each target
-
-<!-- BEGIN SUPPORT-MODEL -->
-
-| Target | Tier | What ships in this repository today | Where the paths are defined |
-|---|---|---|---|
-| Generic Docker and Linux | Tier C | the canonical image, `container/compose.yaml`, and `apps/generic`'s own Go module for the web host | `container/compose.yaml` |
-| TrueNAS | Tier B | a custom-app Compose file plus a TrueNAS Apps catalog entry, metadata only | [`apps/truenas/README.md`](apps/truenas/README.md) |
-| Unraid | Tier B | two Community Applications Docker templates, metadata only | [`apps/unraid/README.md`](apps/unraid/README.md) |
-| Synology DSM | Tier B | a real `.spk` built by `apps/synology`, wrapping the release binaries unchanged and checking their digest against `container/release-manifest.json` | [`apps/synology/README.md`](apps/synology/README.md) |
-| OpenMediaVault | Tier C | a Compose deployment profile, metadata only | [`apps/openmediavault/README.md`](apps/openmediavault/README.md) |
-| Proxmox VE | Tier C | the same Compose profile for a dedicated container-host guest, metadata only | [`apps/proxmox/README.md`](apps/proxmox/README.md) |
-| Portainer CE | Tier B | a version 3 App Template plus the Compose stack it deploys, metadata only | [`apps/portainer/README.md`](apps/portainer/README.md) |
-| Dockge | Tier C | no packaging at all, by design: Dockge imports `container/compose.yaml` itself, and the deliverable is the workflow that keeps that true | [`apps/dockge/README.md`](apps/dockge/README.md) |
-| CasaOS | Tier B | one `docker-compose.yml` carrying an `x-casaos` block, which is both the runtime definition and the store submission | [`apps/casaos/README.md`](apps/casaos/README.md) |
-| ZimaOS | Tier B | the same `x-casaos` compose file again, for the CasaOS-derived store ZimaOS ships | [`apps/zimaos/README.md`](apps/zimaos/README.md) |
-| UGREEN UGOS Pro | Tier A | the frontend bridge and nothing else: no `.UPK`, no packaging | EPIC D, issue #83 |
-
-<!-- END SUPPORT-MODEL -->
-
-The tiers come from `docs/EPIC-B-multi-nas.md`'s support-tier list, from `canonical.json`,
-which declares nine platforms and the seven runtime profiles behind them, and from
-`conformance.json`, which declares all eleven targets with their tiers. The gate checks
-every row of this table against those two files rather than trusting the table, and it
-checks in both directions: a row here that neither file declares is a failure, and so is a
-target they declare that this table has dropped.
-
-Two things about the Proxmox row are worth saying out loud. Its paths are inside the guest,
-not on the PVE host: the supported model is a dedicated container-host guest with one host
-directory or dataset shared into it, and running the app on the PVE host itself is ruled
-out. And the Unraid row is the one profile where the engine's isolation is weaker than the
-others, because both Unraid templates join a durable, host-wide, generically named bridge
-the operator creates by hand; every container on such a bridge can reach every port of every
-other one, so the engine does not trust forwarded headers there and rate-limits on the
-proxy's own address instead. `apps/unraid/README.md` says so too.
-
-### What is deliberately not being built
-
-EPIC B commits to a support model, and the deferrals are part of it. New Synology `.spk`
-work, native DSM SSO, a native OpenMediaVault Workbench plugin, a Proxmox Web UI plugin, a
-Portainer plugin or API extension, a Dockge plugin, a second application server for any
-provider, provider-specific backup engines and provider-specific copies of the React
-application are all explicitly out of scope unless one of them is later proven necessary.
-
-The Synology line reads like a contradiction and is not one. #85 shipped an `.spk` in Phase
-4 because Phase 4 shipped as written, and the deferral is about **new** `.spk` work; #169
-adds a Container Manager Compose path alongside the shipped package rather than replacing
-it. Retiring shipped packaging would be a product decision and nobody has made one.
-
-Portainer, CasaOS, ZimaOS and Dockge were the four EPIC B's Phase 6 support model named as
-targets that get a documented deployment profile, and this paragraph used to say none of
-them was in the tree. All four are, they are rows in the table above, and the gate would
-fail if they were not: `apps/portainer/` is an App Template plus its Compose stack,
-`apps/casaos/` and `apps/zimaos/` are the same `x-casaos` Compose file for two stores, and
-`apps/dockge/` deliberately ships no packaging because Dockge imports
-`container/compose.yaml` itself. What none of them has is a hardware run, which is the
-[conformance matrix's](#what-has-actually-been-exercised-on-real-hardware) business, not
-this section's.
+**The provider acceptance procedures are still prose**, and issue #112's per-provider
+screenshots are still absent for the same reason, both as the two sections above say.
 
 ## Who owns what
 
@@ -1737,9 +1959,15 @@ Everything above this section assumes an artifact's durable copy is a file at th
 set's `local_path`, because until EPIC E it always was. A **storage medium** is a named
 destination it can live on instead, chosen per retention tier: daily on local disk so a
 recent restore is a filesystem read, monthly on S3, annual on a colder readable class.
-`s3` is the only type, which means any endpoint speaking the S3 API, MinIO and Wasabi
-included, because it is the same rclone backend and no AWS SDK is imported anywhere in this
-repository.
+A destination is an INSTANCE of a registered backend rather than a type of its own, and the
+registry this build bundles holds exactly two. `local_volume` is a directory on a filesystem
+this host can see. `s3` means any endpoint speaking the S3 API, MinIO and Wasabi included,
+because it is the same rclone backend and no AWS SDK is imported anywhere in this
+repository. Several instances of one backend is the ordinary case rather than an edge — a
+hot bucket and a cold one, the backup root and a USB shelf — and each instance is declared,
+proved and named by an id of its own. `core/internal/backend/bundled/` is the registry, one
+manifest per backend, and `core/internal/backend/manifest_test.go` pins the set to those two
+so a third arrives as a manifest rather than as a branch.
 
 [`docs/storage-mediums.md`](docs/storage-mediums.md) is the operator's half: every field,
 what the disclosure commits you to, and what each verification class proves and costs.
@@ -1773,8 +2001,11 @@ retention:
 ```
 
 A credential is a `file`, an `env` or a `command`, and there is deliberately no field for a
-literal key. `local` is reserved for the implicit medium every deployment already has, so a
-configured medium can never claim it. Which medium an artifact calls home is the **first
+literal key. `local` is a legal id in exactly one arrangement: as instance zero of the
+`local_volume` backend, which is what first run seeds for the backup root every deployment
+already has (`core/service/firstrun.go`). Any other backend claiming that string is still
+refused, because two answers to "where is local" is a placement record nothing can
+interpret. Which medium an artifact calls home is the **first
 tier in chain order that currently selects it**, which gives chain order a second meaning:
 order still never changes WHICH artifacts are kept, because `KEEP` is the union of every
 tier's selections, but it now decides WHERE a multiply-selected one lives.
@@ -1799,11 +2030,25 @@ renderer draws both. Where a step cannot mean anything locally it is SKIPPED rat
 quietly passed: `credentials` because a directory reads none, `storage_class` because a
 filesystem has no classes.
 
+**EPIC I finished the thought #622 started: local is a backend, not a single entry.** A
+destination is an instance of a registered backend, so `local` is instance zero of
+`local_volume` rather than a reserved word standing beside the real types, and a deployment
+may declare as many more as it has volumes: a USB shelf and the backup root are two
+instances of one backend, with two ids, two paths and two independent probes. The check is
+dispatched by ROLE rather than by id for exactly that reason
+(`core/internal/app/mediumpreflight.go`), so a second local destination is proved the same
+four ways the seeded one is — gone, unwritable, full, or secretly the same disk as another
+local destination reached by a different path — and a retention tier may name any of them
+rather than only the reserved one (`core/internal/config/local_volume_test.go`). The one
+thing a terminal cannot do with any of this is declare such an instance: see [Doing
+everything from the CLI](#doing-everything-from-the-cli-issue-277).
+
 **A retention tier picks its destination from a picker, in both places a tier is edited**,
 in global settings and in a backup set's own custom retention policy. `rbm settings patch
 --tier-medium NAME=MEDIUM_ID` is the command that picker echoes, and it points one tier and
-leaves the rest of the chain exactly as it is; `MEDIUM_ID` is a declared destination or
-`local`, which is how a tier comes back. Sending a tier somewhere other than local for the
+leaves the rest of the chain exactly as it is; `MEDIUM_ID` is the id of any declared
+destination, the seeded `local` one included, because local is an entry in the same list as
+the rest rather than the absence of one. Sending a tier somewhere other than local for the
 first time needs `--acknowledge-medium-disclosure`, and without it the refusal carries the
 disclosure rather than only naming the flag.
 
@@ -2733,6 +2978,7 @@ lives here instead; nothing in the design depended on the location.
 
 ## Documentation index
 
+- [`docs/site/`](docs/site/) – the source of the published documentation site: the first-run tutorial, the web interface in motion, SSH and connections, and the reference page carrying every screen of the browser interface and every `rbm` command with its flags. It is published at https://spdrman.github.io/rclone-manager/, which is the address the CLI wrapper the installer writes prints to an operator who runs `rbm` with no command
 - [`docs/deployment.md`](docs/deployment.md) – the container build, the two-service Compose topology, the read-only rootfs and uid/gid rules, and release hashes
 - [`docs/adr/0001-embed-rclone-behind-transport-adapter.md`](docs/adr/0001-embed-rclone-behind-transport-adapter.md) – why embed, why not fork or shell out, what it costs
 - [`docs/adr/0002-phase-5-scope.md`](docs/adr/0002-phase-5-scope.md) – why observability stops where it does
