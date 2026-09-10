@@ -3,8 +3,18 @@
  * the removal, and the FR-30 report when a destination artifacts already
  * live on stops answering (G2.2, issue #594).
  *
- * The wizard behind "Add a destination" is S3DestinationWizard.tsx; this
- * is the page it opens from and returns to.
+ * # Adding one is two wizards, in order (EPIC I, #664)
+ *
+ * "Add a destination" opens AddDestinationWizard: choose a registered
+ * backend, name this instance, confirm. It writes nothing. What it hands
+ * back is a backend id and an instance name, and the CONFIGURE step that
+ * follows collects the values, proves them, and performs the one create.
+ *
+ * The configure step here is still S3DestinationWizard, which is
+ * S3-shaped: issue #669's manifest-driven renderer replaces it, and the
+ * two land as a pair, which is also what makes a local volume
+ * configurable from this card at all. Until then the id chosen in step 2
+ * is passed to it as `presetId` rather than asked for twice.
  *
  * # What FR-30 makes this card responsible for
  *
@@ -51,6 +61,7 @@ import { useAsync } from "@shared/hooks/useAsync";
 import { Banner } from "@shared/components/Banner";
 import { ErrorState } from "@shared/components/EmptyState";
 import { apiErrorOf, isNotConfigured } from "@shared/api/failure";
+import { AddDestinationWizard } from "@shared/pages/AddDestinationWizard";
 import { S3DestinationWizard } from "@shared/pages/S3DestinationWizard";
 import { MediumPreflightChecks } from "@shared/pages/MediumPreflightChecks";
 import { CommandEcho } from "@shared/pages/CommandEcho";
@@ -91,6 +102,14 @@ export function StorageDestinationsCard({
   }
   const [editing, setEditing] = useState<StorageMedium | null>(null);
   const [adding, setAdding] = useState(false);
+  // The name chosen by the add wizard's step 2, held while the configure
+  // step collects the values. Null means no add is part-way through.
+  //
+  // It is the NAME rather than a created destination because nothing has
+  // been created: the configure step performs the one create, after it
+  // has proved the destination (see this file's own doc, and
+  // AddDestinationWizard's on why an unconfigured instance cannot exist).
+  const [configuring, setConfiguring] = useState<string | null>(null);
 
   return (
     <section className="card" role="region" aria-label="Storage destinations">
@@ -158,10 +177,26 @@ export function StorageDestinationsCard({
         )}
 
         {adding ? (
-          <S3DestinationWizard
+          <AddDestinationWizard
+            existing={mediums.data ?? []}
             onClose={() => setAdding(false)}
-            onSaved={() => {
+            onConfirmed={(_backendId, instanceId) => {
+              // The backend id is not used yet, and that is the seam
+              // #669 fills: the configure surface here is S3-shaped, so
+              // there is nothing to choose between. Its renderer takes
+              // the manifest, and choosing a surface by backend type
+              // would be the switch EPIC I exists to delete.
               setAdding(false);
+              setConfiguring(instanceId);
+            }}
+          />
+        ) : null}
+        {configuring !== null ? (
+          <S3DestinationWizard
+            presetId={configuring}
+            onClose={() => setConfiguring(null)}
+            onSaved={() => {
+              setConfiguring(null);
               changed();
             }}
           />
@@ -509,10 +544,26 @@ function AffectedSets({ usage }: { usage: StorageMediumUsage }) {
  *  missing entirely. It goes here rather than into the tier picker's
  *  label for the reason destinationLabel gives: this is the screen an
  *  operator comes to in order to see what their destinations ARE, and a
- *  picker is a list to choose between. */
+ *  picker is a list to choose between.
+ *
+ *  # Why the place is assembled from what is PRESENT (EPIC I, #664)
+ *
+ *  Two instances of one backend is the ordinary case, not an edge, and
+ *  this line is what tells them apart. It used to read the bucket and
+ *  nothing else, which is a description of one backend's idea of a place:
+ *  a declared destination on a local volume has no bucket, so two of them
+ *  both rendered as their type and stopped, and the list said two
+ *  destinations were one thing — exactly the assumption #664 exists to
+ *  remove, in the one place an operator would meet it.
+ *
+ *  So the location is whichever of bucket and path this destination
+ *  actually carries, joined to its namespace. That is a branch on what is
+ *  there rather than on which backend it is, which matters: a switch on
+ *  backend type here would need a new arm for every manifest added, and
+ *  the arm nobody wrote is a row that describes nothing. */
 function describeDestination(m: StorageMedium): string {
   if (m.isLocal) return localDriveDescription(m);
-  const where = m.prefix ? `${m.bucket}/${m.prefix}` : m.bucket;
+  const where = [m.bucket || m.path, m.prefix].filter(Boolean).join("/");
   return [m.type, where, m.region, m.storageClass].filter(Boolean).join(" · ");
 }
 

@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "10c5c6b0a9adfd30297dc337210bef132370228cbbff1b5e6c6c5e46f9598054";
+export const CONTRACT_SHA256 = "ad99bcfe63437b219ab61c84b1e69ee7d0ded504a543e34fae7367e30d988e40";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -313,6 +313,23 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     successStatus: 200,
     errorCodes: {
       401: ["UNAUTHENTICATED"],
+    }
+  },
+  {
+    id: "listBackends",
+    method: "GET",
+    path: "/backends",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListBackendsResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
     }
   },
   {
@@ -1387,6 +1404,67 @@ export interface WireAuthErrorResponse {
   message: string;
 }
 
+/** One choice an `enum`-kind field offers: the value that is stored,
+ *  and the words a surface renders for it. */
+export interface WireBackendEnumValue {
+  label: string;
+  value: string;
+}
+
+/** One registered backend, declared as data. A destination is an
+ *  INSTANCE of one of these, and several instances of one backend is
+ *  the normal case rather than an edge, which is why a manifest
+ *  carries a label and a summary for a picker and says nothing about
+ *  any particular destination. */
+export interface WireBackendManifest {
+  fields: WireBackendManifestField[];
+  id: string;
+  label: string;
+  probe: WireBackendProbe;
+  rclone_backend: string;
+  role: "object_store" | "local_volume";
+  summary: string;
+}
+
+/** One thing an operator is asked for when they configure an instance
+ *  of this backend: what it is called, what KIND of value it is, and
+ *  whether it is required. It is a declaration of SHAPE and it never
+ *  carries a value. In particular a `credential`-kind field says only
+ *  that a credential is needed here; the material itself reaches the
+ *  engine as a reference (see StorageMediumCredentialsReference) and
+ *  has no spelling on this boundary at all, which is what makes
+ *  serving this catalogue to a browser safe. */
+export interface WireBackendManifestField {
+  help?: string;
+  id: string;
+  kind: "string" | "path" | "url" | "enum" | "bool" | "credential" | "key_prefix";
+  label: string;
+  pattern?: string;
+  required: boolean;
+  unset_means?: string;
+  values?: WireBackendEnumValue[];
+}
+
+/** How an instance of this backend is verified: which steps of the
+ *  closed vocabulary apply to it. It declares no procedure. There is
+ *  no script, no command and no expression anywhere in a manifest,
+ *  which is EPIC I's decision and not an omission, and it is the
+ *  reason this document can be served to a browser without handing
+ *  out an arbitrary-command surface. */
+export interface WireBackendProbe {
+  steps: WireBackendProbeStep[];
+}
+
+/** One step of the verification vocabulary, and whether this backend
+ *  runs it. A skipped step is a first-class outcome and not a quiet
+ *  pass, so one that does not run carries the sentence explaining
+ *  why. */
+export interface WireBackendProbeStep {
+  reason?: string;
+  run: boolean;
+  step: string;
+}
+
 /** A persisted backup set as the API reports it. */
 export interface WireBackupSet {
   completion_strategy: "rename" | "marker" | "stable";
@@ -1761,6 +1839,20 @@ export interface WireListActivityResponse {
  *  never a bare top-level array. */
 export interface WireListArtifactsResponse {
   artifacts: WireArtifact[];
+}
+
+/** GET /backends. Read-only by design, for Validator's reason one
+ *  step further on: a client-extensible backend catalogue would be an
+ *  arbitrary-backend surface, and a manifest is the one thing in this
+ *  product that decides what a destination may be. It carries the
+ *  naming rules alongside the catalogue so the add-a-destination form
+ *  validates against the rule the server applies rather than a second
+ *  copy of it. */
+export interface WireListBackendsResponse {
+  backends: WireBackendManifest[];
+  instance_id_pattern: string;
+  reserved_instance_id: string;
+  unregistered: WireUnregisteredBackend[];
 }
 
 /** GET /backup-sets. An object with one array field, never a bare
@@ -2488,6 +2580,18 @@ export interface WireTestConnectionResponse {
 export interface WireTrustedHostKey {
   algorithm: string;
   fingerprint: string;
+}
+
+/** A backend this build's transport layer understands but which NO
+ *  manifest declares, so no instance of it can exist. Reported rather
+ *  than hidden: hiding it answers an operator worse, because somebody
+ *  who came looking for SFTP learns nothing from a menu that never
+ *  mentions it and asks again next month, whereas a row saying the
+ *  shape is understood and is not registered is a real answer. A
+ *  client renders these as unselectable; there is nothing to send,
+ *  since a create request naming one is refused by the registry. */
+export interface WireUnregisteredBackend {
+  rclone_backend: string;
 }
 
 /** PATCH /backup-sets/{source}/{set}. A SPARSE edit of one

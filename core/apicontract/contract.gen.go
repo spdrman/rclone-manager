@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "10c5c6b0a9adfd30297dc337210bef132370228cbbff1b5e6c6c5e46f9598054"
+const ContractSHA256 = "ad99bcfe63437b219ab61c84b1e69ee7d0ded504a543e34fae7367e30d988e40"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -326,6 +326,15 @@ var Endpoints = []Endpoint{
 		RequestSchema: "", ResponseSchema: "SessionResponse", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
+		},
+	},
+	{
+		ID: "listBackends", Method: "GET", Path: "/backends",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ListBackendsResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			500: {ErrorCodeInternal},
 		},
 	},
 	{
@@ -995,6 +1004,67 @@ type AuthErrorResponse struct {
 	Message       string    `json:"message"`
 }
 
+// BackendEnumValue is one choice an `enum`-kind field offers: the value that is stored,
+// and the words a surface renders for it.
+type BackendEnumValue struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// BackendManifest is one registered backend, declared as data. A destination is an
+// INSTANCE of one of these, and several instances of one backend is
+// the normal case rather than an edge, which is why a manifest
+// carries a label and a summary for a picker and says nothing about
+// any particular destination.
+type BackendManifest struct {
+	Fields        []BackendManifestField `json:"fields"`
+	ID            string                 `json:"id"`
+	Label         string                 `json:"label"`
+	Probe         BackendProbe           `json:"probe"`
+	RcloneBackend string                 `json:"rclone_backend"`
+	Role          string                 `json:"role"`
+	Summary       string                 `json:"summary"`
+}
+
+// BackendManifestField is one thing an operator is asked for when they configure an instance
+// of this backend: what it is called, what KIND of value it is, and
+// whether it is required. It is a declaration of SHAPE and it never
+// carries a value. In particular a `credential`-kind field says only
+// that a credential is needed here; the material itself reaches the
+// engine as a reference (see StorageMediumCredentialsReference) and
+// has no spelling on this boundary at all, which is what makes
+// serving this catalogue to a browser safe.
+type BackendManifestField struct {
+	Help       string             `json:"help,omitempty"`
+	ID         string             `json:"id"`
+	Kind       string             `json:"kind"`
+	Label      string             `json:"label"`
+	Pattern    string             `json:"pattern,omitempty"`
+	Required   bool               `json:"required"`
+	UnsetMeans string             `json:"unset_means,omitempty"`
+	Values     []BackendEnumValue `json:"values,omitempty"`
+}
+
+// BackendProbe is how an instance of this backend is verified: which steps of the
+// closed vocabulary apply to it. It declares no procedure. There is
+// no script, no command and no expression anywhere in a manifest,
+// which is EPIC I's decision and not an omission, and it is the
+// reason this document can be served to a browser without handing
+// out an arbitrary-command surface.
+type BackendProbe struct {
+	Steps []BackendProbeStep `json:"steps"`
+}
+
+// BackendProbeStep is one step of the verification vocabulary, and whether this backend
+// runs it. A skipped step is a first-class outcome and not a quiet
+// pass, so one that does not run carries the sentence explaining
+// why.
+type BackendProbeStep struct {
+	Reason string `json:"reason,omitempty"`
+	Run    bool   `json:"run"`
+	Step   string `json:"step"`
+}
+
 // BackupSet is A persisted backup set as the API reports it.
 type BackupSet struct {
 	CompletionStrategy       string           `json:"completion_strategy"`
@@ -1371,6 +1441,20 @@ type ListActivityResponse struct {
 // never a bare top-level array.
 type ListArtifactsResponse struct {
 	Artifacts []Artifact `json:"artifacts"`
+}
+
+// ListBackendsResponse is GET /backends. Read-only by design, for Validator's reason one
+// step further on: a client-extensible backend catalogue would be an
+// arbitrary-backend surface, and a manifest is the one thing in this
+// product that decides what a destination may be. It carries the
+// naming rules alongside the catalogue so the add-a-destination form
+// validates against the rule the server applies rather than a second
+// copy of it.
+type ListBackendsResponse struct {
+	Backends           []BackendManifest     `json:"backends"`
+	InstanceIDPattern  string                `json:"instance_id_pattern"`
+	ReservedInstanceID string                `json:"reserved_instance_id"`
+	Unregistered       []UnregisteredBackend `json:"unregistered"`
 }
 
 // ListBackupSetsResponse is GET /backup-sets. An object with one array field, never a bare
@@ -2100,6 +2184,18 @@ type TrustedHostKey struct {
 	Fingerprint string `json:"fingerprint"`
 }
 
+// UnregisteredBackend is A backend this build's transport layer understands but which NO
+// manifest declares, so no instance of it can exist. Reported rather
+// than hidden: hiding it answers an operator worse, because somebody
+// who came looking for SFTP learns nothing from a menu that never
+// mentions it and asks again next month, whereas a row saying the
+// shape is understood and is not registered is a real answer. A
+// client renders these as unselectable; there is nothing to send,
+// since a create request naming one is refused by the registry.
+type UnregisteredBackend struct {
+	RcloneBackend string `json:"rclone_backend"`
+}
+
 // UpdateBackupSetRequest is PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
 // already-persisted backup set (issue #350): every property is
 // optional, and a property this body omits is left exactly as it is
@@ -2208,6 +2304,11 @@ var SchemaTypes = map[string]any{
 	"ArtifactCheckResponse":             ArtifactCheckResponse{},
 	"ArtifactReinstateResponse":         ArtifactReinstateResponse{},
 	"AuthErrorResponse":                 AuthErrorResponse{},
+	"BackendEnumValue":                  BackendEnumValue{},
+	"BackendManifest":                   BackendManifest{},
+	"BackendManifestField":              BackendManifestField{},
+	"BackendProbe":                      BackendProbe{},
+	"BackendProbeStep":                  BackendProbeStep{},
 	"BackupSet":                         BackupSet{},
 	"BackupSetEditHold":                 BackupSetEditHold{},
 	"BackupSetEditHoldState":            BackupSetEditHoldState{},
@@ -2239,6 +2340,7 @@ var SchemaTypes = map[string]any{
 	"ImportStorageCredentialsResponse":  ImportStorageCredentialsResponse{},
 	"ListActivityResponse":              ListActivityResponse{},
 	"ListArtifactsResponse":             ListArtifactsResponse{},
+	"ListBackendsResponse":              ListBackendsResponse{},
 	"ListBackupSetsResponse":            ListBackupSetsResponse{},
 	"ListOperationsResponse":            ListOperationsResponse{},
 	"ListSSHKeyCandidatesResponse":      ListSSHKeyCandidatesResponse{},
@@ -2290,6 +2392,7 @@ var SchemaTypes = map[string]any{
 	"TestConnectionRequest":             TestConnectionRequest{},
 	"TestConnectionResponse":            TestConnectionResponse{},
 	"TrustedHostKey":                    TrustedHostKey{},
+	"UnregisteredBackend":               UnregisteredBackend{},
 	"UpdateBackupSetRequest":            UpdateBackupSetRequest{},
 	"UpdateCapacitySettings":            UpdateCapacitySettings{},
 	"UpdateRetentionSettings":           UpdateRetentionSettings{},

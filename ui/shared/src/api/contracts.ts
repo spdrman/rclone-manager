@@ -869,6 +869,166 @@ export interface StorageMediumUsage {
 }
 
 /**
+ * What one value a backend collects IS (EPIC I, #664).
+ *
+ * The set is closed in the engine and a manifest may not add to it, so
+ * this union is a real closed set rather than a hint: a surface renders
+ * one control per kind, and a kind it does not know is a version
+ * mismatch to say out loud, not free text to fall back to.
+ *
+ * `credential` is the marker that routes an input to the credential
+ * import instead of into the instance body. It is a kind rather than a
+ * flag on a string field because a credential is not a value: the
+ * material never travels on the same path a value does, and a form that
+ * treated it as "a string with a secret flag" would be one refactor away
+ * from putting it there.
+ */
+export type BackendFieldKind =
+  | "string"
+  | "path"
+  | "url"
+  | "enum"
+  | "bool"
+  | "credential"
+  | "key_prefix";
+
+/**
+ * The same seven kinds at runtime.
+ *
+ * It exists so a renderer's own test can iterate the set and fail when a
+ * kind has no control, instead of a new kind rendering as nothing at all
+ * on a screen nobody re-opened. A union alone cannot be enumerated, and a
+ * second hand-written list beside it would be the drift this pair exists
+ * to prevent — so the type is derived from nothing and the array is
+ * checked against it by the compiler.
+ */
+export const BACKEND_FIELD_KINDS: readonly BackendFieldKind[] = [
+  "string",
+  "path",
+  "url",
+  "enum",
+  "bool",
+  "credential",
+  "key_prefix"
+];
+
+/**
+ * What a backend IS to this engine, as opposed to which rclone backend it
+ * dials. Closed in the engine, for BackendFieldKind's reason.
+ */
+export type BackendRole = "object_store" | "local_volume";
+
+/** One choice an `enum`-kind field offers: the value that is stored, and
+ *  the words to render for it. */
+export interface BackendEnumValue {
+  value: string;
+  label: string;
+}
+
+/**
+ * One thing an operator is asked for when they configure an instance of a
+ * backend.
+ *
+ * This is SHAPE and never a value. A `credential` field says a credential
+ * is needed here and says nothing about what one is, which is what makes
+ * the whole catalogue safe to hold in a browser at all.
+ */
+export interface BackendManifestField {
+  /** The key this value is stored under, and deliberately the same
+   *  spelling the configuration file uses for the same fact. It is what a
+   *  create request keys its values by, so nothing here has to translate
+   *  a label back into a field. */
+  id: string;
+  label: string;
+  help?: string;
+  kind: BackendFieldKind;
+  required: boolean;
+  /** The closed choice set, for `enum` fields and only for those. */
+  values?: BackendEnumValue[];
+  /** Anchored regular expression source, for `string` fields and only
+   *  for those; safe to pass to `new RegExp`. */
+  pattern?: string;
+  /** What the engine resolves this field to when an instance leaves it
+   *  empty.
+   *
+   *  Render it as "leave empty for X" and send NOTHING. It is not a
+   *  default to pre-fill: a default written into the request is a default
+   *  frozen into the operator's own file by the next settings save
+   *  (issue #294), which is why the engine resolves it with an accessor
+   *  rather than storing it. */
+  unsetMeans?: string;
+}
+
+/** One step of the verification vocabulary and whether this backend runs
+ *  it. `reason` is present exactly when `run` is false: a skipped step is
+ *  a first-class outcome and not a quiet pass, so it has to say why in
+ *  words an operator reads. */
+export interface BackendProbeStep {
+  step: string;
+  run: boolean;
+  reason?: string;
+}
+
+/**
+ * One registered backend, as data.
+ *
+ * A destination is an INSTANCE of one of these. That is the whole of EPIC
+ * I: several instances of one backend is the normal case rather than an
+ * edge, so a manifest carries what a picker needs to offer the backend
+ * and says nothing whatever about any particular destination.
+ */
+export interface BackendManifest {
+  /** The backend's name, and what a create request names. It is NOT
+   *  `rcloneBackend` below, and the two are separate because a future
+   *  second local-ish backend would dial the same rclone backend as the
+   *  first. */
+  id: string;
+  label: string;
+  summary: string;
+  role: BackendRole;
+  /** Which rclone backend an instance of this is dialed through,
+   *  reported for an operator's benefit. Constrained by the engine to
+   *  backends the build actually registers (FR-4). */
+  rcloneBackend: string;
+  fields: BackendManifestField[];
+  probe: { steps: BackendProbeStep[] };
+}
+
+/** A backend the engine understands and no manifest declares, so no
+ *  instance of one can exist.
+ *
+ *  Rendered, dimmed, rather than hidden. Somebody who came looking for
+ *  SFTP learns nothing from a menu that never mentions it and asks again
+ *  next month; a row saying the shape is understood and is not registered
+ *  is a real answer. Nothing about it can be submitted. */
+export interface UnregisteredBackend {
+  rcloneBackend: string;
+}
+
+/**
+ * Every backend an instance may be declared on, and the rules an instance
+ * id follows.
+ *
+ * The rules travel with the catalogue rather than being restated in a
+ * form, for RetentionSchema's stated reason: a form has to refuse exactly
+ * what a hand-edited configuration file would be refused for, and a
+ * client holding its own copy of the rule goes stale in one direction
+ * only — silently accepting a name the engine then rejects.
+ */
+export interface BackendCatalog {
+  registered: BackendManifest[];
+  unregistered: UnregisteredBackend[];
+  /** Anchored regular expression source; safe to pass to `new RegExp`. */
+  instanceIdPattern: string;
+  /** The one instance id no operator may choose. It names the drive this
+   *  deployment's backups land on, written by the first-boot seed as
+   *  instance zero of the local volume backend, and it is refused on
+   *  every operator-facing path. A form that offers it and then meets the
+   *  refusal is a worse experience than one that says so in the field. */
+  reservedInstanceId: string;
+}
+
+/**
  * One step of a storage-medium preflight (issue #443).
  *
  * There is no field here for a credential and there is not going to be
@@ -1726,6 +1886,23 @@ export interface BackupManagerApi {
   createStorageMedium(spec: StorageMediumSpec): Promise<StorageMedium>;
   updateStorageMedium(mediumId: string, spec: StorageMediumSpec): Promise<StorageMedium>;
   removeStorageMedium(mediumId: string): Promise<void>;
+
+  /**
+   * EPIC I (#664): every backend a destination can be an instance of,
+   * and the rules an instance id follows.
+   *
+   * The add-a-destination picker reads this and holds no list of its
+   * own. A component with an array of backend names in it, or a switch
+   * on backend type, is the assumption this epic exists to remove — that
+   * a destination IS a backend type rather than an instance of one —
+   * re-asserted in the one surface the epic is about.
+   *
+   * Read-only: there is no route that adds to it, by design. A manifest
+   * decides what a destination may BE, including which rclone backend it
+   * dials, so a client-extensible catalogue would put FR-4's gate on the
+   * far side of the network from the binary it constrains.
+   */
+  listBackends(): Promise<BackendCatalog>;
 
   /** Make this the destination a NEWLY CREATED retention tier starts on
    *  (#622). It moves that and nothing else: no existing tier is

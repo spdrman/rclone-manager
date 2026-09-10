@@ -507,6 +507,17 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// be shadowed by the "/backup-sets/*" catch-all above.
 		r.Get("/validators", h.listValidators)
 
+		// EPIC I (#664): the registered-backend catalogue #668's
+		// add-a-destination picker renders, and the naming rules its
+		// name field refuses against. Read-only for the route above's
+		// reason one step further on — a manifest decides what a
+		// destination may BE, including which rclone backend it dials,
+		// so a client-extensible catalogue would put FR-4's gate on the
+		// far side of the network from the binary it constrains. Static
+		// path, so the "/backup-sets/*" catch-all above cannot shadow
+		// it.
+		r.Get("/backends", h.listBackends)
+
 		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
 		// The other way to end up holding a key reference (#592):
 		// selecting one this machine already holds, by the opaque handle
