@@ -2646,6 +2646,7 @@ core/internal/
   app/           the presentation-agnostic application service every command and handler calls
   archive/       what a storage class means for getting bytes back, and the restore that has to be asked for
   artifactstore/ where a committed artifact's bytes live, asked rather than composed from a directory string
+  backend/       the registry of declarative backend manifests a destination is an instance of
   capacity/      disk-space admission checks
   config/        YAML config schema, loading, validation (Load takes any path)
   discovery/     turns a raw remote listing into artifacts proven complete
