@@ -266,7 +266,7 @@ export function App() {
             (issue #677). Callers build the URL with artifactPath()
             (utilities/routes.ts) rather than by hand, which is what
             escapes each part. */}
-        <Route path="/backups/:source/:set/:name" element={<BackupDetailPage />} />
+        <Route path="/backups/:source/:set/:name" element={<BackupDetailPage readOnly={readOnly} />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/quarantine" element={<QuarantinePage readOnly={readOnly} quarantine={quarantine} />} />
         <Route path="/settings" element={<SettingsPage readOnly={readOnly} />} />

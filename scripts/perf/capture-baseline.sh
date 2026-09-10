@@ -50,7 +50,7 @@ SKIP_IMAGE=0
 # Server.Arch prints Go's vocabulary (arm64, amd64), which is the same
 # vocabulary `docker image inspect --format {{.Architecture}}` prints and
 # what lands in the record beside the value, so there is no mapping table
-# here to get wrong. scripts/e2e/run-machine-tier.sh reached the same
+# here to get wrong. scripts/rcmtools/e2e/run_machine_tier.py reached the same
 # conclusion on this machine and needs one only because it reads
 # `docker info --format {{.Architecture}}`, which says aarch64.
 #

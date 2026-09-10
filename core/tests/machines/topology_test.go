@@ -52,18 +52,30 @@ func TestTheSourceMachineHasOneDefinition(t *testing.T) {
 		t.Errorf("%s does not install iptables, so LimitConnections cannot impose #264's rule and every connection-cap test becomes a copy of the uncapped case:\n%s", name, text)
 	}
 
-	scriptPath := filepath.Join(root, "scripts", "e2e", "two-machine-backup.sh")
+	scriptPath := filepath.Join(root, "scripts", "rcmtools", "e2e", "two_machine_backup.py")
 	script, err := os.ReadFile(scriptPath)
 	if err != nil {
 		t.Fatalf("reading %s: %v", scriptPath, err)
 	}
 	if !strings.Contains(string(script), name) {
-		t.Errorf("%s never mentions %s, so the shell script is building its source machine from a definition of its own again. Two definitions of the simulated VPS agree right up until they do not, and the one that drifts is the one nobody is running that day.", filepath.Base(scriptPath), name)
+		t.Errorf("%s never mentions %s, so the driver is building its source machine from a definition of its own again. Two definitions of the simulated VPS agree right up until they do not, and the one that drifts is the one nobody is running that day.", filepath.Base(scriptPath), name)
 	}
-	// The inline heredoc it used to build from, named so a reader can tell
-	// this apart from a rename.
-	if strings.Contains(string(script), "RUN apk add --no-cache iptables\nDOCKERFILE") {
-		t.Errorf("%s still builds its source machine from an inline Dockerfile heredoc, which is the second definition #451 removed", filepath.Base(scriptPath))
+	// The inline definition it used to build from, named so a reader can
+	// tell this apart from a rename. In bash that was a heredoc, and the
+	// pattern was its body plus its terminator; after the port to Python
+	// (#672) that exact text can no longer occur, so looking for it would
+	// be a check that cannot fail -- listed, ticking, watching nothing.
+	// What survives the language change is the Dockerfile's own first
+	// directive appearing in the driver at all, which is what an inline
+	// second definition needs and what naming the shared file does not.
+	//
+	// Note for whoever writes the next comment in that driver: this is a
+	// scan over source TEXT and cannot tell a mention from a use, so
+	// quoting the Dockerfile's first line in a note there would redden
+	// this. Name the file instead; that is what the cell above requires
+	// anyway.
+	if strings.Contains(string(script), "FROM atmoz/sftp") {
+		t.Errorf("%s carries the source machine's own FROM directive, so it is building that machine from a second definition, which is the one #451 removed", filepath.Base(scriptPath))
 	}
 }
 
@@ -78,7 +90,7 @@ func TestTheSourceMachineHasOneDefinition(t *testing.T) {
 // keeps the root refusal in core/internal/testenv rather than opting out of
 // it.
 func TestTheDriverRunsTheTierInsideAManagerMachine(t *testing.T) {
-	path := filepath.Join(repoRoot(t), "scripts", "e2e", "run-machine-tier.sh")
+	path := filepath.Join(repoRoot(t), "scripts", "rcmtools", "e2e", "run_machine_tier.py")
 	script, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("the machine-tier driver is missing at %s: %v", path, err)
@@ -97,7 +109,20 @@ func TestTheDriverRunsTheTierInsideAManagerMachine(t *testing.T) {
 	if !strings.Contains(text, "cmd/gotestwatch") {
 		t.Errorf("the driver runs the tier under a bare `go test`. A machine-tier package's wall clock tracks real machine load, so a fixed -timeout chosen on a quiet machine kills a run that is still making progress (#256), which is why scripts/ci-local.sh puts these packages under gotestwatch. A driver meant to stand in for that step has to keep the bound")
 	}
-	if !strings.Contains(text, "EXIT_CANNOT_RUN=3") {
+	// The driver's CANNOT RUN status, after the bash driver became
+	// scripts/rcmtools/e2e/run_machine_tier.py (#672). This used to look for
+	// the literal `EXIT_CANNOT_RUN=3`, and looking for it now would be
+	// looking for the defect: the number 3 is not written in the driver at
+	// all any more. rcmtools/harness.py reserves 3 for this verdict, reaches
+	// it from `cannot_run` through an internal status nothing else produces,
+	// and translates once at the exit, precisely so a subprocess with its own
+	// meaning for 3 (#551) cannot be mistaken for "this machine could not
+	// perform the proof". So both halves are asserted: the verdict is
+	// reachable, and it is not hand-written.
+	if !strings.Contains(text, "harness.cannot_run(") {
 		t.Errorf("the driver has no CANNOT RUN status. A machine that cannot run the tier is neither a pass nor a failure, and two-machine-backup.sh already ledgers that as exit 3; without it the gate cannot tell the two apart without parsing prose")
+	}
+	if strings.Contains(text, "EXIT_CANNOT_RUN = 3") || strings.Contains(text, "exit(3)") || strings.Contains(text, "return 3") {
+		t.Errorf("the driver writes the exit status 3 itself. 3 is the gate ledger's INCOMPLETE and rcmtools/harness.py's finish() is the only place allowed to produce it, so a driver that types it can report a machine verdict for a proof that ran and failed")
 	}
 }

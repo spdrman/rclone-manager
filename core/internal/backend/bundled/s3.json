@@ -1,0 +1,84 @@
+{
+  "id": "s3",
+  "label": "S3 or S3-compatible",
+  "summary": "Amazon S3, or any service that speaks its API: MinIO, Ceph, Backblaze B2, Wasabi, a private gateway.",
+  "role": "object_store",
+  "rclone_backend": "s3",
+  "fields": [
+    {
+      "id": "bucket",
+      "label": "Bucket",
+      "help": "A bucket with no key namespace in it. A subdirectory inside the bucket belongs in the prefix field.",
+      "kind": "string",
+      "required": true,
+      "pattern": "^[^/]+$"
+    },
+    {
+      "id": "region",
+      "label": "Region",
+      "help": "Passed to the provider unexamined. This product holds no list of legal regions, because a list here would be a second, staler copy that refuses a region that works.",
+      "kind": "string",
+      "required": false
+    },
+    {
+      "id": "endpoint",
+      "label": "Endpoint",
+      "help": "Only for an S3-compatible service. Leave empty for Amazon's own endpoint for the region.",
+      "kind": "url",
+      "required": false
+    },
+    {
+      "id": "prefix",
+      "label": "Key namespace",
+      "help": "So one bucket can hold more than this product's artifacts. Leave empty to write at the root.",
+      "kind": "key_prefix",
+      "required": false
+    },
+    {
+      "id": "storage_class",
+      "label": "Storage class",
+      "kind": "enum",
+      "required": false,
+      "unset_means": "STANDARD",
+      "values": [
+        { "value": "STANDARD", "label": "Standard" },
+        { "value": "STANDARD_IA", "label": "Standard, infrequent access" },
+        { "value": "ONEZONE_IA", "label": "One zone, infrequent access" },
+        { "value": "INTELLIGENT_TIERING", "label": "Intelligent tiering" },
+        { "value": "GLACIER_IR", "label": "Glacier instant retrieval" },
+        { "value": "GLACIER", "label": "Glacier (a restore takes hours)" },
+        { "value": "DEEP_ARCHIVE", "label": "Deep Archive (a restore takes hours)" }
+      ]
+    },
+    {
+      "id": "upload_verification",
+      "label": "How a copy is proven",
+      "kind": "enum",
+      "required": false,
+      "unset_means": "readback",
+      "values": [
+        { "value": "readback", "label": "Download the copy again and re-hash it" },
+        { "value": "attested", "label": "Believe the destination's own full-object digest" }
+      ]
+    },
+    {
+      "id": "credentials",
+      "label": "Access key",
+      "help": "Stored once, in a file only this service can read. It is never shown again and never leaves this host in a response.",
+      "kind": "credential",
+      "required": true
+    }
+  ],
+  "probe": {
+    "steps": [
+      { "step": "credentials", "run": true },
+      { "step": "reach", "run": true },
+      { "step": "deliverable", "run": true },
+      { "step": "write", "run": true },
+      { "step": "read_back", "run": true },
+      { "step": "storage_class", "run": true },
+      { "step": "verification", "run": true },
+      { "step": "delete", "run": true }
+    ]
+  }
+}
