@@ -147,7 +147,6 @@ func (b *BackupService) PreflightStorageMedium(ctx context.Context, id string) (
 		return toMediumPreflight(report), nil
 	}
 
-
 	report, err := b.state.Load().inner.PreflightMedium(ctx, id)
 	switch {
 	case app.AsMediumNotDeclared(err):
