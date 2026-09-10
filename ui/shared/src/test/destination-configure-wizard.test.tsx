@@ -779,7 +779,14 @@ describe("configuring a destination that does not exist yet", () => {
     // line that fails is worse than no line: the entire reason these are
     // printed is that an operator can copy them.
     const shown = screen.getByRole("group", { name: "Configure locker_one" }).textContent ?? "";
-    expect(shown).toContain("rbm medium add locker_one");
+    // The whole line, and `--type` pinned to the BACKEND ID rather than
+    // to the rclone backend. The synthetic manifest spells the two
+    // differently on purpose - id `widget_locker`, rclone backend
+    // `widgetlocker` - because they coincide for s3 and diverge for
+    // local_volume, so a test using a manifest where they matched would
+    // pass on the spelling that prints a command that fails.
+    expect(shown).toContain("rbm medium add locker_one --type widget_locker");
+    expect(shown).not.toContain("widgetlocker");
     expect(shown).not.toContain("rbm medium edit");
   });
 });
