@@ -429,7 +429,15 @@ actually is, and `container/compose.yaml` sets it by default to
 published `web-ui` on. `localhost` only resolves correctly when you open the link on
 the NAS itself; set `PUBLIC_BASE_URL` in `.env` to the NAS's real hostname/IP (see
 `container/.env.example`) to get a link that also works from another machine on the
-LAN. Leaving `PUBLIC_BASE_URL` unset entirely (outside of `compose.yaml`'s own default,
+LAN. `scripts/install/install_docker_host.py` already does that for you: with no
+`--public-base-url` it reads the address this machine's default route leaves by and
+writes that into the `.env` it generates, because the link is opened from a different
+machine on the same LAN and an address is the only form that works there with nothing
+configured. A hostname is not: it resolves on the box it names and, without mDNS or a
+DNS record somebody set up, nowhere else. On a host with no default route to read an
+address off, it falls back to the hostname. `compose.yaml` itself cannot do any of
+this, which is why its own default is still `localhost`: it has no way to ask the
+kernel anything. Leaving `PUBLIC_BASE_URL` unset entirely (outside of `compose.yaml`'s own default,
 e.g. when running `/rbm-web serve` directly) prints just the raw token
 instead of a clickable but wrong link.
 
