@@ -104,7 +104,12 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = SCRIPTS_DIR.parent
 SCRIPT = REPO_ROOT / "scripts" / "release" / "publish-image.sh"
+PARITY_SCRIPT = REPO_ROOT / "scripts" / "release" / "verify-manifest-parity.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
+
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from rcmtools.release import verify_manifest_parity as parity  # noqa: E402
 
 _UNSET_GIT_VARS = (
     "GIT_INDEX_FILE",
@@ -209,6 +214,46 @@ def run_publish_path(repo: Path, *extra_env: str) -> tuple[int, str]:
     """Drive the script WITHOUT the GUARDS_ONLY seam. DRY_RUN=1 is the
     belt: it stops before `docker buildx build --push`."""
     return _run(repo, list(extra_env), guards_only=False)
+
+
+def stub_docker(tmpdirs: list[str]) -> Path:
+    """A `docker` on PATH that refuses to build, with a marker.
+
+    The parity proof's own refusals all fire before the first `docker`
+    call, so they need no Docker at all. Their positive control does: it
+    has to show that a well-formed manifest gets PAST them, and the next
+    thing past them is a cross-architecture build. A stub that fails
+    loudly turns that into a one-second assertion instead of two real
+    builds, and the marker is what stops the control passing on a
+    `docker` that was never invoked."""
+    d = Path(tempfile.mkdtemp())
+    tmpdirs.append(str(d))
+    bindir = d / ".stubbin"
+    bindir.mkdir()
+    (bindir / "docker").write_text('#!/usr/bin/env bash\necho "stub docker refused to build" >&2\nexit 1\n')
+    (bindir / "docker").chmod(0o755)
+    return bindir
+
+
+def run_parity(repo: Path, *extra_env: str) -> tuple[int, str]:
+    """Drive scripts/release/verify-manifest-parity.sh -- the SHIM, so the
+    shim's `exec` is exercised too -- against `repo`. It has no
+    GUARDS_ONLY seam: its refusals simply precede its first `docker`
+    call, which is why they are drivable here and its comparison logic is
+    not."""
+    env = _clean_env()
+    for entry in extra_env:
+        key, _, value = entry.partition("=")
+        env[key] = value
+    proc = subprocess.run(
+        ["bash", str(PARITY_SCRIPT)],
+        cwd=str(repo),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    return proc.returncode, proc.stdout
 
 
 def expansions_in_run_blocks(path: Path) -> str:
@@ -445,6 +490,100 @@ def main() -> int:
         rc, out = run_publish_path(repo, f"PATH={stub}{os.pathsep}{os.environ.get('PATH', '')}")
         expect(rc, out, 0, "stopping before docker buildx build")
         refute(out, "SKIP_PROVENANCE_CHECK=1 removes the check")
+
+        # --- the parity proof publish-image.sh runs before the push
+        #
+        # scripts/release/verify-manifest-parity.sh (#260) is the last
+        # thing that happens before anything leaves this machine, and it
+        # is the only release script with no guard suite of its own: it is
+        # two full cross-architecture Docker builds, so it is deliberately
+        # not wired into ci-local.sh. Its REFUSALS, though, all fire
+        # before the first `docker` call, and the module's hazard note
+        # claims this file holds them -- so it has to, or that claim is
+        # decoration. Everything below is Docker-free except the positive
+        # control, which reaches the first build and stops there against a
+        # stub `docker`.
+        current = "a manifest stamped unsafe_local_build is not worth proving a build against"
+        repo = new_repo(tmpdirs)
+        (repo / "container" / "release-manifest.json").write_text(
+            '{ "unsafe_local_build": true, "version": "test", "commit": "'
+            + git(repo, "rev-parse", "HEAD").strip()
+            + '", "architectures": [ { "architecture": "amd64", "binary_sha256": { "rbm": "x", "rbm-web": "y" } } ] }\n'
+        )
+        rc, out = run_parity(repo)
+        expect(rc, out, 2, 'stamped "unsafe_local_build": true')
+        refute(out, "==> Proving")
+
+        current = "a manifest missing the commit it would build"
+        repo = new_repo(tmpdirs)
+        (repo / "container" / "release-manifest.json").write_text(
+            '{ "version": "test", "commit": "", "architectures": [ { "architecture": "amd64", '
+            '"binary_sha256": { "rbm": "x", "rbm-web": "y" } } ] }\n'
+        )
+        rc, out = run_parity(repo)
+        expect(rc, out, 2, "both are needed as build arguments")
+        refute(out, "==> Proving")
+
+        current = "a manifest recording no architecture at all, which would pass by having nothing to compare"
+        repo = new_repo(tmpdirs)
+        (repo / "container" / "release-manifest.json").write_text(
+            '{ "version": "test", "commit": "' + git(repo, "rev-parse", "HEAD").strip() + '" }\n'
+        )
+        rc, out = run_parity(repo)
+        expect(rc, out, 2, "records no architecture at all")
+        refute(out, "==> Proving")
+
+        current = "no manifest in the tree at all"
+        repo = new_repo(tmpdirs)
+        (repo / "container" / "release-manifest.json").unlink()
+        rc, out = run_parity(repo)
+        expect(rc, out, 2, "there is nothing to check the build against")
+        refute(out, "==> Proving")
+
+        current = "a well-formed manifest gets past every refusal (control for the four above)"
+        repo = new_repo(tmpdirs)
+        (repo / "container" / "release-manifest.json").write_text(
+            '{ "version": "test", "commit": "' + git(repo, "rev-parse", "HEAD").strip() + '", '
+            '"architectures": [ { "architecture": "amd64", "binary_sha256": { "rbm": "x", "rbm-web": "y" } } ] }\n'
+        )
+        stub = stub_docker(tmpdirs)
+        rc, out = run_parity(repo, f"PATH={stub}{os.pathsep}{os.environ.get('PATH', '')}")
+        expect(rc, out, 1, "==> Proving")
+        expect(rc, out, 1, "stub docker refused to build")
+        refute(out, "records no architecture at all")
+        refute(out, "both are needed as build arguments")
+        refute(out, "there is nothing to check the build against")
+
+        current = "recorded() indexes by architecture and cannot cross-match another one's digest"
+        swapped: dict[str, object] = {
+            "architectures": [
+                {"architecture": "amd64", "binary_sha256": {"rbm": "AAA", "rbm-web": "AAW"}},
+                {"architecture": "arm64", "binary_sha256": {"rbm": "BBB", "rbm-web": "BBW"}},
+            ]
+        }
+        got = {
+            (arch, binary): parity.recorded(swapped, arch, binary)
+            for arch in ("amd64", "arm64")
+            for binary in ("rbm", "rbm-web")
+        }
+        want = {
+            ("amd64", "rbm"): "AAA",
+            ("amd64", "rbm-web"): "AAW",
+            ("arm64", "rbm"): "BBB",
+            ("arm64", "rbm-web"): "BBW",
+        }
+        if got != want:
+            fail(f"recorded() crossed architectures or binaries: {got} != {want}")
+
+        current = "recorded() returns None, not an empty string, for a hash the manifest does not carry"
+        for arch, binary in (("amd64", "rbm-lite"), ("s390x", "rbm")):
+            value = parity.recorded(swapped, arch, binary)
+            if value is not None:
+                fail(
+                    f"recorded({arch!r}, {binary!r}) returned {value!r} rather than None, so an absent "
+                    "record is conflatable with a real hash that merely differs, and the MISMATCH line "
+                    'would read "manifest records: " with nothing after it'
+                )
 
         # --- the workflow that drives this script
         current = "release.yml never interpolates a dispatch input into a run: body"
