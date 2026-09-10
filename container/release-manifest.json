@@ -1,14 +1,14 @@
 {
   "version": "0.4.0",
   "commit": "77427012c8f6b23faa01713d59c0df8ba3bf1657",
-  "generated_at": "2026-09-10T05:27:04Z",
+  "generated_at": "2026-09-10T07:54:41Z",
   "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script now refuses to record a commit that is not an ancestor of origin/main and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled. registry_digest is the digest ghcr.io assigns ghcr.io/spdrman/backup-manager on push (docker buildx build --push prints it, docker buildx imagetools inspect reads it back).",
   "architectures": [
     {
       "architecture": "amd64",
       "binary_sha256": {
-        "rbm": "9fa565f4149da57dbc921cf960e60b7856f1af5fc928029cbf9c646acbfc6d80",
-        "rbm-web": "83dbecf16922f537f697ec65bc88a1748d05e37cec671700e95239e33fee56f6"
+        "rbm": "90fc987c74515e1c53083836e45c23919c4a437f8e1e8fdfc05f5136198e4975",
+        "rbm-web": "90180bf71b929e27d6cb4aeb23c0eafb7303c151c07af30d7c22d964fef3c0c1"
       },
       "local_image_id_sha256": "c0e45ba266a338d07063dbda5e0704649e0ed77d9ec473f492c24f14e7d46ef4",
       "registry_digest": null
@@ -16,8 +16,8 @@
     {
       "architecture": "arm64",
       "binary_sha256": {
-        "rbm": "b5741ced307a4c3cafd49aedecda1201cae791b406c5abedaf52ce435accfb0b",
-        "rbm-web": "e1bbeec4d77bab74b47ad96ff428ca67096f5102a992de9652dcaf14cdb1e944"
+        "rbm": "5418896e1028bc3d5d20c7c4dec88ea8a61fafa694e78725b3b46325343e9fcb",
+        "rbm-web": "cc3bd1a7be26b67315de8d6edfa5927c80348f9e149bb74e34664d8867163cbb"
       },
       "local_image_id_sha256": "a0ec8ec8c19b7f9d339522977efd754e41b6d3f3d455092e55976acb3522131e",
       "registry_digest": null
