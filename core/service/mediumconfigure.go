@@ -43,6 +43,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -68,6 +69,25 @@ import (
 // could hold one is a value map something eventually puts material
 // into.
 type StorageMediumConfiguration struct {
+	// Backend is the manifest id this instance is an instance of, and it
+	// is what makes ConfigureStorageMedium a create as well as a
+	// replace.
+	//
+	// It has to be here rather than derived, and P2 (issue #669, #668)
+	// is the reason: an UNCONFIGURED destination is not representable in
+	// config.yaml at all. Registry.ValidateInstance refuses an absent
+	// required field (backend/validate.go:228-233), config.Validate
+	// delegates every per-field rule to it, and both bundled manifests
+	// have required fields - so a medium written with no values is
+	// refused two layers below any API. There is therefore no record to
+	// read a backend id off at create time, because there is no record
+	// until the values exist.
+	//
+	// Required when the id is not declared yet. When it IS declared it
+	// must match: a request changing which backend an instance is would
+	// be a different destination wearing the same name.
+	Backend string
+
 	Fields      map[string]string
 	Credentials StorageMediumCredentials
 }
@@ -171,10 +191,16 @@ func (b *BackupService) ConfigureStorageMedium(
 	if err != nil {
 		return StorageMediumSummary{}, err
 	}
-	// mustExist, and the credential inheritance writeStorageMedium
-	// derives for itself from a spec naming nothing: the same rule an
-	// edit already has, rather than a second statement of it here.
-	return b.writeStorageMedium(ctx, spec, true)
+	// The one create for the whole add-and-configure flow, and the
+	// replace, through one route. That is what PUT means, and under P2
+	// it is not a convenience: a destination cannot be declared before
+	// its values exist, so "create" and "configure" are one write with
+	// one probe in front of it. `mustExist` is therefore whether the
+	// instance was already declared and not a constant; the credential
+	// inheritance writeStorageMedium derives for itself from a spec
+	// naming nothing, which is the same rule an edit already has.
+	_, _, declaredErr := b.declaredInstance(id)
+	return b.writeStorageMedium(ctx, spec, declaredErr == nil)
 }
 
 // specFromConfiguration turns a manifest-shaped configuration into the
@@ -186,7 +212,32 @@ func (b *BackupService) specFromConfiguration(
 	cfg StorageMediumConfiguration,
 ) (StorageMediumSpec, bool, error) {
 	medium, manifest, err := b.declaredInstance(id)
-	if err != nil {
+	switch {
+	case err == nil:
+		if cfg.Backend != "" && cfg.Backend != manifest.ID {
+			return StorageMediumSpec{}, false, fmt.Errorf(
+				"%w: %s is already an instance of the %s backend; changing which backend an instance is would be a different destination under the same name",
+				ErrInvalidRequest, id, manifest.ID)
+		}
+	case errors.Is(err, ErrMediumNotFound):
+		// The create. There is no record to read a backend id off,
+		// which is exactly why the request carries one: see
+		// StorageMediumConfiguration.Backend.
+		if cfg.Backend == "" {
+			return StorageMediumSpec{}, false, fmt.Errorf(
+				"%w: %s is not declared yet, so this configuration has to name the backend it is an instance of",
+				ErrInvalidRequest, id)
+		}
+		registry, regErr := backend.Bundled()
+		if regErr != nil {
+			return StorageMediumSpec{}, false, regErr
+		}
+		manifest, regErr = registry.Backend(cfg.Backend)
+		if regErr != nil {
+			return StorageMediumSpec{}, false, fmt.Errorf("service: storage medium %s: %w", id, regErr)
+		}
+		medium = config.StorageMedium{ID: id, Type: manifest.ID}
+	default:
 		return StorageMediumSpec{}, false, err
 	}
 

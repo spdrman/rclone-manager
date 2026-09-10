@@ -79,10 +79,17 @@ export function testConnectionCommand(destinationId: string): string {
 export function editConfigurationCommand(
   manifest: BackendManifest,
   destinationId: string,
-  values: Record<string, string>
+  values: Record<string, string>,
+  creating = false
 ): { command: string; fieldsWithNoFlag: string[] } {
-  const parts = [`rbm medium edit ${destinationId}`];
+  // `add` or `edit`, from whether the destination is declared yet. It is
+  // one verb per fact rather than a printed line that is nearly right:
+  // `medium edit` against an id nothing declares fails, and a line that
+  // fails is worse than no line, because the whole reason these are
+  // printed is that an operator can copy them.
+  const parts = [`rbm medium ${creating ? "add" : "edit"} ${destinationId}`];
   const fieldsWithNoFlag: string[] = [];
+  if (creating) parts.push(`--type ${manifest.rcloneBackend}`);
 
   for (const field of manifest.fields) {
     if (field.kind === "credential") continue;

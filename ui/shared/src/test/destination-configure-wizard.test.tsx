@@ -120,7 +120,9 @@ function unconfigured() {
   return vi.fn(() => Promise.resolve({ fields: {}, credentialConfigured: false }));
 }
 
-async function openWizard(overrides: Partial<BackupManagerApi>) {
+async function openWizard(
+  overrides: Partial<BackupManagerApi> & { destination?: StorageMedium | null }
+) {
   const api = {
     ...createMockApi(),
     getStorageMediumConfiguration: unconfigured(),
@@ -131,7 +133,8 @@ async function openWizard(overrides: Partial<BackupManagerApi>) {
     <ApiProvider api={api}>
       <DestinationConfigureWizard
         manifest={syntheticManifest()}
-        destination={LOCKER}
+        instanceId="locker_one"
+        destination={overrides.destination === undefined ? LOCKER : overrides.destination}
         currentDefault="local"
         onClose={vi.fn()}
         onSaved={onSaved}
@@ -695,3 +698,83 @@ function reportFailingAtReach(): MediumPreflight {
     ]
   };
 }
+
+/**
+ * The add flow's single create (P2, issues #669 and #668).
+ *
+ * #668's confirm step names a backend and an instance and writes
+ * nothing, because an unconfigured destination is not representable:
+ * `Registry.ValidateInstance` refuses an absent required field
+ * (core/internal/backend/validate.go:228-233), `config.Validate`
+ * delegates every per-field rule to it, and both bundled manifests have
+ * required fields. So the create happens here, once, after the probe has
+ * passed - which is exactly the property #594's "writes nothing until
+ * the destination has been proven" was pinning, now covering the create
+ * as well as the configure.
+ */
+describe("configuring a destination that does not exist yet", () => {
+  it("asks nothing about a destination that is not declared", async () => {
+    const read = vi.fn(() => Promise.resolve({ fields: {}, credentialConfigured: false }));
+    await openWizard({
+      destination: null,
+      getStorageMediumConfiguration: read,
+      importStorageCredentials: vi.fn(() => Promise.resolve("cred-669")),
+      preflightStorageMediumConfiguration: vi.fn(() => Promise.resolve(report(true)))
+    });
+
+    // Reading it would be asking about something that is not there, and
+    // the answer would be a 404 rendered as a failure on a form that is
+    // working correctly.
+    expect(read).not.toHaveBeenCalled();
+    expect(within(screen.getByTestId("manifest-field-row-path")).getByTestId("manifest-field-control"))
+      .toHaveValue("");
+  });
+
+  it("creates it once, at the save, naming the backend, and not before the probe passes", async () => {
+    const configure = vi.fn(() => Promise.resolve({ ...LOCKER, connectionUnverified: false }));
+    await openWizard({
+      destination: null,
+      importStorageCredentials: vi.fn(() => Promise.resolve("cred-669")),
+      preflightStorageMediumConfiguration: vi.fn(() => Promise.resolve(report(true))),
+      configureStorageMedium: configure
+    });
+
+    await describeTheLocker();
+    press("Next: test connection");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next: review" })).toBeEnabled());
+    // Proven, and still nothing written.
+    expect(configure).not.toHaveBeenCalled();
+
+    press("Next: review");
+    press("Save configuration");
+    await waitFor(() => expect(configure).toHaveBeenCalledTimes(1));
+
+    // The backend is named, because there is no record to read it off
+    // yet - that is the whole of why the request carries it.
+    expect(configure).toHaveBeenCalledWith("locker_one", {
+      backend: "widget_locker",
+      fields: { path: "/mnt/lockers", prefix: "widgets/2026" },
+      credentials: { credentialsId: "cred-669" }
+    });
+  });
+
+  it("prints `medium add` rather than `medium edit` while nothing is declared", async () => {
+    await openWizard({
+      destination: null,
+      importStorageCredentials: vi.fn(() => Promise.resolve("cred-669")),
+      preflightStorageMediumConfiguration: vi.fn(() => Promise.resolve(report(true)))
+    });
+
+    await describeTheLocker();
+    press("Next: test connection");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next: review" })).toBeEnabled());
+    press("Next: review");
+
+    // `medium edit` against an id nothing declares fails, and a printed
+    // line that fails is worse than no line: the entire reason these are
+    // printed is that an operator can copy them.
+    const shown = screen.getByRole("group", { name: "Configure locker_one" }).textContent ?? "";
+    expect(shown).toContain("rbm medium add locker_one");
+    expect(shown).not.toContain("rbm medium edit");
+  });
+});

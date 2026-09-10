@@ -75,13 +75,30 @@ const NO_CREDENTIAL: ManifestCredentialDraft = { accessKeyId: "", secretAccessKe
 
 export function DestinationConfigureWizard({
   manifest,
+  instanceId,
   destination,
   currentDefault,
   onClose,
   onSaved
 }: {
   manifest: BackendManifest;
-  destination: StorageMedium;
+  /** The instance being configured. For a destination that already
+   *  exists this is its id; for one #668's confirm step just named, it
+   *  is the id that will be created by the save. */
+  instanceId: string;
+  /**
+   * The declared destination, or null when there is not one yet.
+   *
+   * Null is the add flow, and it is null rather than a half-built
+   * StorageMedium because an unconfigured destination is not
+   * representable: Registry.ValidateInstance refuses an absent required
+   * field (core/internal/backend/validate.go:228-233) and both bundled
+   * manifests have required fields, so nothing was written when #668's
+   * confirm step handed this flow a name. The save is the create, and it
+   * happens after the probe has passed - which is the property #594's
+   * own tests were pinning and the reason P2 keeps them intact.
+   */
+  destination: StorageMedium | null;
   currentDefault: string | null;
   onClose(): void;
   onSaved(medium: StorageMedium): void;
@@ -109,6 +126,14 @@ export function DestinationConfigureWizard({
 
   useEffect(() => {
     let live = true;
+    // Nothing to read when nothing is declared, and asking would be
+    // asking about a destination that does not exist. An empty form IS
+    // the neutral starting point in that case, which is the one case it
+    // is.
+    if (destination === null) {
+      setValues(emptyValues(manifest));
+      return;
+    }
     api
       .getStorageMediumConfiguration(destination.id)
       .then((current) => {
@@ -120,7 +145,7 @@ export function DestinationConfigureWizard({
     return () => {
       live = false;
     };
-  }, [api, destination.id, manifest]);
+  }, [api, destination, manifest]);
 
   // The elapsed counter, and the only reason this component owns a
   // timer. Nothing streams step progress - the manager answers a probe
@@ -191,7 +216,8 @@ export function DestinationConfigureWizard({
         setCredentialConfigured(true);
       }
 
-      const answer = await api.preflightStorageMediumConfiguration(destination.id, {
+      const answer = await api.preflightStorageMediumConfiguration(instanceId, {
+        ...(destination === null ? { backend: manifest.id } : {}),
         fields: configurationValues(manifest, values),
         ...(reference ? { credentials: { credentialsId: reference } } : {})
       });
@@ -208,7 +234,7 @@ export function DestinationConfigureWizard({
     } finally {
       setBusy(false);
     }
-  }, [api, credential, credentialTyped, credentialsId, destination.id, manifest, values]);
+  }, [api, credential, credentialTyped, credentialsId, instanceId, manifest, values]);
 
   const toTestStep = useCallback(() => {
     setStep("test");
@@ -220,7 +246,11 @@ export function DestinationConfigureWizard({
     setBusy(true);
     setFailure(null);
     try {
-      let saved = await api.configureStorageMedium(destination.id, {
+      let saved = await api.configureStorageMedium(instanceId, {
+        // The backend is named on a create and left out on a replace,
+        // where the declared record already answers it and a request
+        // that disagreed would be refused.
+        ...(destination === null ? { backend: manifest.id } : {}),
         fields: configurationValues(manifest, values),
         ...(credentialsId ? { credentials: { credentialsId } } : {})
       });
@@ -229,24 +259,29 @@ export function DestinationConfigureWizard({
       // a different sentence, and the engine answers each with the
       // destination as it now stands so the caller renders what was
       // persisted.
-      if (makeDefault) saved = await api.setDefaultStorageMedium(destination.id);
+      if (makeDefault) saved = await api.setDefaultStorageMedium(instanceId);
       onSaved(saved);
     } catch (e: unknown) {
       setFailure(apiErrorOf(e));
     } finally {
       setBusy(false);
     }
-  }, [api, credentialsId, destination.id, makeDefault, manifest, onSaved, values]);
+  }, [api, credentialsId, instanceId, makeDefault, manifest, onSaved, values]);
 
   const echo = useMemo(() => {
     if (values === null) return { command: "", fieldsWithNoFlag: [] as string[] };
-    return editConfigurationCommand(manifest, destination.id, configurationValues(manifest, values));
-  }, [destination.id, manifest, values]);
+    return editConfigurationCommand(
+      manifest,
+      instanceId,
+      configurationValues(manifest, values),
+      destination === null
+    );
+  }, [instanceId, manifest, values]);
 
   return (
     <div
       role="group"
-      aria-label={`Configure ${destination.id}`}
+      aria-label={`Configure ${instanceId}`}
       style={{ display: "flex", flexDirection: "column", gap: 14 }}
     >
       <div style={{ fontSize: 12.5, color: "var(--text-2)" }}>
@@ -338,7 +373,7 @@ export function DestinationConfigureWizard({
           ) : null}
           <CommandEcho
             label="the engine's own check, against what is already saved"
-            commands={[testConnectionCommand(destination.id)]}
+            commands={[testConnectionCommand(instanceId)]}
           />
           <Buttons
             onCancel={() => setStep("fields")}
@@ -355,7 +390,7 @@ export function DestinationConfigureWizard({
         <>
           <ManifestReview
             manifest={manifest}
-            destinationId={destination.id}
+            destinationId={instanceId}
             values={values}
             credentialStored={credentialConfigured}
             verified={verified}

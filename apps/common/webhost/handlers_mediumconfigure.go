@@ -83,6 +83,12 @@ type mediumFieldValue struct {
 // "this instance carries no values" - a real instruction - which is why
 // nothing here treats the two as the same thing.
 type mediumConfigurationRequest struct {
+	// Backend names the manifest this instance is an instance of, and it
+	// is what makes the PUT a create as well as a replace. Required when
+	// the id is not declared yet; see
+	// service.StorageMediumConfiguration.Backend for why there is
+	// nothing to derive it from at that moment (P2, issue #669).
+	Backend     string                             `json:"backend,omitempty"`
 	Fields      []mediumFieldValue                 `json:"fields"`
 	Credentials *storageMediumCredentialsReference `json:"credentials,omitempty"`
 }
@@ -149,7 +155,16 @@ func (h *handlers) preflightStorageMediumConfiguration(w http.ResponseWriter, r 
 }
 
 // configureStorageMedium is PUT
-// /api/v1/storage-mediums/{id}/configuration.
+// /api/v1/storage-mediums/{id}/configuration: the one create for the
+// whole add-and-configure flow, and the replace.
+//
+// One route for both because a destination cannot exist unconfigured. An
+// absent required field is refused by Registry.ValidateInstance
+// (core/internal/backend/validate.go:228-233), config.Validate delegates
+// every per-field rule to it, and both bundled manifests have required
+// fields - so the two-phase "declare it now, fill it in later" write is
+// not something this schema can express. PUT is create-or-replace, which
+// is what PUT means.
 //
 // The engine runs the same check in front of the write and refuses when
 // it fails (#636), which is why a caller's own passing check is not what
@@ -217,7 +232,7 @@ func (h *handlers) decodeMediumConfiguration(
 		fields[pair.Field] = pair.Value
 	}
 
-	cfg := service.StorageMediumConfiguration{Fields: fields}
+	cfg := service.StorageMediumConfiguration{Backend: body.Backend, Fields: fields}
 	if body.Credentials != nil {
 		cfg.Credentials = service.StorageMediumCredentials{
 			ID:      body.Credentials.CredentialsID,
