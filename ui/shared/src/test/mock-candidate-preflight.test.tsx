@@ -244,8 +244,16 @@ describe("the S3 destination wizard driven against the unmodified fixture", () =
 
   async function wizardOnStorageClass(storageClass: string, uploadVerification = "readback") {
     const api = createMockApi();
-    const existing = (await api.listStorageMediums()).find((m) => !m.isLocal);
-    if (!existing) throw new Error("the fixture declares no remote destination to edit");
+    // A destination with a BUCKET, which is what this pane edits and what
+    // a candidate check needs a class and a credential for. It used to be
+    // `!m.isLocal`, and that stopped meaning "a bucket" when EPIC I
+    // (#664) made a declared local volume an ordinary destination: those
+    // are not the reserved entry either, so the first match became a
+    // directory and this pane was handed one to type a bucket into.
+    // Branching on the place a destination carries rather than on which
+    // one is reserved is the same rule describeDestination follows.
+    const existing = (await api.listStorageMediums()).find((m) => m.bucket);
+    if (!existing) throw new Error("the fixture declares no destination with a bucket to edit");
     render(
       <ApiProvider api={api}>
         <S3DestinationWizard editing={existing} onClose={() => {}} onSaved={() => {}} />
@@ -279,11 +287,11 @@ describe("the S3 destination wizard driven against the unmodified fixture", () =
     // import is 400ms and its preflight another 700, both well outside
     // testing-library's default one second, so the window is wide.
     await waitFor(() => expect(within(group).getByText("delete")).toBeTruthy(), { timeout: 5000 });
-    return { api, next, group };
+    return { api, next, group, edited: existing.id };
   }
 
   it("lets an ordinary destination be saved, which is the flow the fixture exists to serve", async () => {
-    const { api, next, group } = await wizardOnStorageClass("STANDARD");
+    const { api, next, group, edited } = await wizardOnStorageClass("STANDARD");
 
     await waitFor(() => expect(next).toBeEnabled(), { timeout: 5000 });
     // All eight, and no skips. A report that stopped short would still
@@ -304,7 +312,7 @@ describe("the S3 destination wizard driven against the unmodified fixture", () =
     // creates.
     await waitFor(async () => {
       const mediums = await api.listStorageMediums();
-      expect(mediums.find((m) => m.id === "offsite_s3")?.storageClass).toBe("STANDARD");
+      expect(mediums.find((m) => m.id === edited)?.storageClass).toBe("STANDARD");
     }, { timeout: 5000 });
   }, 15000);
 
