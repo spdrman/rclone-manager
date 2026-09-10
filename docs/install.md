@@ -33,6 +33,53 @@ definition itself (see [It derives from the canonical
 definition](#it-derives-from-the-canonical-definition-it-does-not-restate-it) below for
 what keeps the copy honest).
 
+### `--cli-only`: the command line, and no web host at all
+
+```
+python3 scripts/install/install_docker_host.py install --cli-only
+```
+
+Everything above still happens (the directories, the keypair, the pinned image, every
+refusal), and then the deployment comes up a different shape. The engine container runs
+`/rbm daemon` instead of `/rbm-web serve`, the `web-ui` container is never started, and
+nothing publishes a port on the host, so no process in the deployment serves HTTP and
+the `rbm-web` binary is not executed anywhere. The installer writes a wrapper to
+`<prefix>/bin/rbm` and that is the interface:
+
+```
+~/rclone-manager/bin/rbm status
+~/rclone-manager/bin/rbm sources
+```
+
+It is `docker compose run --rm --no-deps --entrypoint /rbm rclone-manager`, not
+`exec`, deliberately. `exec` needs a running container, and the first command anybody
+needs on a fresh CLI-only host runs before anything has been started. A one-off
+container gets the same image, mounts, uid and network as the engine, so a command that
+has to reach a serving engine still reaches it, and `--no-deps` keeps a read from
+starting the engine as a side effect of being run.
+
+**A fresh `--cli-only` install starts nothing, and that is the design.** A full install
+has a first-run wizard, so it can come up with no configuration at all and hand you a
+link. `rbm daemon` has no such thing: it is refused rather than started when there is no
+`config.yaml`, so starting it on a fresh host would produce a container that exits, gets
+restarted, exits again, and an installer that either claims success over a crash loop or
+waits out its timeout for a state that can never arrive. So it stages everything, starts
+nothing, exits 0, and prints the command that writes the first configuration. Creating
+the first backup set writes the first `config.yaml` along with it (issue #176), so
+there is no file to hand-author first.
+
+Since there is nothing serving, there is no health endpoint to ask either. What the
+installer checks instead is that the container stays running for a settle window rather
+than for one sample: `rbm daemon` is running for part of every restart cycle, so a
+single `docker compose ps` would report a crash loop as an install about half the time.
+
+The shape is recorded as `CLI_ONLY` in the staged `.env` and adopted on a later run the
+same way the credential paths are (see [The credentials in that same
+`.env`](#the-credentials-in-that-same-env-are-kept-not-re-guessed) below). A bare re-run
+of a CLI-only deployment stays CLI-only, because an upgrade is not the place to start
+publishing a Web UI on the LAN of a host somebody deliberately installed without one.
+`--no-cli-only` converts it back, and says so.
+
 ### Compatibility: `--prefix` no longer defaults to `/volume1/backup-manager`
 
 It defaults to `~/rclone-manager`. If you have a script that relied on the old default
