@@ -241,6 +241,97 @@ pre code { background: none; padding: 0; }
 .num { color: var(--warn); }
 
 /* ---------------------------------------------------------------
+   Output blocks.
+
+   A block to type and a block the program printed that look alike
+   is worse than showing no output at all, because the reader types
+   the second one. So an output block says the word above itself,
+   is set in the body-copy colour rather than the code colour, and
+   carries a dashed frame that no block meant for typing has.
+   --------------------------------------------------------------- */
+.out { margin-bottom: 0.75rem; }
+
+.out-label,
+.out-note {
+  display: block;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-faint);
+}
+
+.out-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+
+.out-note { font-size: 0.75rem; line-height: 1.5; }
+
+.out pre {
+  background: var(--surface);
+  border-style: dashed;
+  color: var(--text-light);
+  margin-bottom: 0.35rem;
+}
+
+/* ---------------------------------------------------------------
+   The one line of output that has to be acted on.
+
+   The enrolment link is single use and dead thirty minutes after
+   the engine printed it, so it is highlighted rather than left to
+   be found in a wall of text, and what it is is attached to it
+   rather than written underneath. It opens on focus as well as on
+   hover: a tooltip only a mouse can reach is one that half the
+   readers of this page never see.
+   --------------------------------------------------------------- */
+pre.hinted {
+  /* This one block does not clip its own tooltip. Nothing in it is
+     wide enough to need the scrolling every other pre gets, so the
+     overflow that scrolling needs is given up here. */
+  overflow: visible;
+  white-space: pre-wrap;
+}
+
+.hint { position: relative; }
+
+.hint-link {
+  background: var(--code-bg);
+  color: var(--primary);
+  font-weight: 600;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.hint-bubble {
+  display: none;
+  position: absolute;
+  top: 1.8em;
+  left: 0;
+  z-index: 5;
+  width: min(30rem, 82vw);
+  white-space: normal;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-light);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-left: 4px solid var(--primary);
+  border-radius: 0 6px 6px 0;
+  padding: 0.7rem 0.9rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+}
+
+.hint:hover .hint-bubble,
+.hint:focus-within .hint-bubble { display: block; }
+
+.hint-bubble strong { color: var(--text); }
+
+/* ---------------------------------------------------------------
    Callouts. Three tones, each one carrying a word as well as a
    colour, because the product's own UI rule (§ status is never
    colour alone) is a reasonable rule for its documentation too.

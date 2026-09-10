@@ -3711,11 +3711,7 @@ def cmd_install(args) -> int:
             remedy,
         )
 
-    say("")
-    say("==> Installed.")
-    say(f"    Web UI:  {args.public_base_url}")
-    say(f"    Compose: {' '.join(compose_argv(args))}")
-    for line in first_run_epilog(args):
+    for line in installed_epilog(args):
         say(line)
     return EXIT_OK
 
@@ -3819,21 +3815,8 @@ def finish_cli_only_install(args) -> int:
     compose = " ".join(compose_argv(args))
 
     if not (args.config_dir / "config.yaml").is_file():
-        say("")
-        say("==> Installed. Nothing is running yet, and that is what --cli-only means here:")
-        say("    `rbm daemon` is refused rather than started without a config.yaml, and a CLI-only")
-        say("    install has no first-run wizard to write one. Creating the first backup set writes")
-        say("    the first config.yaml with it:")
-        say(f"      {wrapper} backup-set create <source>/<backup-set> \\")
-        say("          --host HOST --user USER --remote-path /remote/path --local-path /backups/path \\")
-        say("          --ssh-key-file /etc/rclone-manager/id_ed25519 --trust-host-key \\")
-        say("          --completion-strategy stable")
-        say("")
-        say("    Then start the scheduler:")
-        say(f"      {compose} up -d --no-build {ENGINE_SERVICE}")
-        say("")
-        say(f"    CLI:     {wrapper}")
-        say(f"    Compose: {compose}")
+        for line in cli_only_staged_epilog(args):
+            say(line)
         return EXIT_OK
 
     say(f"==> docker compose up -d {ENGINE_SERVICE}")
@@ -3894,6 +3877,54 @@ def first_run_epilog(args: argparse.Namespace) -> list[str]:
         "    precisely so that a fresh install does not need one hand-written before it starts.",
         "    Open the Web UI and follow it. The enrollment link is in the engine's log:",
         f"      {' '.join(compose_argv(args))} logs rclone-manager | grep enroll",
+    ]
+
+
+def installed_epilog(args: argparse.Namespace) -> list[str]:
+    """Everything a full install prints once its last check has passed.
+
+    A list rather than a run of say() calls, for the reason
+    first_run_epilog is already one: docs/site/index.html shows this
+    output to a reader who has just run the install, and terminal output
+    copied into a page by hand drifts from the program silently. The
+    site's check renders these lines and compares, so the page cannot
+    claim an epilog this installer does not print.
+    """
+    return [
+        "",
+        "==> Installed.",
+        f"    Web UI:  {args.public_base_url}",
+        f"    Compose: {' '.join(compose_argv(args))}",
+        *first_run_epilog(args),
+    ]
+
+
+def cli_only_staged_epilog(args: argparse.Namespace) -> list[str]:
+    """What a fresh --cli-only install prints, having started nothing.
+
+    Separate from installed_epilog rather than a flag on it, because the
+    two say different things: this one has no Web UI line and no
+    enrolment link at all, which is the whole point of the flag (#689),
+    and the site shows it precisely to make that absence visible.
+    """
+    wrapper = args.prefix / "bin" / "rbm"
+    compose = " ".join(compose_argv(args))
+    return [
+        "",
+        "==> Installed. Nothing is running yet, and that is what --cli-only means here:",
+        "    `rbm daemon` is refused rather than started without a config.yaml, and a CLI-only",
+        "    install has no first-run wizard to write one. Creating the first backup set writes",
+        "    the first config.yaml with it:",
+        f"      {wrapper} backup-set create <source>/<backup-set> \\",
+        "          --host HOST --user USER --remote-path /remote/path --local-path /backups/path \\",
+        "          --ssh-key-file /etc/rclone-manager/id_ed25519 --trust-host-key \\",
+        "          --completion-strategy stable",
+        "",
+        "    Then start the scheduler:",
+        f"      {compose} up -d --no-build {ENGINE_SERVICE}",
+        "",
+        f"    CLI:     {wrapper}",
+        f"    Compose: {compose}",
     ]
 
 

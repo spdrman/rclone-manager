@@ -36,6 +36,7 @@ import argparse
 import ast
 import contextlib
 import email.message
+import html
 import io
 import json
 import os
@@ -5334,6 +5335,240 @@ class TestTheSiteReferenceNamesEveryFlagThisParserDeclares(unittest.TestCase):
         self.assertEqual(self.flags_in_first_cell(control), {"--prefix", "--puid", "--pgid"},
                          "the extractor should read both flags out of a shared row, skip a colspan "
                          "heading, and never read a flag named in the prose columns")
+
+
+def enrolment_notice(base_url: str, token: str) -> str:
+    """The sentence the engine prints while enrolment is still open,
+    rendered from the engine's own format strings rather than quoted.
+
+    Two files, because the line is assembled from two. The name it opens
+    with is derived in core/cliecho/cliname.go, deliberately, so that
+    `rbm` and `rbm-web` cannot drift apart; the sentence itself is the
+    Fprintf format in apps/common/auth/local/service.go's
+    PrintBootstrapNotice, which is the only thing that knows the expiry
+    and the single use it promises.
+    """
+    cliname = (REPO_ROOT / "core" / "cliecho" / "cliname.go").read_text(encoding="utf-8")
+    binary = re.search(r'\bBinary\s*=\s*"([^"]+)"', cliname)
+    suffix = re.search(r'\bWebBinary\s*=\s*Binary\s*\+\s*"([^"]+)"', cliname)
+    if binary is None or suffix is None:
+        raise AssertionError(
+            "core/cliecho/cliname.go no longer declares Binary and WebBinary the way this reader "
+            "expects; the site's enrolment-line check is reading it, so it has to be updated with it")
+
+    service = (REPO_ROOT / "apps" / "common" / "auth" / "local" / "service.go").read_text(encoding="utf-8")
+    formats = [m for m in re.findall(r'cliecho\.WebBinary\s*\+\s*"((?:[^"\\]|\\.)*)"', service)
+               if "/enroll?token=" in m]
+    if len(formats) != 1:
+        raise AssertionError(
+            f"expected exactly one enrolment-link format string in apps/common/auth/local/"
+            f"service.go, found {len(formats)}; that file is what the site's copy of the line is "
+            f"checked against")
+
+    literal = formats[0].replace("\\n", "\n").replace('\\"', '"')
+    return (binary.group(1) + suffix.group(1) + literal) % (base_url, token)
+
+
+class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
+    """Issue #714. docs/site/index.html's "Installing it" section used to
+    show two commands and then describe the result in prose. It now shows
+    the result, which means that page carries terminal output, and
+    terminal output copied into a page by hand is the thing that goes
+    stale without anybody noticing.
+
+    So the page does not carry a copy of the epilog, it carries the
+    epilog: this renders installed_epilog and cli_only_staged_epilog with
+    the sample prefix and address the page substitutes, and compares them
+    line for line. A word changed in the installer's success message and
+    not changed on the page fails here.
+
+    The enrolment link is a separate claim with its own history. Issue
+    #688: the link named `localhost`, which on a laptop reading it over
+    SSH is the laptop, and the token is single use and dies in 30
+    minutes, so the first thing anybody does with a fresh install did not
+    work. #690 fixed it by probing the LAN address. The installer does not
+    print that line at all - the engine does, which is why the epilog
+    prints the command that greps it out - so the sentence is held to the
+    engine's own format string instead of to this file.
+    """
+
+    # What the page substitutes for the two values a real run computes
+    # from the host it is running on. Everything else in both blocks is
+    # printed verbatim, which is what makes comparing them worth doing.
+    SAMPLE_PREFIX = "/home/you/rclone-manager"
+    SAMPLE_BASE_URL = "http://192.168.0.10:8080"
+    TOKEN_STAND_IN = "<a long random string>"
+
+    ENROL_SECTION = "first-run.html#enrol"
+
+    def page(self, name):
+        path = REPO_ROOT / "docs" / "site" / name
+        self.assertTrue(path.is_file(), f"{path} is missing; this test reads it")
+        return path.read_text(encoding="utf-8")
+
+    def region(self, name, marker):
+        doc = self.page(name)
+        begin, end = f"<!-- BEGIN {marker} -->", f"<!-- END {marker} -->"
+        i, j = doc.find(begin), doc.find(end)
+        self.assertTrue(0 <= i < j,
+                        f"docs/site/{name} has no {begin} ... {end} region; this test reads that "
+                        f"region, so removing it removes the check")
+        return doc[i + len(begin):j]
+
+    @staticmethod
+    def block_lines(region_text):
+        """An output block's own lines, blank ends trimmed.
+
+        Nothing else is undone: an output block holds no markup, so a tag
+        appearing in one is a reason to look rather than something to
+        tolerate. The leading blank line the epilog opens with separates
+        it from `docker compose up`'s output in a terminal and separates
+        it from the paragraph above on the page, so it is not compared.
+        """
+        lines = html.unescape(region_text).split("\n")
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return lines
+
+    @staticmethod
+    def sentence(region_text):
+        """One line of program output out of a region that wraps it.
+
+        The page breaks a sentence too long for the block across three
+        lines and highlights the middle one, so the comparison is of
+        words rather than of layout. Anything between the TOOLTIP markers
+        is this site's annotation rather than the program's output and is
+        dropped before the tags are.
+        """
+        stripped = re.sub(r"<!-- BEGIN TOOLTIP -->.*?<!-- END TOOLTIP -->", "",
+                          region_text, flags=re.DOTALL)
+        return " ".join(html.unescape(re.sub(r"<[^>]+>", "", stripped)).split())
+
+    def epilog(self, render):
+        """One of the installer's epilogs, rendered against the page's
+        sample values.
+
+        --project is deliberately left at its default, so that renaming
+        the Compose project fails here too: every `docker compose` line
+        on the page names it. The configuration directory is a path that
+        does not exist, because both blocks are a FIRST install, and a
+        real one is what first_run_epilog asks about.
+        """
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        args.prefix = Path(self.SAMPLE_PREFIX)
+        args.config_dir = Path(fx.tmp.name) / "never-configured"
+        args.public_base_url = self.SAMPLE_BASE_URL
+        return render(args)
+
+    def test_the_install_output_block_is_the_epilog_this_installer_prints(self):
+        printed = self.epilog(installer.installed_epilog)
+        shown = self.block_lines(self.region("index.html", "INSTALL-OUTPUT"))
+        self.assertEqual(shown, self.block_lines("\n".join(printed)),
+                         "docs/site/index.html shows an install epilog this installer does not "
+                         "print. The page is what is wrong: it exists to show a reader which part "
+                         "of their screen matters, and output that is nearly right is worse than "
+                         "none, because it is read as exact.")
+
+    def test_the_cli_only_output_block_is_the_epilog_a_fresh_cli_only_install_prints(self):
+        printed = self.epilog(installer.cli_only_staged_epilog)
+        shown = self.block_lines(self.region("index.html", "INSTALL-OUTPUT-CLI-ONLY"))
+        self.assertEqual(shown, self.block_lines("\n".join(printed)),
+                         "docs/site/index.html shows a --cli-only epilog this installer does not "
+                         "print")
+
+    def test_the_cli_only_output_block_carries_no_enrolment_link(self):
+        """The absence is the point of the block, not an oversight in it.
+
+        A CLI-only deployment publishes no port and runs no web host, so
+        there is nothing to enrol into (#689, landed in #690). A link in
+        that block would be a lie, and one somebody would spend the
+        thirty minutes of a token trying to open.
+        """
+        shown = self.region("index.html", "INSTALL-OUTPUT-CLI-ONLY")
+        for forbidden in ("enroll", "enrol", "hint-link", self.ENROL_SECTION):
+            self.assertNotIn(forbidden, shown,
+                             f"the --cli-only output block on docs/site/index.html names "
+                             f"{forbidden!r}; that install has no web host to enrol into, so "
+                             f"anything enrolment-shaped in that block is inventing one")
+
+    def test_both_pages_quote_the_sentence_the_engine_really_prints(self):
+        """The line with the link in it, held to the engine rather than to
+        this installer, because the engine is what prints it."""
+        # Collapsed rather than put through sentence(): the stand-in for
+        # the token is angle-bracketed, and sentence() strips markup, so
+        # running the expected side through it would delete the one part
+        # of the line a reader has to recognise.
+        expected = " ".join(enrolment_notice(self.SAMPLE_BASE_URL, self.TOKEN_STAND_IN).split())
+        for name in ("index.html", "first-run.html"):
+            self.assertEqual(self.sentence(self.region(name, "ENROL-LOG-LINE")), expected,
+                             f"docs/site/{name} quotes an enrolment log line the engine does not "
+                             f"print. apps/common/auth/local/service.go is what prints it; the "
+                             f"expiry, the single use and the host all come from there.")
+
+    def test_the_link_is_highlighted_and_lands_on_the_first_run_section(self):
+        shown = self.region("index.html", "ENROL-LOG-LINE")
+        self.assertIn(f'class="hint-link" href="{self.ENROL_SECTION}"', shown,
+                      "the enrolment link in the output block is not a highlighted link to the "
+                      "first-run page's section on creating the administrator")
+        self.assertIn('aria-describedby="enrol-hint"', shown)
+        self.assertIn('id="enrol-hint"', shown,
+                      "the link is described by an element that is not in the block")
+        self.assertIn(f'<a href="{self.ENROL_SECTION}"', shown,
+                      "the tooltip does not carry the link itself, so a reader who reads the "
+                      "tooltip rather than the URL has nothing to click")
+        for claim in ("Single use", "30 minutes", "localhost"):
+            self.assertIn(claim, shown,
+                          f"the tooltip does not say {claim!r}; those three are what a reader "
+                          f"holding a dead link needed to have been told")
+
+    def test_no_page_on_the_site_links_to_a_fragment_that_is_not_there(self):
+        """Generalised from the one anchor #714 needed, because looking
+        for it found a link that was already dead: reference.html sent a
+        reader to index.html#install-cli-only, and the heading that would
+        have answered to it had no id. A fragment that resolves to
+        nothing scrolls nowhere and says nothing, so the reader concludes
+        the section does not exist.
+        """
+        pages = {p.name: p.read_text(encoding="utf-8")
+                 for p in (REPO_ROOT / "docs" / "site").glob("*.html")}
+        self.assertIn("index.html", pages, "read no pages out of docs/site")
+        ids = {name: set(re.findall(r'id="([^"]+)"', doc)) for name, doc in pages.items()}
+        dead = []
+        for name, doc in pages.items():
+            for href in re.findall(r'href="([^"]*#[^"]*)"', doc):
+                if href.startswith(("http://", "https://", "mailto:")):
+                    continue
+                page, _, fragment = href.partition("#")
+                target = page or name
+                if target not in ids or fragment not in ids[target]:
+                    dead.append(f"{name} -> {href}")
+        self.assertEqual(dead, [], f"these links on the site resolve to nothing: {dead}")
+
+    def test_the_tooltip_opens_on_focus_and_not_only_on_hover(self):
+        """A tooltip only a mouse can reach is one half the readers of the
+        page never see, and it is carrying the only link in the block."""
+        css = self.page("theme.css")
+        self.assertIn(".hint:focus-within .hint-bubble", css,
+                      "theme.css opens the enrolment tooltip on hover only; keyboard focus has to "
+                      "open it too")
+
+    def test_the_extractors_can_actually_fail(self):
+        """The positive control. block_lines returning nothing and
+        sentence returning "" would satisfy several of the assertions
+        above against any document at all."""
+        self.assertEqual(self.block_lines("\n==&gt; Installed.\n    Web UI:  x\n\n"),
+                         ["==> Installed.", "    Web UI:  x"])
+        self.assertEqual(
+            self.sentence('<span class="cm">Open</span>\n'
+                          '<a href="x">http://h/enroll?token=&lt;t&gt;</a>'
+                          '<!-- BEGIN TOOLTIP --><span>not output</span><!-- END TOOLTIP -->\n'
+                          'to create one.'),
+            "Open http://h/enroll?token=<t> to create one.",
+            "sentence should join the wrapped lines, unescape, drop the markup and drop the "
+            "tooltip, and nothing else")
 
 
 if __name__ == "__main__":
