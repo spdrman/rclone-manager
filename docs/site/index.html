@@ -126,8 +126,8 @@ python3 install_docker_host.py install</code></pre>
 
     <p class="io-label">Output</p>
     <div class="io">
-      <pre><code>==&gt; Installed.
-    Web UI:  http://192.168.0.10:8080
+      <pre class="io-out"><code>==&gt; Installed.
+    Web UI:  http://10.0.0.10:8080
     Compose: docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env \
              -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml
 
@@ -137,7 +137,7 @@ python3 install_docker_host.py install</code></pre>
       docker compose -p rclone-manager ... logs rclone-manager | grep enroll
 
 <span class="cm">$ docker compose -p rclone-manager ... logs rclone-manager | grep enroll</span>
-rbm-web: no administrator account exists yet. Open <a class="tip-term" href="first-run.html#enrol">http://192.168.0.10:8080/enroll?token=<span class="tip-token">4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6</span></a>
+rbm-web: no administrator account exists yet. Open <a class="tip-term" href="first-run.html#enrol">http://10.0.0.10:8080/enroll?token=<span class="tip-token">4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6</span></a>
 to create one (valid 30 minutes, single use).</code></pre>
       <aside class="tip-bubble">
         <button type="button" class="tip-close" aria-label="Close this note">&times;</button>
@@ -166,7 +166,7 @@ docker compose -p rclone-manager ... logs --tail=50 rclone-manager | grep enroll
 python3 install_docker_host.py install --cli-only</code></pre>
 
     <p class="io-label">Output</p>
-    <pre><code>==&gt; Installed. Nothing is running yet, and that is what --cli-only means here:
+    <pre class="io-out"><code>==&gt; Installed. Nothing is running yet, and that is what --cli-only means here:
     `rbm daemon` is refused rather than started without a config.yaml, and a CLI-only
     install has no first-run wizard to write one. Creating the first backup set writes
     the first config.yaml with it:

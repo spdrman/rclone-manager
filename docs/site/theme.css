@@ -52,6 +52,11 @@
   --text-light: #5b5d5b;
   --text-faint: #8b8d8a;
   --code-bg: #ececea;
+  /* An output block is not a thing you type, so it does not look like
+     one. White against the typed block's grey, and the highlight inside
+     it is tuned against THIS panel rather than against the page. */
+  --code-bg-out: #ffffff;
+  --hl-bg: #b2e2c4;
   --border: #dedcd8;
   --border-strong: #c8c7c3;
   --hero-bg: #16283a;
@@ -78,6 +83,12 @@
   --text-light: #a3a6a2;
   --text-faint: #767976;
   --code-bg: #1e201e;
+  /* Inverted relationship on purpose: in the dark scheme the output
+     panel goes DEEPER than the typed one rather than lighter, because
+     there is nothing above white to move to. Same intent, opposite
+     direction, and the highlight is re-tuned for it. */
+  --code-bg-out: #0d0f0d;
+  --hl-bg: #22513a;
   --border: #313331;
   --border-strong: #454745;
   --hero-bg: #0d1720;
@@ -418,10 +429,18 @@ footer p { color: var(--text-faint); margin-bottom: 0.3rem; }
    covered the line it was describing: you hovered the link, the bubble
    opened on top of it, and the thing you were pointing at disappeared
    under the explanation of itself. */
+/* What came back, not what you type. The border is doing as much of the
+   separating as the fill: two panels a shade apart read as one surface
+   without it. */
+pre.io-out {
+  background: var(--code-bg-out);
+  border-color: var(--border-strong);
+}
+
 .io { position: relative; }
 
 .tip-term {
-  background: var(--ok-bg);
+  background: var(--hl-bg);
   border-bottom: 1px dashed var(--ok);
   border-radius: 3px;
   padding: 0 0.15em;
