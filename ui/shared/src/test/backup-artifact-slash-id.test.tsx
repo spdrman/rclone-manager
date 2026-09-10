@@ -270,4 +270,32 @@ describe("an artifact id with separators in it reaches its own page", () => {
     // route would have asked for something here.
     expect(asked).toEqual([]);
   });
+
+  /* The other fixture lie, and the one that would have made every case
+   * above pass while the page showed the wrong backup.
+   *
+   * api/mock.ts's getArtifact used to answer an id it did not have with
+   * the FIRST artifact. A dropped segment, a lost escape, an id
+   * reassembled in the wrong order — each would have rendered a real,
+   * plausible page about somebody else's backup, and every assertion in
+   * this file that only checks "a detail page opened" would have been
+   * satisfied by it. It refuses with ARTIFACT_NOT_FOUND now, which is
+   * what the service does, and this is the case that keeps it refusing:
+   * restoring the fallback breaks it and nothing else.
+   *
+   * Stated from the operator's side, because that is the behaviour that
+   * matters: a bookmark to a backup that has since been deleted says so,
+   * rather than quietly showing a different one under its URL. */
+  it("says so when the id names no backup, instead of showing a different one", async () => {
+    // The real createMockApi here, deliberately: every other case stubs
+    // getArtifact, so this is the only one that can see what api/mock.ts
+    // itself does with an id it has never heard of.
+    const api = createMockApi();
+    const [first] = await createMockApi().listArtifacts();
+
+    renderApp(api, "/backups/production/postgres-primary/deleted-last-month.dump.zst");
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText(first.filename)).not.toBeInTheDocument();
+  });
 });
