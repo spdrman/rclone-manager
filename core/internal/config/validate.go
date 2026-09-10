@@ -57,6 +57,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/backend"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
@@ -1438,6 +1439,21 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 	declared := make(map[string]bool, len(mediums))
 	seen := map[string]int{} // medium id -> the index that first declared it
 
+	// #667 moved every per-field rule below (the type's closed set,
+	// bucket's shape, storage_class and upload_verification's closed
+	// sets, prefix's four rules) off a Go-side copy of the s3 schema and
+	// onto backend.Registry: the manifest is now the only description of
+	// those facts, checked in backendmanifest_test.go's tests 29 and 30
+	// (issue #665). A registry that fails to load is reported once here
+	// rather than once per medium, and TestOpenLoadsTheBundledRegistry's
+	// own doc is why that is the only branch: the embedded manifests are
+	// fixed at build time, so Bundled() failing in a shipped binary is
+	// already impossible by the time this runs.
+	reg, regErr := backend.Bundled()
+	if regErr != nil {
+		v.addf("storage_mediums: the bundled backend registry failed to load: %v", regErr)
+	}
+
 	for i := range mediums {
 		m := &mediums[i]
 		path := fmt.Sprintf("storage_mediums[%d]", i)
@@ -1462,48 +1478,175 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 			declared[m.ID] = true
 		}
 
-		// The type set is closed and grows only by a future FR, because a
-		// new backend is an architecture decision rather than an import
-		// line (FR-28). Accepting a type nothing implements would let an
-		// operator write a config this product can validate and never
-		// serve.
-		if !validStorageMediumTypes[m.Type] {
-			if m.Type == "" {
-				v.addf("%s: type must be set to one of: %s", path, storageMediumTypeList)
-			} else {
-				v.addf("%s: type %q is not one of: %s", path, m.Type, storageMediumTypeList)
-			}
+		if regErr == nil {
+			v.validateStorageMediumBackend(path, m, reg)
+			v.validateUploadVerificationIsAchievable(path, m, reg)
 		}
 
-		switch {
-		case m.Bucket == "":
-			v.addf("%s: bucket must not be empty; a medium with no bucket names no destination at all", path)
-		case strings.Contains(m.Bucket, "/"):
-			// One specific mistake, named in words an operator can act
-			// on rather than left to the backend to report as an
-			// unresolvable bucket.
+		// One specific mistake, named in words an operator can act on
+		// rather than left to the backend's generic "bucket does not
+		// match the shape this backend accepts" (which the delegated
+		// check above already produces for the same input): a bucket
+		// carrying a "/" is a bucket and a prefix written into one
+		// field, most often by an operator who read S3's own docs
+		// before this product's.
+		if strings.Contains(m.Bucket, "/") {
 			v.addf("%s: bucket %q must not contain \"/\"; a key namespace inside the bucket belongs in prefix, not in the bucket name", path, m.Bucket)
 		}
 
-		// Empty means the documented default in both of the next two, and
-		// the default is resolved by an accessor rather than written back
-		// into the struct here. Writing it back would freeze today's
-		// default into an operator's own file on the next settings save
-		// (issue #294), and for the same reason nothing below fills in a
-		// value: this function only ever refuses.
-		if m.StorageClass != "" && !validStorageClasses[m.StorageClass] {
-			v.addf("%s: storage_class %q is not one of: %s", path, m.StorageClass, storageClassList)
-		}
-		if m.UploadVerification != "" && !validUploadVerifications[m.UploadVerification] {
-			v.addf("%s: upload_verification %q is not one of: %s", path, m.UploadVerification, uploadVerificationList)
-		}
-		v.validateUploadVerificationIsAchievable(path, m)
-
-		v.validateMediumPrefix(path, m.Prefix)
 		v.validateMediumCredentials(path, m.Credentials)
 	}
 
 	return declared
+}
+
+// validateStorageMediumBackend is where #667 moved this schema: type
+// legality and every per-field rule the backend's own manifest can state
+// (bucket's shape, storage_class and upload_verification's closed sets,
+// prefix's four rules, credentials' presence) now come from
+// backend.Registry.ValidateInstance rather than from a Go-side copy of
+// the same facts.
+//
+// The type gate is narrower than reg.IDs(): a backend the registry
+// declares but whose REQUIRED fields storageMediumFieldValue cannot yet
+// supply (local_volume, until #666 adds a case for its "path" field) is
+// not yet a legal StorageMedium.Type, because there is no way to author
+// an instance of it that could ever validate. That is expressibleBackendIDs'
+// whole job, and it is also StorageMediumTypes' definition now: the two
+// must never disagree about what an operator may write, so both read it.
+//
+// id, type and connection_unverified are excluded from the values map on
+// purpose (storageMediumFieldsNotInTheManifest's own reasons,
+// backendmanifest_test.go): they are this instance's identity, not a
+// value the backend collects. credentials is a placeholder rather than
+// the real value: see storageMediumFieldValue.
+func (v *validator) validateStorageMediumBackend(path string, m *StorageMedium, reg *backend.Registry) {
+	ids := expressibleBackendIDs(reg)
+	found := false
+	for _, id := range ids {
+		if id == m.Type {
+			found = true
+			break
+		}
+	}
+	if !found {
+		if m.Type == "" {
+			v.addf("%s: type must be set to one of: %s", path, strings.Join(ids, ", "))
+		} else {
+			v.addf("%s: type %q is not one of: %s", path, m.Type, strings.Join(ids, ", "))
+		}
+		return
+	}
+
+	manifest, err := reg.Backend(m.Type)
+	if err != nil {
+		// Unreachable: found came from expressibleBackendIDs, which only
+		// ever names ids reg.Backend resolves. Reported rather than
+		// ignored, on this file's own "never silently drop a problem"
+		// principle.
+		v.addf("%s: %v", path, err)
+		return
+	}
+
+	values := map[string]string{}
+	for _, f := range manifest.Fields {
+		if value, ok := storageMediumFieldValue(m, f.ID); ok {
+			values[f.ID] = value
+		}
+	}
+	v.problems = append(v.problems, reg.ValidateInstance(m.Type, path, values)...)
+}
+
+// storageMediumFieldValue is the seam #666 (the local_volume manifest)
+// extends: it names, for one manifest field id, which of StorageMedium's
+// own Go fields carries that value.
+//
+// A field id this struct has no case for (a field a declared backend's
+// manifest names that this struct has not grown yet - local_volume's
+// "path", before #666 adds it) answers ("", false) rather than ("",
+// true): the difference is what the caller does with it.
+// validateStorageMediumBackend never even puts such a key into the
+// values map, so backend.ValidateInstance's "required field absent"
+// rule fires precisely as if nothing had been collected, and
+// expressibleBackendIDs uses the same false to keep that backend out of
+// the legal type set entirely until there is a real field to read.
+func storageMediumFieldValue(m *StorageMedium, fieldID string) (string, bool) {
+	switch fieldID {
+	case "bucket":
+		return m.Bucket, true
+	case "region":
+		return m.Region, true
+	case "endpoint":
+		return m.Endpoint, true
+	case "prefix":
+		return m.Prefix, true
+	case "storage_class":
+		return m.StorageClass, true
+	case "upload_verification":
+		return m.UploadVerification, true
+	case "credentials":
+		if hasMediumCredentials(m.Credentials) {
+			// A placeholder, never the real value: backend.ValidateInstance's
+			// own doc says a KindCredential field's value is a credential
+			// REFERENCE, never material, and this schema's credentials
+			// block is already-resolved custody information (File/Env/
+			// Command; see MediumCredentials) rather than a reference at
+			// all. validateMediumCredentials is what actually checks that
+			// shape, in full, below; this return only tells
+			// ValidateInstance that something was configured, so its
+			// required-field rule agrees with validateMediumCredentials
+			// about WHETHER credentials were set without a real path,
+			// env var name or argv ever crossing into a value this
+			// package did not mint.
+			return "configured", true
+		}
+		return "", true
+	default:
+		return "", false
+	}
+}
+
+// hasMediumCredentials reports whether c names at least one of its three
+// sources. See storageMediumFieldValue.
+func hasMediumCredentials(c MediumCredentials) bool {
+	return c.File != "" || c.Env != "" || len(c.Command) != 0
+}
+
+// expressibleBackendIDs is the closed set StorageMedium.Type actually
+// accepts: every backend.Bundled() id whose manifest's REQUIRED fields
+// storageMediumFieldValue can all supply, sorted (reg.IDs()' own order).
+//
+// This is narrower than reg.IDs() on purpose. The registry is data
+// shipped for every consumer at once (#668's wizard among them), and it
+// may know about a backend before this struct has grown the field that
+// backend requires - exactly local_volume's position until #666 adds a
+// "path" field. A type this config schema could never author a passing
+// instance of is not a legal value here yet, no matter what the registry
+// declares, and the moment #666 adds that one case to
+// storageMediumFieldValue, this set gains "local_volume" with no further
+// edit to this function.
+func expressibleBackendIDs(reg *backend.Registry) []string {
+	ids := make([]string, 0, reg.Len())
+	for _, id := range reg.IDs() {
+		m, err := reg.Backend(id)
+		if err != nil {
+			continue // unreachable: id came from reg.IDs() itself
+		}
+		expressible := true
+		for _, f := range m.Fields {
+			if !f.Required {
+				continue
+			}
+			if _, ok := storageMediumFieldValue(&StorageMedium{}, f.ID); !ok {
+				expressible = false
+				break
+			}
+		}
+		if expressible {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // validateUploadVerificationIsAchievable refuses an upload_verification
@@ -1552,11 +1695,11 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 // It cannot attest either, but its problem is the type, and reporting the
 // consequence beside the cause sends an operator to the wrong key: the
 // same reason validateStorageMediums does not report a malformed id twice.
-func (v *validator) validateUploadVerificationIsAchievable(path string, m *StorageMedium) {
+func (v *validator) validateUploadVerificationIsAchievable(path string, m *StorageMedium, reg *backend.Registry) {
 	if m.UploadVerification != UploadVerificationAttested {
 		return
 	}
-	if !validStorageMediumTypes[m.Type] || typesThatCanAttest[m.Type] {
+	if _, err := reg.Backend(m.Type); err != nil || typesThatCanAttest[m.Type] {
 		return
 	}
 	v.addf("%s: upload_verification %q cannot be achieved on a %q medium, so every move to it would be refused "+
@@ -1575,39 +1718,6 @@ func (v *validator) validateUploadVerificationIsAchievable(path string, m *Stora
 // See validateUploadVerificationIsAchievable, which is its only reader and
 // carries the whole argument.
 var typesThatCanAttest = map[string]bool{}
-
-// validateMediumPrefix checks the key namespace a medium writes under.
-//
-// FR-28 fixes the key layout as <prefix>/<source>/<set>/<artifact-name>,
-// joined with "/". Every rule here is about that join: a leading, trailing
-// or doubled slash produces an empty key segment, which means two
-// spellings of the same object and a locator that does not round-trip.
-//
-// The ".." refusal is the one rule that is not about tidiness. S3 has no
-// traversal to exploit, but a key is not only ever a key: restoring an
-// artifact writes it to a local path derived from that key, and a key
-// namespace that cannot contain ".." is one fewer place for that to go
-// wrong. Refusing it in the schema costs an operator nothing, since a ".."
-// segment in a prefix has no meaning worth having.
-func (v *validator) validateMediumPrefix(path, prefix string) {
-	if prefix == "" {
-		return
-	}
-	if strings.HasPrefix(prefix, "/") || strings.HasSuffix(prefix, "/") {
-		v.addf("%s: prefix %q must not start or end with \"/\"; the key layout joins it with \"/\" already, so a slash here produces an empty key segment", path, prefix)
-		return
-	}
-	for _, seg := range strings.Split(prefix, "/") {
-		switch seg {
-		case "":
-			v.addf("%s: prefix %q must not contain an empty segment (\"//\")", path, prefix)
-			return
-		case ".", "..":
-			v.addf("%s: prefix %q must not contain a \".\" or \"..\" segment; a key namespace has no traversal to express, and a restore writes to a local path derived from the key", path, prefix)
-			return
-		}
-	}
-}
 
 // validateMediumCredentials checks FR-33's custody shape: three sources,
 // exactly one set.
@@ -1886,28 +1996,28 @@ func (v *validator) validateTierIsNotBoundToAnArchiveClass(path string, t *Reten
 		path, t.Name, t.Medium, class, class, nonArchiveStorageClassList, class)
 }
 
-// validStorageMediumTypes is the closed set StorageMedium.Type accepts.
-// One entry today; see StorageMediumTypeS3 for why the set is closed and
-// what adding to it costs.
-var validStorageMediumTypes = map[string]bool{
-	StorageMediumTypeS3: true,
-}
-
-// storageMediumTypes is the same set in a fixed order, for the "must be
-// one of" message and for StorageMediumTypes' exported copy, and
-// storageMediumTypeList is that message's rendering built once at init.
+// StorageMediumTypes returns every value StorageMedium.Type currently
+// accepts.
 //
-// Two spellings of one set is the pattern every closed vocabulary in this
-// file follows, for the reason validStorageClasses states: ranging the map
-// would reorder the sentence per run.
-var storageMediumTypes = []string{StorageMediumTypeS3}
-
-var storageMediumTypeList = strings.Join(storageMediumTypes, ", ")
-
-// StorageMediumTypes returns every value StorageMedium.Type accepts. See
-// StorageClasses for why this is exported.
+// #667 moved this off a Go-side closed set (validStorageMediumTypes, one
+// entry, "s3"): it is now expressibleBackendIDs(reg), the bundled
+// backend registry filtered to the backends this struct can actually
+// populate. See expressibleBackendIDs for why that filter exists rather
+// than reg.IDs() itself, and validateStorageMediumBackend, which is the
+// only other reader of the same set - the two must never disagree about
+// what an operator may write.
+//
+// A registry that fails to load returns nil, which
+// TestOpenLoadsTheBundledRegistry's own doc says cannot happen once the
+// embedded manifests parse: the failure is unreachable in a shipped
+// binary, and Validate reports it loudly (once, in validateStorageMediums)
+// rather than this accessor doing so a second time in its own words.
 func StorageMediumTypes() []string {
-	return append([]string(nil), storageMediumTypes...)
+	reg, err := backend.Bundled()
+	if err != nil {
+		return nil
+	}
+	return expressibleBackendIDs(reg)
 }
 
 // validStorageClasses is the closed set StorageMedium.StorageClass
@@ -1930,8 +2040,6 @@ var storageClasses = []string{
 	StorageClassIntelligentTiering, StorageClassGlacierIR,
 	StorageClassGlacier, StorageClassDeepArchive,
 }
-
-var storageClassList = strings.Join(storageClasses, ", ")
 
 // nonArchiveStorageClassList is every class a retention tier's medium may
 // write with, for the refusal that names the ones it may not.
@@ -1972,18 +2080,14 @@ func StorageClasses() []string {
 	return append([]string(nil), storageClasses...)
 }
 
-// validUploadVerifications and uploadVerificationModes are the same pair
-// for StorageMedium.UploadVerification.
-var validUploadVerifications = map[string]bool{
-	UploadVerificationReadback: true,
-	UploadVerificationAttested: true,
-}
-
-// The ordered half of the same pair, and its rendered message. See
-// storageMediumTypes.
+// uploadVerificationModes is StorageMedium.UploadVerification's ordered
+// closed set, still used by the exported UploadVerificationModes below.
+// The membership map this section used to also carry
+// (validUploadVerifications) is gone: #667 moved the "is this value one
+// of the set" check onto backend.Registry.ValidateInstance, and the s3
+// manifest's own declared values are what TestTheS3ManifestsEnumsMatchConfigsClosedSets
+// (issue #665) pins against this slice.
 var uploadVerificationModes = []string{UploadVerificationReadback, UploadVerificationAttested}
-
-var uploadVerificationList = strings.Join(uploadVerificationModes, ", ")
 
 // UploadVerificationModes returns every value
 // StorageMedium.UploadVerification accepts. See StorageClasses.
