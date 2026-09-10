@@ -252,18 +252,228 @@ func TestRemoveStorageMedium_RefusesTheDefault(t *testing.T) {
 	}
 }
 
-// TestRemoveStorageMedium_RefusesTheLocalHardDrive: local is not declared
-// and cannot be un-declared. Without this, the second invariant is one
-// DELETE away from being false.
-func TestRemoveStorageMedium_RefusesTheLocalHardDrive(t *testing.T) {
+// TestRemoveStorageMedium_ALegacyConfigurationReportsLocalNotFound is the
+// old special case's replacement (#670). Before #670 the local hard
+// drive could never be un-declared because it was never declared at all,
+// and RemoveStorageMedium said so by name. A configuration written
+// before #670 (localFixture: local is never a row in storage_mediums)
+// still has no row to remove, so the honest answer is the same one any
+// other undeclared id gets: not found. This is deliberately NOT the old
+// ErrStorageMediumIsDefault-flavoured refusal; that behaviour belonged to
+// a special case #670 removes, not to a wording preference.
+func TestRemoveStorageMedium_ALegacyConfigurationReportsLocalNotFound(t *testing.T) {
 	svc, _ := localFixture(t)
 
 	err := svc.RemoveStorageMedium(context.Background(), StorageMediumLocalID)
-	if err == nil {
-		t.Fatal("RemoveStorageMedium removed the local hard drive")
+	if !errors.Is(err, ErrMediumNotFound) {
+		t.Errorf("RemoveStorageMedium(local) on a configuration that never declared it = %v, want ErrMediumNotFound", err)
 	}
-	if !AsStorageMediumIsDefault(err) && !errors.Is(err, ErrInvalidRequest) {
-		t.Errorf("RemoveStorageMedium(local) error = %v, want a named refusal", err)
+}
+
+// seededFixture opens a service through the SAME first-run door a real
+// install uses (FirstRun.CreateInitialConfig), so its local destination
+// is #670's seeded row rather than localFixture's synthesised one. Every
+// test about the seeded local entry's invariants needs this, not
+// localFixture, or it would be testing the legacy fallback by accident.
+func seededFixture(t *testing.T) (*BackupService, string) {
+	t.Helper()
+	fr, configPath, _ := newTestFirstRun(t)
+	if _, err := fr.CreateInitialConfig(context.Background(), firstRunCreateReq(t, fr, "nightly")); err != nil {
+		t.Fatalf("CreateInitialConfig: %v", err)
+	}
+	svc, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	return svc, configPath
+}
+
+// TestCreateInitialConfig_SeedsExactlyOneConfiguredVerifiedDefaultDestination
+// is #670's central proof: a fresh install's destinations list is exactly
+// one entry, and it needs no operator action to be configured, proven or
+// default.
+func TestCreateInitialConfig_SeedsExactlyOneConfiguredVerifiedDefaultDestination(t *testing.T) {
+	svc, configPath := seededFixture(t)
+
+	mediums, err := svc.ListStorageMediums(context.Background())
+	if err != nil {
+		t.Fatalf("ListStorageMediums: %v", err)
+	}
+	if len(mediums) != 1 {
+		t.Fatalf("a fresh install lists %d destinations, want exactly 1: %+v", len(mediums), mediums)
+	}
+	local := mediums[0]
+	if local.ID != StorageMediumLocalID {
+		t.Errorf("ID = %q, want %q", local.ID, StorageMediumLocalID)
+	}
+	if !local.IsLocal {
+		t.Error("IsLocal = false on the seeded destination")
+	}
+	if !local.IsDefault {
+		t.Error("a fresh install's one destination is not the default, so a newly created tier would start nowhere")
+	}
+	if local.Path == "" {
+		t.Error("the seeded destination names no path, though its path is the backup root the installer already chose")
+	}
+	// "Verified without anybody pressing anything": the seed is only
+	// ever written once seedLocalStorageMedium's own probe passes, so
+	// ConnectionUnverified must read false with no test-connection call
+	// from this test.
+	if local.ConnectionUnverified {
+		t.Error("ConnectionUnverified = true on a destination CreateInitialConfig proved before writing")
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(raw), "id: local") {
+		t.Errorf("config.yaml does not declare the seeded local destination:\n%s", raw)
+	}
+}
+
+// TestCreateInitialConfig_RefusesWhenTheBackupRootFailsItsOwnProbe is the
+// negative control for "verified without anybody pressing anything": the
+// mark has to be EARNED. A backup root that cannot be written to fails
+// the whole first-run write rather than seeding a destination nothing
+// proved.
+func TestCreateInitialConfig_RefusesWhenTheBackupRootFailsItsOwnProbe(t *testing.T) {
+	fr, configPath, _ := newTestFirstRun(t)
+	req := firstRunCreateReq(t, fr, "nightly")
+	// Created and then taken away, exactly as
+	// TestPreflightStorageMedium_LocalReportsAMissingPathDistinctly does:
+	// a NAS volume that failed to mount, not a path that was simply never
+	// there.
+	if err := os.RemoveAll(req.LocalPath); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+
+	if _, err := fr.CreateInitialConfig(context.Background(), req); err == nil {
+		t.Fatal("CreateInitialConfig succeeded against a backup root that does not exist")
+	}
+	if _, err := os.Stat(configPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused first boot left a config file behind at %s (stat err = %v)", configPath, err)
+	}
+}
+
+// TestRemoveStorageMedium_SeededLocalIsUndeletableByTheGenericDefaultRule
+// proves #670's own instruction: the seeded destination's undeletability
+// falls out of the SAME default-protection rule any other destination
+// gets, not a special case naming its id. The refusal is
+// ErrStorageMediumIsDefault, word for word what removing any other
+// default destination produces (TestRemoveStorageMedium_RefusesTheDefault).
+func TestRemoveStorageMedium_SeededLocalIsUndeletableByTheGenericDefaultRule(t *testing.T) {
+	svc, _ := seededFixture(t)
+
+	err := svc.RemoveStorageMedium(context.Background(), StorageMediumLocalID)
+	if err == nil {
+		t.Fatal("RemoveStorageMedium removed the seeded local destination while it was the only, default one")
+	}
+	if !AsStorageMediumIsDefault(err) {
+		t.Errorf("RemoveStorageMedium(local) error = %v, want ErrStorageMediumIsDefault — the same refusal any other default destination gets, proving there is no special case for this id", err)
+	}
+}
+
+// TestRemoveStorageMedium_SeededLocalIsRemovableOnceItIsNotTheDefault is
+// the other half of "let the property emerge": once a second destination
+// is default, the seeded local entry is an ordinary, removable
+// destination like any other, because #670's local is instance zero of a
+// registered backend rather than a permanent exemption.
+func TestRemoveStorageMedium_SeededLocalIsRemovableOnceItIsNotTheDefault(t *testing.T) {
+	svc, configPath := seededFixture(t)
+
+	credentials := filepath.Join(filepath.Dir(configPath), "fixture-credentials")
+	body := "[default]\naws_access_key_id = " + testCanaryAccessKeyID + "\naws_secret_access_key = " + testCanarySecret + "\n"
+	if err := os.WriteFile(credentials, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := svc.CreateStorageMedium(context.Background(), StorageMediumSpec{
+		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Bucket: "example-bucket",
+		Credentials:         StorageMediumCredentials{File: credentials},
+		SkipConnectionCheck: true,
+	}); err != nil {
+		t.Fatalf("CreateStorageMedium: %v", err)
+	}
+	if _, err := svc.SetDefaultStorageMedium(context.Background(), "offsite_s3"); err != nil {
+		t.Fatalf("SetDefaultStorageMedium: %v", err)
+	}
+
+	if err := svc.RemoveStorageMedium(context.Background(), StorageMediumLocalID); err != nil {
+		t.Fatalf("RemoveStorageMedium(local) once it was no longer the default: %v", err)
+	}
+
+	mediums, err := svc.ListStorageMediums(context.Background())
+	if err != nil {
+		t.Fatalf("ListStorageMediums: %v", err)
+	}
+	if len(mediums) != 1 || mediums[0].ID != "offsite_s3" {
+		t.Errorf("ListStorageMediums = %+v, want exactly offsite_s3", mediums)
+	}
+}
+
+// TestCreateStorageMedium_RefusesTheReservedLocalIdEvenThoughConfigNowAccepts
+// pins Main's condition 2: the operator-facing door stays shut for
+// config.MediumLocal regardless of what the config-level shape check now
+// permits (it has to permit it, or the seeded file could not reload).
+func TestCreateStorageMedium_RefusesTheReservedLocalIdEvenThoughConfigNowAccepts(t *testing.T) {
+	svc, _ := openTestService(t)
+
+	_, err := svc.CreateStorageMedium(context.Background(), StorageMediumSpec{
+		ID: StorageMediumLocalID, Type: "s3", Region: "us-east-1", Bucket: "example-bucket",
+		SkipConnectionCheck: true,
+	})
+	if err == nil {
+		t.Fatal("CreateStorageMedium accepted the reserved local id from a request")
+	}
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Errorf("CreateStorageMedium(id=local) error = %v, want ErrInvalidRequest", err)
+	}
+}
+
+// TestFirstRun_SecondStartDoesNotReseedAfterTheSeedWasRemoved is #670's
+// "seeding is a first-run act, not a reconciliation": once the operator
+// has removed or repointed the seeded destination, a later start must
+// not find the original quietly restored. CreateInitialConfig's own
+// one-time door (ErrAlreadyConfigured) is the entire mechanism; this
+// proves it actually holds for the seed specifically.
+func TestFirstRun_SecondStartDoesNotReseedAfterTheSeedWasRemoved(t *testing.T) {
+	svc, configPath := seededFixture(t)
+
+	credentials := filepath.Join(filepath.Dir(configPath), "fixture-credentials")
+	body := "[default]\naws_access_key_id = " + testCanaryAccessKeyID + "\naws_secret_access_key = " + testCanarySecret + "\n"
+	if err := os.WriteFile(credentials, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := svc.CreateStorageMedium(context.Background(), StorageMediumSpec{
+		ID: "offsite_s3", Type: "s3", Region: "us-east-1", Bucket: "example-bucket",
+		Credentials:         StorageMediumCredentials{File: credentials},
+		SkipConnectionCheck: true,
+	}); err != nil {
+		t.Fatalf("CreateStorageMedium: %v", err)
+	}
+	if _, err := svc.SetDefaultStorageMedium(context.Background(), "offsite_s3"); err != nil {
+		t.Fatalf("SetDefaultStorageMedium: %v", err)
+	}
+	if err := svc.RemoveStorageMedium(context.Background(), StorageMediumLocalID); err != nil {
+		t.Fatalf("RemoveStorageMedium(local): %v", err)
+	}
+
+	// A second process start: Open against the same config path,
+	// exactly what the daemon does on every restart. Nothing on this
+	// path may re-run CreateInitialConfig or otherwise reintroduce local.
+	svc2, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open (second start): %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	mediums, err := svc2.ListStorageMediums(context.Background())
+	if err != nil {
+		t.Fatalf("ListStorageMediums: %v", err)
+	}
+	if len(mediums) != 1 || mediums[0].ID != "offsite_s3" {
+		t.Errorf("a second start restored the removed local destination: %+v", mediums)
 	}
 }
 

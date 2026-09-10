@@ -153,21 +153,26 @@ type StorageMediumSummary struct {
 	// #622), and the first two exist because this type now describes a
 	// destination that is not a bucket.
 	//
-	// Path is the drive the LOCAL destination writes to, resolved exactly
-	// as CapacitySettings.BackupRoot resolves it so one deployment cannot
-	// report two mounts, and empty for every declared medium because a
-	// bucket has no path on this machine. It is the answer to the
-	// question #622 says the settings list could not answer at all: the
-	// list omitted the drive backups actually land on, and a local entry
-	// that did not name the drive would only half fix that.
+	// Path is the directory this entry writes to: a declared
+	// local_volume medium's own path field since #666, or the backup
+	// root itself (CapacitySettings.BackupRoot resolution) for a
+	// synthesised legacy local entry (toStorageMediumSummaries, #670).
+	// Always empty for a bucket-backed medium, which has no path on this
+	// machine. It is the answer to the question #622 says the settings
+	// list could not answer at all: the list omitted the drive backups
+	// actually land on, and a local entry that did not name the drive
+	// would only half fix that.
 	//
-	// IsLocal separates the one synthesised entry from the declared ones,
-	// so a surface decides what to offer (no Edit, no Remove) on a fact
-	// rather than by comparing an id against a reserved string it would
-	// have to hold its own copy of. Type carries the same information and
-	// is the wrong field to branch on: it is a vocabulary that grows by
-	// architecture decision, and a second local-ish backend added there
-	// one day must not silently make an entry undeletable.
+	// IsLocal marks the one entry carrying config.MediumLocal's reserved
+	// id, whether that row is declared (#670's seed, or any later
+	// local_volume instance an operator names "local" — which nothing
+	// can, the id being reserved) or synthesised for a pre-#670
+	// configuration that never declared it. Type carries similar
+	// information and is still the wrong field to branch on for "is this
+	// removable like any other destination": it is a vocabulary that
+	// grows by architecture decision, and a second local-ish backend
+	// added there one day is an ordinary, removable destination, not a
+	// rival to this one.
 	//
 	// IsDefault is the destination a NEWLY CREATED retention tier starts
 	// on. Exactly one entry in a list carries it. It says nothing about
@@ -197,9 +202,13 @@ type StorageMediumSummary struct {
 	// command's output, which is what made --no-verify a hole rather than
 	// an escape hatch.
 	//
-	// Always false for the local hard drive: it is synthesised rather than
-	// declared, it has no create to skip and no bucket to prove, and #636
-	// puts it out of scope in so many words.
+	// False for the local hard drive whether it is declared or
+	// synthesised: a #670 seed is only ever written once
+	// seedLocalStorageMedium's own probe passes, so ConnectionUnverified
+	// is earned rather than asserted for it exactly as for any other
+	// medium (#636); a pre-#670 synthesised entry has no create to skip
+	// and no bucket to prove, and #636 already put that case out of
+	// scope in so many words.
 	ConnectionUnverified bool
 }
 
@@ -408,12 +417,40 @@ func toServicePlacement(p state.Placement, idx mediumIndex) Placement {
 // construction here rather than by a check somewhere else: this function
 // cannot return an empty slice.
 //
+// # Declared local versus synthesised local (#670)
+//
+// A configuration written since #670 declares local like any other
+// destination (config.MediumLocal, in cfg.StorageMediums), proven and
+// persisted by seedLocalStorageMedium at first boot. That declared row is
+// used here, in its ordinary declaration-order slot, when it exists.
+//
+// localStorageMediumSummary — synthesising an entry from
+// EffectiveBackupRoot rather than reading a row — is kept for exactly one
+// case: a configuration written BEFORE #670, which never declared local
+// at all. Preferring a real row when one exists, and falling back to
+// synthesis only when none does, is what lets an old config.yaml keep
+// loading and resolving unchanged (the same round-trip guarantee #667
+// carries for S3): nothing here rewrites an old file into declaring a
+// medium it never chose to.
+//
 // Declaration order is preserved for the declared ones, unchanged, so a
 // settings page still shows the operator's own file back to them in the
-// order they wrote it.
+// order they wrote it. A #670 seed always appends local first, so this
+// still leads the list on every fresh install without this function
+// having to reorder anything.
 func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
 	out := make([]StorageMediumSummary, 0, len(cfg.StorageMediums)+1)
-	out = append(out, localStorageMediumSummary(cfg))
+
+	declaresLocal := false
+	for _, m := range cfg.StorageMediums {
+		if m.ID == StorageMediumLocalID {
+			declaresLocal = true
+			break
+		}
+	}
+	if !declaresLocal {
+		out = append(out, localStorageMediumSummary(cfg))
+	}
 
 	defaultID := cfg.EffectiveDefaultStorageMedium()
 	for _, m := range cfg.StorageMediums {
@@ -426,13 +463,14 @@ func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
 			StorageClass:        class,
 			Endpoint:            m.Endpoint,
 			Prefix:              m.Prefix,
+			Path:                m.Path,
 			UploadVerification:  m.EffectiveUploadVerification(),
 			ReadsRequireRestore: archive.IsArchive(class),
 			IsDefault:           m.ID == defaultID,
 			// Path is empty for every backend but local_volume (issue
 			// #666), the same "empty for a bucket" contract Path's own
 			// doc already states for the synthesised local entry above.
-			Path: m.Path,
+			IsLocal:             m.ID == StorageMediumLocalID,
 			// Read straight off the configuration rather than derived from
 			// anything: whether a destination was ever proven is not
 			// something its own history can answer, so it is only ever

@@ -52,6 +52,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/mediumcheck"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
@@ -342,6 +343,18 @@ func (f *FirstRun) CreateInitialConfig(ctx context.Context, req CreateBackupSetR
 		State:        config.State{Database: f.defaults.StateDatabase},
 		Sources:      []config.Source{{Name: sourceName, BackupSets: []config.BackupSet{newSet}}},
 	}
+
+	// #670: the local hard drive becomes a real declared destination
+	// from first boot, rather than the implicit backstop it always was
+	// before. Its path is the backup root newSet just established, so
+	// nothing here asks an operator to name it. See
+	// seedLocalStorageMedium's own doc for why writing config.MediumLocal
+	// here is not the operator-facing hole CreateStorageMedium refuses.
+	localMedium, err := seedLocalStorageMedium(ctx, cfg)
+	if err != nil {
+		return BackupSet{}, err
+	}
+	cfg.StorageMediums = append(cfg.StorageMediums, localMedium)
 	// Retention and Alerts are left at their zero values on purpose:
 	// config.Validate resolves both to this product's documented defaults
 	// (FR-18's tier chain, alerting off), which is exactly what a
@@ -526,4 +539,79 @@ func createConfigExclusivelyRemovingOnError(path string, b []byte) (retErr error
 		return fmt.Errorf("service: syncing the configuration directory: %w", err)
 	}
 	return nil
+}
+
+// seedLocalStorageMedium builds the ONE declared destination a fresh
+// install starts with (#670): the local hard drive, at cfg's own backup
+// root, PROVEN by mediumcheck's real probe rather than asserted.
+//
+// # Why this may write config.MediumLocal when CreateStorageMedium may not
+//
+// validateStorageMediums refuses an OPERATOR from ever declaring a medium
+// with this id: config.MediumLocal is the legacy spelling of "the backup
+// set's own local_path", and a caller minting a second, declared answer
+// to "where is local" is exactly the hazard MediumTypeLocalDir's own doc
+// names. This function is not an operator. It runs once, behind issue
+// #176's one-time door, asserting a directory the deployment's own
+// installer has already mounted and proved exists and is writable —
+// which is why it PROVES that claim itself, with the identical probe
+// PreflightStorageMedium(local) runs on demand later
+// (mediumcheck.RunLocal, the same steps #666's local_volume manifest
+// declares), rather than writing a mark nothing checked. A failed probe
+// fails this whole call, exactly as the SSH connection check a few lines
+// above does: a first configuration naming a destination nothing can
+// reach is the same hazard PR #628's review found on the source side.
+//
+// writeStorageMedium's own guard is the other half of what keeps this an
+// installer-only exception rather than a hole an API caller can walk
+// through: CreateStorageMedium refuses config.MediumLocal from every
+// request body, unconditionally, regardless of what this function writes
+// here.
+//
+// # Why writing it here is not the second answer MediumTypeLocalDir forbids
+//
+// MediumTypeLocalDir's doctrine fixes the BACKEND TYPE local artifacts are
+// written through: one answer to "what kind of thing is a local
+// directory". It says nothing about how many DESTINATIONS of that type a
+// deployment declares, which is #666's whole subject and #664's own
+// architecture decision. config.MediumLocal is the pre-EPIC-I id
+// reservation, from before a destination was a backend instance, and this
+// is the function EPIC I designates to carry it into the new model: the
+// seeded medium is instance zero of the local_volume backend, not a rival
+// to it.
+func seedLocalStorageMedium(ctx context.Context, cfg *config.Config) (config.StorageMedium, error) {
+	root := cfg.EffectiveBackupRoot()
+	report, err := mediumcheck.RunLocal(ctx, func(step mediumcheck.Step, err error) {
+		// The one place the underlying cause is allowed to go, exactly as
+		// app.Service.PreflightLocalMedium's own Observe is: an os error
+		// names a path on this host, and this runs before there is a
+		// configured service with a log of its own to send it to.
+		_ = err
+	}, mediumcheck.LocalTarget{
+		Root:              root,
+		SafetyMarginBytes: uint64(cfg.Capacity.SafetyMarginBytes),
+		CriticalFreeBytes: uint64(cfg.Capacity.CriticalFreeBytes),
+	})
+	if err != nil {
+		return config.StorageMedium{}, fmt.Errorf("service: proving the backup root before first use: %w", err)
+	}
+	if !report.OK {
+		return config.StorageMedium{}, fmt.Errorf("%w: the backup root %s did not pass its own storage check (%s)",
+			ErrConnectionNotProven, root, firstFailedStepDetail(report))
+	}
+	return config.StorageMedium{
+		ID:   config.MediumLocal,
+		Type: config.StorageMediumTypeLocalVolume,
+		Path: root,
+	}, nil
+}
+
+// firstFailedStepDetail names the first step seedLocalStorageMedium's
+// probe did not pass, so a first boot that cannot seed its own backup
+// root says which check to fix rather than only that one did.
+func firstFailedStepDetail(report mediumcheck.Report) string {
+	if failures := report.Failures(); len(failures) > 0 {
+		return fmt.Sprintf("%s: %s", failures[0].Step, failures[0].Detail)
+	}
+	return "unknown step"
 }

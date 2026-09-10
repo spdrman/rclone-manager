@@ -85,6 +85,15 @@ func firstRunCreateReq(t *testing.T, fr *FirstRun, name string) CreateBackupSetR
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
+	// #670: CreateInitialConfig now proves the backup root before
+	// writing (seedLocalStorageMedium), the same way it already proves
+	// the SSH connection above, so the fixture has to hand it a
+	// directory that actually exists — exactly what a real installer's
+	// own backup-root mount already is by the time setup runs.
+	localPath := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(localPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", localPath, err)
+	}
 	return CreateBackupSetRequest{
 		Name:               name,
 		Host:               "example.internal",
@@ -93,7 +102,7 @@ func firstRunCreateReq(t *testing.T, fr *FirstRun, name string) CreateBackupSetR
 		SSHKeyID:           ref.ID,
 		KnownHostsLine:     "example.internal ssh-ed25519 AAAAtestfixtureline",
 		RemotePath:         "/backups/" + name,
-		LocalPath:          filepath.Join(t.TempDir(), name),
+		LocalPath:          localPath,
 		Include:            []string{"*.dump"},
 		CompletionStrategy: "marker",
 		// The skip, for the reason validCreateReq (backupsets_test.go)
@@ -388,6 +397,13 @@ func TestFirstRun_NeverTakesTheStateDatabasePathFromTheRequest(t *testing.T) {
 	elsewhere := filepath.Join(t.TempDir(), "attacker", "state.db")
 	req.RemotePath = "/backups/" + filepath.Dir(elsewhere)
 	req.LocalPath = filepath.Dir(elsewhere)
+	// #670: seedLocalStorageMedium now proves this path exists before
+	// CreateInitialConfig writes anything; this test is about where
+	// STATE lands, not about the local path check, so give it a real
+	// directory rather than exercising that refusal by accident.
+	if err := os.MkdirAll(req.LocalPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", req.LocalPath, err)
+	}
 
 	if _, err := fr.CreateInitialConfig(context.Background(), req); err != nil {
 		t.Fatalf("CreateInitialConfig: %v", err)
