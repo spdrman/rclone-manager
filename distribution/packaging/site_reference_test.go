@@ -178,17 +178,17 @@ type documentedRoute struct {
 // pointing at its first step is truer than a second, shorter retelling
 // on this page.
 var routeSections = map[string]documentedRoute{
-	"/":                    {"reference.html", "web-dashboard"},
-	"/sets":                {"reference.html", "web-sets"},
-	"/sets/new":            {"first-run.html", "step1"},
-	"/sets/:source/:set":   {"reference.html", "web-set-detail"},
-	"/backups":             {"reference.html", "web-backups"},
-	"/backups/:artifactId": {"reference.html", "web-backup-detail"},
-	"/activity":            {"reference.html", "web-activity"},
-	"/quarantine":          {"reference.html", "web-quarantine"},
-	"/settings":            {"reference.html", "web-settings"},
-	"/catalog-recovery":    {"reference.html", "web-catalog"},
-	"/enroll":              {"first-run.html", "enrol"},
+	"/":                           {"reference.html", "web-dashboard"},
+	"/sets":                       {"reference.html", "web-sets"},
+	"/sets/new":                   {"first-run.html", "step1"},
+	"/sets/:source/:set":          {"reference.html", "web-set-detail"},
+	"/backups":                    {"reference.html", "web-backups"},
+	"/backups/:source/:set/:name": {"reference.html", "web-backup-detail"},
+	"/activity":                   {"reference.html", "web-activity"},
+	"/quarantine":                 {"reference.html", "web-quarantine"},
+	"/settings":                   {"reference.html", "web-settings"},
+	"/catalog-recovery":           {"reference.html", "web-catalog"},
+	"/enroll":                     {"first-run.html", "enrol"},
 }
 
 // routeExemptions are routes deliberately left out of routeSections,
