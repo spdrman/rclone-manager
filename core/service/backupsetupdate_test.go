@@ -567,6 +567,13 @@ func writeRichTestConfigFile(t *testing.T) string {
 		"        remote_path: " + remoteDir + "\n" +
 		"        local_path: " + filepath.Join(dir, "local") + "\n" +
 		"        include:\n          - \"*.dump\"\n" +
+		// Issue #737's path-scoped exclude, set here for the same reason
+		// every other field is: the whole-struct comparison below proves
+		// nothing about a field that is absent on both sides, and an
+		// update that silently dropped an operator's exclude_paths would
+		// put a discovery pass that was finishing back to walking a 65k
+		// file cache every poll.
+		"        exclude_paths:\n          - tiles\n" +
 		"        completion:\n" +
 		"          strategy: stable\n" +
 		"          stable_for: 90s\n" +

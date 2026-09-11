@@ -396,6 +396,8 @@ func (v *validator) validateBackupSet(path, sourceName string, sourceReadOnly bo
 		}
 	}
 
+	v.validateExcludePaths(path, bs.ExcludePaths)
+
 	v.validateCompletion(path+".completion", &bs.Completion, bs.Include)
 
 	// A stale_after that parses to the zero Duration must not be read as
@@ -596,6 +598,66 @@ func (v *validator) validatePassphrase(path string, p *Passphrase) {
 			v.addf("%s: the first element (the executable) must not be empty", cmdPath)
 		} else if !filepath.IsAbs(p.Command[0]) {
 			v.addf("%s: executable %q must be an absolute path", cmdPath, p.Command[0])
+		}
+	}
+}
+
+// validateExcludePaths checks the directories issue #737 lets a backup set
+// keep discovery's walk out of.
+//
+// The rules are close to the exact opposite of the Include rules above it,
+// and that is the point rather than an inconsistency: an include pattern
+// is matched against a basename, so a "/" in one is meaningless and
+// refused, while an exclude names a place in the tree, so a "/" is how a
+// nested one is written at all. BackupSet.ExcludePaths has the whole
+// argument for why these are two fields.
+//
+// Three shapes are refused and each refusal buys something.
+//
+// A "." or ".." segment, because this is resolved against the set's
+// remote_path by the transport, and a path that could climb out of it is
+// the traversal the Include rules refuse a separator for. Nothing here can
+// safely "clean" one either: the honest answer to `uploads/../../etc` is
+// that nobody can tell what the operator meant.
+//
+// A backslash, on the same terms include patterns refuse one: remote paths
+// in this product are slash-separated, and a value that looks like a
+// Windows path would silently match nothing.
+//
+// And a glob metacharacter, which is the rule worth a sentence. An entry
+// here becomes an rclone directory filter, and rclone's filter syntax
+// would give `*`, `?`, `[`, `{` meaning. Accepting them would make this
+// field half a pattern language that nothing documents and nobody could
+// predict the edges of, and the failure mode is an operator who excluded
+// more than they meant and finds out when a restore point is missing. A
+// literal directory whose name really does contain one of those
+// characters is refused rather than mismatched, which at least says so.
+//
+// A leading or trailing "/" is accepted and normalized by the transport,
+// because "tiles", "tiles/" and "/tiles" are three ways operators write
+// one directory and none of them is wrong.
+func (v *validator) validateExcludePaths(path string, excludes []string) {
+	for k, dir := range excludes {
+		excPath := fmt.Sprintf("%s.exclude_paths[%d]", path, k)
+		trimmed := strings.Trim(dir, "/")
+		switch {
+		case trimmed == "":
+			v.addf("%s: must not be empty", excPath)
+		case strings.Contains(dir, `\`):
+			v.addf("%s: %q must be a slash-separated path relative to remote_path", excPath, dir)
+		case strings.ContainsAny(dir, `*?[]{}`):
+			v.addf("%s: %q must be a literal directory path, not a pattern; per-artifact filtering is what include patterns are for", excPath, dir)
+		default:
+			for _, seg := range strings.Split(trimmed, "/") {
+				if seg == "" {
+					v.addf("%s: %q must not contain an empty path segment", excPath, dir)
+					break
+				}
+				if seg == "." || seg == ".." {
+					v.addf("%s: %q must be a path under remote_path, with no %q segment", excPath, dir, seg)
+					break
+				}
+			}
 		}
 	}
 }

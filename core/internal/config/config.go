@@ -429,10 +429,57 @@ type BackupSet struct {
 	// succeeds.
 	ID model.BackupSetID `yaml:"-"`
 
-	Remote     Remote     `yaml:"remote"`
-	RemotePath string     `yaml:"remote_path"`
-	LocalPath  string     `yaml:"local_path"`
-	Include    []string   `yaml:"include"`
+	Remote     Remote   `yaml:"remote"`
+	RemotePath string   `yaml:"remote_path"`
+	LocalPath  string   `yaml:"local_path"`
+	Include    []string `yaml:"include"`
+
+	// ExcludePaths names directories, relative to RemotePath, that
+	// discovery must never walk into: issue #737's "recurse into
+	// uploads/, never into uploads/tiles/".
+	//
+	// It is a PATH list, and Include is a BASENAME pattern list, and the
+	// two are deliberately not one field. FR-5's include patterns are
+	// validated as filenames (validate.go refuses any "/" in one) because
+	// they are matched against a candidate's basename wherever it turned
+	// up in the tree, which is also why they can say nothing whatsoever
+	// about WHERE to look: a pattern that matched only some directories
+	// would need a vocabulary the include field does not have, and giving
+	// it one would change what every pattern already written means. So
+	// this is additive and separate rather than an extension of that
+	// field, and it is scoped the way a path is: anchored at RemotePath,
+	// naming one place in the tree and not every directory that happens
+	// to share a basename.
+	//
+	// The reason it exists at all is cost, not tidiness. Discovery's
+	// listing is fully recursive by design (see the rclone adapter's List:
+	// an artifact in a subdirectory that went missing from a listing is
+	// the protection-dies-quietly failure this product exists to prevent),
+	// and a backup set aimed at a directory an application also writes its
+	// own cache under therefore walks the cache too. The deployment that
+	// reported #737 had 65k files across 1.6k subdirectories under one
+	// such cache, which over a remote with no native recursive listing is
+	// 1.6k round trips per poll for artifacts nobody could ever want, and
+	// a discovery pass that did not finish. An entry here is turned into
+	// an rclone directory filter, so the walk is PRUNED rather than
+	// walked-then-discarded; a filter that only cleaned up the result set
+	// would return the same answer in the same unusable time.
+	//
+	// Each entry is a literal relative directory path, not a pattern.
+	// Validate refuses "/"-rooted and "."/".." traversal, and refuses
+	// glob metacharacters as well: rclone's filter syntax would give
+	// them meaning, and a field named for paths that silently accepted
+	// half a pattern language is exactly the kind of ambiguity an
+	// operator discovers by having excluded the wrong thing. A leading or
+	// trailing "/" is accepted and means the same directory, because both
+	// are how people write one.
+	//
+	// omitempty, like every other key this schema has gained, so a
+	// deployment that excludes nothing never writes a file an older build
+	// cannot parse (Load's KnownFields(true); see RetentionConfig's own
+	// note on that one-way door).
+	ExcludePaths []string `yaml:"exclude_paths,omitempty"`
+
 	Completion Completion `yaml:"completion"`
 	StaleAfter Duration   `yaml:"stale_after"`
 

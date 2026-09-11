@@ -476,6 +476,12 @@ func sourceFor(cfg *config.Config, src config.Source, bs config.BackupSet) trans
 		KeyEncryptionCommand: cfg.KeyEncryption.Command,
 		KnownHosts:           r.KnownHosts,
 		Root:                 bs.RemotePath,
+		// #737's path-scoped exclude. It comes from the SET rather than
+		// the remote, like Root does and for the same reason: what to
+		// skip is a property of the tree this set is pointed at, not of
+		// the host it is reached through, and two sets on one host can
+		// name different ones.
+		ExcludePaths: bs.ExcludePaths,
 	}
 }
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **A backup set can name a subtree discovery must not walk into** (#737).
+  `exclude_paths` on a backup set lists directories, relative to
+  `remote_path`, that the listing skips: "recurse into `uploads/`, never into
+  `uploads/tiles/`". It is a path list and FR-5's `include` is a basename
+  pattern list, deliberately two fields — an include pattern is matched
+  against a candidate's basename wherever it turned up, so it can say nothing
+  about *where* to look, and teaching it to would change what every pattern
+  already written means.
+
+  The point is the cost, not the result set. Discovery's listing is fully
+  recursive by design, so a set pointed at a directory an application also
+  caches under walks the cache too — 65k files across 1.6k subdirectories in
+  the deployment that reported this, which against a remote with no native
+  recursive listing is 1.6k round trips per poll for artifacts nobody wants,
+  and a pass that did not finish. An entry becomes an rclone directory
+  filter, so the walk declines to descend rather than walking and discarding:
+  the excluded directories are never listed at all. Each entry is a literal
+  relative path (a leading or trailing `/` is fine); a traversal segment or a
+  glob metacharacter is refused rather than half-honoured. Writing none of
+  them is every configuration that exists today, unchanged.
+
 ## [0.4.0] - 2026-09-09
 
 ### Added

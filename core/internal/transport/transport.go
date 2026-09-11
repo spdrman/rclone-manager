@@ -120,6 +120,25 @@ type Source struct {
 	MaxConnections int
 
 	Root string
+
+	// ExcludePaths names directories, relative to Root, that List must
+	// never walk into: issue #737's per-backup-set exclude
+	// (config.BackupSet.ExcludePaths, which carries the whole argument
+	// for why this is a path list and FR-5's include patterns are a
+	// basename-pattern list).
+	//
+	// It reaches the transport rather than being applied to List's answer
+	// by the caller because the cost is the walk, not the slice. A backup
+	// set aimed at a directory an application also caches under (65k
+	// files across 1.6k subdirectories, in the deployment that reported
+	// it) is 1.6k directory reads per poll against a remote with no
+	// native recursive listing, and a caller filtering the result has
+	// already paid all of them. Only the thing doing the walking can
+	// decline to descend.
+	//
+	// Empty, which is every Source built before #737 existed, means the
+	// full unconditional recursion List has always done.
+	ExcludePaths []string
 }
 
 // RemoteArtifact is the identity of a remote object at a point in time.
