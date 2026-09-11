@@ -991,7 +991,7 @@ export const BACKEND_FIELD_KINDS: readonly BackendFieldKind[] = [
  * What a backend IS to this engine, as opposed to which rclone backend it
  * dials. Closed in the engine, for BackendFieldKind's reason.
  */
-export type BackendRole = "object_store" | "local_volume";
+export type BackendRole = "object_store" | "local_volume" | "remote_filesystem";
 
 /** One choice an `enum`-kind field offers: the value that is stored, and
  *  the words to render for it. */

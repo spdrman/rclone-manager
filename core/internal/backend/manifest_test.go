@@ -36,7 +36,7 @@ func TestTheBundledSetIsExactly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bundled(): %v", err)
 	}
-	want := []string{"local_volume", "s3"}
+	want := []string{"local_volume", "s3", "sftp"}
 	if got := reg.IDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("bundled backend ids = %v, want %v", got, want)
 	}
@@ -487,6 +487,32 @@ func TestFieldKindsAreExactly(t *testing.T) {
 	}
 	if !reflect.DeepEqual(validFieldKinds, want) {
 		t.Fatalf("the closed field-kind set changed: got %v, want %v", validFieldKinds, want)
+	}
+}
+
+// TestRolesAreExactly pins the closed ROLE set, the way the test above
+// pins the closed kind set and for the same reason: doc.go's "a manifest
+// can declare a new BACKEND, it cannot declare a new ROLE" is only true
+// while adding one is a Go change somebody reviews, and #731's
+// remote_filesystem is the first one added since #665 wrote that
+// sentence.
+//
+// It also pins rolesList against validRoles. That string is written out
+// by hand (it is what every role refusal prints), so a role added to the
+// map and not to the sentence would tell an operator their legal role is
+// not one of the accepted ones - a message that is wrong in the one
+// place somebody reads it.
+func TestRolesAreExactly(t *testing.T) {
+	want := map[Role]bool{
+		RoleObjectStore: true, RoleLocalVolume: true, RoleRemoteFilesystem: true,
+	}
+	if !reflect.DeepEqual(validRoles, want) {
+		t.Fatalf("the closed role set changed: got %v, want %v", validRoles, want)
+	}
+	for role := range validRoles {
+		if quoted := fmt.Sprintf("%q", string(role)); !strings.Contains(rolesList(), quoted) {
+			t.Errorf("rolesList() = %s, and it does not name the accepted role %s", rolesList(), quoted)
+		}
 	}
 }
 

@@ -3943,7 +3943,8 @@
             "type": "string",
             "enum": [
               "object_store",
-              "local_volume"
+              "local_volume",
+              "remote_filesystem"
             ],
             "description": "What this backend IS to this engine, as opposed to how bytes reach it. Closed in Go."
           },

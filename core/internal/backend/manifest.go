@@ -12,14 +12,29 @@ const (
 
 	// RoleLocalVolume is a directory on a filesystem this host can see.
 	RoleLocalVolume Role = "local_volume"
+
+	// RoleRemoteFilesystem is a directory tree on ANOTHER host, reached
+	// over the network and addressed by a path rather than by a bucket
+	// and a key. sftp (issue #731) is the first one.
+	//
+	// It is its own role rather than a second spelling of
+	// RoleLocalVolume, and the difference is the whole point: internal/
+	// app's mediumType dispatches on this, RoleLocalVolume resolves to
+	// transport.MediumTypeLocalDir, and a remote destination that
+	// resolved to that would write every "offsite" copy to a directory
+	// on this machine. A role internal/app does not yet dial refuses at
+	// the moment something is about to be reached, which is that
+	// function's own documented answer and the safe one.
+	RoleRemoteFilesystem Role = "remote_filesystem"
 )
 
 // validRoles is the closed set Role accepts, checked at load. A map
 // rather than a switch so validate.go and any future listing (an error
 // message naming every accepted role) read it from one place.
 var validRoles = map[Role]bool{
-	RoleObjectStore: true,
-	RoleLocalVolume: true,
+	RoleObjectStore:      true,
+	RoleLocalVolume:      true,
+	RoleRemoteFilesystem: true,
 }
 
 // FieldKind is what one collected value IS. The set is closed in Go for

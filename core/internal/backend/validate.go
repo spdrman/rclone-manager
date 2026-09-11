@@ -41,7 +41,7 @@ func validateManifest(file string, m Manifest) []error {
 }
 
 func rolesList() string {
-	return `"object_store", "local_volume"`
+	return `"object_store", "local_volume", "remote_filesystem"`
 }
 
 func backendsList() string {
