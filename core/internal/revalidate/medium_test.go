@@ -27,11 +27,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // countingStore records what a revalidation pass actually asked the medium
@@ -120,7 +120,7 @@ func moveToMedium(t *testing.T, j *state.Journal, artifact model.ArtifactID, med
 	if _, err := j.RecordTransition(ctx, state.Transition{
 		Artifact: artifact, Key: artifact.String() + ":on-medium", From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
 		Placement: &state.PlacementUpdate{
-			Medium: mediumID, Location: "rclone-manager/production/postgres-primary/" + artifact.Name,
+			Medium: mediumID, Location: "backupd/production/postgres-primary/" + artifact.Name,
 			Size: &size, Hash: sha256Hex(content), HashAlg: "sha256",
 			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
 		},
@@ -162,7 +162,7 @@ func addMediumPlacement(t *testing.T, j *state.Journal, artifact model.ArtifactI
 	if _, err := j.RecordTransition(context.Background(), state.Transition{
 		Artifact: artifact, Key: artifact.String() + ":also-on-medium", From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
 		Placement: &state.PlacementUpdate{
-			Medium: mediumID, Location: "rclone-manager/production/postgres-primary/" + artifact.Name,
+			Medium: mediumID, Location: "backupd/production/postgres-primary/" + artifact.Name,
 			Size: &size, Hash: sha256Hex(content), HashAlg: "sha256",
 			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
 		},
@@ -642,7 +642,7 @@ func addSecondMedium(t *testing.T, j *state.Journal, artifact model.ArtifactID, 
 	if _, err := j.RecordTransition(context.Background(), state.Transition{
 		Artifact: artifact, Key: artifact.String() + ":on-" + mediumID, From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
 		Placement: &state.PlacementUpdate{
-			Medium: mediumID, Location: "rclone-manager/production/postgres-primary/" + artifact.Name,
+			Medium: mediumID, Location: "backupd/production/postgres-primary/" + artifact.Name,
 			Size: &size, Hash: sha256Hex(content), HashAlg: "sha256",
 			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
 		},

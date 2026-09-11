@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/spdrman/rclone-manager/apps/common/csrf"
+	"github.com/spdrman/backupd/apps/common/csrf"
 )
 
 // This package's side of the shared CSRF primitive.

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/tests/machines"
 )
 
 // The error classifier held to errors a real server produced, rather than

@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/rclone-manager/core/cliecho"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The parity guard, and the recording it rides on (issue #599).
@@ -252,12 +252,12 @@ func TestARefusalIsRecordedWithItsReason(t *testing.T) {
 	if got.Route != "/operations" {
 		t.Errorf("the refusal names route %q", got.Route)
 	}
-	// And it is the named gap, not a misleading `rbm run`.
+	// And it is the named gap, not a misleading `backupd run`.
 	if got.Command != "" {
-		t.Errorf("run_cycle echoed the command %q; `rbm run` opens the service in the operator's own process and runs a cycle THERE", got.Command)
+		t.Errorf("run_cycle echoed the command %q; `backupd run` opens the service in the operator's own process and runs a cycle THERE", got.Command)
 	}
 	if !strings.Contains(got.GapDetail, "not in this engine") {
-		t.Errorf("the gap does not say why `rbm run` is not the answer: %q", got.GapDetail)
+		t.Errorf("the gap does not say why `backupd run` is not the answer: %q", got.GapDetail)
 	}
 }
 

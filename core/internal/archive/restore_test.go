@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file is the restore operation's suite, and most of what it tests is

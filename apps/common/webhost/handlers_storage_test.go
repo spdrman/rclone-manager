@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The capacity assessment, which is a read that must stay a read.

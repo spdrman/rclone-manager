@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // State is FR-34's closed vocabulary for what can be done with one durable

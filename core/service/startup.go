@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // startupLockSuffix names the advisory lock file next to the journal
@@ -53,7 +53,7 @@ const journalLockSuffix = ".journal-lock"
 //
 // It is a separate file from the journal lock because the journal lock
 // answers a different question and cannot be made to answer this one:
-// every `rbm status`, every `sources`, every cron `run` holds
+// every `backupd status`, every `sources`, every cron `run` holds
 // the journal lock too, which is exactly what openUnderSharedLock's own
 // doc says is ordinary use of this CLI. Asking the journal lock "is an
 // engine running" gets "somebody has this journal open", and issue #537
@@ -94,7 +94,7 @@ const servingLockSuffix = ".serving-lock"
 // this function's to perform, and that is precisely how §46.1's
 // migration-failure requirement is met: on ANY failure below this
 // returns a nil *state.Journal, and every caller (OpenConfigAndJournal ->
-// Open, and cmd/backup-manager's openService) already treats that as
+// Open, and cmd/backupd's openService) already treats that as
 // fatal and constructs no BackupService at all, so nothing downstream of
 // it — no scheduler tick, no cycle, no transfer, no delete — ever begins.
 //
@@ -110,7 +110,7 @@ const servingLockSuffix = ".serving-lock"
 // That ordering is the point, not an optimisation. The restore below
 // rename-overwrites the journal's files, so an armed restore is the one
 // thing in this codebase that can destroy an FR-9 journal. Keeping it
-// armed on every `rbm status` bought nothing (there was no
+// armed on every `backupd status` bought nothing (there was no
 // migration to undo) and risked everything, so it is now reached only on a
 // start that genuinely is about to change the schema.
 //
@@ -119,7 +119,7 @@ const servingLockSuffix = ".serving-lock"
 // This sequence used to mint the deployment identity here, under the
 // startup lock, on the reasoning that every process opening the journal
 // passes through it exactly once. That is true and it is the wrong set of
-// processes. `rbm status`, `sources` and every routed write
+// processes. `backupd status`, `sources` and every routed write
 // come through here too, and none of them is serving anything, so a
 // deployment whose identity file was missing got a brand new name from
 // whichever CLI command happened to run next, while the engine went on
@@ -140,7 +140,7 @@ const servingLockSuffix = ".serving-lock"
 // open, which is exactly the process a migration (or a restore) would
 // destroy data underneath. So there is a second lock, taken on every
 // successful start and held by the caller for as long as it keeps the
-// journal: SHARED, so any number of processes coexist (`backup-manager
+// journal: SHARED, so any number of processes coexist (`backupd
 // status` alongside a live `serve` stays ordinary use of this CLI), and
 // taken EXCLUSIVELY by a process that needs to migrate, which therefore
 // refuses with ErrJournalInUse rather than migrating underneath a live

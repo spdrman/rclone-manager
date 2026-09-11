@@ -25,7 +25,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/spdrman/rclone-manager/core/internal/capacity"
+	"github.com/spdrman/backupd/core/internal/capacity"
 )
 
 // StorageStatus is the plain, provider-agnostic shape of one backup set's

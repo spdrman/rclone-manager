@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/retention"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/retention"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // EPIC E FR-27/FR-30 (issue #239) at the preview/apply boundary: a
@@ -383,8 +383,8 @@ func previewOfALegacyRow(t *testing.T, chain config.Retention) RetentionPlan {
 // noise, and putting it on the preview would greet an upgrade with every
 // backup it already had listed under a heading that reads like a fault.
 //
-// `rbm retention` already refuses to print exactly this
-// (printPlacementPlan's own doc, core/cmd/backup-manager/retention.go).
+// `backupd retention` already refuses to print exactly this
+// (printPlacementPlan's own doc, core/cmd/backupd/retention.go).
 // The plan the API is built on did not, so the two operator surfaces
 // disagreed about the same deployment.
 func TestPreviewRetention_AMediumFreeDeploymentSaysNothingAboutPlacement(t *testing.T) {

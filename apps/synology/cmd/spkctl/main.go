@@ -10,15 +10,15 @@
 // Where the release binaries come from: they are the two executables
 // inside the canonical OCI image 4.1 builds. Extract them with
 //
-//	cid=$(docker create --platform linux/amd64 backup-manager:<version> /rbm version)
-//	docker cp "${cid}:/rbm"     ./release/amd64/rbm
-//	docker cp "${cid}:/rbm-web" ./release/amd64/rbm-web
+//	cid=$(docker create --platform linux/amd64 backupd:<version> /backupd version)
+//	docker cp "${cid}:/backupd"     ./release/amd64/backupd
+//	docker cp "${cid}:/backupd-web" ./release/amd64/backupd-web
 //	docker rm "${cid}"
 //
 // which is the same extraction scripts/release/record-release-hashes.sh
 // does to produce the manifest in the first place. The source paths are
-// /rbm and /rbm-web because those are the real binaries after the 0.3.3
-// CLI rename; /rbm and /rbm-web still resolve in
+// /backupd and /backupd-web because those are the real binaries after the 0.3.3
+// CLI rename; /backupd and /backupd-web still resolve in
 // the image, but they are symlinks, and `docker cp` without -L copies a
 // link rather than what it points at. The destination names, and this
 // package's own payload names, stay as they are: they are what
@@ -31,11 +31,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spdrman/rclone-manager/apps/synology/spk"
+	"github.com/spdrman/backupd/apps/synology/spk"
 )
 
 // main defers to run so the whole CLI is reachable from a test without a
-// process, the same split cmd/backup-manager-web uses.
+// process, the same split cmd/backupd-web uses.
 func main() { os.Exit(run(os.Args[1:])) }
 
 // run dispatches and returns the exit code. Two means the invocation was
@@ -72,7 +72,7 @@ commands:
 build flags:
   --arch GOARCH        amd64 or arm64 (required)
   --version VERSION    INFO's version, e.g. 1.0.0-1 (required)
-  --binaries DIR       directory holding rbm and rbm-web for
+  --binaries DIR       directory holding backupd and backupd-web for
                         --arch (required)
   --ui-bundle DIR      the built shared UI bundle for this provider,
                         i.e. ui/shared/dist-bundles/synology, produced by

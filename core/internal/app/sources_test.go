@@ -40,7 +40,7 @@ func TestSources_ListsConfiguredSourcesAndBackupSets(t *testing.T) {
 }
 
 // TestSources_ReportsReadOnly is issue #316's mirror of the existing
-// Disabled coverage above: `rbm sources` (and any future HTTP
+// Disabled coverage above: `backupd sources` (and any future HTTP
 // read of the same summary) has to say when a backup set is declared
 // read-only (issue #282), not only whether it runs.
 func TestSources_ReportsReadOnly(t *testing.T) {

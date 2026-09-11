@@ -170,7 +170,7 @@ type Inventory struct {
 }
 
 // InventorySchema is the current shape's identifier.
-const InventorySchema = "backup-manager/third-party-licenses/1"
+const InventorySchema = "backupd/third-party-licenses/1"
 
 // ParseInventory reads an inventory document.
 func ParseInventory(data []byte) (Inventory, error) {
@@ -224,8 +224,8 @@ type GoBuildTarget struct {
 // binary appearing in the Dockerfile and not here is a difference someone
 // has to make on purpose.
 var ShippedGoBinaries = []GoBuildTarget{
-	{Binary: "backup-manager", ModuleDir: "core", Package: "./cmd/backup-manager"},
-	{Binary: "backup-manager-web", ModuleDir: "apps/generic", Package: "./cmd/backup-manager-web"},
+	{Binary: "backupd", ModuleDir: "core", Package: "./cmd/backupd"},
+	{Binary: "backupd-web", ModuleDir: "apps/generic", Package: "./cmd/backupd-web"},
 }
 
 // GoModuleRef is one module in a binary's linked graph.
@@ -237,7 +237,7 @@ type GoModuleRef struct {
 
 // firstPartyModulePrefix is this repository's own module namespace.
 // Modules under it are the product, not third-party dependencies of it.
-const firstPartyModulePrefix = "github.com/spdrman/rclone-manager/"
+const firstPartyModulePrefix = "github.com/spdrman/backupd/"
 
 // GoLinkedModules lists the third-party modules linked into one binary
 // for one target platform.
@@ -320,7 +320,7 @@ func parseGoListModules(out string) ([]GoModuleRef, error) {
 // isFirstPartyModule reports whether a module path is this repository's
 // own. The prefix has a trailing slash, so the bare namespace is matched
 // separately rather than by loosening the prefix, which would also match
-// a hypothetical github.com/spdrman/rclone-manager-anything.
+// a hypothetical github.com/spdrman/backupd-anything.
 func isFirstPartyModule(path string) bool {
 	return path == strings.TrimSuffix(firstPartyModulePrefix, "/") ||
 		strings.HasPrefix(path, firstPartyModulePrefix)
@@ -385,7 +385,7 @@ func NPMProductionComponents(data []byte) ([]Component, error) {
 			Ecosystem:  EcosystemNPM,
 			LicenseID:  pkg.License,
 			Integrity:  pkg.Integrity,
-			LinkedInto: []string{"backup-manager-web"},
+			LinkedInto: []string{"backupd-web"},
 		})
 	}
 	SortComponents(out)
@@ -483,7 +483,7 @@ func BuildSPDX(inv Inventory, name, namespace, created string) SPDXDocument {
 		DocumentNamespace: namespace,
 		CreationInfo: SPDXCreationInfo{
 			Created:  created,
-			Creators: []string{"Tool: rclone-manager-provenance", "Organization: Roman Goldmann"},
+			Creators: []string{"Tool: backupd-provenance", "Organization: Roman Goldmann"},
 		},
 	}
 	for _, c := range inv.Components {
@@ -532,7 +532,7 @@ func BuildSPDX(inv Inventory, name, namespace, created string) SPDXDocument {
 // ---------------------------------------------------------------------
 
 // ProvenanceSchema is the current bundle shape's identifier.
-const ProvenanceSchema = "backup-manager/release-provenance/1"
+const ProvenanceSchema = "backupd/release-provenance/1"
 
 // ProvenanceDir is where the generated compliance artifacts live.
 //
@@ -745,7 +745,7 @@ func ArtifactParityComplaints(targets map[string]DistributionTarget, recorded []
 // repository with no tags is an abbreviated commit) and the tag every
 // provider package advertises is a semantic version that resolves
 // nowhere. The moment a push happens, the two must be the same string,
-// or `docker run ghcr.io/spdrman/backup-manager:1.0.0 /rbm
+// or `docker run ghcr.io/spdrman/backupd:1.0.0 /backupd
 // version` answers with a commit SHA that the listing never mentions.
 func VersionParityComplaints(published bool, canonicalTag, manifestVersion, bundleVersion string, versionIsABuildStamp bool) []string {
 	var out []string

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/apps/common/auth/local"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
 )
 
 // These tests are about the wiring, not about generic's answers. What ID()

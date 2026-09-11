@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // This file is FR-20's prune, once the copy being pruned is an object

@@ -5,9 +5,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
 
-	"github.com/spdrman/rclone-manager/core/cliecho"
+	"github.com/spdrman/backupd/core/cliecho"
 )
 
 // The composition root: everything this package's doc comment lays out,
@@ -76,10 +76,10 @@ type Config struct {
 	// no published port and joins no network but `internal`, which only
 	// `web-ui` (`serve-ui`, apps/common/webhost/serve.NewUI's reverse proxy)
 	// also joins - nothing else on the host, and nothing on the LAN, can
-	// ever be this Service's direct peer. apps/generic/cmd/backup-manager-web's
+	// ever be this Service's direct peer. apps/generic/cmd/backupd-web's
 	// `--trust-forwarded-headers` flag is what actually turns this on for
 	// that deployment; container/compose.yaml sets it for the
-	// `rclone-manager` (engine) service only, never for `web-ui` itself
+	// `backupd` (engine) service only, never for `web-ui` itself
 	// (which correctly observes its own real TLS status directly and must
 	// never trust a forwarded header from just anyone hitting its
 	// published port).
@@ -205,7 +205,7 @@ func (s *Service) Authenticator() capabilities.Authenticator {
 // TrustForwardedHeaders reports whether this Service was configured to
 // trust X-Forwarded-For/X-Forwarded-Proto from its immediate caller (see
 // Config.TrustForwardedHeaders's own doc for exactly when that is safe).
-// apps/generic/cmd/backup-manager-web calls this to fill
+// apps/generic/cmd/backupd-web calls this to fill
 // apps/common/webhost/serve.EngineConfig.TrustForwardedHeaders, which
 // decides the same thing for the CSRF cookie NewEngine issues
 // (EnsureCSRFCookie) that this Service's own session cookie already
@@ -241,7 +241,7 @@ func (s *Service) NeedsEnrollment() (bool, error) {
 // rather than this package's. It lands in the same log as every other
 // line the process writes, and it is usually the FIRST line a new
 // deployment shows anybody, so a prefix nothing else in the image uses is
-// the worst one to have. It said `backup-manager` until 0.3.3, which was
+// the worst one to have. It said `backupd` until 0.3.3, which was
 // already the wrong half of the pair (the CLI never prints this), and
 // the rename made it a name the product no longer answers to at all. It
 // reads core/cliecho.WebBinary now, the one place that name is spelled.

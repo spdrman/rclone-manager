@@ -63,7 +63,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/obs"
 )
 
 // keyCommandTimeout bounds how long a `command` key resolver is allowed to

@@ -35,7 +35,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // The fixture writeTestConfigFile writes: one source, one backup set,

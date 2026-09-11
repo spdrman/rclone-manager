@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/model"
 )
 
 // A backup set's standing connection refusal: the manager could not reach
@@ -59,7 +59,7 @@ const (
 	// because they call for different fixes: a rejected login is a
 	// question for the remote account, a permission drift is a question
 	// for this filesystem, and before this reason existed both looked
-	// identical from the Web UI, "Backup Manager could not log in".
+	// identical from the Web UI, "Backupd could not log in".
 	HaltKeyPermissions = "KEY_PERMISSIONS"
 )
 

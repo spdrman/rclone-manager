@@ -3,14 +3,14 @@
 // contract).
 //
 // Five of the contract's seven metrics are properties of the running
-// process and are measured here, against the real `backup-manager-web
+// process and are measured here, against the real `backupd-web
 // serve` binary over real HTTP, never against an in-process httptest
 // handler: idle RSS, startup-to-healthy time, /api/v1 read latency,
 // configuration write latency, and idle CPU. The remaining two live
 // elsewhere because they are not properties of this process:
 // core/tests/perfbaseline measures transfer throughput through the
 // transport adapter (which is core's, not this app's), and
-// python3 scripts/rcmtools/perf/capture_baseline.py measures the OCI image size by
+// python3 scripts/bdtools/perf/capture_baseline.py measures the OCI image size by
 // building it.
 //
 // Image size is now also ENFORCED somewhere none of the above is, and the
@@ -28,7 +28,7 @@
 //
 // This is a harness, not a gate. It is skipped unless PERF_BASELINE=1, so
 // an ordinary `go test ./...` (and every CI job that runs one) never pays
-// for it and never goes red on a noisy number. python3 scripts/rcmtools/perf/capture_baseline.py
+// for it and never goes red on a noisy number. python3 scripts/bdtools/perf/capture_baseline.py
 // is the supported way to run it; docs/perf/README.md defines the host,
 // the workload and the threshold the recorded numbers are compared
 // against.
@@ -108,7 +108,7 @@ const (
 	startupTimeout = 60 * time.Second
 )
 
-// runtimeRecord is the JSON this harness prints. python3 scripts/rcmtools/perf/capture_baseline.py
+// runtimeRecord is the JSON this harness prints. python3 scripts/bdtools/perf/capture_baseline.py
 // merges it with the other two harnesses' records into one baseline file.
 type runtimeRecord struct {
 	Workload             string  `json:"workload"`
@@ -154,7 +154,7 @@ type latencySet struct {
 
 func TestCaptureRuntimeBaseline(t *testing.T) {
 	if os.Getenv("PERF_BASELINE") != "1" {
-		t.Skip("perf baseline harness: set PERF_BASELINE=1 to run it (python3 scripts/rcmtools/perf/capture_baseline.py does)")
+		t.Skip("perf baseline harness: set PERF_BASELINE=1 to run it (python3 scripts/bdtools/perf/capture_baseline.py does)")
 	}
 
 	repoRoot := repoRoot(t)
@@ -572,12 +572,12 @@ func repoRoot(t *testing.T) string {
 // per-module jobs do.
 func buildEngine(t *testing.T, repoRoot string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "backup-manager-web")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager-web")
+	bin := filepath.Join(t.TempDir(), "backupd-web")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backupd-web")
 	cmd.Dir = filepath.Join(repoRoot, "apps", "generic")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build backup-manager-web: %v\n%s", err, out)
+		t.Fatalf("build backupd-web: %v\n%s", err, out)
 	}
 	return bin
 }

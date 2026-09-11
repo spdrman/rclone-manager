@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
 )
 
 // The dry run's promise, and the real run being the same pipeline.

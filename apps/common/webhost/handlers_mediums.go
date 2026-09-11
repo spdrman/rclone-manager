@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // Prove a declared storage medium works, before a cycle carrying a real

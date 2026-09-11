@@ -52,7 +52,7 @@ func TestTheSourceMachineHasOneDefinition(t *testing.T) {
 		t.Errorf("%s does not install iptables, so LimitConnections cannot impose #264's rule and every connection-cap test becomes a copy of the uncapped case:\n%s", name, text)
 	}
 
-	scriptPath := filepath.Join(root, "scripts", "rcmtools", "e2e", "two_machine_backup.py")
+	scriptPath := filepath.Join(root, "scripts", "bdtools", "e2e", "two_machine_backup.py")
 	script, err := os.ReadFile(scriptPath)
 	if err != nil {
 		t.Fatalf("reading %s: %v", scriptPath, err)
@@ -90,7 +90,7 @@ func TestTheSourceMachineHasOneDefinition(t *testing.T) {
 // keeps the root refusal in core/internal/testenv rather than opting out of
 // it.
 func TestTheDriverRunsTheTierInsideAManagerMachine(t *testing.T) {
-	path := filepath.Join(repoRoot(t), "scripts", "rcmtools", "e2e", "run_machine_tier.py")
+	path := filepath.Join(repoRoot(t), "scripts", "bdtools", "e2e", "run_machine_tier.py")
 	script, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("the machine-tier driver is missing at %s: %v", path, err)
@@ -110,10 +110,10 @@ func TestTheDriverRunsTheTierInsideAManagerMachine(t *testing.T) {
 		t.Errorf("the driver runs the tier under a bare `go test`. A machine-tier package's wall clock tracks real machine load, so a fixed -timeout chosen on a quiet machine kills a run that is still making progress (#256), which is why scripts/ci-local.sh puts these packages under gotestwatch. A driver meant to stand in for that step has to keep the bound")
 	}
 	// The driver's CANNOT RUN status, after the bash driver became
-	// scripts/rcmtools/e2e/run_machine_tier.py (#672). This used to look for
+	// scripts/bdtools/e2e/run_machine_tier.py (#672). This used to look for
 	// the literal `EXIT_CANNOT_RUN=3`, and looking for it now would be
 	// looking for the defect: the number 3 is not written in the driver at
-	// all any more. rcmtools/harness.py reserves 3 for this verdict, reaches
+	// all any more. bdtools/harness.py reserves 3 for this verdict, reaches
 	// it from `cannot_run` through an internal status nothing else produces,
 	// and translates once at the exit, precisely so a subprocess with its own
 	// meaning for 3 (#551) cannot be mistaken for "this machine could not
@@ -123,6 +123,6 @@ func TestTheDriverRunsTheTierInsideAManagerMachine(t *testing.T) {
 		t.Errorf("the driver has no CANNOT RUN status. A machine that cannot run the tier is neither a pass nor a failure, and two-machine-backup.sh already ledgers that as exit 3; without it the gate cannot tell the two apart without parsing prose")
 	}
 	if strings.Contains(text, "EXIT_CANNOT_RUN = 3") || strings.Contains(text, "exit(3)") || strings.Contains(text, "return 3") {
-		t.Errorf("the driver writes the exit status 3 itself. 3 is the gate ledger's INCOMPLETE and rcmtools/harness.py's finish() is the only place allowed to produce it, so a driver that types it can report a machine verdict for a proof that ran and failed")
+		t.Errorf("the driver writes the exit status 3 itself. 3 is the gate ledger's INCOMPLETE and bdtools/harness.py's finish() is the only place allowed to produce it, so a driver that types it can report a machine verdict for a proof that ran and failed")
 	}
 }

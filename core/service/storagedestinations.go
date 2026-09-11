@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // The local hard drive as a first-class storage destination, and the
@@ -54,7 +54,7 @@ import (
 //
 // # The one thing that still renders it, and why that is not a third spelling
 //
-// `rbm settings` and `backup-set retention` print a
+// `backupd settings` and `backup-set retention` print a
 // `medium=...` column only for a tier that is NOT on the local hard drive.
 // That reads like a call site with an opinion and is not one: it is a
 // RENDERING rule ("a destination column is worth a reader's attention when

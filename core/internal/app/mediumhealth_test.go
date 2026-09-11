@@ -7,19 +7,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/health"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/health"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // Issue #444. The story the issue tells is an operator opening a status
-// page on a deployment nobody has run `rbm run` in front of,
+// page on a deployment nobody has run `backupd run` in front of,
 // whose moves have been failing for a week, and being told everything is
 // fine. These tests are that story end to end: a real cycle, the real
 // move engine, a real medium that refuses the upload, and the verdict
-// `rbm status` would print a week later.
+// `backupd status` would print a week later.
 //
 // Nothing here plants a move row by hand. A test that writes its own
 // journal rows proves the reader can read what the test wrote; the whole
@@ -158,7 +158,7 @@ func (refusingMoveJournal) ListMoves(context.Context, ...string) ([]state.Move, 
 // TestBuildHealthReport_ADeploymentWithNoMediumAsksNoPlacementQuestion is
 // the issue's second acceptance line. Every deployment that predates EPIC
 // E has to read exactly as it did before this field existed, and it must
-// not acquire a new way for `rbm status` to fail.
+// not acquire a new way for `backupd status` to fail.
 func TestBuildHealthReport_ADeploymentWithNoMediumAsksNoPlacementQuestion(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

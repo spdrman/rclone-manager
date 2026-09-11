@@ -86,7 +86,7 @@ func CheckHealthCheck(svc Service, c Canonical) []Violation {
 	if len(svc.HealthcheckTest) == 0 {
 		// Inheriting the image's own HEALTHCHECK. Legitimate, and only
 		// for a service that actually has what that command needs: the
-		// baked-in check is `/rbm status`, which reads the
+		// baked-in check is `/backupd status`, which reads the
 		// config file and the state database.
 		if !mountsRole(svc, "state") && !mountsRole(svc, "config") {
 			add(fmt.Sprintf("service %s declares no healthcheck, so it inherits the image's own `%s`, which reads the config file and the state database; this service mounts neither, so the check can only ever report unhealthy",

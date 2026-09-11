@@ -64,8 +64,8 @@ import (
 // reads, and gets "" when there is nothing to read.
 //
 // That split is structural rather than a convention, and it has to be.
-// The mint used to sit in runStartupSequence, which every `backup-manager`
-// subcommand goes through, so a `rbm status` on a deployment
+// The mint used to sit in runStartupSequence, which every `backupd`
+// subcommand goes through, so a `backupd status` on a deployment
 // whose identity file was missing (restore only the .db, which the
 // restore section below names as supported) MINTED one. On a host where
 // the engine was still up holding the old identity, that one read command

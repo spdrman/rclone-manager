@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file covers the carrier and not the numbers: whether a reporter put

@@ -545,7 +545,7 @@ func checkBackupRootContainment(p providerUnderTest) (bool, string) {
 // finding", and TestOnlyTheWebUIContainerPublishesAPort's sibling in
 // conformance_test.go already treats it as one. Skipping it here made two
 // safety-relevant checks, state persistence and backup-root containment,
-// fail OPEN: a profile that bind-mounts a whole /etc/backup-manager, or a
+// fail OPEN: a profile that bind-mounts a whole /etc/backupd, or a
 // stray /data, was invisible to both.
 func roleMounts(p providerUnderTest) (map[string]Mount, string) {
 	svcs, err := p.services()

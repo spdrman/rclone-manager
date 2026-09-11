@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
 )
 
 // The route table, which is where this package's security tiering
@@ -567,7 +567,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(requireCSRF).Put("/storage-mediums/{id}/configuration", h.configureStorageMedium)
 
 		// Issue #211: FR-9 catalog recovery, the API expression of
-		// `rbm catalog rebuild` and its --dry-run. Rebuild only
+		// `backupd catalog rebuild` and its --dry-run. Rebuild only
 		// ever adds records whose recovery manifests are already on disk
 		// and never removes or overwrites one, so it carries CSRF but not
 		// the destructive gate; see handlers_catalog.go for the argument

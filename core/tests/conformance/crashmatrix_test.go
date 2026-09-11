@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
+	"github.com/spdrman/backupd/core/internal/artifactstore"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/tests/machines"
 )
 
 // This file is #242's other half of job one: "the full crash matrix from

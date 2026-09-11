@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // This file is issue #434's pin for this package: an artifact whose
@@ -52,7 +52,7 @@ func moveToMedium(t *testing.T, j *state.Journal, artifact model.ArtifactID, st 
 	if _, err := j.RecordTransition(ctx, state.Transition{
 		Artifact: artifact, Key: artifact.String() + ":on-medium", From: string(st), To: string(st), OccurredAt: at,
 		Placement: &state.PlacementUpdate{
-			Medium: onMediumTestMedium, Location: "rclone-manager/production/postgres-primary/" + artifact.Name,
+			Medium: onMediumTestMedium, Location: "backupd/production/postgres-primary/" + artifact.Name,
 			Size: &size, Hash: hash, HashAlg: "sha256",
 			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
 		},
@@ -131,7 +131,7 @@ func TestReconcile_Complete_EveryCopyGone_QuarantinesAsLost(t *testing.T) {
 	if _, err := j.RecordTransition(context.Background(), state.Transition{
 		Artifact: artifact, Key: artifact.String() + ":gone-medium", From: "COMPLETE", To: "COMPLETE", OccurredAt: time.Now().UTC(),
 		Placement: &state.PlacementUpdate{
-			Medium: onMediumTestMedium, Location: "rclone-manager/production/postgres-primary/" + artifact.Name,
+			Medium: onMediumTestMedium, Location: "backupd/production/postgres-primary/" + artifact.Name,
 			Status: state.PlacementGone,
 		},
 	}); err != nil {
@@ -171,7 +171,7 @@ func TestReconcile_ArtifactMidMove_IsStillCheckedLocally(t *testing.T) {
 	at := time.Now().UTC()
 	for _, p := range []state.PlacementUpdate{
 		{Medium: state.MediumLocal, Location: localPath, Size: &size, Status: state.PlacementActive},
-		{Medium: onMediumTestMedium, Location: "rclone-manager/production/postgres-primary/" + artifact.Name, Size: &size,
+		{Medium: onMediumTestMedium, Location: "backupd/production/postgres-primary/" + artifact.Name, Size: &size,
 			VerificationClass: state.VerificationContent, Status: state.PlacementActive},
 	} {
 		p := p

@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // This file is issue #444: FR-24 was medium-blind, so a week of failing
@@ -46,7 +46,7 @@ func openMove(artifact, destination, phase, why string, planned time.Time) state
 	return state.Move{
 		Artifact:          mustArtifact(artifact),
 		DestinationMedium: destination,
-		DestinationKey:    "rclone-manager/" + artifact,
+		DestinationKey:    "backupd/" + artifact,
 		Phase:             phase,
 		Error:             why,
 		CreatedAt:         planned,

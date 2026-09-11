@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/retention"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/retention"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // FR-20: the file where this package actually deletes a backup.
@@ -49,7 +49,7 @@ import (
 // can detect the inventory changing out from under a previously-issued
 // plan_id before ever calling PruneApply again (see core/service's
 // retention.go). This package has no such envelope concept itself, and
-// nothing in this package's own callers (cmd/backup-manager's `retention`
+// nothing in this package's own callers (cmd/backupd's `retention`
 // command) needs Records at all — it is carried here purely so
 // core/service does not have to re-query the journal a second time, with
 // its own small risk of observing a different snapshot than the one the
@@ -105,7 +105,7 @@ type PrunePlan struct {
 // (KEEP vs "not kept by GFS"); this method (and PruneApply below) is what
 // actually wires this package to FR-20's positively-identified,
 // symlink-and-traversal-safe local deletion, via internal/retention/
-// prune.go's PruneDecide/PruneApply (issue #21). cmd/backup-manager's
+// prune.go's PruneDecide/PruneApply (issue #21). cmd/backupd's
 // bare `retention` command still only calls RetentionPreviewAll, which is
 // why a preview taken there and one taken through the API can disagree
 // about a pruned artifact: this one stats the path and reports REFUSE,

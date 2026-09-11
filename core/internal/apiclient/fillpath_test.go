@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/apicontract"
+	"github.com/spdrman/backupd/core/apicontract"
 )
 
 // fillPath's own rules, driven directly.

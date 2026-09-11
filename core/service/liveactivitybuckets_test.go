@@ -27,10 +27,10 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/cliecho"
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/obs"
 )
 
 // oneSetService is the fixture these cases need: exactly one configured
@@ -69,7 +69,7 @@ func TestRecordAPIAction_AnActionOnASetThisDeploymentDoesNotHaveIsADeploymentLin
 		Actor: "alice", Method: "PATCH", Route: "/backup-sets/{source}/{set}",
 		Status: 404, ErrorCode: "BACKUP_SET_NOT_FOUND",
 		BackupSetID: "ghost-src/ghost-set",
-		Command:     "rbm backup-set patch ghost-src/ghost-set --stale-after 48h",
+		Command:     "backupd backup-set patch ghost-src/ghost-set --stale-after 48h",
 	})
 
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
@@ -97,7 +97,7 @@ func TestRecordAPIAction_StillLandsOnAConfiguredSet(t *testing.T) {
 	svc.RecordAPIAction(context.Background(), cliecho.APIAction{
 		Actor: "alice", Method: "PATCH", Route: "/backup-sets/{source}/{set}",
 		Status: 200, BackupSetID: "alpha/nightly",
-		Command: "rbm backup-set patch alpha/nightly --stale-after 48h",
+		Command: "backupd backup-set patch alpha/nightly --stale-after 48h",
 	})
 
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
@@ -158,7 +158,7 @@ func TestRecordAPIAction_ProbingThisAPIGrowsNothing(t *testing.T) {
 		svc.RecordAPIAction(context.Background(), cliecho.APIAction{
 			Actor: "alice", Method: "PATCH", Route: "/backup-sets/{source}/{set}",
 			Status: 404, ErrorCode: "BACKUP_SET_NOT_FOUND", BackupSetID: id,
-			Command: "rbm backup-set patch " + id + " --stale-after 48h",
+			Command: "backupd backup-set patch " + id + " --stale-after 48h",
 		})
 	}
 

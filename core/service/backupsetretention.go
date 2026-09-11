@@ -42,7 +42,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // RetentionOverride is one backup set's own retention policy, in the
@@ -512,7 +512,7 @@ func toConfigRetention(o RetentionOverride) config.Retention {
 // same YAML spelling config.yaml carries it in: the CONTENTS of a
 // `retention:` block, without the key itself.
 //
-// This exists so a caller outside this package (cmd/backup-manager's
+// This exists so a caller outside this package (cmd/backupd's
 // `backup-set retention --policy-file`) can accept a whole chain, tiers
 // included, without inventing a second grammar for one. A compact
 // command-line spelling of a tier chain would be exactly that: a second

@@ -52,7 +52,7 @@
 // network and what lets a medium reach the source by name.
 //
 // When NetworkEnv is set, the test process is itself a container on that
-// network (scripts/rcmtools/e2e/run_machine_tier.py does this, #451), nothing
+// network (scripts/bdtools/e2e/run_machine_tier.py does this, #451), nothing
 // publishes a port, and the source is reached by its alias. Source.Addr
 // answers correctly in both placements, so a test never has to know which
 // one it is in.
@@ -75,7 +75,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
+	"github.com/spdrman/backupd/core/tests/dockerlease"
 )
 
 // NetworkEnv, when set, names the network this test process is already a
@@ -208,7 +208,7 @@ func Start(t *testing.T) *Machines {
 	// created.
 	created := false
 	if !inNetwork {
-		name = fmt.Sprintf("rclone-manager-machines-%d-%d", os.Getpid(), time.Now().UnixNano())
+		name = fmt.Sprintf("backupd-machines-%d-%d", os.Getpid(), time.Now().UnixNano())
 		t.Cleanup(func() {
 			if created {
 				removeNetwork(t, name)

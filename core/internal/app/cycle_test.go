@@ -6,8 +6,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
 )
 
 // FR-1's cycle, and the shared configuration fixtures the whole package

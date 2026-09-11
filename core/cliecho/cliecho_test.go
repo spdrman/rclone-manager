@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/apicontract"
+	"github.com/spdrman/backupd/core/apicontract"
 )
 
 // TestEveryRouteAnswersWithACommandOrANamedGap is this package's own half
@@ -155,10 +155,10 @@ func TestAStorageMediumWriteEchoesTheSkipOnlyWhenItWasAskedFor(t *testing.T) {
 }
 
 // The gap the issue singles out, because it is the one a lazier
-// implementation gets wrong. `rbm run` exists, and printing it
+// implementation gets wrong. `backupd run` exists, and printing it
 // here would print a command that does something different to a different
 // process.
-func TestRunAllDueSetsPrintsTheGapAndNotBackupManagerRun(t *testing.T) {
+func TestRunAllDueSetsPrintsTheGapAndNotBackupdRun(t *testing.T) {
 	line := Echo(Action{Method: "POST", Route: "/operations", Body: []byte(`{"action":"` + apicontract.ActionRunCycle + `","config_revision":"r1"}`)})
 	if len(line.Command) != 0 {
 		t.Fatalf("run_cycle printed the command %v; `"+Binary+" run` opens the service in the operator's own process and runs a cycle THERE, so it is a different act against a different process",

@@ -338,8 +338,8 @@ func TestSBOMTakesItsTimestampFromTheManifestNotTheClock(t *testing.T) {
 // to watch the refusal fire before the day somebody adds the fourth.
 func TestParseGoListModulesRefusesAnUnversionedThirdPartyModule(t *testing.T) {
 	const (
-		mainModule  = "github.com/spdrman/rclone-manager/core\t\t/repo/core"
-		firstParty  = "github.com/spdrman/rclone-manager/apps/common\t\t/repo/apps/common"
+		mainModule  = "github.com/spdrman/backupd/core\t\t/repo/core"
+		firstParty  = "github.com/spdrman/backupd/apps/common\t\t/repo/apps/common"
 		thirdParty  = "github.com/rclone/rclone\tv1.70.0\t/gopath/rclone@v1.70.0"
 		replacedDep = "github.com/some/thirdparty\t\t/repo/vendor/thirdparty"
 	)
@@ -457,8 +457,8 @@ func TestNPMProductionComponents(t *testing.T) {
 		if c.Integrity == "" {
 			t.Errorf("%s carries no integrity hash, so the lockfile's own evidence is dropped on the way into the SBOM", c.Name)
 		}
-		if len(c.LinkedInto) != 1 || c.LinkedInto[0] != "backup-manager-web" {
-			t.Errorf("%s records linkedInto %v; the frontend bundle is embedded in backup-manager-web and nowhere else", c.Name, c.LinkedInto)
+		if len(c.LinkedInto) != 1 || c.LinkedInto[0] != "backupd-web" {
+			t.Errorf("%s records linkedInto %v; the frontend bundle is embedded in backupd-web and nowhere else", c.Name, c.LinkedInto)
 		}
 	}
 }

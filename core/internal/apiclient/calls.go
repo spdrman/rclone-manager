@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/spdrman/rclone-manager/core/apicontract"
+	"github.com/spdrman/backupd/core/apicontract"
 )
 
 // The typed calls.
@@ -240,7 +240,7 @@ func (c *Client) GetArtifact(ctx context.Context, source, set, name string) (api
 // It issues a plan_id and deletes nothing. FR-20's deletion runs through
 // applyRetention, which refuses unless the plan it re-derives still
 // fingerprints as the one that id was issued for, and this package
-// deliberately has no method for that: `rbm retention` is a
+// deliberately has no method for that: `backupd retention` is a
 // preview in both its modes (retention.go's own doc) and a CLI apply would
 // be a second authorisation path beside the one an administrator reviews.
 func (c *Client) PreviewRetention(ctx context.Context, source, set string) (apicontract.RetentionPlan, error) {
@@ -250,11 +250,11 @@ func (c *Client) PreviewRetention(ctx context.Context, source, set string) (apic
 }
 
 // The storage-destination surface (G2.2, issue #594), which is what makes
-// `rbm medium add|edit|remove|import-credentials` work beside a
+// `backupd medium add|edit|remove|import-credentials` work beside a
 // running engine instead of being refused.
 //
 // They are here under this file's own rule and not in spite of it: each
-// one has a command that drives it (core/cmd/backup-manager/medium.go),
+// one has a command that drives it (core/cmd/backupd/medium.go),
 // so none of them is an untested wrapper claiming this client works
 // against a route nothing calls.
 
@@ -398,7 +398,7 @@ func (c *Client) ListActivity(ctx context.Context, limit int) (apicontract.ListA
 // and survives a restart; this one is a bounded in-memory tail of the
 // SERVING PROCESS's own event stream, so it exists only where that process
 // does. A caller with no route to it has nothing to read, which is why
-// `rbm activity --follow` refuses rather than falling back to
+// `backupd activity --follow` refuses rather than falling back to
 // the journal: the two feeds answer different questions and quietly
 // swapping one for the other would be this repository's own recurring
 // defect, two surfaces telling an operator different things.

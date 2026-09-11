@@ -38,9 +38,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/artifactstore"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
 )
 
 // lifecycleDir is where TestLifecycleUsesOnlyTheSharedFormulaFromThisPackage
@@ -106,7 +106,7 @@ func TestLocalLocatorIsTheLiteralPathEveryDeploymentAlreadyHas(t *testing.T) {
 		{"/data/backups", "backup.dump.zst", "/data/backups/backup.dump.zst"},
 		{"/data/backups", "a b.tar", "/data/backups/a b.tar"},
 		{"/data/backups", "2026-09-01T00-00-00Z.sql", "/data/backups/2026-09-01T00-00-00Z.sql"},
-		{"/mnt/tank/backup-manager/backups", "backup.dump", "/mnt/tank/backup-manager/backups/backup.dump"},
+		{"/mnt/tank/backupd/backups", "backup.dump", "/mnt/tank/backupd/backups/backup.dump"},
 		{"/data/backups/", "backup.dump", "/data/backups/backup.dump"},
 		{"relative/dir", "backup.dump", "relative/dir/backup.dump"},
 	}
@@ -453,7 +453,7 @@ func TestSeamOffersNoMoveMethod(t *testing.T) {
 // variable rather than on the package, and there is no way to reach it
 // without first calling something that IS in this list.
 func TestLifecycleUsesOnlyTheSharedFormulaFromThisPackage(t *testing.T) {
-	const storePath = "github.com/spdrman/rclone-manager/core/internal/artifactstore"
+	const storePath = "github.com/spdrman/backupd/core/internal/artifactstore"
 	allowed := map[string]bool{"NewLocal": true}
 
 	entries, err := os.ReadDir(lifecycleDir)

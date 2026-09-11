@@ -15,7 +15,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/backupd/core/internal/app"
 )
 
 // TestExecuteRunCycle_SummaryTellsABarrenCycleFromAGoodOne is issue #361

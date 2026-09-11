@@ -132,7 +132,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/model"
 )
 
 // ErrNotPresent reports that a store does not hold the artifact asked

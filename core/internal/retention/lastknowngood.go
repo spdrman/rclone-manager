@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // TierLastKnownGood marks a GFSVerdict kept under FR-19: the artifact holds

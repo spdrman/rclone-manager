@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/testenv"
+	"github.com/spdrman/backupd/core/internal/testenv"
 )
 
 // This suite has to prove a policy about an environment it is not running

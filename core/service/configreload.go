@@ -1,8 +1,8 @@
 package service
 
 import (
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // This file is the shared tail of every configuration write: once the new

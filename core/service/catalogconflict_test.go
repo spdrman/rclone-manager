@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/recovery"
+	"github.com/spdrman/backupd/core/internal/recovery"
 )
 
 // TestCatalogPass_ReportsAConflictingSidecarThroughTheServiceSurface holds

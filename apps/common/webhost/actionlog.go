@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/rclone-manager/core/cliecho"
+	"github.com/spdrman/backupd/core/cliecho"
 )
 
 // Every action taken through this API, recorded where an operator can
@@ -37,7 +37,7 @@ import (
 // exactly the refusals an operator most needs to see, and not one of them
 // reaches a handler body.
 //
-// It also settles where the echoed `backup-manager` command comes from.
+// It also settles where the echoed `backupd` command comes from.
 // The command is a function of the route and the request, both of which
 // are right here, so it is built once, in Go, in core/cliecho, and never
 // composed in a browser (see that package for why that matters).

@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/archive"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/archive"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
-// This file is issue #435: what `rbm validate <id>` does about
+// This file is issue #435: what `backupd validate <id>` does about
 // an artifact whose durable copies are all on storage mediums.
 //
 // # Why it is here at all

@@ -23,15 +23,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/backend"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/backend"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // writeTestConfigFile builds a minimal, valid config.yaml against real temp
 // directories, wired through the "local" transport backend so this test
 // needs no network and no Docker — the same fixture shape
-// cmd/backup-manager/main_test.go's writeTestConfig uses for its own
+// cmd/backupd/main_test.go's writeTestConfig uses for its own
 // end-to-end smoke tests, reproduced here because Open is this package's
 // equivalent "load a real file off disk" entry point and had no direct
 // test of its own otherwise.

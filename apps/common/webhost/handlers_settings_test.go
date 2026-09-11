@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The read and the partial write of the settings surface.

@@ -32,11 +32,11 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
-	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/apps/common/auth/local"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/apps/common/platform/profile"
+	"github.com/spdrman/backupd/apps/common/webhost/serve"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // testPlatformAdapter is a minimal capabilities.PlatformAdapter built only
@@ -64,7 +64,7 @@ func (a testPlatformAdapter) PlatformInfo(_ context.Context) (capabilities.Platf
 	return capabilities.PlatformInfo{ID: capabilities.PlatformGeneric, Name: "test"}, nil
 }
 
-// writeTestConfig mirrors core/cmd/backup-manager/main_test.go's own
+// writeTestConfig mirrors core/cmd/backupd/main_test.go's own
 // writeTestConfig: a minimal, valid config against real temp directories,
 // needing no network and no Docker.
 func writeTestConfig(t *testing.T) string {
@@ -386,7 +386,7 @@ func newUIHarness(t *testing.T) *uiHarness {
 	}
 
 	staticFS := fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte("<html><body>generic backup-manager UI shell</body></html>")},
+		"index.html": &fstest.MapFile{Data: []byte("<html><body>generic backupd UI shell</body></html>")},
 	}
 
 	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{Upstream: upstream, StaticFS: staticFS}))
@@ -465,7 +465,7 @@ func TestUI_StaticUIServedForNonAPIRoute(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s status = %d, want %d", path, resp.StatusCode, http.StatusOK)
 		}
-		if !strings.Contains(string(body), "generic backup-manager UI shell") {
+		if !strings.Contains(string(body), "generic backupd UI shell") {
 			t.Errorf("GET %s body = %q, want it to contain the static index.html content (SPA fallback)", path, body)
 		}
 	}

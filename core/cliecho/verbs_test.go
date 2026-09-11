@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/apicontract"
+	"github.com/spdrman/backupd/core/apicontract"
 )
 
 // A gap is a promise that a verb does not exist, and this tree ships five
@@ -15,7 +15,7 @@ import (
 // at an operator who could have run one.
 //
 // The mechanical guard against a gap outliving the thing it describes is
-// in core/cmd/backup-manager, which is the only package that can see the
+// in core/cmd/backupd, which is the only package that can see the
 // verb tables. This is the other half: the commands themselves, pinned
 // here where the builders are.
 func TestTheRoutesWhoseVerbsNowExistNameThem(t *testing.T) {
@@ -113,7 +113,7 @@ func TestTheRoutesWhoseVerbsNowExistNameThem(t *testing.T) {
 // one of the three values the contract defines and not one any client has
 // ever sent. So no real request matched that arm: every restore and every
 // per-set run fell through to a default whose sentence is about
-// `rbm run`, a different verb for a different act. The
+// `backupd run`, a different verb for a different act. The
 // example body said "restore" too, so the end-to-end parse test certified
 // a branch production never reaches.
 //
@@ -174,7 +174,7 @@ func TestOperationsReadsTheActionsTheContractDefines(t *testing.T) {
 	}
 }
 
-// Gaps() is what the guard in core/cmd/backup-manager reads, and a
+// Gaps() is what the guard in core/cmd/backupd reads, and a
 // declared list is only worth what it covers. This is the coverage half:
 // every sentence Echo can actually produce has to be in it.
 func TestEveryGapSentenceEchoCanPrintIsDeclared(t *testing.T) {
@@ -195,7 +195,7 @@ func TestEveryGapSentenceEchoCanPrintIsDeclared(t *testing.T) {
 		}
 		seen++
 		if !declared[line.GapDetail] {
-			t.Errorf("%s %s prints a gap sentence Gaps() does not declare:\n  %s\nThe guard in core/cmd/backup-manager reads that list, so an undeclared sentence is one nothing checks against the verb tables.",
+			t.Errorf("%s %s prints a gap sentence Gaps() does not declare:\n  %s\nThe guard in core/cmd/backupd reads that list, so an undeclared sentence is one nothing checks against the verb tables.",
 				a.Method, a.Route, line.GapDetail)
 		}
 	}

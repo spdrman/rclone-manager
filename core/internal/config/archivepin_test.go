@@ -15,8 +15,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/archive"
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/archive"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // TestTheArchiveClassSetMatchesInternalArchive is #442's third

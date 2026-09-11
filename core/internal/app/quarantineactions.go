@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // The four things an operator may do about a backup this manager stopped
@@ -202,7 +202,7 @@ func (s *Service) RetryQuarantinedIngestion(ctx context.Context, id model.Artifa
 // is where that whole decision and its argument live.
 //
 // Which of the two happened is not on the return value: a caller that has
-// to tell an operator reads the row back afterwards (`rbm retry` does).
+// to tell an operator reads the row back afterwards (`backupd retry` does).
 // Handing back only "no error" is what the API contract's own response for
 // this operation carries, and one method signature answering to two
 // surfaces is worth less than the row both of them can read.

@@ -31,8 +31,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // RetainRemoteRequest is everything one attempt at issue #282's retain

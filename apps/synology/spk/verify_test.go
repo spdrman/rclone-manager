@@ -120,7 +120,7 @@ func TestVerify_BinaryHashParity(t *testing.T) {
 				return path, manifest
 			},
 			wantOK:        false,
-			wantSubstring: "rbm",
+			wantSubstring: "backupd",
 		},
 		{
 			// A subtler control: the package is right, but it is checked
@@ -145,13 +145,13 @@ func TestVerify_BinaryHashParity(t *testing.T) {
 			build: func(t *testing.T) (string, ReleaseManifest) {
 				path, manifest := buildFixture(t, "amd64")
 				tampered := mutateInnerPayload(t, path, func(inner []tarEntry) []tarEntry {
-					return replaceBody(inner, PayloadBinDir+"/rbm-web",
+					return replaceBody(inner, PayloadBinDir+"/backupd-web",
 						fakeELF(elf.EM_X86_64, []byte("tampered")))
 				})
 				return tampered, manifest
 			},
 			wantOK:        false,
-			wantSubstring: "rbm-web",
+			wantSubstring: "backupd-web",
 		},
 	}
 
@@ -391,7 +391,7 @@ func TestVerify_RejectsDangerousFileModes(t *testing.T) {
 
 	bad := mutateInnerPayload(t, path, func(inner []tarEntry) []tarEntry {
 		for i := range inner {
-			if inner[i].hdr.Name == PayloadBinDir+"/rbm" {
+			if inner[i].hdr.Name == PayloadBinDir+"/backupd" {
 				inner[i].hdr.Mode = 0o4755
 			}
 		}
@@ -401,7 +401,7 @@ func TestVerify_RejectsDangerousFileModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	requireFail(t, rep, CheckFileModes, "rbm")
+	requireFail(t, rep, CheckFileModes, "backupd")
 }
 
 // TestVerify_ScansShellAnywhereInThePackage covers the two holes in the
@@ -434,7 +434,7 @@ func TestVerify_ScansShellAnywhereInThePackage(t *testing.T) {
 	}
 	substituted := strings.Replace(shipped,
 		`RUN_DIR="${PKG_VAR}/run"`,
-		`RUN_DIR="/volume1/backup-manager"`, 1)
+		`RUN_DIR="/volume1/backupd"`, 1)
 	if substituted == shipped {
 		t.Fatal("could not substitute RUN_DIR in common.sh, so the case below proves nothing")
 	}
@@ -450,7 +450,7 @@ func TestVerify_ScansShellAnywhereInThePackage(t *testing.T) {
 			inner: true,
 			mutate: func(entries []tarEntry) []tarEntry {
 				return addEntry(entries, PayloadShareDir+"/cleanup.sh",
-					[]byte("#!/bin/sh\nrm -rf /volume1/backup-manager\n"))
+					[]byte("#!/bin/sh\nrm -rf /volume1/backupd\n"))
 			},
 			detail: "cleanup.sh",
 		},
@@ -459,7 +459,7 @@ func TestVerify_ScansShellAnywhereInThePackage(t *testing.T) {
 			inner: true,
 			mutate: func(entries []tarEntry) []tarEntry {
 				return addEntry(entries, DSMUIDir+"/refresh",
-					[]byte("#!/bin/sh\nfind /volume1/backup-manager -type f | xargs rm -f\n"))
+					[]byte("#!/bin/sh\nfind /volume1/backupd -type f | xargs rm -f\n"))
 			},
 			detail: "refresh",
 		},

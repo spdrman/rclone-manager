@@ -1,4 +1,4 @@
-module github.com/spdrman/rclone-manager/core
+module github.com/spdrman/backupd/core
 
 go 1.27.0
 

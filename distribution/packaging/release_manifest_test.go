@@ -297,7 +297,7 @@ func newSquashMergeFixture(t *testing.T) squashMergeFixture {
 //
 // That premise is no longer true, on both halves of the manifest this
 // test holds together. The registry is settled: ghcr.io, and
-// ghcr.io/spdrman/backup-manager, which canonical.json already carries.
+// ghcr.io/spdrman/backupd, which canonical.json already carries.
 // And as of the 0.1.0 push, canonical.json records image.published true,
 // so this test now demands what it used to only promise it would: a real
 // registry_digest per architecture, and a real top-level index_digest for
@@ -405,7 +405,7 @@ func TestRegistryDigestComplaints_CoversEveryCombination(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := registryDigestComplaints("ghcr.io/spdrman/backup-manager", tc.published, tc.indexDigest, tc.arches)
+			got := registryDigestComplaints("ghcr.io/spdrman/backupd", tc.published, tc.indexDigest, tc.arches)
 			if tc.want == "" {
 				if len(got) != 0 {
 					t.Fatalf("expected no complaint, got %v", got)
@@ -423,7 +423,7 @@ func TestRegistryDigestComplaints_CoversEveryCombination(t *testing.T) {
 
 	// Every architecture is judged, not just the first: a manifest whose
 	// second entry is the broken one has to complain about that entry.
-	got := registryDigestComplaints("ghcr.io/spdrman/backup-manager", true, validIndex, []ReleaseArchitecture{
+	got := registryDigestComplaints("ghcr.io/spdrman/backupd", true, validIndex, []ReleaseArchitecture{
 		{Architecture: "amd64", RegistryDigest: digest("sha256:" + strings.Repeat("d", 64))},
 		{Architecture: "arm64", RegistryDigest: nil},
 	})
@@ -578,9 +578,9 @@ func fixtureManifest(p providerUnderTest, commit string) ReleaseManifest {
 		hashes := map[string]string{}
 		for _, b := range p.canonical.Binaries {
 			// manifestBinaryKey, not a bare TrimPrefix: since the 0.3.3
-			// CLI rename the canonical binary paths (/rbm, /rbm-web) and
+			// CLI rename the canonical binary paths (/backupd, /backupd-web) and
 			// the keys container/release-manifest.json records a hash
-			// under (backup-manager, backup-manager-web) are different
+			// under (backupd, backupd-web) are different
 			// strings, and a fixture that keyed on the path would be a
 			// manifest the real reader cannot read. Every positive
 			// control built on this would then fail for the fixture's

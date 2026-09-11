@@ -149,7 +149,7 @@ type Metadata struct {
 	// definition has no store to appear in.
 	StoreArtifacts []string `json:"storeArtifacts"`
 	// BinaryArtifacts maps a canonical binary path
-	// ("/rbm-web") to a checked-in file in this provider's
+	// ("/backupd-web") to a checked-in file in this provider's
 	// package that is supposed to BE those bytes. Empty for every
 	// provider that consumes the OCI image by reference, which is all of
 	// them today, and that is the point: core-binary-hash-parity cannot
@@ -826,7 +826,7 @@ func ImportsProviderRe(provider string) *regexp.Regexp {
 	// lines until it meets a provider path in a later comment, and the
 	// check then reports core as importing a provider because somebody
 	// wrote "this repository's" a few lines above the word. That is not
-	// hypothetical: it is how core/cmd/backup-manager/usagepins_test.go
+	// hypothetical: it is how core/cmd/backupd/usagepins_test.go
 	// first tripped this. An import path and a string literal both live
 	// on one line, so refusing to cross one costs nothing real.
 	return regexp.MustCompile(`["'][^"'\n]*apps/` + regexp.QuoteMeta(provider) + `/`)
@@ -844,7 +844,7 @@ func ImportsProviderRe(provider string) *regexp.Regexp {
 type ReleaseManifest struct {
 	Commit string `json:"commit"`
 	// Version is the VERSION build argument the recorded binaries were
-	// stamped with, which is what `/rbm version` answers. It
+	// stamped with, which is what `/backupd version` answers. It
 	// is NOT necessarily the semantic version the provider packages
 	// advertise: the generator defaults it to `git describe --tags
 	// --always`, and this repository has no tags, so today it is an
@@ -945,12 +945,12 @@ func (m ReleaseManifest) ArchitectureSet() []string {
 //
 // The two are not the same string any more, and that is deliberate
 // rather than an oversight left over from the 0.3.3 CLI rename. What an
-// operator types became `rbm` and `rbm-web`, so canonical.json's
-// commands, every compose file and every adapter name /rbm and /rbm-web,
+// operator types became `backupd` and `backupd-web`, so canonical.json's
+// commands, every compose file and every adapter name /backupd and /backupd-web,
 // and scan.go checks a `command:`'s argv[0] against exactly that list.
 // The release ARTIFACT did not get renamed: the manifest's binary_sha256
 // keys, apps/synology/spk's payload members and the provenance inventory
-// all still say backup-manager and backup-manager-web, because they
+// all still say backupd and backupd-web, because they
 // identify a recorded build rather than a command, and re-keying a
 // record that already carries 0.3.3's hashes would invalidate evidence
 // to change a label.

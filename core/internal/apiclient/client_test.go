@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/apicontract"
+	"github.com/spdrman/backupd/core/apicontract"
 )
 
 // What this file plants, and why each one is planted rather than reasoned
@@ -395,7 +395,7 @@ func TestNew_RefusesABaseURLItCannotUse(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"no scheme", "127.0.0.1:8080"},
-		{"a scheme that is not HTTP", "unix:///var/run/backup-manager.sock"},
+		{"a scheme that is not HTTP", "unix:///var/run/backupd.sock"},
 		{"no host", "http://"},
 		{"a query nobody would mean", "http://127.0.0.1:8080/?token=abc"},
 		{"the API's own URL rather than the host's", "http://127.0.0.1:8080/api/v1"},

@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/capacity"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/health"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/retention"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/capacity"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/health"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/retention"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // FR-24's `status`, assembled from inputs that know nothing about each other.
@@ -46,7 +46,7 @@ import (
 // A free-space reading is allowed to be missing, because it is a live reading
 // of something outside the journal and its absence is itself reportable.
 
-// BuildHealthReport is `rbm status`' use case (FR-24). It calls
+// BuildHealthReport is `backupd status`' use case (FR-24). It calls
 // internal/health.ComputeBackupSetHealth once per configured backup set,
 // against that set's freshly-loaded journal rows, and bundles the result
 // with the process-liveness half of FR-24 built from versionInfo.
@@ -191,7 +191,7 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 //
 // Unlike placementEvidence next door, this runs for every backup set,
 // including every deployment that predates EPIC E, so it must not become a
-// new way for `rbm status` to fail: that promise is exactly
+// new way for `backupd status` to fail: that promise is exactly
 // what placementEvidence's gate is for. LastKnownGoodUnconfirmed can only
 // fail one way, by the retention chain refusing to resolve, and a
 // deployment in that state has a real condition worth reporting anyway. So
@@ -250,7 +250,7 @@ type movesBySet map[model.BackupSetID][]state.Move
 // What the gate buys is that no deployment predating EPIC E changes
 // behaviour at all: it runs no retention classification on a status call,
 // and it does not have to have a journal that can read the move table.
-// Both of those would be new ways for `rbm status` to fail for
+// Both of those would be new ways for `backupd status` to fail for
 // a deployment that has never asked for any of this.
 //
 // # Why a failure here fails the whole report

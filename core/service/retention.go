@@ -12,11 +12,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/retention"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/retention"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // This file is the envelope around the one routine in this product that
@@ -836,8 +836,8 @@ func declaresAStorageMedium(cfg *config.Config) bool {
 // would find every backup they already had listed under a heading that
 // reads like a fault.
 //
-// `rbm retention` already refuses to print exactly this, for
-// exactly this reason (printPlacementPlan, core/cmd/backup-manager/
+// `backupd retention` already refuses to print exactly this, for
+// exactly this reason (printPlacementPlan, core/cmd/backupd/
 // retention.go). This is the same rule on the second surface, so the two
 // tell the same story about the same deployment rather than two.
 //

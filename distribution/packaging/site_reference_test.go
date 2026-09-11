@@ -67,7 +67,7 @@ func commandsFromHTMLTable(regionText string) []string {
 }
 
 func TestTheSiteReferenceDocumentsExactlyTheRegisteredCommands(t *testing.T) {
-	src, err := os.ReadFile(Path("core/cmd/backup-manager/main.go"))
+	src, err := os.ReadFile(Path("core/cmd/backupd/main.go"))
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
 	}

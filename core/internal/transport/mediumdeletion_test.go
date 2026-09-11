@@ -94,7 +94,7 @@ func TestOnlyTheMoveEngineDeletesFromAMedium(t *testing.T) {
 		// a backup gets decided", because it never touches a backup: the
 		// only key it can ever pass to DeleteObject is one it generated
 		// itself, from crypto/rand, under a reserved
-		// .rclone-manager-preflight/ segment that transport.MediumKey
+		// .backupd-preflight/ segment that transport.MediumKey
 		// cannot produce for any configured artifact (a source, a backup
 		// set and an artifact name each refuse a separator, so none of
 		// them can spell that segment).

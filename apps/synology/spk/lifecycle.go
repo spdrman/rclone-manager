@@ -90,7 +90,7 @@ var mustSurvivePrefixes = []string{
 //
 // $@ is here because start-stop-status' start_daemon dispatches the
 // argument vector its own start branch built, which names
-// ${PKG_BIN}/rbm-web literally.
+// ${PKG_BIN}/backupd-web literally.
 var allowedCommands = map[string]bool{
 	".": true, "source": true, ":": true, "[": true, "test": true,
 	"cat": true, "chmod": true, "chown": true, "cp": true, "dirname": true,

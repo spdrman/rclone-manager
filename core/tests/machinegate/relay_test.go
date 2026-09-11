@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/tests/machines"
 )
 
 // A plain TCP relay in front of a machine, and the one property that has to

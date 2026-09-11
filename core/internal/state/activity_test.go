@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/model"
 )
 
 // discoverAndAdvance records one artifact and walks it through the states

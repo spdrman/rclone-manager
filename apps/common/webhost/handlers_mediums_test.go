@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The medium preflight, whose most important test is about what the

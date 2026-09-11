@@ -12,7 +12,7 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/operations"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file tests a pair of operations that cannot be tested against the

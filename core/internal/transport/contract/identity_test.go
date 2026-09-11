@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file unit-tests Capture and Changed, the two helpers the contract

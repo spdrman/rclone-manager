@@ -117,77 +117,77 @@ func TestScanForUnsafeDeletes(t *testing.T) {
 		},
 		{
 			name:     "wiping the backup share is caught",
-			body:     "#!/bin/sh\nrm -rf /volume1/backup-manager\n",
+			body:     "#!/bin/sh\nrm -rf /volume1/backupd\n",
 			wantFind: true,
 		},
 		{
 			name:     "wiping a volume with a glob is caught",
-			body:     "#!/bin/sh\nrm -rf /volume*/backup-manager/*\n",
+			body:     "#!/bin/sh\nrm -rf /volume*/backupd/*\n",
 			wantFind: true,
 		},
 		{
 			name:     "find piped into xargs rm is caught",
-			body:     "#!/bin/sh\nfind /volume1/backup-manager -type f | xargs rm -f\n",
+			body:     "#!/bin/sh\nfind /volume1/backupd -type f | xargs rm -f\n",
 			wantFind: true,
 		},
 		{
 			name:     "find -delete outside the footprint is caught",
-			body:     "#!/bin/sh\nfind /volume1/backup-manager -type f -delete\n",
+			body:     "#!/bin/sh\nfind /volume1/backupd -type f -delete\n",
 			wantFind: true,
 		},
 		{
 			name:     "a deletion behind sh -c is caught",
-			body:     "#!/bin/sh\nsh -c 'rm -rf /volume1/backup-manager'\n",
+			body:     "#!/bin/sh\nsh -c 'rm -rf /volume1/backupd'\n",
 			wantFind: true,
 		},
 		{
 			name:     "a truncating redirection is caught",
-			body:     "#!/bin/sh\n: > /volume1/backup-manager/index.db\n",
+			body:     "#!/bin/sh\n: > /volume1/backupd/index.db\n",
 			wantFind: true,
 		},
 		{
 			name:     "cat /dev/null into a file is caught",
-			body:     "#!/bin/sh\ncat /dev/null > /volume1/backup-manager/index.db\n",
+			body:     "#!/bin/sh\ncat /dev/null > /volume1/backupd/index.db\n",
 			wantFind: true,
 		},
 		{
 			name:     "cp /dev/null over a file is caught",
-			body:     "#!/bin/sh\ncp /dev/null /volume1/backup-manager/index.db\n",
+			body:     "#!/bin/sh\ncp /dev/null /volume1/backupd/index.db\n",
 			wantFind: true,
 		},
 		{
 			name:     "truncate is caught",
-			body:     "#!/bin/sh\ntruncate -s 0 /volume1/backup-manager/index.db\n",
+			body:     "#!/bin/sh\ntruncate -s 0 /volume1/backupd/index.db\n",
 			wantFind: true,
 		},
 		{
 			name:     "dd over a file is caught",
-			body:     "#!/bin/sh\ndd if=/dev/zero of=/volume1/backup-manager/index.db\n",
+			body:     "#!/bin/sh\ndd if=/dev/zero of=/volume1/backupd/index.db\n",
 			wantFind: true,
 		},
 		{
 			name:     "moving the backup share away is caught",
-			body:     "#!/bin/sh\nmv /volume1/backup-manager /tmp/\n",
+			body:     "#!/bin/sh\nmv /volume1/backupd /tmp/\n",
 			wantFind: true,
 		},
 		{
 			name:     "removing the DSM share with synoshare is caught",
-			body:     "#!/bin/sh\nsynoshare --del backup-manager\n",
+			body:     "#!/bin/sh\nsynoshare --del backupd\n",
 			wantFind: true,
 		},
 		{
 			name:     "a backgrounded deletion after another command is caught",
-			body:     "#!/bin/sh\nsleep 1 & rm -rf /volume1/backup-manager &\n",
+			body:     "#!/bin/sh\nsleep 1 & rm -rf /volume1/backupd &\n",
 			wantFind: true,
 		},
 		{
 			name:     "a recursive chown of the share is caught",
-			body:     "#!/bin/sh\nchown -R nobody /volume1/backup-manager\n",
+			body:     "#!/bin/sh\nchown -R nobody /volume1/backupd\n",
 			wantFind: true,
 		},
 		{
 			name:     "rmdir outside the footprint is caught",
-			body:     "#!/bin/sh\nrmdir /volume1/backup-manager\n",
+			body:     "#!/bin/sh\nrmdir /volume1/backupd\n",
 			wantFind: true,
 		},
 		{
@@ -197,7 +197,7 @@ func TestScanForUnsafeDeletes(t *testing.T) {
 		},
 		{
 			name:     "a comment mentioning rm -rf is not a deletion",
-			body:     "#!/bin/sh\n# deliberately does not rm -rf /volume1/backup-manager\nexit 0\n",
+			body:     "#!/bin/sh\n# deliberately does not rm -rf /volume1/backupd\nexit 0\n",
 			wantFind: false,
 		},
 		{
@@ -237,16 +237,16 @@ func TestScanForUnsafeDeletes(t *testing.T) {
 // because it passes in CI and may not elsewhere.
 func TestScanForUnsafeDeletes_ResolutionIsDeterministic(t *testing.T) {
 	vars := map[string]string{
-		"_pid":     "/volume1/backup-manager/short",
-		"_pidfile": "/volume1/backup-manager/long",
+		"_pid":     "/volume1/backupd/short",
+		"_pidfile": "/volume1/backupd/long",
 	}
 	// Both spellings, both names: a resolver that expanded nothing at
 	// all would also be deterministic, so each case pins a value.
 	for _, tc := range []struct{ in, want string }{
-		{"${_pidfile}", "/volume1/backup-manager/long"},
-		{"$_pidfile", "/volume1/backup-manager/long"},
-		{"${_pid}", "/volume1/backup-manager/short"},
-		{"$_pid", "/volume1/backup-manager/short"},
+		{"${_pidfile}", "/volume1/backupd/long"},
+		{"$_pidfile", "/volume1/backupd/long"},
+		{"${_pid}", "/volume1/backupd/short"},
+		{"$_pid", "/volume1/backupd/short"},
 	} {
 		for range 200 {
 			if got := expandShellVars(tc.in, vars); got != tc.want {
@@ -279,7 +279,7 @@ func TestScanShippedScript_ReadsTheArchivesOwnCommonSh(t *testing.T) {
 
 	substituted := strings.Replace(pristine,
 		`RUN_DIR="${PKG_VAR}/run"`,
-		`RUN_DIR="/volume1/backup-manager"`, 1)
+		`RUN_DIR="/volume1/backupd"`, 1)
 	if substituted == pristine {
 		t.Fatal("could not substitute RUN_DIR in common.sh, so this test proves nothing")
 	}

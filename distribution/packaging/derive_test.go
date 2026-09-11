@@ -157,7 +157,7 @@ func derivationMutations() []derivationMutation {
 // regression rather than mutating something adjacent to it: the exact
 // health check every adapter shipped with, put back, has to be refused.
 //
-// A generic mutation cannot say this. `rbm status` is a real
+// A generic mutation cannot say this. `backupd status` is a real
 // command the image really ships and really answers, so nothing about it
 // looks wrong from the outside; what is wrong is that a container start
 // waits on it, and a fresh install has backed nothing up.
@@ -171,11 +171,11 @@ func TestTheBackupFreshnessVerdictIsRefusedAsAnEngineStartGate(t *testing.T) {
 				t.Fatalf("the unmutated adapter already drifts, so this control would pass for the wrong reason:\n%s", FormatDrift(d))
 			}
 
-			a.Engine.HealthcheckTest = []string{"CMD", "/rbm", "status"}
+			a.Engine.HealthcheckTest = []string{"CMD", "/backupd", "status"}
 			a.Engine.HealthcheckDisabled = false
 			d := CheckDerivation(a, c)
 			if !namesField(d, FieldHealthCheck) {
-				t.Fatalf("declaring `rbm status` as the engine's health check produced %s, want a refusal naming %q: it is FR-24's freshness verdict, non-zero on a fresh install, and the Web UI waits on it", FormatDrift(d), FieldHealthCheck)
+				t.Fatalf("declaring `backupd status` as the engine's health check produced %s, want a refusal naming %q: it is FR-24's freshness verdict, non-zero on a fresh install, and the Web UI waits on it", FormatDrift(d), FieldHealthCheck)
 			}
 		})
 	}
@@ -358,7 +358,7 @@ func TestAThirdContainerIsRefused(t *testing.T) {
 	p := allPlatforms()[0]
 	a := adapterRuntimes(t, p, c)[0].rt
 
-	a.Others = append(a.Others, Service{Name: "backup-manager-sidecar", Command: []string{"/usr/bin/some-agent"}})
+	a.Others = append(a.Others, Service{Name: "backupd-sidecar", Command: []string{"/usr/bin/some-agent"}})
 	d := CheckDerivation(a, c)
 	if !namesField(d, FieldRuntimeProfile) {
 		t.Errorf("a third container produced %s, want a refusal naming %q", FormatDrift(d), FieldRuntimeProfile)

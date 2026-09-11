@@ -36,17 +36,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/discovery"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/contract"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/bwlimit"
-	"github.com/spdrman/rclone-manager/core/tests/classifytransport"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/discovery"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/contract"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/tests/bwlimit"
+	"github.com/spdrman/backupd/core/tests/classifytransport"
+	"github.com/spdrman/backupd/core/tests/machines"
 )
 
 func openJournal(t *testing.T) *state.Journal {

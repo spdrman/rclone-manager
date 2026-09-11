@@ -60,7 +60,7 @@ type Image struct {
 
 // ContainerPaths are the mount points inside the container. Identical for
 // every provider, because they are baked into the binaries' own defaults
-// (apps/generic/cmd/backup-manager-web's defaultConfigPath and
+// (apps/generic/cmd/backupd-web's defaultConfigPath and
 // defaultAuthStorePath) rather than chosen per platform.
 type ContainerPaths struct {
 	State   string `json:"state"`

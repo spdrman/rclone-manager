@@ -25,9 +25,9 @@
 package app
 
 import (
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/retention"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/retention"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // ActiveMediumFromRecords builds the one placement lookup this product

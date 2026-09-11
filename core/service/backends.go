@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/spdrman/rclone-manager/core/internal/backend"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/internal/backend"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
 )
 
 // This file is EPIC I's (#664) read-only half of the backend registry: the

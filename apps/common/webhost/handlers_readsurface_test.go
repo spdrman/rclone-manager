@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The artifact reads, where the interesting cases are about telling

@@ -36,7 +36,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // unreachableEndpoint is an http:// URL on a loopback port nothing is

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
 )
 
 // The three system reads, plus one standing constraint on all of them.
@@ -238,7 +238,7 @@ func TestReadiness_ReportsFalseWhenTheBackendItselfIsNotReady(t *testing.T) {
 // the engine reporting healthy, so whatever the engine's healthcheck
 // asks is what stands between an operator and the only LAN-facing
 // listener. This pins the two properties that make /health/live usable
-// as that gate and `rbm status` unusable: it answers for a
+// as that gate and `backupd status` unusable: it answers for a
 // backend whose startup sequence never completed, which is what a fresh
 // unconfigured install looks like, and it answers with no session, which
 // is what a healthcheck subprocess has.

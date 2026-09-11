@@ -94,7 +94,7 @@ func TestReadOnlyParsesFromYAML(t *testing.T) {
 	doc := []byte(`
 poll_interval: 15m
 state:
-  database: /var/lib/backup-manager/state.db
+  database: /var/lib/backupd/state.db
 sources:
   - id: production
     read_only: true
@@ -105,7 +105,7 @@ sources:
           host: production.example.internal
           user: backup
           key_file: /run/secrets/backup_ssh_key
-          known_hosts: /etc/backup-manager/known_hosts
+          known_hosts: /etc/backupd/known_hosts
         remote_path: /backups/postgres
         local_path: /backups/production/postgres
         stale_after: 30h
@@ -118,7 +118,7 @@ sources:
           host: production.example.internal
           user: backup
           key_file: /run/secrets/backup_ssh_key
-          known_hosts: /etc/backup-manager/known_hosts
+          known_hosts: /etc/backupd/known_hosts
         remote_path: /backups/staging
         local_path: /backups/production/staging
         stale_after: 30h

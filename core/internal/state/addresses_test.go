@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/model"
 )
 
 // TestBackupSetAddress_RecordsReplacesAndTellsAbsenceApartFromEmpty is the

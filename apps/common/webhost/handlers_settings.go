@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // One route for every administrable setting, and one line about where

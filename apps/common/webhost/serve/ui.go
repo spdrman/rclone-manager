@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
-	"github.com/spdrman/rclone-manager/apps/common/webhost"
+	"github.com/spdrman/backupd/apps/common/auth/local"
+	"github.com/spdrman/backupd/apps/common/platform/profile"
+	"github.com/spdrman/backupd/apps/common/webhost"
 )
 
 // The UI half of the two-container split: the only process with a
@@ -48,7 +48,7 @@ import (
 type UIConfig struct {
 	// Upstream is the engine's own base URL as reachable from the UI
 	// host - e.g. over an internal Docker network
-	// (http://rclone-manager:8080, the compose service name resolved
+	// (http://backupd:8080, the compose service name resolved
 	// through Docker's embedded DNS), never a published host port.
 	Upstream *url.URL
 

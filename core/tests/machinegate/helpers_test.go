@@ -12,7 +12,7 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 
-	"github.com/spdrman/rclone-manager/core/tests/machines"
+	"github.com/spdrman/backupd/core/tests/machines"
 )
 
 // The raw backend the controls in this package are argued against.

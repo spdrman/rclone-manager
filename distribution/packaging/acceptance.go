@@ -150,7 +150,7 @@ func ReadAcceptanceProcedure(path, backupRoot string, subs map[string]string) ([
 // carefully rather than deleting.
 //
 // It used to be the instruction a fresh install failed on first. Every
-// adapter gave the engine `healthcheck: ["CMD", "/rbm",
+// adapter gave the engine `healthcheck: ["CMD", "/backupd",
 // "status"]` and gated the only container that publishes a port on it
 // with `depends_on: condition: service_healthy`. `status` opens the
 // service, `core/service.Open` loaded and validated config.yaml, and with

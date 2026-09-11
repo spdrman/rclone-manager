@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // H2.2 (#622): the local hard drive as a first-class storage destination,

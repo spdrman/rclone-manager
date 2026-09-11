@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // bkAttachMediumValues gives every record a full set of medium-supplied
@@ -36,7 +36,7 @@ func bkAttachMediumValues(records []state.Record) []state.Record {
 		out[i].Placements = []state.Placement{
 			{
 				Medium:            "offsite_s3",
-				Location:          "rclone-manager/production/pg/" + out[i].Artifact.Name,
+				Location:          "backupd/production/pg/" + out[i].Artifact.Name,
 				Size:              &size,
 				Hash:              "0000000000000000000000000000000000000000000000000000000000000000",
 				HashAlg:           "sha256",

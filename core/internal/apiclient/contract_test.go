@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/apicontract"
+	"github.com/spdrman/backupd/core/apicontract"
 )
 
 // This file asks the two questions the client's own behaviour cannot

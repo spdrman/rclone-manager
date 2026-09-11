@@ -46,10 +46,10 @@ type newAdapter struct {
 
 func newAdapters() []newAdapter {
 	return []newAdapter{
-		{id: "portainer", compose: "compose/backup-manager.yml", env: "compose/backup-manager.env", acceptance: "docs/acceptance/portainer-stack-deployment.md"},
+		{id: "portainer", compose: "compose/backupd.yml", env: "compose/backupd.env", acceptance: "docs/acceptance/portainer-stack-deployment.md"},
 		{id: "dockge", acceptance: "docs/acceptance/dockge-stack-import.md"},
-		{id: "casaos", compose: "compose/backup-manager.yml", acceptance: "docs/acceptance/casaos-app-store-install.md"},
-		{id: "zimaos", compose: "compose/backup-manager.yml", acceptance: "docs/acceptance/zimaos-app-store-install.md"},
+		{id: "casaos", compose: "compose/backupd.yml", acceptance: "docs/acceptance/casaos-app-store-install.md"},
+		{id: "zimaos", compose: "compose/backupd.yml", acceptance: "docs/acceptance/zimaos-app-store-install.md"},
 	}
 }
 
@@ -166,13 +166,13 @@ func mutateForEquivalence(a AdapterRuntime, property string) (AdapterRuntime, st
 
 	switch property {
 	case PropRoleSet:
-		out.Others = append(out.Others, Service{Name: "backup-manager-sidecar", Command: []string{"/rbm", "daemon"}})
+		out.Others = append(out.Others, Service{Name: "backupd-sidecar", Command: []string{"/backupd", "daemon"}})
 		return out, "added a third container", true
 	case PropCommand:
 		if out.WebUI == nil {
 			return out, "", false
 		}
-		out.WebUI.Command = append([]string{"/rbm-web", "serve"}, out.WebUI.Command[2:]...)
+		out.WebUI.Command = append([]string{"/backupd-web", "serve"}, out.WebUI.Command[2:]...)
 		return out, "made the Web UI run the engine command", true
 	case PropContainerMounts:
 		if out.Engine == nil || len(out.Engine.Mounts) == 0 {
@@ -190,7 +190,7 @@ func mutateForEquivalence(a AdapterRuntime, property string) (AdapterRuntime, st
 		if out.WebUI == nil {
 			return out, "", false
 		}
-		out.WebUI.HealthcheckTest = []string{"CMD", "/rbm", "status"}
+		out.WebUI.HealthcheckTest = []string{"CMD", "/backupd", "status"}
 		return out, "gave the Web UI the engine's health check, which needs a state database it does not have", true
 	case PropEngineEnvironment:
 		if out.Engine == nil {
@@ -431,13 +431,13 @@ func TestNoNewAdapterWiresAuthenticationOfItsOwn(t *testing.T) {
 func TestThePortainerTemplateIsAStackTemplateAndNotAPlugin(t *testing.T) {
 	const (
 		root      = "apps/portainer"
-		stackfile = "apps/portainer/compose/backup-manager.yml"
+		stackfile = "apps/portainer/compose/backupd.yml"
 	)
 	tpl, err := ReadPortainerTemplates(Path(filepath.Join(root, "templates.json")))
 	if err != nil {
 		t.Fatalf("read the App Template: %v", err)
 	}
-	env, err := ReadEnvFile(Path(filepath.Join(root, "compose", "backup-manager.env")))
+	env, err := ReadEnvFile(Path(filepath.Join(root, "compose", "backupd.env")))
 	if err != nil {
 		t.Fatalf("read the env file: %v", err)
 	}
@@ -483,26 +483,26 @@ func TestThePortainerTemplateIsAStackTemplateAndNotAPlugin(t *testing.T) {
 // that currently satisfies all of them, and a rule nobody has watched
 // fail is a comment.
 func TestThePortainerTemplateCheckFailsOnEveryWayItCanBeWrong(t *testing.T) {
-	const stackfile = "apps/portainer/compose/backup-manager.yml"
+	const stackfile = "apps/portainer/compose/backupd.yml"
 	good := PortainerTemplates{
 		Version: "3",
 		Templates: []PortainerTemplate{{
 			Type:        3,
-			Title:       "Backup Manager",
-			Name:        "backup-manager",
+			Title:       "Backupd",
+			Name:        "backupd",
 			Description: "d",
 			Logo:        "https://example.invalid/logo.svg",
 			Platform:    "linux",
 			Categories:  []string{"backup"},
 			Env: []PortainerEnv{
-				{Name: "STATE_DIR", Label: "state", Default: "/opt/backup-manager/state"},
+				{Name: "STATE_DIR", Label: "state", Default: "/opt/backupd/state"},
 			},
 		}},
 	}
 	good.Templates[0].Repository.URL = "https://example.invalid/repo"
 	good.Templates[0].Repository.Stackfile = stackfile
 	vars := []string{"STATE_DIR"}
-	env := map[string]string{"STATE_DIR": "/opt/backup-manager/state"}
+	env := map[string]string{"STATE_DIR": "/opt/backupd/state"}
 
 	if v := CheckPortainerTemplate("fixture", good, vars, env, stackfile); len(v) > 0 {
 		t.Fatalf("the clean fixture already fails, so no control below means anything:\n%s", format(v))
@@ -549,7 +549,7 @@ func TestThePortainerTemplateCheckFailsOnEveryWayItCanBeWrong(t *testing.T) {
 			RulePortainerTemplate, "the stack reads it nowhere"},
 		{"defaults a variable to something the env file does not",
 			mutate(func(t *PortainerTemplates) { t.Templates[0].Env[0].Default = "/somewhere/else" }),
-			RulePortainerTemplate, "compose/backup-manager.env declares"},
+			RulePortainerTemplate, "compose/backupd.env declares"},
 		{"never offers a variable the stack needs",
 			mutate(func(t *PortainerTemplates) { t.Templates[0].Env = nil }),
 			RulePortainerTemplate, "never offers it"},
@@ -854,7 +854,7 @@ func TestCasaOSAndZimaOSStoreMetadataDescribesTheStackBesideIt(t *testing.T) {
 
 	for _, id := range []string{"casaos", "zimaos"} {
 		t.Run(id, func(t *testing.T) {
-			path := filepath.Join(PlatformDir(id), "compose", "backup-manager.yml")
+			path := filepath.Join(PlatformDir(id), "compose", "backupd.yml")
 			md, err := ReadCasaOSMetadata(path)
 			if err != nil {
 				t.Fatalf("read x-casaos: %v", err)
@@ -867,7 +867,7 @@ func TestCasaOSAndZimaOSStoreMetadataDescribesTheStackBesideIt(t *testing.T) {
 			if len(drift) > 0 {
 				t.Fatalf("could not reduce this adapter to roles:\n%s", FormatDrift(drift))
 			}
-			if v := CheckCasaOSMetadata(id+"/compose/backup-manager.yml", md, rt, c); len(v) > 0 {
+			if v := CheckCasaOSMetadata(id+"/compose/backupd.yml", md, rt, c); len(v) > 0 {
 				t.Errorf("the store metadata does not describe the services beside it:\n%s", format(v))
 			}
 		})
@@ -879,7 +879,7 @@ func TestCasaOSAndZimaOSStoreMetadataDescribesTheStackBesideIt(t *testing.T) {
 // fixture, so every branch runs against the shape actually shipped.
 func TestTheStoreMetadataCheckFailsOnADeliberateMismatch(t *testing.T) {
 	c := MustLoad()
-	path := filepath.Join(PlatformDir("casaos"), "compose", "backup-manager.yml")
+	path := filepath.Join(PlatformDir("casaos"), "compose", "backupd.yml")
 	base, err := ReadCasaOSMetadata(path)
 	if err != nil {
 		t.Fatal(err)
@@ -990,7 +990,7 @@ func TestStoreMetadataStaysInTheDistributionAdapter(t *testing.T) {
 	// The control. A clean result over two large trees is exactly the
 	// shape that hides a scanner walking nothing.
 	fixture := t.TempDir()
-	write(t, filepath.Join(fixture, "ok.go"), "package p\n\nconst Name = \"backup-manager\"\n")
+	write(t, filepath.Join(fixture, "ok.go"), "package p\n\nconst Name = \"backupd\"\n")
 	if v, err := ScanForStoreMetadataLeak(fixture); err != nil || len(v) > 0 {
 		t.Fatalf("a clean fixture reported %v (err %v)", v, err)
 	}

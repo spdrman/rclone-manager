@@ -12,7 +12,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
+	"github.com/spdrman/backupd/apps/common/webhost/serve"
 )
 
 // Bundle resolution, tested mostly through its refusals.

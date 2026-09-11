@@ -1,5 +1,5 @@
 // This file is issue #211's catalog-recovery surface: the API expression
-// of `rbm catalog rebuild` and its --dry-run.
+// of `backupd catalog rebuild` and its --dry-run.
 //
 // The two routes return the same shape because they are the same code
 // path with one flag different (see core/service.ScanCatalog). A preview
@@ -10,7 +10,7 @@ package webhost
 import (
 	"net/http"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // catalogFailureResponse is one recovery manifest a pass could not use.

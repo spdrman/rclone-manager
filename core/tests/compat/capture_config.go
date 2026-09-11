@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // FR-35 clause 1: every config fixture under testdata/configs put through

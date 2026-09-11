@@ -84,15 +84,15 @@ func sha256Of(b []byte) string {
 func TestCoreBinaryHashParity_NeedsARealByteComparison(t *testing.T) {
 	p, dir := tempProvider(t, "fictional")
 	binary := []byte("not really a binary, but it has a SHA-256 like everything else")
-	write(t, filepath.Join(dir, "payload", "backup-manager-web"), string(binary))
+	write(t, filepath.Join(dir, "payload", "backupd-web"), string(binary))
 	p.spec.Metadata.BinaryArtifacts = map[string]string{
-		"/rbm-web": filepath.Join("payload", "backup-manager-web"),
+		"/backupd-web": filepath.Join("payload", "backupd-web"),
 	}
 
 	good := ReleaseManifest{
 		Commit: "0123456789abcdef",
 		Architectures: []ReleaseArchitecture{
-			{Architecture: "amd64", BinarySHA256: map[string]string{"rbm-web": sha256Of(binary)}},
+			{Architecture: "amd64", BinarySHA256: map[string]string{"backupd-web": sha256Of(binary)}},
 		},
 	}
 
@@ -105,7 +105,7 @@ func TestCoreBinaryHashParity_NeedsARealByteComparison(t *testing.T) {
 	corrupted := ReleaseManifest{
 		Commit: "0123456789abcdef",
 		Architectures: []ReleaseArchitecture{
-			{Architecture: "amd64", BinarySHA256: map[string]string{"rbm-web": sha256Of([]byte("a different build"))}},
+			{Architecture: "amd64", BinarySHA256: map[string]string{"backupd-web": sha256Of([]byte("a different build"))}},
 		},
 	}
 	ok, detail := coreBinaryHashParity(p, corrupted)
@@ -141,8 +141,8 @@ func TestCoreBinaryHashParity_RefusesEveryProviderThatShipsNoBinary(t *testing.T
 // directions.
 func TestArchitectureParity_IsPerProvider(t *testing.T) {
 	manifest := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "x", "rbm-web": "x"}},
-		{Architecture: "arm64", BinarySHA256: map[string]string{"rbm": "x", "rbm-web": "x"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"backupd": "x", "backupd-web": "x"}},
+		{Architecture: "arm64", BinarySHA256: map[string]string{"backupd": "x", "backupd-web": "x"}},
 	}}
 
 	p, dir := tempProvider(t, "fictional")
@@ -233,19 +233,19 @@ func TestReleaseManifestIntegrity_SeparatesGitFailingFromGitSayingNo(t *testing.
 // hash-completeness half.
 func TestReleaseManifest_RecordsEveryBinary(t *testing.T) {
 	full := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "a", "rbm-web": "b"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"backupd": "a", "backupd-web": "b"}},
 	}}
-	if ok, detail := full.RecordsEveryBinary([]string{"/rbm", "/rbm-web"}); !ok {
+	if ok, detail := full.RecordsEveryBinary([]string{"/backupd", "/backupd-web"}); !ok {
 		t.Fatalf("a complete manifest must be accepted, got: %s", detail)
 	}
 	partial := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "a"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"backupd": "a"}},
 	}}
-	if ok, _ := partial.RecordsEveryBinary([]string{"/rbm", "/rbm-web"}); ok {
+	if ok, _ := partial.RecordsEveryBinary([]string{"/backupd", "/backupd-web"}); ok {
 		t.Errorf("a manifest missing one binary's hash must be refused")
 	}
 	empty := ReleaseManifest{}
-	if ok, _ := empty.RecordsEveryBinary([]string{"/rbm"}); ok {
+	if ok, _ := empty.RecordsEveryBinary([]string{"/backupd"}); ok {
 		t.Errorf("a manifest with no architectures at all must be refused")
 	}
 }
@@ -266,16 +266,16 @@ func TestReleaseManifest_RecordsEveryBinary(t *testing.T) {
 // side that matters: on names the map must NOT recognise.
 func TestTheManifestKeyCannotPairAHashWithTheWrongBinary(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
-		{"/rbm", "rbm"},
-		{"rbm", "rbm"},
-		{"/rbm-web", "rbm-web"},
-		{"rbm-web", "rbm-web"},
+		{"/backupd", "backupd"},
+		{"backupd", "backupd"},
+		{"/backupd-web", "backupd-web"},
+		{"backupd-web", "backupd-web"},
 
 		// Anything else keeps its own name and therefore fails the lookup,
 		// which is the whole point: an invented binary must be reported
 		// missing rather than borrowing one of the two above.
 		{"/rclone", "rclone"},
-		{"/rbm-webhook", "rbm-webhook"},
+		{"/backupd-webhook", "backupd-webhook"},
 		{"/rbmx", "rbmx"},
 	} {
 		if got := manifestBinaryKey(tc.in); got != tc.want {
@@ -287,9 +287,9 @@ func TestTheManifestKeyCannotPairAHashWithTheWrongBinary(t *testing.T) {
 	// binary the manifest does not record has to come back refused, not
 	// translated onto one it does.
 	m := ReleaseManifest{Architectures: []ReleaseArchitecture{
-		{Architecture: "amd64", BinarySHA256: map[string]string{"rbm": "a", "rbm-web": "b"}},
+		{Architecture: "amd64", BinarySHA256: map[string]string{"backupd": "a", "backupd-web": "b"}},
 	}}
-	if ok, detail := m.RecordsEveryBinary([]string{"/rbm", "/rbm-web", "/rbm-sidecar"}); ok {
+	if ok, detail := m.RecordsEveryBinary([]string{"/backupd", "/backupd-web", "/backupd-sidecar"}); ok {
 		t.Errorf("a binary with no hash of its own was accepted: %s", detail)
 	}
 }
@@ -416,8 +416,8 @@ func TestBridgeFlagsOnlyCountWhereABundleLoadsThem(t *testing.T) {
 	// a working-looking UI, and neither the store artifacts nor the
 	// bridge flag would notice.
 	wrong := SelectUIBundle(&Service{
-		Name:        "backup-manager-ui",
-		Command:     []string{"/rbm-web", "serve-ui", "--profile=truenas"},
+		Name:        "backupd-ui",
+		Command:     []string{"/backupd-web", "serve-ui", "--profile=truenas"},
 		Environment: map[string]string{"UI_ROOT": "/ui/bundles"},
 	}, UIBundleSelection{Mechanism: UIBundleNone}, "unraid")
 	if wrong.Provider != "truenas" {
@@ -625,19 +625,19 @@ func TestRoleMountsRefusesAMountWithNoKnownRole(t *testing.T) {
 	// containment alike.
 	p, dir := tempProvider(t, "fictional")
 	write(t, filepath.Join(dir, "compose.yaml"), `services:
-  backup-manager:
+  backupd:
     image: `+canonical.Image.Reference+`
-    command: ["/rbm-web", "serve"]
+    command: ["/backupd-web", "serve"]
     volumes:
       - /srv/app/state:/data/state
       - /srv/app/backups:/data/backups
-      - /srv/app/etc:/etc/backup-manager
+      - /srv/app/etc:/etc/backupd
 `)
 	p.spec.Metadata.Kind = "compose"
 	p.spec.Metadata.Compose = "compose.yaml"
 
 	if mounts, detail := roleMounts(p); mounts != nil {
-		t.Errorf("a mount at /etc/backup-manager has no canonical role and must be refused, got %v", mounts)
+		t.Errorf("a mount at /etc/backupd has no canonical role and must be refused, got %v", mounts)
 	} else if !strings.Contains(detail, "not a container path the canonical image knows about") {
 		t.Errorf("the refusal should say what it could not place, got: %s", detail)
 	}
@@ -668,7 +668,7 @@ func unresolvedHostPaths(t *testing.T, compose string, env map[string]string) ma
 }
 
 func TestProxmoxProfileRefusesToStartWithAnUnsetHostPath(t *testing.T) {
-	path := Path(filepath.Join("apps", "proxmox", "compose", "backup-manager.yml"))
+	path := Path(filepath.Join("apps", "proxmox", "compose", "backupd.yml"))
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -703,12 +703,12 @@ func TestProxmoxProfileRefusesToStartWithAnUnsetHostPath(t *testing.T) {
 
 	// And the checked-in env file supplies every one of them, so a
 	// correct deployment never sees a refusal.
-	env, err := ReadEnvFile(Path(filepath.Join("apps", "proxmox", "compose", "backup-manager.env")))
+	env, err := ReadEnvFile(Path(filepath.Join("apps", "proxmox", "compose", "backupd.env")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if left := unresolvedHostPaths(t, compose, env); len(left) > 0 {
-		t.Errorf("backup-manager.env leaves %v unresolved", left)
+		t.Errorf("backupd.env leaves %v unresolved", left)
 	}
 }
 
@@ -829,7 +829,7 @@ func TestProxmoxProcedureIsSafeToFollowLiterally(t *testing.T) {
 		},
 		{
 			name: "the chown moves back ahead of the key",
-			text: "sudo chown -R 1000:100 /mnt/backup-manager\n" + text,
+			text: "sudo chown -R 1000:100 /mnt/backupd\n" + text,
 			want: "recursive chown runs before the SSH key exists",
 		},
 	}

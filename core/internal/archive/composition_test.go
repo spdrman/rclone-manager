@@ -189,7 +189,7 @@ func deleteSource(ctx context.Context, s store, medium, key string) error {
 import (
 	"context"
 
-	"github.com/spdrman/rclone-manager/core/internal/archive"
+	"github.com/spdrman/backupd/core/internal/archive"
 )
 
 type store interface {
@@ -236,7 +236,7 @@ func (e *Engine) reclaimSourceEarly(ctx context.Context, medium, key string) err
 import (
 	"context"
 
-	"github.com/spdrman/rclone-manager/core/internal/archive"
+	"github.com/spdrman/backupd/core/internal/archive"
 )
 
 type Engine struct{ Store interface {
@@ -266,7 +266,7 @@ func (e *Engine) deleteSource(ctx context.Context, src archive.Copy, all []archi
 import (
 	"context"
 
-	arc "github.com/spdrman/rclone-manager/core/internal/archive"
+	arc "github.com/spdrman/backupd/core/internal/archive"
 )
 
 type store interface {
@@ -303,7 +303,7 @@ const compliantChain = `package placement
 import (
 	"context"
 
-	"github.com/spdrman/rclone-manager/core/internal/archive"
+	"github.com/spdrman/backupd/core/internal/archive"
 )
 
 type Engine struct{ Store interface {
@@ -358,7 +358,7 @@ var deleteExemptions = []deleteExemption{
 		Func: "run.deleted",
 		Reason: "the medium preflight (#443), and it is outside the rule because it is outside the SUBJECT of the rule: there is no artifact " +
 			"anywhere in this delete. The only key it can pass to DeleteObject is one it generated itself from crypto/rand, under a reserved " +
-			".rclone-manager-preflight/ segment that transport.MediumKey cannot spell for any configured artifact, and the object at it is a " +
+			".backupd-preflight/ segment that transport.MediumKey cannot spell for any configured artifact, and the object at it is a " +
 			"fixed 120-byte probe this same call wrote seconds earlier. CheckSourceDelete asks whether another copy of the BACKUP is readable, " +
 			"and there is no backup: refusing to delete the probe would leave litter in an operator's bucket that nothing in this product ever " +
 			"cleans up. mediumcheck's TestProbeKey_LivesUnderASegmentNoArtifactCanReach pins the containment, and its happy path asserts exactly " +

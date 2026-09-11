@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file is the ladder's own suite, and most of it is one promise
@@ -99,7 +99,7 @@ func mediumPlacement(content []byte) state.Placement {
 	size := int64(len(content))
 	return state.Placement{
 		Medium:   "offsite_s3",
-		Location: "rclone-manager/production/pg/a.dump",
+		Location: "backupd/production/pg/a.dump",
 		Size:     &size,
 		Hash:     sha256Of(content),
 		HashAlg:  string(transport.SHA256),

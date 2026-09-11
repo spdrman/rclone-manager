@@ -3,7 +3,7 @@ package webhost
 import (
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The move outcome on an operation read: present when the summary carries

@@ -3,10 +3,10 @@ package app
 import (
 	"context"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/reconcile"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/reconcile"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/retry"
 )
 
 // Driving FR-17 reconciliation, which is all this package is allowed to do

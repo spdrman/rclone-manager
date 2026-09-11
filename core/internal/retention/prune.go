@@ -78,7 +78,7 @@
 //
 // PruneDecide computes, and only computes, the KEEP/DELETE/REFUSE verdict
 // for every artifact FR-18/FR-19 have an opinion about in one backup set.
-// It performs no mutation: `rbm retention --dry-run` (owned by
+// It performs no mutation: `backupd retention --dry-run` (owned by
 // issue #25/#26, elsewhere) calls this and only this to render its
 // explanation, which is FR-20's other mandatory half, "a retention engine
 // you cannot interrogate is one you cannot trust" per the EPIC.
@@ -120,10 +120,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/artifactstore"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // prunePartialSuffix mirrors lifecycle/transfer.go's own unexported
@@ -166,7 +166,7 @@ const (
 
 // PruneVerdict is FR-20's fully explained answer for one artifact: what
 // happened (or would happen) to its local file, and why, in language an
-// operator reading `rbm retention --dry-run` output can act
+// operator reading `backupd retention --dry-run` output can act
 // on without reading this package's source.
 type PruneVerdict struct {
 	Artifact model.ArtifactID
@@ -786,7 +786,7 @@ func pruneKeepReason(tiers []GFSTierSelection) string {
 // PruneDecide computes FR-20's KEEP/DELETE/REFUSE verdict for every
 // artifact FR-18's GFSDecide and FR-19's LastKnownGoodDecide have an
 // opinion about in one backup set. It performs no mutation whatsoever: it
-// is exactly, and only, the function `rbm retention --dry-run`
+// is exactly, and only, the function `backupd retention --dry-run`
 // (issue #25/#26) calls to render its mandatory explanation, and it is
 // also the first step PruneApply takes, so a real run's decisions can
 // never be computed by a second, potentially divergent, code path. See

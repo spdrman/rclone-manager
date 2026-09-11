@@ -18,7 +18,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // --- RetainRemote ---

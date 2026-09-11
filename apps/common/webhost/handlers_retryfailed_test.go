@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // Issue #419's route out of FAILED. The quarantine retry beside it has

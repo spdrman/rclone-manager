@@ -269,7 +269,7 @@ func TestRunDockerBuildWatched_ARealBuildSucceeds(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM alpine:3.20\nRUN echo hello\n"), 0o644); err != nil {
 		t.Fatalf("writing Dockerfile: %v", err)
 	}
-	tag := "rclone-manager-test-dockerbuild-watched-ok:" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	tag := "backupd-test-dockerbuild-watched-ok:" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", tag).Run() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -375,7 +375,7 @@ func TestRunDockerBuildWatched_CapturesEveryLineARealBuildEmits(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
 		t.Fatalf("writing Dockerfile: %v", err)
 	}
-	tag := "rclone-manager-test-dockerbuild-capture:" + nonce
+	tag := "backupd-test-dockerbuild-capture:" + nonce
 	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", tag).Run() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -409,7 +409,7 @@ func TestRunDockerBuildWatched_ARealHangIsCaught(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
 		t.Fatalf("writing Dockerfile: %v", err)
 	}
-	tag := "rclone-manager-test-dockerbuild-watched-hang:" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	tag := "backupd-test-dockerbuild-watched-hang:" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", tag).Run() })
 
 	// Deliberately small bounds, so a genuine hang is caught in single-digit

@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // FR-30's prune half (issue #239): deleting an expired artifact whose
@@ -31,7 +31,7 @@ import (
 // destroys is a copy of a backup, and a suite that establishes the happy
 // path first grows its refusals as afterthoughts around it.
 
-const reclaimKey = "rclone-manager/production/postgres-primary/expired.dump"
+const reclaimKey = "backupd/production/postgres-primary/expired.dump"
 
 var reclaimNow = time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // GET /api/v1/activity/live on the wire (issue #573).

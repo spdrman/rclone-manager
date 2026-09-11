@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/model"
 )
 
 func TestLoadParsesFullExample(t *testing.T) {
@@ -39,7 +39,7 @@ func TestLoadParsesFullExample(t *testing.T) {
 	if got, want := cfg.PollInterval.Duration(), 15*time.Minute; got != want {
 		t.Fatalf("PollInterval = %s, want %s", got, want)
 	}
-	if got, want := cfg.State.Database, "/var/lib/backup-manager/state.db"; got != want {
+	if got, want := cfg.State.Database, "/var/lib/backupd/state.db"; got != want {
 		t.Fatalf("State.Database = %q, want %q", got, want)
 	}
 	if len(cfg.Sources) != 1 {
@@ -221,7 +221,7 @@ func TestLoadParsesKeyCommand(t *testing.T) {
 		t.Fatalf("LoadAndValidate: %v", err)
 	}
 	r := cfg.Sources[0].BackupSets[0].Remote
-	want := []string{"/usr/local/bin/op", "read", "op://infra/backup-manager/private-key"}
+	want := []string{"/usr/local/bin/op", "read", "op://infra/backupd/private-key"}
 	if len(r.Key.Command) != len(want) {
 		t.Fatalf("Key.Command = %#v, want %#v", r.Key.Command, want)
 	}

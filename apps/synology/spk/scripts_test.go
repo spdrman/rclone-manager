@@ -192,7 +192,7 @@ done
 func TestPidAlive_ChecksIdentityNotExistence(t *testing.T) {
 	dir := stagedScripts(t)
 	dest := t.TempDir()
-	ours := filepath.Join(dest, "bin", "rbm-web")
+	ours := filepath.Join(dest, "bin", "backupd-web")
 	daemonFixture(t, ours)
 	decoy := filepath.Join(dest, "elsewhere", "somebody-elses-daemon")
 	daemonFixture(t, decoy)
@@ -257,7 +257,7 @@ kill -9 "$fixture" 2>/dev/null || true
 func TestStopDaemon_DoesNotSignalSomebodyElsesProcess(t *testing.T) {
 	dir := stagedScripts(t)
 	dest := t.TempDir()
-	ours := filepath.Join(dest, "bin", "rbm-web")
+	ours := filepath.Join(dest, "bin", "backupd-web")
 	oursSignalled := daemonFixture(t, ours)
 	decoy := filepath.Join(dest, "elsewhere", "somebody-elses-daemon")
 	decoySignalled := daemonFixture(t, decoy)

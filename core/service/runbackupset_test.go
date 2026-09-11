@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/backupd/core/internal/app"
 )
 
 // submitFixtureRun is the submission this file makes over and over, with

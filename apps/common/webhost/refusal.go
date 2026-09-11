@@ -19,7 +19,7 @@ import (
 //
 // That is not a logging-level problem, it is a structural one, and it made
 // the frontend's own words untrue. api/failure.ts answers an INTERNAL code
-// with "Backup Manager reported an internal error rather than a reason it
+// with "Backupd reported an internal error rather than a reason it
 // could name. Its own log holds the detail, under this correlation id."
 // The log held nothing, under any id, for any of these routes.
 //

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/service"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/service"
+	"github.com/spdrman/backupd/core/tests/machines"
 )
 
 // G2.2 (#594): declaring a storage destination and proving it BEFORE it is

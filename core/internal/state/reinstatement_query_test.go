@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/model"
 )
 
 // ArtifactsWithAnyTransition is the set-wide half of the question

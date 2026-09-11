@@ -30,8 +30,8 @@ func TestManifestObjectKeyMirrorsTheArtifactKey(t *testing.T) {
 	}{
 		{
 			name:        "with a prefix",
-			artifactKey: "rclone-manager/production/postgres-primary/2026-09-01.dump",
-			want:        "rclone-manager/production/postgres-primary/.manifest/2026-09-01.dump.json",
+			artifactKey: "backupd/production/postgres-primary/2026-09-01.dump",
+			want:        "backupd/production/postgres-primary/.manifest/2026-09-01.dump.json",
 		},
 		{
 			name:        "a multi-segment prefix",
@@ -107,7 +107,7 @@ func TestEncodeDecodeManifestRoundTrips(t *testing.T) {
 	m.Placements = []ManifestPlacement{
 		{Medium: "local", Location: "/backups/pg/backup-2026-08-20.dump", SizeBytes: &size,
 			Checksum: "deadbeef", ChecksumAlgorithm: "sha256", VerificationClass: "content", Status: "ACTIVE"},
-		{Medium: "offsite_s3", Location: "rclone-manager/production/postgres-primary/backup-2026-08-20.dump",
+		{Medium: "offsite_s3", Location: "backupd/production/postgres-primary/backup-2026-08-20.dump",
 			SizeBytes: &size, Checksum: "deadbeef", ChecksumAlgorithm: "sha256",
 			VerificationClass: "existence", Status: "ACTIVE"},
 	}

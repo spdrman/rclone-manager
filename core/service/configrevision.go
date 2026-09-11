@@ -1,7 +1,7 @@
 package service
 
 import (
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // Issue #544, Phase 2 of #536: letting a process that is NOT this

@@ -20,7 +20,7 @@
 // asked about the wrong hop.
 //
 // So this suite composes NewUI in front of NewEngine, exactly as
-// apps/generic/cmd/backup-manager-web does, and attacks the composition.
+// apps/generic/cmd/backupd-web does, and attacks the composition.
 //
 // # Every attack proves it arrived before it asserts it was stopped
 //
@@ -52,13 +52,13 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/common/csrf"
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
-	"github.com/spdrman/rclone-manager/apps/common/webhost"
-	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/apps/common/auth/local"
+	"github.com/spdrman/backupd/apps/common/csrf"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/apps/common/platform/profile"
+	"github.com/spdrman/backupd/apps/common/webhost"
+	"github.com/spdrman/backupd/apps/common/webhost/serve"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // loopbackCIDRs is the trusted-peer range that CONTAINS whatever httptest

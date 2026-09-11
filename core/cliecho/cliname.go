@@ -16,15 +16,15 @@ package cliecho
 // survivable the moment it does. Renaming the command then means reading
 // fifty string literals and deciding, one at a time, whether each is the
 // CLI or something that merely looks like it. Three shapes in this tree
-// spell "backup-manager" and are NOT this constant, and every one of them
+// spell "backupd" and are NOT this constant, and every one of them
 // would be swept up by a careless search-and-replace:
 //
-//   - filesystem paths (/etc/backup-manager/config, /var/lib/backup-manager)
+//   - filesystem paths (/etc/backupd/config, /var/lib/backupd)
 //     which packaging mounts and an operator's existing deployment already
 //     has on disk;
 //   - the project, the image and the compose service (ghcr.io/spdrman/
-//     backup-manager, the "backup-manager" service in container/
-//     compose.yaml, "Backup Manager" as the product's name);
+//     backupd, the "backupd" service in container/
+//     compose.yaml, "Backupd" as the product's name);
 //   - wire identity that a log or an audit trail may already be matched
 //     on, which is the User-Agent core/internal/apiclient sends.
 //
@@ -61,8 +61,8 @@ package cliecho
 // never enters a decision.
 //
 // That is a property worth keeping now that the old name is gone rather
-// than aliased. `backup-manager` is not in the image at all:
-// container/Dockerfile copies exactly /rbm and /rbm-web into the runtime
+// than aliased. `backupd` is not in the image at all:
+// container/Dockerfile copies exactly /backupd and /backupd-web into the runtime
 // stage and creates no link beside either, so there is no second spelling
 // for this constant to have to agree with. Taking the printed name from
 // argv[0] instead would still be wrong, and for a reason the rename does
@@ -71,7 +71,7 @@ package cliecho
 // build print a command nobody can type.
 //
 // What can be tested is the half that lives in this module, and
-// TestNothingDispatchesOnArgv0 in core/cmd/backup-manager does: it reads
+// TestNothingDispatchesOnArgv0 in core/cmd/backupd does: it reads
 // every non-test file under core/ and requires os.Args to appear in
 // exactly one shape, os.Args[1:], with os.Executable unused. So the name
 // this package prints is the name this package declares, whatever the
@@ -82,19 +82,19 @@ const (
 	// "usage:" line, and every sentence that says which command to run
 	// next.
 	//
-	// It was `backup-manager` until 0.3.3, and 0.3.3 retired that name
+	// It was `backupd` until 0.3.3, and 0.3.3 retired that name
 	// rather than aliasing it: the image ships no symlink under the old
 	// spelling, so anything already automated against it has to move
 	// across. Printing two names is how a reference stops being one,
 	// and shipping two is how a rename never finishes.
-	Binary = "rbm"
+	Binary = "backupd"
 
 	// WebBinary is the other command in the image, the one that serves the
 	// Web UI. It is derived rather than spelled so that the two names
 	// cannot drift apart, which is the whole reason this file exists.
 	//
-	// The package directory is core/cmd/backup-manager and the web one is
-	// apps/generic/cmd/backup-manager-web. A Go package path is not
+	// The package directory is core/cmd/backupd and the web one is
+	// apps/generic/cmd/backupd-web. A Go package path is not
 	// operator-visible, so neither follows this constant.
 	WebBinary = Binary + "-web"
 )

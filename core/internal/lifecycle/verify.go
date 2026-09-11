@@ -131,11 +131,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/retry"
 )
 
 // maxValidatorOutput bounds how much of an application validator's combined
@@ -774,7 +774,7 @@ func runValidator(ctx context.Context, cmd config.Command, localPath string) (pa
 		// own timeout fired while the outer context was still fine. It did
 		// not answer in time. Fail closed rather than treat "we don't
 		// know" as a pass.
-		return false, detail + fmt.Sprintf("\n(rclone-manager: validator killed after exceeding its %s timeout)", timeout), nil
+		return false, detail + fmt.Sprintf("\n(backupd: validator killed after exceeding its %s timeout)", timeout), nil
 	default:
 		var exitErr *exec.ExitError
 		if errors.As(runErr, &exitErr) {

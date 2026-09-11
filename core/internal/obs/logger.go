@@ -97,7 +97,7 @@ type Logger struct {
 // package has no opinion on either. A nil w is treated as io.Discard
 // rather than panicking, matching this type's general policy of failing
 // safe (silently) rather than loud when logging infrastructure itself is
-// misconfigured: a backup manager should not go down because its own
+// misconfigured: a backupd should not go down because its own
 // logger was constructed oddly.
 func New(w io.Writer, minLevel Level) *Logger {
 	if w == nil {

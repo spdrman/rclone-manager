@@ -8,10 +8,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/recovery"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/recovery"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file implements FR-14, the durable NAS commit. Steps 1 and 2 of
@@ -382,7 +382,7 @@ type commitMeasurement struct {
 	// operator reads, or empty when the record and the file agreed.
 	//
 	// It is carried rather than only logged because the journal
-	// transition is where an operator meets it (`rbm artifacts` prints
+	// transition is where an operator meets it (`backupd artifacts` prints
 	// the recorded detail), and a transport telling the manager something
 	// false about a copy it just made is a fault worth reporting, not a
 	// discrepancy to paper over.

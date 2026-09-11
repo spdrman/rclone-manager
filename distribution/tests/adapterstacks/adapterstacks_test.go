@@ -5,7 +5,7 @@
 //
 // Every adapter gates its web UI on `depends_on: <engine>: condition:
 // service_healthy`, and every adapter derived the engine's health check
-// from canonical.json, which said `rbm status`. That is FR-24's
+// from canonical.json, which said `backupd status`. That is FR-24's
 // backup-freshness verdict, and it exits non-zero on a fresh install by
 // design, because a fresh install has backed nothing up. So on every
 // adapter the one container an operator installed the app to reach never
@@ -67,7 +67,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/distribution/compose"
+	"github.com/spdrman/backupd/distribution/compose"
 )
 
 // ---------------------------------------------------------------------
@@ -113,7 +113,7 @@ func requireDocker(t *testing.T) {
 // same time takes the name over, and this run then quietly tests that
 // checkout's image instead of its own. The tag carries the pid and the
 // process start time so two runs on one machine cannot collide either.
-var imageReference = "backup-manager:adapterstacks-" +
+var imageReference = "backupd:adapterstacks-" +
 	strconv.Itoa(os.Getpid()) + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 
 var build struct {
@@ -137,7 +137,7 @@ func buildImage(t *testing.T) string {
 		cmd := exec.Command("docker", "build",
 			"-f", filepath.Join(root, "container", "Dockerfile"),
 			"-t", imageReference,
-			"--label", "com.rclone-manager.test=adapterstacks",
+			"--label", "com.backupd.test=adapterstacks",
 			"--load",
 			root,
 		)
@@ -189,7 +189,7 @@ func TestMain(m *testing.M) {
 // the configuration mount is a directory at all (issue #196), and an
 // empty one is the only honest shape for an install nobody has
 // configured. The engine serves the first-run setup flow from it, and
-// `rbm status` exits non-zero in it, which every test below
+// `backupd status` exits non-zero in it, which every test below
 // reads back rather than assumes.
 func freshInstall(t *testing.T) string {
 	t.Helper()
@@ -229,9 +229,9 @@ func freshInstallHostPaths(t *testing.T, dir string) map[string]string {
 	return map[string]string{
 		"/data/state":                     filepath.Join(dir, "state"),
 		"/data/backups":                   filepath.Join(dir, "backups"),
-		"/etc/backup-manager/config":      filepath.Join(dir, "config"),
-		"/etc/backup-manager/id_ed25519":  keyFile,
-		"/etc/backup-manager/known_hosts": knownHosts,
+		"/etc/backupd/config":      filepath.Join(dir, "config"),
+		"/etc/backupd/id_ed25519":  keyFile,
+		"/etc/backupd/known_hosts": knownHosts,
 	}
 }
 
@@ -537,20 +537,20 @@ func containerState(t *testing.T, id string) string {
 	return inspect(t, id).State.Status
 }
 
-// statusExitCode runs `rbm status` inside a running container.
+// statusExitCode runs `backupd status` inside a running container.
 //
 // This is the control the whole file turns on: without it a green run
 // proves only that some stack came up, and a fixture that had quietly
 // become healthy would pass while saying nothing at all about the defect.
 func statusExitCode(t *testing.T, id string) (int, string) {
 	t.Helper()
-	out, err := exec.Command("docker", "exec", id, "/rbm", "status").CombinedOutput()
+	out, err := exec.Command("docker", "exec", id, "/backupd", "status").CombinedOutput()
 	if err == nil {
 		return 0, string(out)
 	}
 	exit, ok := err.(*exec.ExitError)
 	if !ok {
-		t.Fatalf("docker exec %s /rbm status: %v\n%s", id, err, out)
+		t.Fatalf("docker exec %s /backupd status: %v\n%s", id, err, out)
 	}
 	return exit.ExitCode(), string(out)
 }
@@ -594,8 +594,8 @@ func getWithTransportRetry(t *testing.T, url string, timeout time.Duration) *htt
 
 // serviceRunning names a rewritten definition's service by the COMMAND it
 // runs, never by what it is called: the adapters call them
-// backup-manager/backup-manager-ui and the canonical definition calls them
-// rclone-manager/web-ui, so a lookup keyed on the name would stop finding
+// backupd/backupd-ui and the canonical definition calls them
+// backupd/web-ui, so a lookup keyed on the name would stop finding
 // them the moment one was renamed.
 func serviceRunning(t *testing.T, file, subcommand string) string {
 	t.Helper()
@@ -678,7 +678,7 @@ func TestEveryDerivedAdapterBringsUpTheWebUIOnAFreshInstall(t *testing.T) {
 			// happened to be healthy.
 			code, statusOut := statusExitCode(t, engineID)
 			if code == 0 {
-				t.Fatalf("%s: `rbm status` exited 0 inside this fixture, so it is not the fresh install this test claims to run:\n%s", rel, statusOut)
+				t.Fatalf("%s: `backupd status` exited 0 inside this fixture, so it is not the fresh install this test claims to run:\n%s", rel, statusOut)
 			}
 
 			uiID := project.containerID(t, uiName)

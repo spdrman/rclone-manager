@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/rclone-manager/apps/common/csrf"
+	"github.com/spdrman/backupd/apps/common/csrf"
 )
 
 // gate_redteam_test.go is issue #87 (B5.1)'s attack on the destructive

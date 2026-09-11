@@ -198,7 +198,7 @@ func TestWhatThisGuardMustNotReport(t *testing.T) {
 	}{
 		{
 			"the placeholder pin this repository's own tests use",
-			"core/cmd/backup-manager/create_test.go",
+			"core/cmd/backupd/create_test.go",
 			"package main\n\nconst aKnownHostsLine = \"[source.example.internal]:2222 " + madeUpHostKey + "\"\n",
 		},
 		{
@@ -214,7 +214,7 @@ func TestWhatThisGuardMustNotReport(t *testing.T) {
 		{
 			"an image reference, which is a name and a version rather than a host and a port",
 			"scripts/install/install_docker_host.py",
-			"# ssh key path only\nIMAGE = \"ghcr.io/spdrman/backup-manager:0.3.0\"\n",
+			"# ssh key path only\nIMAGE = \"ghcr.io/spdrman/backupd:0.3.0\"\n",
 		},
 		{
 			"a generated throwaway keypair a test needs in order to parse one",
@@ -244,7 +244,7 @@ func TestWhatThisGuardMustNotReport(t *testing.T) {
 		{
 			"a key PATH, which is not key material and is exactly what this product asks operators to supply",
 			"scripts/install/install_docker_host.py",
-			"# The SFTP client private key, never read and never printed.\nDEFAULT_KEY = \"/volume1/backup-manager/secrets/id_ed25519\"\n",
+			"# The SFTP client private key, never read and never printed.\nDEFAULT_KEY = \"/volume1/backupd/secrets/id_ed25519\"\n",
 		},
 	}
 

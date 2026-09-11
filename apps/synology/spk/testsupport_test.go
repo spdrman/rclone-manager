@@ -85,8 +85,8 @@ func stagedUIBundle(t *testing.T, platform string) string {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{
-		UIBundleMarkerName: `{"schema":"rclone-manager/ui-bundle/1","platform":"` + platform + `"}`,
-		"index.html":       "<!doctype html><title>Backup Manager</title><script src=/assets/app.js></script>",
+		UIBundleMarkerName: `{"schema":"backupd/ui-bundle/1","platform":"` + platform + `"}`,
+		"index.html":       "<!doctype html><title>Backupd</title><script src=/assets/app.js></script>",
 		"assets/app.js":    "// " + platform + " bridge\n",
 	}
 	for name, body := range files {

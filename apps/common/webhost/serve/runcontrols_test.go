@@ -9,7 +9,7 @@
 // composition main.go actually builds.
 //
 // The first test is the deployment's own answer, with no Gate supplied at
-// all, exactly as apps/generic/cmd/backup-manager-web/main.go builds it.
+// all, exactly as apps/generic/cmd/backupd-web/main.go builds it.
 // It is allowed to assert a refusal: a refusal is a legitimate outcome to
 // record, and recording it is the check that would have caught this two
 // releases ago. What it is not allowed to do is assert a bare 403, which
@@ -39,10 +39,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/common/webhost"
-	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/apps/common/auth/local"
+	"github.com/spdrman/backupd/apps/common/webhost"
+	"github.com/spdrman/backupd/apps/common/webhost/serve"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // openGate is a DestructiveGate that passes, supplied by this test and

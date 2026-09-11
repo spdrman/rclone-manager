@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/rclone-manager/core/internal/discovery"
+	"github.com/spdrman/backupd/core/internal/discovery"
 )
 
 // This file is issue #361's answer to "did this cycle actually do
@@ -67,7 +67,7 @@ func (p CycleProgress) NothingGotThrough() bool {
 // CycleVerdict is everything the decision "did this backup set's share of
 // this cycle fail" is made of. `run` and `fetch` both build one of these
 // from their own result type and hand it to the same decision function
-// (cycleFailed, core/cmd/backup-manager/setup.go), which is what stops
+// (cycleFailed, core/cmd/backupd/setup.go), which is what stops
 // the two commands drifting into two definitions of a failed cycle that
 // merely happen to agree today (issue #283, and issue #361 where they
 // turned out not to agree at all).

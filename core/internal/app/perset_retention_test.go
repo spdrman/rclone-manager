@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // Issue #333's fourth acceptance criterion, at the app layer: a preview
