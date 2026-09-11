@@ -132,6 +132,12 @@ get away from.
                     deleted with the stack is worse than no evidence.
   --image REF       skip the build and use an already-built product image.
   --keep-on-failure leave a failed stack up for reading.
+  --front-proxy-tls put an ordinary TLS + HTTP/2 reverse proxy in front of
+                    serve-ui, so the browser reaches the stack the way a
+                    real NAS's front door does (h2 over TLS) rather than
+                    the plain HTTP/1.1 this rig otherwise uses. The
+                    reproduction for rclone-manager#730. RM_SEED_CYCLES=N
+                    additionally runs N backup cycles to enlarge the feed.
 
 The exit status is the client container's, not the teardown's. A run that
 tore down cleanly after a red suite is a red run.
