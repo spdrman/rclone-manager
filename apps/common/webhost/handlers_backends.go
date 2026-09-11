@@ -93,12 +93,19 @@ type backendProbeResponse struct {
 // standing constraint forbids naming an implementation on /api/v1, and
 // `role` is the product answer to what a backend is.
 type backendResponse struct {
-	ID      string                 `json:"id"`
-	Label   string                 `json:"label"`
-	Summary string                 `json:"summary"`
-	Role    string                 `json:"role"`
-	Fields  []backendFieldResponse `json:"fields"`
-	Probe   backendProbeResponse   `json:"probe"`
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Summary string `json:"summary"`
+	Role    string `json:"role"`
+
+	// Configurable is served always, never omitempty: false is the
+	// interesting answer here, and a field that disappeared when it was
+	// false would say "this build is too old to know" in exactly the
+	// case a client most needs to be told.
+	Configurable bool `json:"configurable"`
+
+	Fields []backendFieldResponse `json:"fields"`
+	Probe  backendProbeResponse   `json:"probe"`
 }
 
 // unregisteredBackendResponse is a storage shape this build understands
@@ -166,12 +173,13 @@ func (h *handlers) listBackends(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, b := range catalog.Backends {
 		out := backendResponse{
-			ID:      b.ID,
-			Label:   b.Label,
-			Summary: b.Summary,
-			Role:    b.Role,
-			Fields:  make([]backendFieldResponse, 0, len(b.Fields)),
-			Probe:   backendProbeResponse{Steps: make([]backendProbeStepResponse, 0, len(b.Probe))},
+			ID:           b.ID,
+			Label:        b.Label,
+			Summary:      b.Summary,
+			Role:         b.Role,
+			Configurable: b.Configurable,
+			Fields:       make([]backendFieldResponse, 0, len(b.Fields)),
+			Probe:        backendProbeResponse{Steps: make([]backendProbeStepResponse, 0, len(b.Probe))},
 		}
 		for _, f := range b.Fields {
 			field := backendFieldResponse{

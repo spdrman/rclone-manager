@@ -73,6 +73,51 @@ func TestTheSftpManifestIsReachableThroughTheRegistry(t *testing.T) {
 	}
 }
 
+// TestTheSftpManifestIsRegisteredAndNotYetConfigurable is the honest
+// half of #731, and the two claims have to hold together: the manifest
+// is REGISTERED, so somebody searching a picker for SFTP is answered
+// with the real shape rather than with silence, and it is not
+// CONFIGURABLE, so no surface offers a row whose every path ends in a
+// refusal.
+//
+// The second claim is not decoration. Nothing behind this package can
+// store or dial an instance yet: config.expressibleBackendIDs reports
+// [local_volume s3] because StorageMedium has no field for a host, a
+// user or a known_hosts file; service's field mapper names the field it
+// cannot store; internal/app's mediumType refuses RoleRemoteFilesystem.
+// A manifest that claimed to be configurable while all three refused
+// would be a wizard that collects eight values and then fails on save,
+// which is a worse answer than the one this flag gives.
+//
+// The other two shipped manifests are asserted here too, because the
+// default is what makes this flag safe to add: if silence meant false,
+// this test would pass while the two backends an operator actually uses
+// went dark.
+func TestTheSftpManifestIsRegisteredAndNotYetConfigurable(t *testing.T) {
+	reg, err := Bundled()
+	if err != nil {
+		t.Fatalf("Bundled(): %v", err)
+	}
+
+	m, err := reg.Backend("sftp")
+	if err != nil {
+		t.Fatalf("Backend(\"sftp\"): %v", err)
+	}
+	if m.IsConfigurable() {
+		t.Error("the sftp manifest reports itself configurable, and nothing in this build can store or dial an instance of it: a picker reading this offers a row that cannot be saved")
+	}
+
+	for _, id := range []string{"local_volume", "s3"} {
+		other, err := reg.Backend(id)
+		if err != nil {
+			t.Fatalf("Backend(%q): %v", id, err)
+		}
+		if !other.IsConfigurable() {
+			t.Errorf("the %s manifest reports itself not configurable; it is a destination an operator can author today, and a picker reading this would refuse to offer it", id)
+		}
+	}
+}
+
 // TestTheSftpManifestDeclaresAnSSHDestination is what the manifest IS,
 // asserted against the facts a consumer depends on rather than against
 // the file's text.
@@ -129,11 +174,25 @@ func TestTheSftpManifestDeclaresAnSSHDestination(t *testing.T) {
 		t.Errorf("the sftp manifest's credential field is %q; \"credentials\" is the id core/cliecho's wire spellings and core/service's credential reference are built for", cred.ID)
 	}
 
+	// TODO(#235): `path` is a directory on the FAR host and `known_hosts`
+	// is a file on THIS one, and both are KindPath, whose rules are this
+	// machine's. Deferred with the manifest not configurable: the
+	// distinction is unreachable until something dials an instance, and
+	// #235 is where a remote-path kind is decided rather than guessed at
+	// here.
 	if path, _ := m.Field("path"); path.Kind != KindPath {
 		t.Errorf("the sftp manifest's path field is kind %q, want %q: the directory on the far host is a path, and KindPath is what refuses a relative or unclean one", path.Kind, KindPath)
 	}
 	if prefix, _ := m.Field("prefix"); prefix.Kind != KindKeyPrefix {
 		t.Errorf("the sftp manifest's prefix field is kind %q, want %q", prefix.Kind, KindKeyPrefix)
+	}
+
+	// TODO(#235): the host pattern refuses whitespace and a separator and
+	// nothing else, so it accepts strings no resolver ever will. Deferred
+	// with the manifest not configurable: a real host rule belongs next
+	// to the code that dials one, which #235 adds.
+	if host, _ := m.Field("host"); host.Pattern == "" {
+		t.Error("the sftp manifest's host field declares no pattern; a URL pasted into that box would be stored as a hostname")
 	}
 }
 

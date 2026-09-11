@@ -1059,6 +1059,16 @@ export interface BackendManifest {
   label: string;
   summary: string;
   role: BackendRole;
+  /** Whether an instance of this backend can be authored today.
+   *
+   *  False is a backend this build registers, describes and serves, and
+   *  cannot yet store or dial: `sftp` (#731) is the first one. Render it
+   *  and refuse it — somebody who came looking for it deserves the real
+   *  shape and the reason rather than silence — and never submit it: the
+   *  configure step has nowhere to save what it would collect, so
+   *  offering it collects eight values and fails on the last screen.
+   *  Tracked in #235. */
+  configurable: boolean;
   fields: BackendManifestField[];
   probe: { steps: BackendProbeStep[] };
 }

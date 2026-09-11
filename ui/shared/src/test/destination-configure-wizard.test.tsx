@@ -44,6 +44,7 @@ function syntheticManifest(): BackendManifest {
     label: "Widget locker",
     summary: "A backend that does not exist, so nothing can know about it.",
     role: "object_store",
+    configurable: true,
     fields: [
       { id: "path", label: "Spool directory", kind: "path", required: true },
       { id: "prefix", label: "Shelf namespace", kind: "key_prefix", required: false },

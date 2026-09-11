@@ -38,7 +38,13 @@ type backendsBody struct {
 		Label   string `json:"label"`
 		Summary string `json:"summary"`
 		Role    string `json:"role"`
-		Fields  []struct {
+		// A pointer, because the question this field answers is
+		// whether the server said anything at all: a plain bool would
+		// decode an omitted `configurable` to false and this test could
+		// not tell a build that reported a preview backend from one
+		// that forgot to report the field.
+		Configurable *bool `json:"configurable"`
+		Fields       []struct {
 			ID         string `json:"id"`
 			Label      string `json:"label"`
 			Help       string `json:"help"`
@@ -102,6 +108,11 @@ func TestListBackends_ReturnsTheRegistry(t *testing.T) {
 		}
 		if got.Role != want.Role {
 			t.Errorf("backends[%d].role = %q, want %q", i, got.Role, want.Role)
+		}
+		if got.Configurable == nil {
+			t.Errorf("backends[%d] (%s) reports no configurable flag; a client cannot tell a backend it may offer from one whose every path ends in a refusal", i, want.ID)
+		} else if *got.Configurable != want.Configurable {
+			t.Errorf("backends[%d].configurable = %v, want %v", i, *got.Configurable, want.Configurable)
 		}
 		if len(got.Fields) != len(want.Fields) {
 			t.Fatalf("backends[%d] (%s) declares %d fields, want %d; a projection that drops one is a manifest format with two spellings", i, want.ID, len(got.Fields), len(want.Fields))

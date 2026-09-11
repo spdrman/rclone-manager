@@ -1228,12 +1228,15 @@ const VALIDATORS: ValidatorCatalogEntry[] = [
  * fields and no help text renders green here and wrong against the real
  * registry.
  *
- * `unregistered` is empty, and that is the whole answer after #731: it
- * is RequiredBackends minus the transports a manifest claims, computed
- * on the server (core/service.RegisteredBackends), and sftp was the last
- * one on it. The field stays in the shape because the subtraction is
- * what the "understood, not registered" row #668's picker dims reads,
- * and the next backend FR-4 links for a source will land on it again.
+ * `unregistered` is empty, and that is only half the answer after #731:
+ * it is RequiredBackends minus the transports a manifest claims,
+ * computed on the server (core/service.RegisteredBackends), and sftp
+ * was the last one on it. The other half is the sftp row below, which
+ * is registered and reports `configurable: false` — the shape is real,
+ * and nothing behind it can store or dial an instance yet. The field
+ * stays in the shape because the subtraction is what the "understood,
+ * not registered" row #668's picker dims reads, and the next backend
+ * FR-4 links for a source will land on it again.
  */
 const BACKEND_CATALOG: BackendCatalog = {
   registered: [
@@ -1243,6 +1246,7 @@ const BACKEND_CATALOG: BackendCatalog = {
       summary:
         "A directory on a disk this NAS can see. A second internal drive, a USB disk, or an already-mounted network share.",
       role: "local_volume",
+      configurable: true,
       fields: [
         {
           id: "path",
@@ -1299,6 +1303,7 @@ const BACKEND_CATALOG: BackendCatalog = {
       summary:
         "Amazon S3, or any service that speaks its API: MinIO, Ceph, Backblaze B2, Wasabi, a private gateway.",
       role: "object_store",
+      configurable: true,
       fields: [
         {
           id: "bucket",
@@ -1383,6 +1388,11 @@ const BACKEND_CATALOG: BackendCatalog = {
       summary:
         "A directory on another machine, reached over SSH. The same protocol a backup source is read over, pointed the other way: a second NAS, a VPS, or a friend's box in another building.",
       role: "remote_filesystem",
+      // Registered, described, searchable, and not authorable: no layer
+      // behind this fixture can store or dial an sftp instance yet
+      // (#235). The picker renders it disabled, which is the answer
+      // somebody who came looking for SFTP came for.
+      configurable: false,
       fields: [
         {
           id: "host",

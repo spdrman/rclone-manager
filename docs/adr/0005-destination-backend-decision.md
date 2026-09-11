@@ -75,9 +75,11 @@ implementation.** Concretely:
 ### What we get
 
 - An operator looking for SFTP finds it in the add-a-destination picker,
-  with the fields an SSH destination actually needs and a connection test
-  that says which step failed, instead of a dimmed "understood, not
-  registered" row.
+  with the fields an SSH destination actually needs and the probe steps
+  that would prove one, instead of a "understood, not registered" row
+  that names a protocol and nothing else. The row is disabled and says
+  why (see the `configurable` flag below); what changed is that the
+  answer on the screen is the real shape rather than a transport name.
 - The next backend already linked for a source (there are none today, and
   `RequiredBackends` is the list to watch) is a reviewed decision with a
   named test in front of it rather than a judgement call in a comment.
@@ -106,7 +108,22 @@ implementation.** Concretely:
   dropping a field. Growing those two tables (and a `MediumStore` that
   dials it) is the follow-on work this ADR deliberately does not do,
   because doing it would make the FR-4 question above impossible to
-  review on its own.
+  review on its own. It is tracked in #235.
+- Because of that, the manifest declares `"configurable": false`, which
+  is served on `/api/v1/backends` and rendered as a disabled row. A
+  registered backend a surface offers and no layer can save is a dead
+  end an operator walks the whole length of — a name, eight values and
+  an SSH key — before the schema refuses it. The flag is what makes the
+  catalogue TRUTHFUL rather than merely complete, and it defaults to
+  true, so it is a claim a preview backend makes and never one an
+  ordinary manifest has to remember to make.
+- The `host` pattern and the `path` / `known_hosts` kinds are therefore
+  unreachable in this build, and they are left as they are rather than
+  refined against a dialer that does not exist. Both carry a
+  `TODO(#235)` where they are pinned (`core/internal/backend/
+  sftp_test.go`): a host rule belongs next to the code that resolves
+  one, and whether a directory on a far host is the same KIND as a file
+  on this one is a question #235 answers with a dialer in hand.
 
 ## Alternatives considered
 

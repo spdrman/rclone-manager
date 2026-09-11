@@ -3946,7 +3946,11 @@
               "local_volume",
               "remote_filesystem"
             ],
-            "description": "What this backend IS to this engine, as opposed to how bytes reach it. Closed in Go."
+            "description": "What this backend IS to this engine, as opposed to how bytes reach it. Closed in Go, and EXTENSIBLE on this wire: a build that registers a backend of a shape this list does not name serves the new value here rather than an existing one, which is an additive change under v1 (see docs/api/contract.md, \"Compatibility and deprecation rules\"). A client must preserve a role it does not recognise and render it as itself; one that switches on this value needs a branch for the unknown case, and one that drops or rewrites an unfamiliar role reports a destination as something it is not."
+          },
+          "configurable": {
+            "type": "boolean",
+            "description": "Whether an instance of this backend can be authored TODAY. False is a registered backend this build cannot yet store or dial: its shape is real, it is served so it can be found and read, and every layer behind this one refuses it by name. A client renders a false row disabled and never submits it - there is no configure step to run and nothing to create, because the create would be refused. True is the ordinary case, and it is what a client should assume of a build too old to send this field."
           },
           "fields": {
             "type": "array",
@@ -3963,6 +3967,7 @@
           "label",
           "summary",
           "role",
+          "configurable",
           "fields",
           "probe"
         ]

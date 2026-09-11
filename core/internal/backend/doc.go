@@ -134,11 +134,11 @@
 // #665 left SupportedRcloneBackends at {local, s3} and named that gap
 // rather than closing it. #731 walked through it on purpose: the set is
 // now {local, s3, sftp} and bundled/sftp.json is the third shipped
-// manifest, so an operator can declare a destination on another machine
-// reached over SSH. What the toll bought instead of a binary-size
-// measurement is written down in
-// docs/adr/0005-destination-backend-decision.md, which is the ADR this
-// paragraph used to ask a future reviewer for.
+// manifest, so a destination on another machine reached over SSH is a
+// shape this build describes rather than one it has no words for. What
+// the toll bought instead of a binary-size measurement is written down
+// in docs/adr/0005-destination-backend-decision.md, which is the ADR
+// this paragraph used to ask a future reviewer for.
 //
 // SupportedRcloneBackends is still NOT rclone.RequiredBackends, and the
 // distinction is now about what it MEANS rather than about which names
@@ -152,6 +152,32 @@
 // an unregistered rclone backend name; between them sits one map literal
 // whose only defence is that changing it shows up in a diff and fails a
 // named test.
+//
+// # A registered backend nothing can configure yet
+//
+// Registering a backend does not make an instance of it authorable, and
+// Manifest.Configurable is where a manifest says which of the two it
+// is. sftp is registered and reports false: config.expressibleBackendIDs
+// still reports [local_volume s3] because StorageMedium has no field for
+// a host, a user or a known_hosts file, service's field mapper names the
+// field it cannot store, and internal/app's mediumType refuses a role it
+// cannot dial. Issue #235 is where those three grow.
+//
+// The flag exists because a catalogue can be complete and still lie. A
+// picker reading a registered backend offers it; an operator names an
+// instance, fills in eight values and an SSH key, and the save is
+// refused by the schema at the end of it. The row that says "not yet
+// configurable" costs that operator one sentence instead of a wizard.
+// It defaults to TRUE (see Manifest.Configurable), so it is a claim a
+// preview backend makes rather than one every ordinary manifest has to
+// remember, and the two backends that are configurable are unchanged
+// files.
+//
+// Nothing in this package enforces the flag, and nothing can: whether a
+// consumer refuses to offer a row is the consumer's own answer, and the
+// consumers that MATTER refuse an sftp instance by name whatever a
+// surface renders. It is disclosure, not a gate - which is the same
+// thing BackendCatalog.Unregistered has always been.
 //
 // # Credentials: a reference, never material, and nothing new is built
 //

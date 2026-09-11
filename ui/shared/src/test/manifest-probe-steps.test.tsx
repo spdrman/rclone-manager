@@ -35,6 +35,7 @@ function syntheticManifest(): BackendManifest {
     label: "Widget locker",
     summary: "A backend that does not exist.",
     role: "object_store",
+    configurable: true,
     fields: [{ id: "locker_name", label: "Locker name", kind: "string", required: true }],
     probe: {
       steps: [

@@ -163,8 +163,37 @@ type Manifest struct {
 	// binary did not register.
 	RcloneBackend string `json:"rclone_backend"`
 
+	// Configurable is whether an instance of this backend can be
+	// authored TODAY, and it is the one field in this format that is
+	// about this BUILD rather than about the backend.
+	//
+	// A pointer because absent means true: the ordinary manifest says
+	// nothing here, and a bool would make "somebody added a manifest
+	// and did not think about this" and "this backend cannot be
+	// configured" the same document. Read it through IsConfigurable,
+	// never directly.
+	//
+	// False is a manifest shipped as a PREVIEW: the shape is real and
+	// is served so an operator searching for it finds an answer, and
+	// the layers that would store and dial an instance of it refuse it
+	// by name (config.expressibleBackendIDs, service's field mapper,
+	// internal/app's mediumType). Registering one without saying so
+	// leaves a picker offering a row whose every path ends in a
+	// refusal, which is a worse answer than the row that says it is
+	// not ready: see doc.go, "A registered backend nothing can
+	// configure yet".
+	Configurable *bool `json:"configurable,omitempty"`
+
 	Fields []Field `json:"fields"`
 	Probe  Probe   `json:"probe"`
+}
+
+// IsConfigurable reports whether an instance of this backend can be
+// authored today. A manifest that says nothing is configurable, so the
+// two shipped backends that are stay unchanged files and only the one
+// that is not has to declare anything.
+func (m Manifest) IsConfigurable() bool {
+	return m.Configurable == nil || *m.Configurable
 }
 
 // Field returns the field with the given id.
