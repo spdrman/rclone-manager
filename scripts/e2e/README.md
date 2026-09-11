@@ -2,7 +2,7 @@
 
 The Playwright suite used to live in `ui/shared/e2e/`. It does not any
 more: issue #158 moved it to
-[`spdrman/rclone-manager-tests`](https://github.com/spdrman/rclone-manager-tests)
+[`spdrman/backupd-tests`](https://github.com/spdrman/backupd-tests)
 as Suite B, so it tests this product the way an operator meets it, from
 outside, with nothing but a browser and a built artefact.
 
@@ -18,16 +18,16 @@ through four merges and was dismissed twice as an ordering flake.
 
 `scripts/ci-local.sh` runs `run-tests-repo-gate.sh` on every non-FAST run,
 which is every commit through `.husky/pre-commit`. That file is a four-line
-bash shim that execs `scripts/rcmtools/e2e/run_tests_repo_gate.py`, which is
+bash shim that execs `scripts/bdtools/e2e/run_tests_repo_gate.py`, which is
 the gate (#672); it stays a file at that path because
 `scripts/tests/ci-local-gate.test.sh` fabricates a stand-in gate there inside a
 sandbox tree, and `ci-local.sh` keeps calling the shim so that stand-in is the
 thing that runs. The step:
 
-1. clones `rclone-manager-tests` at the sha in `tests-repo.pin` into
-   `${XDG_CACHE_HOME:-$HOME/.cache}/rclone-manager-tests-gate/<sha>`, once
+1. clones `backupd-tests` at the sha in `tests-repo.pin` into
+   `${XDG_CACHE_HOME:-$HOME/.cache}/backupd-tests-gate/<sha>`, once
    per pin;
-2. builds `backup-manager` from **this working tree** and runs that
+2. builds `backupd` from **this working tree** and runs that
    repository's CLI smoke slice against it, 55 black-box cases in about
    eleven seconds. That is a signal this repository has never had: nothing
    here exercised the CLI black-box on a per-commit basis at all;
@@ -58,8 +58,8 @@ merge evidence and says so.
 ## Moving the pin
 
 ```sh
-python3 scripts/rcmtools/e2e/bump_tests_pin.py              # the pinned branch's tip
-python3 scripts/rcmtools/e2e/bump_tests_pin.py <full sha>   # an exact commit
+python3 scripts/bdtools/e2e/bump_tests_pin.py              # the pinned branch's tip
+python3 scripts/bdtools/e2e/bump_tests_pin.py <full sha>   # an exact commit
 ```
 
 The bump carries no proof of its own, deliberately. The commit that lands
@@ -86,7 +86,7 @@ change there and the pin bump in the same PR.
   machine with a downloadable trace, not as a gate: nothing triggers it.
   `ci.yml` is the one workflow here that does trigger on its own, on a
   pull request into `release` (#575), and Suite B is not in it.
-- **`rclone-manager-tests` pins a build of this repository**, in its own
+- **`backupd-tests` pins a build of this repository**, in its own
   `build-under-test.json`. The two pins point opposite ways on purpose. A
   new test cannot break in-flight work here until someone bumps this one,
   and a release here cannot silently change what those suites certify.
@@ -170,7 +170,7 @@ down on success, on failure and on interrupt.
 
 ## Both drivers' `--help` is a pinned block, not a line range
 
-`two-machine-backup.sh` and `scripts/rcmtools/e2e/run_machine_tier.py` print
+`two-machine-backup.sh` and `scripts/bdtools/e2e/run_machine_tier.py` print
 their `--help` from the header block between `# HELP-START` and `# HELP-END`
 near the top of each file.
 That used to be a range of line numbers, `sed -n '2,110p' "$0"`, so the help an
@@ -188,7 +188,7 @@ be missing: a comment added above the block leaves the rendered help unchanged.
 
 ## Reproducing #730 (the Activity fetch that throws)
 
-`rclone-manager#730` is the Activity page's `fetch(/api/v1/activity)`
+`backupd#730` is the Activity page's `fetch(/api/v1/activity)`
 throwing `TypeError: Failed to fetch` on a real 0.4.0 NAS, while `curl` to
 the same route answers cleanly. The client request is byte-for-byte the
 same relative, same-origin GET every other page makes (`ui/shared/src/api/
@@ -209,18 +209,18 @@ Run it against the real published 0.4.0 image (the artefact #730 was seen
 on), rather than a build from this tree:
 
 ```sh
-docker pull ghcr.io/spdrman/backup-manager:0.4.0
+docker pull ghcr.io/spdrman/backupd:0.4.0
 scripts/e2e/three-machine-web-ui.sh \
-  --image ghcr.io/spdrman/backup-manager:0.4.0 \
+  --image ghcr.io/spdrman/backupd:0.4.0 \
   --front-proxy-tls
 # optionally enlarge the authenticated /api/v1/activity payload:
 RM_SEED_CYCLES=8 scripts/e2e/three-machine-web-ui.sh \
-  --image ghcr.io/spdrman/backup-manager:0.4.0 --front-proxy-tls
+  --image ghcr.io/spdrman/backupd:0.4.0 --front-proxy-tls
 ```
 
 The built-in `web-ui-smoke.mjs` client counts a failed request or an
 uncaught rejection on the Activity page as a failure, which is exactly
-#730's shape; `--suite ../rclone-manager-tests/suites/web-ui` runs the full
+#730's shape; `--suite ../backupd-tests/suites/web-ui` runs the full
 Suite B, whose `real-path.spec.ts` asserts `getByRole("alert")` is absent
 on `/activity`. Either goes **red** if #730 reproduces over this transport.
 

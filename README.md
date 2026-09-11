@@ -1,20 +1,20 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img src="docs/assets/logo-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress, next to the rclone-manager wordmark" width="240">
+    <img src="docs/assets/logo-light.svg" alt="backupd mark: a broken ring standing for a transfer cycle in progress, next to the backupd wordmark" width="240">
   </picture>
 </p>
 
 
 A backup producer somewhere writes a dump, an archive or a snapshot to disk. That machine
 has finite space, so something has to move the artifact off it and something has to delete
-the original. rclone-manager is the half of that job that runs on the NAS: it discovers
+the original. backupd is the half of that job that runs on the NAS: it discovers
 finished artifacts on the remote server over SFTP, pulls them, verifies them, commits them
 durably, records that it did, and only then removes the remote copy.
 
 It is a standalone Go binary that **embeds pinned rclone Go packages**. It does not fork
 rclone, and it does not shell out to the `rclone` CLI for normal data movement. There are
-two surfaces over the same engine: `rbm` at a terminal, and a web UI on the LAN. Everything
+two surfaces over the same engine: `backupd` at a terminal, and a web UI on the LAN. Everything
 an operator can DO in the browser has an equivalent command, and that is a gate rather than
 an intention: a route with neither a command behind it nor a written reason there is none
 fails the build.
@@ -27,11 +27,11 @@ machine with Docker.
 [`docs/recovery.md`](docs/recovery.md).
 
 **The same material as pages, with pictures**, is the published site: [the first-run
-tutorial](https://spdrman.github.io/rclone-manager/first-run.html), [the web interface in
-motion](https://spdrman.github.io/rclone-manager/web-ui.html), [SSH and
-connections](https://spdrman.github.io/rclone-manager/ssh.html), and [the
-reference](https://spdrman.github.io/rclone-manager/reference.html), which carries every
-screen of the browser interface and every `rbm` command with its flags. It is generated
+tutorial](https://spdrman.github.io/backupd/first-run.html), [the web interface in
+motion](https://spdrman.github.io/backupd/web-ui.html), [SSH and
+connections](https://spdrman.github.io/backupd/ssh.html), and [the
+reference](https://spdrman.github.io/backupd/reference.html), which carries every
+screen of the browser interface and every `backupd` command with its flags. It is generated
 from [`docs/site/`](docs/site/) in this repository. The site is the source of truth for how
 to install the product and how to drive it; this document is the engineering account behind
 it, and where the two ever disagree about install or operator surfaces, the site is right.
@@ -41,7 +41,7 @@ it, and where the two ever disagree about install or operator surfaces, the site
 Two commands, no arguments, on any machine with Docker:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py
+curl -fsSLO https://raw.githubusercontent.com/spdrman/backupd/main/scripts/install/install_docker_host.py
 python3 install_docker_host.py install
 ```
 
@@ -55,15 +55,15 @@ to that file byte for byte by a test.
 ```text
 ==> Installed.
     Web UI:  http://10.0.0.10:8080
-    Compose: docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml
+    Compose: docker compose -p backupd --env-file /home/you/backupd/.env -f /home/you/backupd/compose.yaml -f /home/you/backupd/compose.image.yaml
 
     No config.yaml was written, on purpose. Issue #176 shipped a first-run setup flow
     precisely so that a fresh install does not need one hand-written before it starts.
     Open the Web UI and follow it. The enrollment link is in the engine's log:
-      docker compose -p rclone-manager --env-file /home/you/rclone-manager/.env -f /home/you/rclone-manager/compose.yaml -f /home/you/rclone-manager/compose.image.yaml logs rclone-manager | grep enroll
+      docker compose -p backupd --env-file /home/you/backupd/.env -f /home/you/backupd/compose.yaml -f /home/you/backupd/compose.image.yaml logs backupd | grep enroll
 ```
 
-It picks every path for you — `~/rclone-manager`, with `backups`, `state`, `config` and
+It picks every path for you — `~/backupd`, with `backups`, `state`, `config` and
 `secrets` under it — generates the SSH keypair the engine will use, pins the exact image it
 was built against, and refuses before it changes anything if the machine cannot run it.
 Nothing needs deciding up front, and everything it chose can be changed afterwards. A
@@ -84,7 +84,7 @@ matters. The engine mints the enrolment token during startup and writes the noti
 own log, so the installer prints the line that reads it back out:
 
 ```text
-rbm-web: no administrator account exists yet. Open
+backupd-web: no administrator account exists yet. Open
 http://10.0.0.10:8080/enroll?token=4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6
 to create one (valid 30 minutes, single use).
 ```
@@ -110,7 +110,7 @@ dead, including any still in your scrollback. On a deployment that already has a
 administrator it refuses with its own exit code instead, because enrolment is a one-time
 door and it closed when that account was created.
 
-[The first-run tutorial](https://spdrman.github.io/rclone-manager/first-run.html) picks up
+[The first-run tutorial](https://spdrman.github.io/backupd/first-run.html) picks up
 at that screen and walks every step of the wizard, with an example for every field.
 
 ### Command line only, no web interface
@@ -121,10 +121,10 @@ Same two commands, one flag on the second one:
 python3 install_docker_host.py install --cli-only
 ```
 
-The engine container runs `rbm daemon` instead of `rbm-web serve`, the `web-ui` container is
+The engine container runs `backupd daemon` instead of `backupd-web serve`, the `web-ui` container is
 never started, and no port is published on this host at all, so nothing in the deployment
-serves HTTP and the `rbm-web` binary is never executed. What drives it is the `rbm` wrapper
-the installer writes to `<prefix>/bin/rbm`, which takes every command in
+serves HTTP and the `backupd-web` binary is never executed. What drives it is the `backupd` wrapper
+the installer writes to `<prefix>/bin/backupd`, which takes every command in
 [the CLI table below](#the-engine-and-the-cli-are-real).
 
 There is no enrolment link on such a host and nothing to enrol into, and there is no
@@ -153,13 +153,13 @@ guessing between keeping the data and wiping it is not an installer's decision. 
 `fresh`, refuses to run over an existing install at all.
 
 Every flag with its default, and every exit code, is on [the reference
-page](https://spdrman.github.io/rclone-manager/reference.html#installer) and in
+page](https://spdrman.github.io/backupd/reference.html#installer) and in
 [`docs/install.md`](docs/install.md). This is the path #263 used on the UGREEN NAS.
 
 ### What the browser looks like while it works
 
 Three clips from [the web interface in
-motion](https://spdrman.github.io/rclone-manager/web-ui.html), which has seven more.
+motion](https://spdrman.github.io/backupd/web-ui.html), which has seven more.
 **Every picture this project publishes is recorded against the development server's
 in-memory fixture API rather than against a running engine**: the layout, the copy, the flow
 and the interaction are the real ones, and the data is not.
