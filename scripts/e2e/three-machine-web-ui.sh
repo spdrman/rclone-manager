@@ -327,7 +327,7 @@ backup_set="e2e/vps"
 if [ "$front_proxy" = 1 ]; then
   base_url="https://rclone-manager"
   edge_web_alias="origin"
-  front_proxy_probe_env="-e NODE_TLS_REJECT_UNAUTHORIZED=0"
+  front_proxy_probe_env="-e NODE_NO_WARNINGS=1 -e NODE_TLS_REJECT_UNAUTHORIZED=0"
 else
   base_url="http://rclone-manager:8080"
   edge_web_alias="rclone-manager"
@@ -917,7 +917,7 @@ client_env=(
 # covers a suite that fetches from node. Appended after the array literal so
 # an empty case never expands to a stray argument.
 if [ "$front_proxy" = 1 ]; then
-  client_env+=(-e "RM_IGNORE_HTTPS=1" -e "NODE_TLS_REJECT_UNAUTHORIZED=0")
+  client_env+=(-e "RM_IGNORE_HTTPS=1" -e "NODE_TLS_REJECT_UNAUTHORIZED=0" -e "NODE_NO_WARNINGS=1")
 fi
 
 client_run=(
