@@ -2,7 +2,7 @@
 # The performance gate's own positive controls (#165), at the path
 # everything already names.
 #
-# The controls themselves are scripts/rcmtools/perf/selftest.py now (EPIC I,
+# The controls themselves are scripts/bdtools/perf/selftest.py now (EPIC I,
 # I1.6 / #672). This file stays because the path is load bearing:
 #
 #   * scripts/ci-local.sh and .github/workflows/ci.yml both run
@@ -15,4 +15,4 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-exec python3 "$repo_root/scripts/rcmtools/perf/selftest.py" "$@"
+exec python3 "$repo_root/scripts/bdtools/perf/selftest.py" "$@"

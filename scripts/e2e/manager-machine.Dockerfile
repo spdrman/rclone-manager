@@ -1,8 +1,8 @@
-# The MANAGER machine for the Go machine tier (#451): the box rclone-manager
+# The MANAGER machine for the Go machine tier (#451): the box backupd
 # runs on, playing the NAS, with the toolchain to run core/tests inside it
 # and a docker client to reach the daemon that stands the other machines up.
 #
-# The Go version tracks core/go.mod. scripts/rcmtools/e2e/run_machine_tier.py reads
+# The Go version tracks core/go.mod. scripts/bdtools/e2e/run_machine_tier.py reads
 # the go directive and passes it as a build argument rather than guessing,
 # so a bumped directive fails loudly here instead of silently compiling the
 # tier against an older toolchain.

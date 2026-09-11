@@ -2,7 +2,7 @@
 # The release-manifest generator (#82/B4.1, #174), at the path everything
 # already names.
 #
-# The generator itself is scripts/rcmtools/release/record_release_hashes.py
+# The generator itself is scripts/bdtools/release/record_release_hashes.py
 # now (EPIC I, I1.6 / #672 / #697). This file stays because the path is load
 # bearing in places that are not this port's to move:
 #
@@ -12,7 +12,7 @@
 #     `bash scripts/release/record-release-hashes.sh`, and
 #     container/release-manifest.json's own `note` field names it, as does
 #     the refusal text in verify-manifest-parity;
-#   * scripts/rcmtools/tests/record_release_hashes_guards.py drives THIS
+#   * scripts/bdtools/tests/record_release_hashes_guards.py drives THIS
 #     path (from inside a throwaway repository per refusal) rather than the
 #     module directly, so the shim itself is exercised by every one of the
 #     suite's eleven controls.
@@ -32,4 +32,4 @@
 # is the defect this port was caught on.
 set -euo pipefail
 
-exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/rcmtools/release/record_release_hashes.py" "$@"
+exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/bdtools/release/record_release_hashes.py" "$@"

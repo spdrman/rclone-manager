@@ -2,7 +2,7 @@
 # The /api/v1 contract drift gate (#166), at the path everything already
 # names.
 #
-# The gate itself is scripts/rcmtools/api/check_contract_drift.py now (EPIC
+# The gate itself is scripts/bdtools/api/check_contract_drift.py now (EPIC
 # I, I1.6 / #672). This file stays because the path is load bearing in three
 # places that are not this port's to move:
 #
@@ -11,7 +11,7 @@
 #   * scripts/tests/ci-local-gate.test.sh FABRICATES a file at this literal
 #     path (`printf '#!/usr/bin/env bash\nexit 0\n' > .../check-contract-drift.sh`)
 #     to drive the gate step it stubs;
-#   * scripts/rcmtools/api/selftest.py drives THIS path (from inside each
+#   * scripts/bdtools/api/selftest.py drives THIS path (from inside each
 #     mutant copy of the tree) rather than the module directly, so the shim
 #     itself is exercised by every control.
 #
@@ -22,4 +22,4 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-exec python3 "$repo_root/scripts/rcmtools/api/check_contract_drift.py" "$@"
+exec python3 "$repo_root/scripts/bdtools/api/check_contract_drift.py" "$@"

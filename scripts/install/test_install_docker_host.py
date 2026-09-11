@@ -130,7 +130,7 @@ class Fixture:
     def __init__(self, stack: unittest.TestCase) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         stack.addCleanup(self.tmp.cleanup)
-        self.prefix = Path(self.tmp.name) / "backup-manager"
+        self.prefix = Path(self.tmp.name) / "backupd"
         (self.prefix / "secrets").mkdir(parents=True)
         self.key = self.prefix / "secrets" / "id_ed25519"
         self.key.write_text("not a key, never read by this installer\n")
@@ -982,7 +982,7 @@ if 'utf' in locale.getpreferredencoding(False).lower().replace('-', ''):
     raise SystemExit(0)
 tmp = tempfile.mkdtemp()
 args = installer.resolve(installer.build_parser().parse_args(
-    ['install', '--prefix', tmp + '/rbm']))
+    ['install', '--prefix', tmp + '/backupd']))
 installer.stage_payload(args)
 sys.stdout.buffer.write(b'STAGED ')
 sys.stdout.buffer.write(
@@ -1183,9 +1183,9 @@ class TestRendering(unittest.TestCase):
 
     def test_the_override_pins_the_image_and_changes_nothing_else(self):
         fx = Fixture(self)
-        args = fx.args("--image", "ghcr.io/spdrman/backup-manager:0.1.0")
+        args = fx.args("--image", "ghcr.io/spdrman/backupd:0.1.0")
         override = installer.render_image_override(args)
-        self.assertIn("ghcr.io/spdrman/backup-manager:0.1.0", override)
+        self.assertIn("ghcr.io/spdrman/backupd:0.1.0", override)
         body = [ln for ln in override.splitlines() if ln and not ln.lstrip().startswith("#")]
         keys = [ln.strip().split(":")[0] for ln in body if ln.startswith("    ")]
         self.assertEqual(set(keys), {"image", "pull_policy"},
@@ -1197,7 +1197,7 @@ class TestRendering(unittest.TestCase):
 
     def test_the_version_in_the_env_tracks_the_image_tag(self):
         fx = Fixture(self)
-        args = fx.args("--image", "ghcr.io/spdrman/backup-manager:0.1.0")
+        args = fx.args("--image", "ghcr.io/spdrman/backupd:0.1.0")
         self.assertIn("VERSION=0.1.0", installer.render_env(args))
 
     def test_the_env_is_written_owner_only(self):
@@ -1289,13 +1289,13 @@ class TestVersionOrdering(unittest.TestCase):
     offering to "upgrade" a host onto an older build."""
 
     def test_a_tag_is_read_out_of_a_full_reference(self):
-        self.assertEqual(installer.image_tag("ghcr.io/spdrman/backup-manager:0.2.0"), "0.2.0")
-        self.assertEqual(installer.image_tag("backup-manager:1.4.2"), "1.4.2")
+        self.assertEqual(installer.image_tag("ghcr.io/spdrman/backupd:0.2.0"), "0.2.0")
+        self.assertEqual(installer.image_tag("backupd:1.4.2"), "1.4.2")
 
     def test_a_registry_port_is_not_mistaken_for_a_tag(self):
         """A colon in a reference is not always a tag separator."""
-        self.assertEqual(installer.image_tag("localhost:5000/backup-manager"), "")
-        self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.4.0"), "0.4.0")
+        self.assertEqual(installer.image_tag("localhost:5000/backupd"), "")
+        self.assertEqual(installer.image_tag("localhost:5000/backupd:0.4.0"), "0.4.0")
 
     def test_the_carried_version_is_described_relative_to_what_is_installed(self):
         """Issue #588. compare_versions answers where the INSTALLED version
@@ -1306,7 +1306,7 @@ class TestVersionOrdering(unittest.TestCase):
         Upgrading a real NAS from 0.3.1 to 0.4.0 printed "This installer
         carries 0.4.0 (older)", which is the one sentence that makes
         somebody stop a correct upgrade."""
-        line = installer.describe_what_is_here(2, 2, "0.3.1", "the rclone-manager container", "0.4.0")
+        line = installer.describe_what_is_here(2, 2, "0.3.1", "the backupd container", "0.4.0")
         self.assertIn("0.4.0 (newer)", line)
         self.assertNotIn("0.4.0 (older)", line)
         # And the other direction, which is a real downgrade.
@@ -1359,18 +1359,18 @@ class TestWhichVersionIsInstalled(unittest.TestCase):
     of anything. `docker compose ps -a` lists stopped leftovers and
     orphans from an older layout in whatever order it likes."""
 
-    def engine(self, tag, service="rclone-manager"):
-        return {"Service": service, "Image": f"ghcr.io/spdrman/backup-manager:{tag}"}
+    def engine(self, tag, service="backupd"):
+        return {"Service": service, "Image": f"ghcr.io/spdrman/backupd:{tag}"}
 
     def test_the_engines_container_is_the_one_that_answers(self):
         fx = Fixture(self)
         containers = [
-            {"Service": "some-orphan", "Image": "ghcr.io/spdrman/backup-manager:0.1.0"},
+            {"Service": "some-orphan", "Image": "ghcr.io/spdrman/backupd:0.1.0"},
             self.engine("0.2.0"),
         ]
         tag, source = installer.installed_image_tag(containers, fx.prefix)
         self.assertEqual(tag, "0.2.0", "an orphan listed first must not decide the version")
-        self.assertIn("rclone-manager", source)
+        self.assertIn("backupd", source)
 
     def test_a_stopped_stack_falls_back_to_the_deployment_files(self):
         """With the stack down there are no containers at all, so the
@@ -1398,7 +1398,7 @@ class TestInstallModeDecision(unittest.TestCase):
 
     def decide(self, **kw):
         base = dict(requested=None, installed=False, installed_tag=None,
-                    target_version="0.2.0", interactive=False, prefix=Path("/opt/backup-manager"))
+                    target_version="0.2.0", interactive=False, prefix=Path("/opt/backupd"))
         base.update(kw)
         return installer.decide_install_mode(**base)
 
@@ -1429,10 +1429,10 @@ class TestInstallModeDecision(unittest.TestCase):
         where the path belongs, rendering "version 0.1.0 at 0.2.0's
         prefix", which names no path at all."""
         exc = refusal_from(self.decide, requested="fresh", installed=True, installed_tag="0.1.0",
-                           prefix=Path("/volume1/backup-manager"))
+                           prefix=Path("/volume1/backupd"))
         self.assertIsNotNone(exc)
         self.assertEqual(exc.code, installer.EXIT_EXISTING_INSTALL)
-        self.assertIn("/volume1/backup-manager", exc.message,
+        self.assertIn("/volume1/backupd", exc.message,
                       "the refusal has to name where the install it found actually is")
         self.assertNotIn("0.2.0's prefix", exc.message)
 
@@ -2342,10 +2342,10 @@ class TestCounterDeltaNamesTheRule(unittest.TestCase):
 # container this project's own compose project labelled, and two it did
 # not.
 PS_NDJSON_MIXED_HOST = (
-    '{"Names": "backup-manager", "Image": "ghcr.io/spdrman/backup-manager:0.1.0", '
-    '"Labels": "com.docker.compose.project=rclone-manager,com.docker.compose.service=backup-manager"}\n'
-    '{"Names": "backup-manager-ui", "Image": "ghcr.io/spdrman/backup-manager:0.1.0", '
-    '"Labels": "com.docker.compose.project=rclone-manager,com.docker.compose.service=backup-manager-ui"}\n'
+    '{"Names": "backupd", "Image": "ghcr.io/spdrman/backupd:0.1.0", '
+    '"Labels": "com.docker.compose.project=backupd,com.docker.compose.service=backupd"}\n'
+    '{"Names": "backupd-ui", "Image": "ghcr.io/spdrman/backupd:0.1.0", '
+    '"Labels": "com.docker.compose.project=backupd,com.docker.compose.service=backupd-ui"}\n'
     '{"Names": "plex", "Image": "plexinc/pms-docker:latest", "Labels": "com.docker.compose.project=media"}\n'
     '{"Names": "portainer", "Image": "portainer/portainer-ce:latest", "Labels": ""}\n'
 )
@@ -2359,13 +2359,13 @@ class TestOtherRunningContainers(unittest.TestCase):
     can say what else it is about to disrupt."""
 
     def test_this_projects_own_containers_are_excluded(self):
-        got = installer._other_containers_from_ps_ndjson(PS_NDJSON_MIXED_HOST, "rclone-manager")
+        got = installer._other_containers_from_ps_ndjson(PS_NDJSON_MIXED_HOST, "backupd")
         names = [name for name, _ in got]
-        self.assertNotIn("backup-manager", names)
-        self.assertNotIn("backup-manager-ui", names)
+        self.assertNotIn("backupd", names)
+        self.assertNotIn("backupd-ui", names)
 
     def test_containers_from_another_project_or_no_project_label_are_named(self):
-        got = installer._other_containers_from_ps_ndjson(PS_NDJSON_MIXED_HOST, "rclone-manager")
+        got = installer._other_containers_from_ps_ndjson(PS_NDJSON_MIXED_HOST, "backupd")
         names = {name for name, _ in got}
         self.assertEqual(names, {"plex", "portainer"},
                          "a differently-labelled container and an unlabelled one both count as "
@@ -2373,9 +2373,9 @@ class TestOtherRunningContainers(unittest.TestCase):
 
     def test_a_host_with_no_other_containers_reports_none(self):
         got = installer._other_containers_from_ps_ndjson(
-            '{"Names": "backup-manager", "Image": "x", '
-            '"Labels": "com.docker.compose.project=rclone-manager"}\n',
-            "rclone-manager",
+            '{"Names": "backupd", "Image": "x", '
+            '"Labels": "com.docker.compose.project=backupd"}\n',
+            "backupd",
         )
         self.assertEqual(got, [])
 
@@ -2393,7 +2393,7 @@ INSPECT_TWO_NETWORKS = """
     "Options": {}
   },
   {
-    "Name": "rclone-manager_internal",
+    "Name": "backupd_internal",
     "Id": "3f2e1a9c8b7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f",
     "Driver": "bridge",
     "Options": {}
@@ -2893,10 +2893,10 @@ class TestPersistenceVerification(unittest.TestCase):
     needing a real systemd to produce the state it is reading."""
 
     GOOD: ClassVar[dict[str, str]] = dict(
-               service_unit="rclone-manager-bridge.service", service_state="enabled",
-               service_active="inactive", timer_unit="rclone-manager-bridge.timer",
+               service_unit="backupd-bridge.service", service_state="enabled",
+               service_active="inactive", timer_unit="backupd-bridge.timer",
                timer_state="enabled", timer_active="active",
-               timer_listed="Thu 2026-09-03 rclone-manager-bridge.timer")
+               timer_listed="Thu 2026-09-03 backupd-bridge.timer")
 
     def test_a_correctly_armed_timer_has_no_complaints(self):
         """The service itself is legitimately 'inactive' right after a
@@ -3304,7 +3304,7 @@ class TestNoArgumentInstallHasWhatItNeeds(unittest.TestCase):
 
     def test_the_default_prefix_is_under_the_invoking_users_home(self):
         args = self._bare()
-        self.assertEqual(args.prefix, Path.home() / "rclone-manager")
+        self.assertEqual(args.prefix, Path.home() / "backupd")
         self.assertNotIn("/volume1", str(args.prefix),
                          "the old default guessed one NAS's layout and was wrong even on that NAS")
 
@@ -3322,7 +3322,7 @@ class TestNoArgumentInstallHasWhatItNeeds(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         args = installer.resolve(installer.build_parser().parse_args(
-            ["install", "--prefix", str(Path(tmp.name) / "rclone-manager")]))
+            ["install", "--prefix", str(Path(tmp.name) / "backupd")]))
 
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -3345,7 +3345,7 @@ class TestNoArgumentInstallHasWhatItNeeds(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         args = installer.resolve(installer.build_parser().parse_args(
-            ["install", "--prefix", str(Path(tmp.name) / "rclone-manager")]))
+            ["install", "--prefix", str(Path(tmp.name) / "backupd")]))
         with contextlib.redirect_stdout(io.StringIO()):
             installer.ensure_credentials(args)
         self.assertTrue(args.known_hosts.is_file())
@@ -3361,7 +3361,7 @@ class TestNoArgumentInstallHasWhatItNeeds(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         named = Path(tmp.name) / "typo" / "id_ed25519"
         args = installer.resolve(installer.build_parser().parse_args(
-            ["install", "--prefix", str(Path(tmp.name) / "rclone-manager"),
+            ["install", "--prefix", str(Path(tmp.name) / "backupd"),
              "--ssh-key", str(named)]))
         self.assertTrue(args.ssh_key_supplied)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -3378,7 +3378,7 @@ class TestNoArgumentInstallHasWhatItNeeds(unittest.TestCase):
         every backup silently."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        prefix = Path(tmp.name) / "rclone-manager"
+        prefix = Path(tmp.name) / "backupd"
         (prefix / "secrets").mkdir(parents=True)
         key = prefix / "secrets" / "id_ed25519"
         key.write_text("the key a source already trusts\n")
@@ -3444,7 +3444,7 @@ class TestEveryDirectoryIsBornWithoutGroupOrWorldWrite(unittest.TestCase):
         share.mkdir()
         os.chmod(share, 0o777)
         args = installer.resolve(installer.build_parser().parse_args(
-            ["install", "--prefix", str(share / "rclone-manager")]))
+            ["install", "--prefix", str(share / "backupd")]))
 
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -3519,7 +3519,7 @@ class TestPreflightDoesNotCryAboutWhatInstallWillCreate(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         args = installer.resolve(installer.build_parser().parse_args(
-            ["preflight", "--prefix", str(Path(tmp.name) / "rclone-manager")]))
+            ["preflight", "--prefix", str(Path(tmp.name) / "backupd")]))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             installer.Preflight(args).check_credentials()
@@ -3551,7 +3551,7 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         outside the prefix, exactly as an operator with an existing key
         would have installed it."""
         root = Path(tmp.name)
-        prefix = root / "rclone-manager"
+        prefix = root / "backupd"
         elsewhere = root / "home" / ".ssh"
         elsewhere.mkdir(parents=True)
         key = elsewhere / "backup_ed25519"
@@ -3757,7 +3757,7 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         is the failure a guard nobody exercises does not prevent."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        prefix = Path(tmp.name) / "rclone-manager"
+        prefix = Path(tmp.name) / "backupd"
         env = {"SSH_KEY_FILE": "/somewhere/else/id_ed25519",
                "KNOWN_HOSTS_FILE": "/somewhere/else/known_hosts"}
         for command in ("preflight", "install", "status", "uninstall",
@@ -3774,7 +3774,7 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
     def test_a_fresh_host_adopts_nothing(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        prefix = Path(tmp.name) / "rclone-manager"
+        prefix = Path(tmp.name) / "backupd"
         args = installer.resolve(installer.build_parser().parse_args(
             ["install", "--prefix", str(prefix)]))
         was = args.ssh_key
@@ -3790,7 +3790,7 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         nothing to adopt and nothing to say."""
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        prefix = Path(tmp.name) / "rclone-manager"
+        prefix = Path(tmp.name) / "backupd"
         first = installer.resolve(installer.build_parser().parse_args(
             ["install", "--prefix", str(prefix), "--compose-file", str(CANONICAL_COMPOSE)]))
         with contextlib.redirect_stdout(io.StringIO()):
@@ -3837,7 +3837,7 @@ class TestReplacingTheStagedComposeIsAnnounced(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         args = installer.resolve(installer.build_parser().parse_args(
-            ["install", "--prefix", str(Path(tmp.name) / "rclone-manager"),
+            ["install", "--prefix", str(Path(tmp.name) / "backupd"),
              "--compose-file", str(CANONICAL_COMPOSE)]))
         installer.stage_payload(args)
         staged = args.prefix / "compose.yaml"
@@ -3858,7 +3858,7 @@ class TestReplacingTheStagedComposeIsAnnounced(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         args = installer.resolve(installer.build_parser().parse_args(
-            ["install", "--prefix", str(Path(tmp.name) / "rclone-manager"),
+            ["install", "--prefix", str(Path(tmp.name) / "backupd"),
              "--compose-file", str(CANONICAL_COMPOSE)]))
         installer.stage_payload(args)
         out = io.StringIO()
@@ -3881,33 +3881,33 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
     """
 
     def test_a_digest_is_not_a_tag(self):
-        ref = "ghcr.io/spdrman/backup-manager@sha256:" + "ab" * 32
+        ref = "ghcr.io/spdrman/backupd@sha256:" + "ab" * 32
         self.assertEqual(installer.image_tag(ref), "")
         self.assertEqual(installer.image_digest(ref), "sha256:" + "ab" * 32)
-        self.assertEqual(installer.image_name(ref), "ghcr.io/spdrman/backup-manager")
+        self.assertEqual(installer.image_name(ref), "ghcr.io/spdrman/backupd")
 
     def test_a_tag_and_a_digest_together_are_read_apart(self):
-        ref = "ghcr.io/spdrman/backup-manager:0.1.0@sha256:" + "cd" * 32
+        ref = "ghcr.io/spdrman/backupd:0.1.0@sha256:" + "cd" * 32
         self.assertEqual(installer.image_tag(ref), "0.1.0")
         self.assertEqual(installer.image_digest(ref), "sha256:" + "cd" * 32)
-        self.assertEqual(installer.image_name(ref), "ghcr.io/spdrman/backup-manager")
+        self.assertEqual(installer.image_name(ref), "ghcr.io/spdrman/backupd")
 
     def test_a_registry_port_is_still_not_a_tag(self):
         """The case the old image_tag() got right, kept."""
-        self.assertEqual(installer.image_tag("localhost:5000/backup-manager"), "")
-        self.assertEqual(installer.image_name("localhost:5000/backup-manager"), "localhost:5000/backup-manager")
-        self.assertEqual(installer.image_digest("localhost:5000/backup-manager"), "")
+        self.assertEqual(installer.image_tag("localhost:5000/backupd"), "")
+        self.assertEqual(installer.image_name("localhost:5000/backupd"), "localhost:5000/backupd")
+        self.assertEqual(installer.image_digest("localhost:5000/backupd"), "")
 
     def test_a_reference_with_no_version_in_it_says_so_rather_than_guessing(self):
-        self.assertEqual(installer.reference_version("localhost:5000/backup-manager"), "")
-        self.assertEqual(installer.reference_version("ghcr.io/spdrman/backup-manager@sha256:" + "ef" * 32), "")
+        self.assertEqual(installer.reference_version("localhost:5000/backupd"), "")
+        self.assertEqual(installer.reference_version("ghcr.io/spdrman/backupd@sha256:" + "ef" * 32), "")
 
     def test_the_digest_this_release_recorded_names_this_release(self):
         """A pinned digest IS answerable when it is the one recorded, and
         that is not a guess: it is the same identity check_release holds
         the tag to."""
         with carrying_a_recorded_digest() as recorded:
-            ref = "ghcr.io/spdrman/backup-manager@" + recorded
+            ref = "ghcr.io/spdrman/backupd@" + recorded
             self.assertEqual(installer.reference_version(ref), installer.CARRIED_RELEASE)
             self.assertEqual(
                 installer.compare_versions(installer.reference_version(ref), installer.CARRIED_RELEASE),
@@ -3920,13 +3920,13 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
         nothing a digest can be equal to, so the answer is "" rather than
         a guess at the carried release."""
         with carrying_a_recorded_digest(None):
-            ref = "ghcr.io/spdrman/backup-manager@" + RECORDED_DIGEST
+            ref = "ghcr.io/spdrman/backupd@" + RECORDED_DIGEST
             self.assertEqual(installer.reference_version(ref), "")
 
     def test_the_env_of_a_digest_pinned_install_names_the_release(self):
         fx = Fixture(self)
         with carrying_a_recorded_digest() as recorded:
-            args = fx.args("--image", "ghcr.io/spdrman/backup-manager@" + recorded)
+            args = fx.args("--image", "ghcr.io/spdrman/backupd@" + recorded)
             rendered = installer.render_env(args)
             self.assertIn(f"VERSION={installer.CARRIED_RELEASE}", rendered)
             self.assertNotIn("VERSION=sha256", rendered)
@@ -3940,7 +3940,7 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
         and the old inline expression wrote exactly that for any reference
         carrying no tag."""
         fx = Fixture(self)
-        rendered = installer.render_env(fx.args("--image", "localhost:5000/backup-manager"))
+        rendered = installer.render_env(fx.args("--image", "localhost:5000/backupd"))
         self.assertIn("VERSION=unknown", rendered)
         self.assertNotIn("VERSION=latest", rendered)
         self.assertIsNone(installer._semver("latest"),
@@ -3952,7 +3952,7 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
         implementation."""
         with carrying_a_recorded_digest() as recorded:
             containers = [{"Service": installer.ENGINE_SERVICE,
-                           "Image": "ghcr.io/spdrman/backup-manager@" + recorded}]
+                           "Image": "ghcr.io/spdrman/backupd@" + recorded}]
             tag, source = installer.installed_image_tag(containers, Path("/nonexistent"))
         self.assertEqual(tag, installer.CARRIED_RELEASE)
         self.assertIn(installer.ENGINE_SERVICE, source)
@@ -4033,31 +4033,31 @@ class TestNamingAPreviousRelease(unittest.TestCase):
         that predates it."""
         default = _subparser(installer.build_parser(), "install").get_default("image")
         self.assertEqual(self.args().image, default)
-        self.assertEqual(self.args("--image", "localhost:5000/backup-manager").image,
-                         "localhost:5000/backup-manager",
+        self.assertEqual(self.args("--image", "localhost:5000/backupd").image,
+                         "localhost:5000/backupd",
                          "a tagless --image with no --release is left exactly as typed")
         self.assertEqual(self.args("--release", installer.CARRIED_RELEASE).image, default)
 
     def test_it_fills_a_tagless_reference_an_operator_did_name(self):
-        args = self.args("--image", "registry.example:5000/backup-manager", "--release", "0.4.0")
-        self.assertEqual(args.image, "registry.example:5000/backup-manager:0.4.0")
+        args = self.args("--image", "registry.example:5000/backupd", "--release", "0.4.0")
+        self.assertEqual(args.image, "registry.example:5000/backupd:0.4.0")
 
     def test_an_image_that_already_agrees_is_not_a_conflict(self):
-        args = self.args("--image", "ghcr.io/spdrman/backup-manager:0.4.0", "--release", "0.4.0")
-        self.assertEqual(args.image, "ghcr.io/spdrman/backup-manager:0.4.0")
+        args = self.args("--image", "ghcr.io/spdrman/backupd:0.4.0", "--release", "0.4.0")
+        self.assertEqual(args.image, "ghcr.io/spdrman/backupd:0.4.0")
 
     def test_it_refuses_a_release_older_than_the_binaries_it_writes(self):
-        # The embedded compose runs /rbm-web. That path exists from 0.3.3
+        # The embedded compose runs /backupd-web. That path exists from 0.3.3
         # onwards and in no image published before it, so writing this
         # deployment against an older tag produces two containers that die
-        # with "exec /rbm-web: no such file or directory" while the
+        # with "exec /backupd-web: no such file or directory" while the
         # installer waits for a health check that can never pass. 0.3.0,
         # 0.3.1 and 0.3.2 are all still on the registry, so this is
         # reachable rather than theoretical.
         for old in ("0.3.2", "0.3.0", "0.2.0", "0.1.0"):
             with self.subTest(release=old):
                 exc = refusal_from(self.args, "--release", old)
-                self.assertIsNotNone(exc, f"--release {old} names an image with no /rbm-web in it")
+                self.assertIsNotNone(exc, f"--release {old} names an image with no /backupd-web in it")
                 self.assertEqual(exc.code, installer.EXIT_RELEASE_TOO_OLD)
                 self.assertIn(old, exc.message)
                 self.assertIn(installer.FIRST_RELEASE_WITH_RBM, exc.message)
@@ -4069,11 +4069,11 @@ class TestNamingAPreviousRelease(unittest.TestCase):
         self.assertIsNone(
             exc,
             f"--release {installer.FIRST_RELEASE_WITH_RBM} is the first release whose image "
-            "carries /rbm-web, so it has to be accepted",
+            "carries /backupd-web, so it has to be accepted",
         )
 
     def test_two_flags_naming_different_versions_refuse_rather_than_pick_one(self):
-        exc = refusal_from(self.args, "--image", "ghcr.io/spdrman/backup-manager:0.5.0",
+        exc = refusal_from(self.args, "--image", "ghcr.io/spdrman/backupd:0.5.0",
                            "--release", "0.4.0")
         self.assertIsNotNone(exc, "installing a version other than the one that was named, quietly, "
                                   "is the whole failure this flag exists to prevent")
@@ -4083,7 +4083,7 @@ class TestNamingAPreviousRelease(unittest.TestCase):
 
     def test_a_digest_is_not_weakened_into_a_tag(self):
         exc = refusal_from(self.args,
-                           "--image", "ghcr.io/spdrman/backup-manager@sha256:" + "ab" * 32,
+                           "--image", "ghcr.io/spdrman/backupd@sha256:" + "ab" * 32,
                            "--release", "0.4.0")
         self.assertIsNotNone(exc)
         self.assertEqual(exc.code, installer.EXIT_RELEASE_CONFLICT)
@@ -4098,7 +4098,7 @@ class TestNamingAPreviousRelease(unittest.TestCase):
 
     def test_it_refuses_under_an_image_archive(self):
         fx = Fixture(self)
-        archive = fx.prefix / "backup-manager-0.4.0.tar"
+        archive = fx.prefix / "backupd-0.4.0.tar"
         archive.write_bytes(b"not really a tarball")
         exc = refusal_from(fx.args, "--image-archive", str(archive), "--release", "0.4.0")
         self.assertIsNotNone(exc)
@@ -4425,7 +4425,7 @@ class TestTheRegistryClientSpeaksTheProtocol(unittest.TestCase):
         answers = [TOKEN_ANSWER,
                    ("last=", _CannedResponse(page2)),
                    ("tags/list", _CannedResponse(page1, headers={
-                       "Link": '</v2/spdrman/backup-manager/tags/list?n=100&last=0.2.0>; rel="next"'})),
+                       "Link": '</v2/spdrman/backupd/tags/list?n=100&last=0.2.0>; rel="next"'})),
                    ]
         with _StubbedHTTP(answers) as http:
             versions = installer.Registry().released_versions()
@@ -4439,7 +4439,7 @@ class TestTheRegistryClientSpeaksTheProtocol(unittest.TestCase):
     def test_it_stops_rather_than_following_a_previous_link_forever(self):
         answers = [TOKEN_ANSWER,
                    ("tags/list", _CannedResponse(json.dumps({"tags": ["0.2.0"]}).encode(), headers={
-                       "Link": '</v2/spdrman/backup-manager/tags/list?n=100>; rel="previous"'}))]
+                       "Link": '</v2/spdrman/backupd/tags/list?n=100>; rel="previous"'}))]
         with _StubbedHTTP(answers) as http:
             self.assertEqual(installer.Registry().released_versions(), ["0.2.0"])
         self.assertEqual(len([r for r in http.requests if "tags/list" in r[1]]), 1,
@@ -4546,7 +4546,7 @@ class TestProvingTheReleaseThisInstallerCarries(unittest.TestCase):
 
     def test_somebody_elses_registry_is_not_vouched_for(self):
         registry = _FakeRegistry(digest=self.recorded)
-        pf = self.preflight("--image", "registry.example:5000/backup-manager:0.2.0", registry=registry)
+        pf = self.preflight("--image", "registry.example:5000/backupd:0.2.0", registry=registry)
         printed = self.notes_from(pf)
         self.assertEqual(registry.asked, [], "nothing recorded here describes another registry")
         self.assertIn("!!", printed)
@@ -4868,10 +4868,10 @@ class TestTheEnrolmentLinkNamesAnAddressSomebodyElseCanOpen(unittest.TestCase):
 
 
 class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
-    """--cli-only means the rbm-web binary is not executed at all.
+    """--cli-only means the backupd-web binary is not executed at all.
 
     Not "the Web UI is hidden" and not "the port is bound to loopback":
-    the engine container runs /rbm daemon instead of /rbm-web serve, and
+    the engine container runs /backupd daemon instead of /backupd-web serve, and
     the only service with a `ports:` key is never started. Every
     assertion below is about one of those two facts, because a CLI-only
     install that quietly published a Web UI would be the one failure an
@@ -4884,8 +4884,8 @@ class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
 
     def test_the_engine_runs_the_cli_and_not_the_web_binary(self):
         rendered = self.override("--cli-only")
-        self.assertIn('command: ["/rbm", "daemon"]', rendered)
-        self.assertNotIn('"/rbm-web"', rendered)
+        self.assertIn('command: ["/backupd", "daemon"]', rendered)
+        self.assertNotIn('"/backupd-web"', rendered)
 
     def test_no_web_ui_service_is_pinned_at_all(self):
         rendered = self.override("--cli-only")
@@ -4897,7 +4897,7 @@ class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
         everybody, and the default install would come up unpinned."""
         rendered = self.override()
         self.assertIn("\n  web-ui:", rendered)
-        self.assertNotIn("/rbm daemon", rendered)
+        self.assertNotIn("/backupd daemon", rendered)
 
     def test_the_health_check_is_disabled_rather_than_left_to_fail(self):
         """The canonical check is an HTTP liveness probe against
@@ -4913,12 +4913,12 @@ class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
         down, and it reads it line by line. The extra keys CLI-only adds
         are exactly the kind of thing that breaks a line-oriented read."""
         fx = Fixture(self)
-        args = fx.args("--cli-only", "--image", "ghcr.io/spdrman/rclone-manager:9.9.9",
+        args = fx.args("--cli-only", "--image", "ghcr.io/spdrman/backupd:9.9.9",
                        command="install")
         (args.prefix / "compose.image.yaml").write_text(
             installer.render_image_override(args), encoding="utf-8")
         self.assertEqual(installer._image_from_override(args.prefix),
-                         "ghcr.io/spdrman/rclone-manager:9.9.9")
+                         "ghcr.io/spdrman/backupd:9.9.9")
 
     def test_the_env_records_the_shape_so_a_bare_rerun_keeps_it(self):
         fx = Fixture(self)
@@ -5001,11 +5001,11 @@ class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
         args = fx.args("--cli-only", command="install")
         with contextlib.redirect_stdout(io.StringIO()):
             installer.stage_payload(args)
-        wrapper = args.prefix / "bin" / "rbm"
+        wrapper = args.prefix / "bin" / "backupd"
         self.assertTrue(wrapper.is_file(), "a CLI-only install with no CLI is not an install")
         self.assertEqual(wrapper.stat().st_mode & 0o111, 0o111)
         body = wrapper.read_text(encoding="utf-8")
-        self.assertIn("--entrypoint /rbm", body)
+        self.assertIn("--entrypoint /backupd", body)
         self.assertIn("--no-deps", body,
                       "without it a read starts the engine as a side effect of being run")
         self.assertIn("run --rm", body,
@@ -5033,20 +5033,20 @@ class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
                         encoding="utf-8")
         os.chmod(stub, 0o755)
         env = dict(os.environ, PATH=f"{stub_dir}:{os.environ['PATH']}")
-        return args.prefix / "bin" / "rbm", log, env
+        return args.prefix / "bin" / "backupd", log, env
 
     def test_the_wrapper_refuses_an_empty_invocation_instead_of_falling_through(self):
         """`docker compose run` given no command runs the service's own
-        command, which on a CLI-only deployment is `/rbm daemon`. Without
-        the guard a bare `rbm` became `/rbm /rbm daemon` and reported an
+        command, which on a CLI-only deployment is `/backupd daemon`. Without
+        the guard a bare `backupd` became `/backupd /backupd daemon` and reported an
         unknown command nobody typed, so the guard is the behaviour and
         docker must not be reached at all."""
         wrapper, log, env = self._staged_wrapper_and_stub_docker()
         proc = subprocess.run([str(wrapper)], capture_output=True, text=True, env=env, timeout=60)
         self.assertEqual(proc.returncode, 2,
-                         "a missing command is exit 2 in rbm itself, and the wrapper standing in "
+                         "a missing command is exit 2 in backupd itself, and the wrapper standing in "
                          "for it has to agree rather than invent a third answer")
-        self.assertIn("usage: rbm", proc.stderr)
+        self.assertIn("usage: backupd", proc.stderr)
         self.assertFalse(log.exists(),
                          "docker was invoked for an invocation that names no command; that is the "
                          "fall-through this guard exists to stop")
@@ -5060,14 +5060,14 @@ class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertTrue(log.exists(), "docker was never invoked for a real command")
         called = log.read_text(encoding="utf-8")
-        self.assertIn("run --rm --no-deps --entrypoint /rbm rclone-manager status", called)
+        self.assertIn("run --rm --no-deps --entrypoint /backupd backupd status", called)
 
     def test_a_full_install_stages_no_second_way_in(self):
         fx = Fixture(self)
         args = fx.args(command="install")
         with contextlib.redirect_stdout(io.StringIO()):
             installer.stage_payload(args)
-        self.assertFalse((args.prefix / "bin" / "rbm").exists())
+        self.assertFalse((args.prefix / "bin" / "backupd").exists())
 
     def test_the_flag_exists_only_where_a_deployment_is_staged(self):
         flags = {opt for a in _subparser(installer.build_parser(), "install")._actions
@@ -5083,7 +5083,7 @@ class TestARestartLoopIsNotAnInstall(unittest.TestCase):
     """A CLI-only engine serves nothing, so there is no health endpoint to
     ask and "the container is running" is the whole available claim.
 
-    Which is why it is sampled over a window rather than once. `rbm
+    Which is why it is sampled over a window rather than once. `backupd
     daemon` refuses rather than starts when it is handed something it
     cannot use, and for the first second of that the container genuinely
     is running: a single sample would report an install that is really a
@@ -5152,7 +5152,7 @@ class TestTheInstallerStillTravelsAlone(unittest.TestCase):
       * cwd is the temp directory, so a relative path out to the checkout
         cannot resolve either.
 
-    EPIC I / #672 folded twelve script domains onto scripts/rcmtools by
+    EPIC I / #672 folded twelve script domains onto scripts/bdtools by
     making them import a shared harness. This file is the one that cannot
     be folded that way, and this is what says so in a form that fails.
     """
@@ -5181,7 +5181,7 @@ class TestTheInstallerStillTravelsAlone(unittest.TestCase):
         self.assertEqual(proc.returncode, 0,
                          f"the installer did not survive being copied out of the checkout:\n"
                          f"{proc.stderr}")
-        self.assertIn("Install rclone-manager on a Docker host", proc.stdout)
+        self.assertIn("Install backupd on a Docker host", proc.stdout)
         for command in ("preflight", "install", "status", "uninstall"):
             self.assertIn(command, proc.stdout, "every subcommand has to still be reachable")
 
@@ -5352,7 +5352,7 @@ def enrolment_notice(base_url: str, token: str) -> str:
 
     Two files, because the line is assembled from two. The name it opens
     with is derived in core/cliecho/cliname.go, deliberately, so that
-    `rbm` and `rbm-web` cannot drift apart; the sentence itself is the
+    `backupd` and `backupd-web` cannot drift apart; the sentence itself is the
     Fprintf format in apps/common/auth/local/service.go's
     PrintBootstrapNotice, which is the only thing that knows the expiry
     and the single use it promises.
@@ -5386,7 +5386,7 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
     type. What it could not do by hand is keep it true. Every block was
     typed out, so the `Compose:` line arrived hand-wrapped with a `\\` the
     installer never emits and both blocks elided the compose invocation to
-    `docker compose -p rclone-manager ...`, which is an abbreviation
+    `docker compose -p backupd ...`, which is an abbreviation
     printed as though it were output. Output that is nearly right is worse
     than none, because a reader compares it against their screen
     character by character and concludes their install went wrong.
@@ -5415,7 +5415,7 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
     # The two values a real run computes from the host it is running on,
     # as the page substitutes them. Everything else in every block is
     # printed verbatim, which is what makes comparing them worth doing.
-    SAMPLE_PREFIX = "/home/you/rclone-manager"
+    SAMPLE_PREFIX = "/home/you/backupd"
     SAMPLE_BASE_URL = "http://10.0.0.10:8080"
 
     ENROL_SECTION = "first-run.html#enrol"
@@ -5587,8 +5587,8 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
 
     def test_the_deployment_note_quotes_it_too(self):
         """The third copy of the same sentence, found while pinning the
-        other two and carrying the binary name from before `rbm-web` was
-        derived from `rbm`. Quoted against the shipped Compose default
+        other two and carrying the binary name from before `backupd-web` was
+        derived from `backupd`. Quoted against the shipped Compose default
         rather than an installed host's address, because that document is
         about standing the stack up by hand, where `localhost` really is
         what container/compose.yaml sets.
@@ -5669,7 +5669,7 @@ class TestTheSiteReferenceNamesEverySubcommandThisParserDeclares(unittest.TestCa
     It added `enroll-link`, a seventh installer subcommand, and
     reference.html still said "Its six subcommands" in two places with no
     row for it. Every existing check was green: the flag table is held to
-    the parser's options and the command table to the `rbm` binary's
+    the parser's options and the command table to the `backupd` binary's
     dispatch table, and neither of them has an opinion about how many
     subcommands the installer has.
 
@@ -5776,7 +5776,7 @@ class TestReissuingAnEnrollmentLink(unittest.TestCase):
     reason to prefer either.
     """
 
-    NOTICE = "rbm-web: no administrator account exists yet. Open {} to create one (valid 30 minutes, single use)."
+    NOTICE = "backupd-web: no administrator account exists yet. Open {} to create one (valid 30 minutes, single use)."
 
     def test_the_newest_notice_wins_not_the_first(self):
         fx = Fixture(self)
@@ -5807,7 +5807,7 @@ class TestReissuingAnEnrollmentLink(unittest.TestCase):
         args.state_dir.mkdir(parents=True, exist_ok=True)
         (args.state_dir / "local-auth.json").write_text('{"username": "nas-admin"}')
         with unittest.mock.patch.object(installer, "detect_existing",
-                                        lambda a: (True, [{"Service": "rclone-manager"}], {})):
+                                        lambda a: (True, [{"Service": "backupd"}], {})):
             with self.assertRaises(installer.Refusal) as caught:
                 with contextlib.redirect_stdout(io.StringIO()):
                     installer.cmd_enroll_link(args)
@@ -5861,7 +5861,7 @@ class TestReissuingAnEnrollmentLink(unittest.TestCase):
             return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
         with unittest.mock.patch.object(installer, "detect_existing",
-                                        lambda a: (True, [{"Service": "rclone-manager"}], {})), \
+                                        lambda a: (True, [{"Service": "backupd"}], {})), \
              unittest.mock.patch.object(installer, "run", fake_run):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
@@ -5882,7 +5882,7 @@ class TestReissuingAnEnrollmentLink(unittest.TestCase):
         old = self.NOTICE.format("http://10.0.0.10:8080/enroll?token=OLDOLDOLD")
         fake = _FakeRun(logs_stdout=old)
         with unittest.mock.patch.object(installer, "detect_existing",
-                                        lambda a: (True, [{"Service": "rclone-manager"}], {})), \
+                                        lambda a: (True, [{"Service": "backupd"}], {})), \
              unittest.mock.patch.object(installer, "run", fake), \
              unittest.mock.patch.object(installer, "ENROLL_NOTICE_WAIT", 0):
             with self.assertRaises(installer.Refusal) as caught:

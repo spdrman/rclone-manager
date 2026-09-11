@@ -3,7 +3,7 @@ has to talk to it over the wire.
 
 # The blind spot this closes
 
-suites/web-ui over in spdrman/rclone-manager-tests starts `npm run dev`
+suites/web-ui over in spdrman/backupd-tests starts `npm run dev`
 and the app it drives resolves createMockApi out of
 ui/shared/src/api/mock.ts. So every case in that suite is a claim about a
 component rendering correctly GIVEN a fixture, and not one of them can go
@@ -34,11 +34,11 @@ the whole path so a browser can fail on it.
             the machine being backed up.
 
 Three machines, four containers, and the difference is worth being plain
-about. The product IS two containers: `/rbm-web serve` (the engine: local
-authentication, /api/v1, the scheduler, SQLite) and `/rbm-web serve-ui`
+about. The product IS two containers: `/backupd-web serve` (the engine: local
+authentication, /api/v1, the scheduler, SQLite) and `/backupd-web serve-ui`
 (the static bundle plus a reverse proxy to the engine). Collapsing them
 into one would delete the reverse-proxy hop, and that hop is half of what
-this suite exists to cover. So "the rclone-manager machine" here is the
+this suite exists to cover. So "the backupd machine" here is the
 product's own split, unchanged.
 
 # Why this drops docker-in-docker, and what that gives up
@@ -78,8 +78,8 @@ length to explain is only safe because serve-ui is its sole possible
 peer. Both of those are the topology doing work, so the topology is the
 real one. Nothing is published to the host on any of them.
 
-The name `rclone-manager` lives on the edge network only, and it resolves
-to the UI container: from outside the deployment that IS rclone-manager,
+The name `backupd` lives on the edge network only, and it resolves
+to the UI container: from outside the deployment that IS backupd,
 and it is the address the browser is given. Inside the deployment the
 containers keep compose's own names. One name per network, so nothing
 ever resolves to two things.
@@ -100,7 +100,7 @@ this script returns.
 
 The client container gets these, and they are the whole contract:
 
-  RM_BASE_URL          http://rclone-manager:8080
+  RM_BASE_URL          http://backupd:8080
   RM_ADMIN_USERNAME    the enrolled administrator
   RM_ADMIN_PASSWORD    its password, generated this run
   RM_BACKUP_SET        the seeded set's name
@@ -116,7 +116,7 @@ get away from.
   scripts/e2e/three-machine-web-ui.sh
       stand the stack up and run the built-in browser check.
 
-  scripts/e2e/three-machine-web-ui.sh --suite ../rclone-manager-tests/suites/web-ui
+  scripts/e2e/three-machine-web-ui.sh --suite ../backupd-tests/suites/web-ui
       stand it up and run that directory's Playwright suite inside the
       client container. The suite's own node_modules is not used: the
       image's is, because the checkout's was built for this host.
@@ -136,7 +136,7 @@ get away from.
                     serve-ui, so the browser reaches the stack the way a
                     real NAS's front door does (h2 over TLS) rather than
                     the plain HTTP/1.1 this rig otherwise uses. The
-                    reproduction for rclone-manager#730. RM_SEED_CYCLES=N
+                    reproduction for backupd#730. RM_SEED_CYCLES=N
                     additionally runs N backup cycles to enlarge the feed.
 
 The exit status is the client container's, not the teardown's. A run that

@@ -1,7 +1,7 @@
 // The stack's own proof, run from the client machine.
 //
 // This is not a spec and it is not trying to be one: the Playwright suite
-// over in spdrman/rclone-manager-tests is what asserts product behaviour.
+// over in spdrman/backupd-tests is what asserts product behaviour.
 // This file answers a narrower question, and it is the question a topology
 // script has to answer before anyone builds on it. Is there a real browser
 // in this container, can it reach the UI container over the private
@@ -144,7 +144,7 @@ try {
   //
   // A real POST through serve-ui's reverse proxy to the engine's local
   // auth, answered out of the administrator record the harness created
-  // with `rbm-web auth create-admin`. Nothing here is mocked, so a wrong
+  // with `backupd-web auth create-admin`. Nothing here is mocked, so a wrong
   // password fails exactly the way a wrong password fails in production.
   await page.getByLabel("Username").fill(username);
   await page.getByLabel("Password", { exact: true }).fill(password);

@@ -1,6 +1,6 @@
-# The rclone-manager-tests commit this repository's gate runs its browser
+# The backupd-tests commit this repository's gate runs its browser
 # e2e suite and its CLI smoke slice from. Moved by
-# scripts/rcmtools/e2e/bump_tests_pin.py, and the commit that moves it is itself
+# scripts/bdtools/e2e/bump_tests_pin.py, and the commit that moves it is itself
 # gated against the new pin, so a bad bump cannot land unnoticed.
 #
 # Why this repository pins that one, and that one pins a build of this one:
@@ -10,12 +10,12 @@
 # cannot silently change what those suites certify. Each is one line, in one
 # file, reviewable on its own.
 #
-# At a794c38, read off rclone-manager-tests' merged main rather than a branch
+# At a794c38, read off backupd-tests' merged main rather than a branch
 # head, because a squash rewrites the head and the pin then names a commit in
 # no history. It is exactly two commits past the sha this line held before, and
 # both are #431's, so nothing unrelated arrives with the bump.
 #
-# Those are rclone-manager-tests#32 and rclone-manager-tests#33, which between
+# Those are backupd-tests#32 and backupd-tests#33, which between
 # them retire the two retention cases that recorded this binary's old note
 # about FR-20 being unimplemented and replace them with one that asserts the
 # note that replaces it. They are the specs half of #431; the product half is
@@ -24,8 +24,8 @@
 # staging two of its files, and that repository's own lockstep test caught it
 # on main.
 #
-# It has moved once since, to 6520d0a, which is rclone-manager-tests#34: the
-# archive case that follows rclone-manager#442 refusing a retention tier bound
+# It has moved once since, to 6520d0a, which is backupd-tests#34: the
+# archive case that follows backupd#442 refusing a retention tier bound
 # to an archive storage class at load. The two paragraphs above are about the
 # bump that carried #431's specs and not about where this line points today,
 # which is worth saying rather than leaving them to read as current. A pin
@@ -46,13 +46,13 @@
 # tree and that spec goes red; the gate catches it, which is the pin doing its
 # job rather than a problem with it.
 #
-# It runs the other way too, and that half has no automation. rclone-manager-
+# It runs the other way too, and that half has no automation. backupd-
 # tests carries its own build-under-test.json naming a commit of THIS
 # repository, and a spec landed ahead of its feature cannot go green over there
 # until somebody moves it. Both of those commits are in that position right
 # now: they need that file moved to #465's own merge commit.
 #
-# Moved to b3fe0f8, which is rclone-manager-tests#36, and read off that
+# Moved to b3fe0f8, which is backupd-tests#36, and read off that
 # repository's merged main rather than off the branch, for the reason the
 # paragraph about a794c38 above already gives. EPIC #536 gave every
 # configuration read and write a "mode:" line on stderr saying which world
@@ -76,7 +76,7 @@
 # whatever commit this branch merges as, or #536's specs cannot go green
 # over there.
 #
-# Moved to 0673850, rclone-manager-tests#40, off their merged main again. #555
+# Moved to 0673850, backupd-tests#40, off their merged main again. #555
 # gives a read a third way to refuse, the engine at the address this host was
 # given turning out to serve a different deployment, so the banner says three
 # cases and g5 still pinned the sentence that said two. That is the pin
@@ -90,7 +90,7 @@
 # through RM_MODE=local runs the whole of Suite A green, 72 of 72. Their
 # build-under-test.json names 1bed795 and still has to move to this branch's
 # merge commit by hand, which is the half of the lockstep with no automation.
-# Moved to 90c3bb1, rclone-manager-tests#46, read off their merged main and
+# Moved to 90c3bb1, backupd-tests#46, read off their merged main and
 # not off the branch, for the reason the paragraph about a794c38 above
 # already gives. It is the specs half of #598: ten Suite B cases driving a
 # failing Activity page, and four Suite A cases plus a usage line for the
@@ -113,7 +113,7 @@
 # fails 7 and passes 3, which is what makes it a test of the product rather
 # than of the component.
 #
-# Moved again, to 41b0721, rclone-manager-tests#48, off their merged main.
+# Moved again, to 41b0721, backupd-tests#48, off their merged main.
 # That one is the black-box half of the two CLI surfaces this branch adds
 # beyond the durable activity read: `activity --follow` and `backup-set
 # edit-hold`, both pinned by their REFUSAL rather than their happy path.
@@ -135,7 +135,7 @@
 # build-under-test.json names 1bed795 of this repository and has to move to
 # whatever commit this branch merges as.
 #
-# Moved to e7bf7a9, rclone-manager-tests#51 and #53, off their merged main
+# Moved to e7bf7a9, backupd-tests#51 and #53, off their merged main
 # and not off the branch, for the reason the paragraph about a794c38 above already
 # gives. This one runs the other way round from most of the bumps above:
 # their specs did not land ahead of a feature, they were pinning the old
@@ -187,7 +187,7 @@
 # That is the same manual half the paragraphs above keep flagging, and it
 # is not something a bump on this side can close.
 #
-# Moved to 82fee27, rclone-manager-tests#62, read off their merged main and not
+# Moved to 82fee27, backupd-tests#62, read off their merged main and not
 # off the branch, for the reason the paragraph about a794c38 above already
 # gives. This is the specs half of #622: seventeen Suite B cases and seventeen
 # Suite A ones covering the local hard drive entry, the default marker and the
@@ -209,10 +209,10 @@
 # gate red: theirs was red against the old pin until this line moved, and ours
 # was red the moment #622 put a picker on a form their spec said had none.
 #
-# Moved to bfbe51e, rclone-manager-tests#64, read off their merged main and not
+# Moved to bfbe51e, backupd-tests#64, read off their merged main and not
 # off the branch, for the reason the paragraph about a794c38 above already
 # gives. This is the specs half of the CLI rename: the command an operator types
-# is `rbm` now, and 41 of that suite's cases asserted the old name in a
+# is `backupd` now, and 41 of that suite's cases asserted the old name in a
 # diagnostic prefix or a usage banner. They assert the new one.
 #
 # The bump has to ride with the product change rather than follow it, because
@@ -223,22 +223,22 @@
 #
 # It also brings two cases the old suite could not express. `invoke_as` runs the
 # argv under test through a second filename for the same binary, so g6 reaches
-# `version` under `backup-manager` and g7 reaches an unknown command under it,
-# and both require the output to say `rbm`. What that proves is that the binary
+# `version` under `backupd` and g7 reaches an unknown command under it,
+# and both require the output to say `backupd`. What that proves is that the binary
 # does not care which name reached it. What it does NOT prove, and their case
 # doc says so, is that the shipped image carries both names: the `go` builder
 # makes no image, so that half belongs to container/Dockerfile, where
-# apps/generic/tests/dockercli runs /rbm inside the built image.
+# apps/generic/tests/dockercli runs /backupd inside the built image.
 #
 # Their harness needed one fix that is worth knowing about here, because this
 # repository caused it. `docker cp` copies a symlink AS a symlink, and the new
-# image ships /rbm with /rbm as a link to it, so extraction was
+# image ships /backupd with /backupd as a link to it, so extraction was
 # landing a four-byte dangling link and exec'ing it. They pass `-L` now, which
 # is a no-op against a pre-rename image. The same defect was in this
 # repository's own release scripts and is fixed on the image branch.
-TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
+TESTS_REPO_URL=https://github.com/spdrman/backupd-tests.git
 #
-# Moved to 1b79f8d, rclone-manager-tests#60, off their merged main and not
+# Moved to 1b79f8d, backupd-tests#60, off their merged main and not
 # off the branch, for the reason the paragraph about a794c38 above already
 # gives. It is the specs half of #624: the add-backup-set wizard will not
 # save a source nobody has proven.
@@ -257,7 +257,7 @@ TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
 # half that matters: it makes them a test of the product rather than of the
 # component.
 #
-# The bump also carries b5af4c7, rclone-manager-tests#58, which is #617 and
+# The bump also carries b5af4c7, backupd-tests#58, which is #617 and
 # #618's specs. Their product half is already on main here (#619), and this
 # branch is rebased onto it, so those arrive green rather than ahead of the
 # feature they describe.
@@ -269,7 +269,7 @@ TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
 # above keeps flagging.
 TESTS_REPO_SHA=8d6e1abc1fa36826200ba578bc014d6a817f6e80
 #
-# Moved to bccd71c, rclone-manager-tests#65, off their merged main and not
+# Moved to bccd71c, backupd-tests#65, off their merged main and not
 # off the branch, for the reason the paragraph about a794c38 above already
 # gives. It is #687's OPEN item: "suite/web-ui-real-backend is pushed and
 # green on the rig but nothing points at it." Suite B now drives a real
@@ -290,14 +290,14 @@ TESTS_REPO_SHA=8d6e1abc1fa36826200ba578bc014d6a817f6e80
 # on a backup silently lands on the Dashboard), exit 0, run through
 # scripts/e2e/three-machine-web-ui.sh against this branch. Not yet filed
 # as its own issue on this side; recorded in this bump's PR instead
-# (rclone-manager-tests' findings/DISC-010.md has the full analysis and
+# (backupd-tests' findings/DISC-010.md has the full analysis and
 # a proposed fix).
 #
 # Moved to 8d6e1ab, read off their merged main and not off a branch, for the
 # reason the paragraph about a794c38 above already gives. It carries two of
 # their PRs at once.
 #
-# rclone-manager-tests#66 deletes the eight expectedToFailOnDISC010()
+# backupd-tests#66 deletes the eight expectedToFailOnDISC010()
 # markers from backups.spec.ts, now that #677 fixed the route those cases
 # were failing on. They were wrapped in test.fail(), so this bump is the
 # first time they are RUN rather than required to fail: 191 passed, 69
@@ -305,7 +305,7 @@ TESTS_REPO_SHA=8d6e1abc1fa36826200ba578bc014d6a817f6e80
 # scripts/e2e/three-machine-web-ui.sh against this branch. DISC-010 is
 # closed as a finding on both sides.
 #
-# rclone-manager-tests#67 retargets medium/remove-refuses-the-local-hard-
+# backupd-tests#67 retargets medium/remove-refuses-the-local-hard-
 # drive. It pinned "local is the drive this deployment's backups land on"
 # and "cannot be un-declared", the local-specific refusal #670 deleted when
 # it made local a declared destination, so it had been red against main
@@ -319,8 +319,8 @@ TESTS_REPO_SHA=8d6e1abc1fa36826200ba578bc014d6a817f6e80
 #
 # Still outstanding on their side, and still with no automation: their
 # build-under-test.json names 87a9dc7 of this repository, which predates
-# the `rbm` rename (#64), so roughly forty of their Suite A cases fail over
-# there with `expected "rbm: " … but it was "backup-manager: …"`. Their
+# the `backupd` rename (#64), so roughly forty of their Suite A cases fail over
+# there with `expected "backupd: " … but it was "backupd: …"`. Their
 # hook is red on main for that reason alone. It is the manual half of the
 # lockstep every paragraph above keeps flagging, and no bump on this side
 # can close it.

@@ -2,7 +2,7 @@
 # Positive controls for the /api/v1 contract gates (#166), at the path
 # everything already names.
 #
-# The controls themselves are scripts/rcmtools/api/selftest.py now (EPIC I,
+# The controls themselves are scripts/bdtools/api/selftest.py now (EPIC I,
 # I1.6 / #672). This file stays because the path is load bearing:
 #
 #   * scripts/ci-local.sh runs `bash scripts/api/selftest.sh`;
@@ -16,4 +16,4 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-exec python3 "$repo_root/scripts/rcmtools/api/selftest.py" "$@"
+exec python3 "$repo_root/scripts/bdtools/api/selftest.py" "$@"

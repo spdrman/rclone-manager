@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The two-machine backup proof (#356), at the path everything already names.
 #
-# The proof itself is scripts/rcmtools/e2e/two_machine_backup.py now (EPIC I,
+# The proof itself is scripts/bdtools/e2e/two_machine_backup.py now (EPIC I,
 # I1.6 / #672: sixty scripts across twelve domains, each reinventing the same
-# four helpers, consolidated onto scripts/rcmtools). This file stays because
+# four helpers, consolidated onto scripts/bdtools). This file stays because
 # the path is load bearing in four places that are not this port's to move:
 #
 #   * scripts/ci-local.sh execs it and reads its exit status;
@@ -21,8 +21,8 @@
 # `exec`, so the exit status is the proof's own and not a copy of it. The
 # whole exit-code contract (0 pass, 3 this machine could not perform the
 # proof, anything else failed) depends on that number arriving here
-# untouched; see rcmtools.harness for where it is decided.
+# untouched; see bdtools.harness for where it is decided.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-exec python3 "$repo_root/scripts/rcmtools/e2e/two_machine_backup.py" "$@"
+exec python3 "$repo_root/scripts/bdtools/e2e/two_machine_backup.py" "$@"

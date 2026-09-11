@@ -348,11 +348,11 @@ gate_warn_resource_saver() {
 # started after the preflight and removed on the way out, for the whole life
 # of the run. It costs a few MB of RAM and no CPU.
 #
-# Its label is deliberately NOT dockerlease's `rclone-manager-test`: that
+# Its label is deliberately NOT dockerlease's `backupd-test`: that
 # sweep removes labelled containers older than fifteen minutes, and a full
 # gate run is twenty-five, so the sentinel would be swept out from under the
 # run it exists to protect, at almost exactly the halfway point.
-GATE_SENTINEL_LABEL_KEY=rclone-manager-ci-local-sentinel
+GATE_SENTINEL_LABEL_KEY=backupd-ci-local-sentinel
 GATE_SENTINEL_LABEL="$GATE_SENTINEL_LABEL_KEY=1"
 
 # alpine:3.20 rather than alpine:latest: it is the base
