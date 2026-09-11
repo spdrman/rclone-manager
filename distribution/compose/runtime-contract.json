@@ -19,12 +19,12 @@
     "",
     "Roles, not service names. A service is the engine or the web UI because of",
     "the command it runs, never because of what it is called: apps/truenas calls",
-    "them backup-manager/backup-manager-ui and the canonical file calls them",
-    "rclone-manager/web-ui, and a check keyed on the name would silently stop",
+    "them backupd/backupd-ui and the canonical file calls them",
+    "backupd/web-ui, and a check keyed on the name would silently stop",
     "checking the moment someone renamed one."
   ],
 
-  "schema": "rclone-manager/runtime-contract/1",
+  "schema": "backupd/runtime-contract/1",
   "version": "1.2.0",
 
   "canonical": "container/compose.yaml",
@@ -36,14 +36,14 @@
     "outside the prohibition check."
   ],
   "derived": [
-    "apps/truenas/compose/backup-manager.yaml",
+    "apps/truenas/compose/backupd.yaml",
     "apps/truenas/catalog/templates/docker-compose.yaml",
-    "apps/openmediavault/compose/backup-manager.yml",
-    "apps/proxmox/compose/backup-manager.yml",
-    "apps/synology/compose/backup-manager.yml",
-    "apps/portainer/compose/backup-manager.yml",
-    "apps/casaos/compose/backup-manager.yml",
-    "apps/zimaos/compose/backup-manager.yml"
+    "apps/openmediavault/compose/backupd.yml",
+    "apps/proxmox/compose/backupd.yml",
+    "apps/synology/compose/backupd.yml",
+    "apps/portainer/compose/backupd.yml",
+    "apps/casaos/compose/backupd.yml",
+    "apps/zimaos/compose/backupd.yml"
   ],
 
   "_dockge_comment": [
@@ -123,7 +123,7 @@
       "mustContain": "/health/live",
       "derived": "checked",
       "_derived_note": "CHECKED on every derived artifact, not left to the derivation gate (issue #206). It used to be derivation-gate on the grounds that a derived artifact declares no engine healthcheck at all and inherits the image's, which canonical.json stated as the engine role's test - true while the image's instruction and the canonical engine check were the same command, and the whole of the defect once #167 made the canonical one a liveness probe and left the image's as the freshness verdict. Every derived Compose artifact now declares the start gate itself and is checked here, directly, in the file an operator reads. The derivation gate still checks it too, per adapter and across the four metadata formats this package cannot parse.",
-      "why": "the start gate has to be a liveness question, not a backup-freshness one. Every runtime definition's web UI declares depends_on: <engine>: condition: service_healthy, so whatever the engine's healthcheck asks is what stands between an operator and the only LAN-facing listener. `rbm status` exits non-zero on any DEGRADED, STALE or FAILING set and on a fresh install, which has backed nothing up yet and is legitimately not healthy, so gating on it means a stale backup set, or a fresh install, keeps the web UI from ever starting (issue #206). /health/live needs no configuration and is deliberately outside /api/v1. Backup freshness stays the operator and alerting surface it was built to be, and stays the image's own baked-in HEALTHCHECK for a plain `docker run`."
+      "why": "the start gate has to be a liveness question, not a backup-freshness one. Every runtime definition's web UI declares depends_on: <engine>: condition: service_healthy, so whatever the engine's healthcheck asks is what stands between an operator and the only LAN-facing listener. `backupd status` exits non-zero on any DEGRADED, STALE or FAILING set and on a fresh install, which has backed nothing up yet and is legitimately not healthy, so gating on it means a stale backup set, or a fresh install, keeps the web UI from ever starting (issue #206). /health/live needs no configuration and is deliberately outside /api/v1. Backup freshness stays the operator and alerting surface it was built to be, and stays the image's own baked-in HEALTHCHECK for a plain `docker run`."
     },
     {
       "id": "graceful-shutdown-period",
@@ -189,7 +189,7 @@
       "id": "configuration-mount",
       "scope": "service-mount",
       "roles": ["engine"],
-      "containerPath": "/etc/backup-manager/config",
+      "containerPath": "/etc/backupd/config",
       "writable": true,
       "derived": "derivation-gate",
       "derivedWhy": "distribution/packaging checks every adapter's mounts, in whatever format they were written in: derive.go's storage-mounts rule for the container side and CheckStorageShapes for the write mode, both against canonical.json. It has to be there rather than here for two reasons. It reads each platform's own env file, so ${APPDATA:?...} and ${STATE_DIR:?...} resolve to the real host path instead of an unexpanded string this package would have to split on a colon that is inside a message; and it covers the Unraid XML template, which is not compose at all.",
@@ -199,7 +199,7 @@
       "id": "secret-file-mount",
       "scope": "service-mount",
       "roles": ["engine"],
-      "containerPath": "/etc/backup-manager/id_ed25519",
+      "containerPath": "/etc/backupd/id_ed25519",
       "readOnly": true,
       "derived": "derivation-gate",
       "derivedWhy": "distribution/packaging checks every adapter's mounts, in whatever format they were written in: derive.go's storage-mounts rule for the container side and CheckStorageShapes for the write mode, both against canonical.json. It has to be there rather than here for two reasons. It reads each platform's own env file, so ${APPDATA:?...} and ${STATE_DIR:?...} resolve to the real host path instead of an unexpanded string this package would have to split on a colon that is inside a message; and it covers the Unraid XML template, which is not compose at all.",
