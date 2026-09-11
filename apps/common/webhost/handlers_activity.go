@@ -8,7 +8,6 @@
 package webhost
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -94,7 +93,19 @@ func (h *handlers) listActivity(w http.ResponseWriter, r *http.Request) {
 			Detail:       e.Detail,
 		})
 	}
-	h.logActivityDebug(w, r, limit, resp)
+
+	// Issue #730's diagnostic, and the whole cost of it on a default
+	// deployment: one boolean test. When it IS on, the response is
+	// encoded exactly once and counted on its way out, rather than
+	// marshalled a second time to guess at its size - the number an
+	// operator needs is what left this process, which is also the only
+	// number a second marshal could disagree with.
+	if h.activityDebugOn() {
+		counted := &countingResponseWriter{ResponseWriter: w}
+		writeJSON(counted, http.StatusOK, resp)
+		h.logActivityDebug(r, limit, resp, counted.n)
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -106,47 +117,71 @@ func (h *handlers) listActivity(w http.ResponseWriter, r *http.Request) {
 // deployment, what this handler actually produced for the request the
 // browser could not read.
 //
-// Everything here is behind h.debug (RM_DEBUG=1 or LOG_LEVEL=debug), and
-// a default INFO deployment neither marshals the payload a second time
-// nor sets a header it did not set before. That includes the correlation
-// id: a 200 carries none normally, but the browser-side debug log reads
-// X-Correlation-Id off every response, and without one on the success
-// path there is nothing to join a browser's record of a failed read to
-// the line below describing what was sent.
+// Everything here is behind h.debug (LOG_LEVEL=debug, or RM_DEBUG=1 as
+// the shortcut), and a default INFO deployment encodes the response
+// exactly once and writes no extra line. What it does NOT gate anymore
+// is the correlation id: every response this package produces carries
+// one, minted at the edge (requestscope.go), because the browser-side
+// debug log reads X-Correlation-Id off whatever response it got and an
+// id that only exists while diagnostics are on cannot join a browser's
+// record of a failed read to the hop that answered it.
 //
 // The forwarded headers are logged because the operator's own front end
 // is the other live suspect: if the request reaching this handler has
 // a proto or host that disagrees with what the browser asked for, the
 // hop in front rewrote it, and the fault is there rather than here.
-func (h *handlers) logActivityDebug(w http.ResponseWriter, r *http.Request, limit int, resp listActivityResponse) {
-	if h == nil || !h.debug || h.logger == nil {
-		return
-	}
-
-	id := correlationID()
-	w.Header().Set("X-Correlation-Id", id)
-
-	// Marshalled a second time purely to report the size the client
-	// should have received; writeJSON does its own encoding and is left
-	// exactly as it is on every other path. An error here is not worth
-	// reporting as anything but the size it produced, since writeJSON is
-	// about to hit the same one.
-	body, _ := json.Marshal(resp)
-
+func (h *handlers) logActivityDebug(r *http.Request, limit int, resp listActivityResponse, bytes int) {
 	h.logger.Event(r.Context(), slog.LevelDebug, "activity_debug", "served activity feed",
-		slog.String("correlation_id", id),
+		// The edge minted this and already put it on the response
+		// (requestscope.go), so the line below and the header the
+		// browser's own debug log reads name the same request. Before
+		// that middleware this handler minted its own id here, which
+		// meant the id only existed when diagnostics were on and could
+		// not be joined to the proxy hop's record of the same request.
+		slog.String("correlation_id", CorrelationIDFrom(r.Context())),
+		// The browser's own per-attempt id: the one identifier that
+		// still exists for a request the browser got NO response to,
+		// since there is no response to carry a correlation id back on.
+		slog.String("client_attempt_id", ClientAttemptIDOf(r)),
 		slog.Int("limit", limit),
-		// The cursor pair is here because the payload size above is #730's
-		// live suspect: a request that sent no cursor and came back with a
-		// next one is the operator's browser on page one of a record that
-		// is longer than the page, which is exactly the shape this route
-		// used to answer in a single unbounded response.
+		// The cursor pair is here because the payload size below is
+		// #730's live suspect: a request that sent no cursor and came
+		// back with a next one is the operator's browser on page one of
+		// a record that is longer than the page, which is exactly the
+		// shape this route used to answer in a single unbounded
+		// response.
 		slog.String("before", r.URL.Query().Get("before")),
 		slog.String("next_cursor", resp.NextCursor),
 		slog.Int("event_count", len(resp.Events)),
-		slog.Int("bytes", len(body)),
+		slog.Int("bytes", bytes),
 		slog.String("x_forwarded_for", r.Header.Get("X-Forwarded-For")),
 		slog.String("x_forwarded_proto", r.Header.Get("X-Forwarded-Proto")),
 		slog.String("x_forwarded_host", r.Header.Get("X-Forwarded-Host")),
 	)
+}
+
+// activityDebugOn is the gate, in one place so the handler above and the
+// writer it wraps cannot get out of step: a counted response with no
+// line to report it is pure cost.
+func (h *handlers) activityDebugOn() bool {
+	return h != nil && h.debug && h.logger != nil
+}
+
+// countingResponseWriter counts the body bytes actually written through
+// it, which is what the debug line above reports.
+//
+// It embeds the ResponseWriter rather than reimplementing it, so an
+// optional interface a future handler on this route needs (Flush,
+// Hijack) is a change here and not a silent regression - today this
+// wraps exactly one plain JSON write, on one route, only when
+// diagnostics are on.
+type countingResponseWriter struct {
+	http.ResponseWriter
+	n int
+}
+
+func (c *countingResponseWriter) Write(p []byte) (int, error) {
+	n, err := c.ResponseWriter.Write(p)
+	c.n += n
+	return n, err
 }

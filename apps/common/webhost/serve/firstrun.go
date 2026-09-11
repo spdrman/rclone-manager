@@ -237,9 +237,19 @@ func newEngineHandler(cfg EngineConfig, backend webhost.BackupServiceClient, onC
 	// construction checked; mustIdentityBoundary (engine.go) is the
 	// construction-time refusal that makes a nil here mean "this profile
 	// has no gateway" and never "the boundary went missing".
-	return StripUntrustedIdentity(gatewayOf(cfg.Platform))(
-		SecurityHeaders(
-			local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)))
+	//
+	// webhost.RequestScope goes outside all of it, and outside the mux,
+	// so EVERY response this process produces carries the id an operator
+	// can quote and every line it logs can name the same request
+	// (issue #730): the auth routes above, the API router, and the mux's
+	// own 404 for a path neither of them claims. The API router installs
+	// it too, for a provider that builds a route table without this
+	// composition; nesting is a pass-through, so one request is still
+	// minted exactly one id.
+	return webhost.RequestScope(
+		StripUntrustedIdentity(gatewayOf(cfg.Platform))(
+			SecurityHeaders(
+				local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux))))
 }
 
 // recorderFor resolves where API actions are recorded (issue #599).

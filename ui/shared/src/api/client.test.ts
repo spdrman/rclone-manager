@@ -79,6 +79,34 @@ describe("httpApi CSRF/bootstrap-token wiring", () => {
     vi.unstubAllGlobals();
   });
 
+  /**
+   * Issue #730's review. A request that gets no response carries no
+   * correlation id back, so the browser names each ATTEMPT on the way
+   * out and the server writes that name down. Two things have to hold
+   * for that to be worth anything: the header is always sent, and it is
+   * different every time - an id shared by three retries cannot answer
+   * "which of my tries is the line in your log", which is the only
+   * question it exists for. It is also bounded to what the server is
+   * willing to record (16 hex characters).
+   */
+  it("sends a fresh bounded X-Client-Attempt-Id on every request", async () => {
+    const fetchMock = mockFetchOk({});
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.getVersion();
+    await httpApi.getVersion();
+
+    const ids = fetchMock.mock.calls.map((call) => {
+      const [, init] = call as [string, RequestInit];
+      return (init.headers as Record<string, string>)["X-Client-Attempt-Id"];
+    });
+    expect(ids).toHaveLength(2);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{16}$/);
+    expect(ids[0]).not.toBe(ids[1]);
+
+    vi.unstubAllGlobals();
+  });
+
   it("omits X-CSRF-Token when no cookie has been issued yet", async () => {
     const fetchMock = mockFetchOk(undefined, 204);
     vi.stubGlobal("fetch", fetchMock);

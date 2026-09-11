@@ -35,7 +35,7 @@ import { BackupManagerError, RequestFailure, toApiErrorCode } from "./contracts"
 // them on. Imported rather than inlined because the gate, the console
 // format and the non-browser guards belong to one module, not to the
 // three catch blocks below.
-import { debugEnvironment, debugLog, describeError } from "./debug";
+import { debugEnvironment, debugLog, describeError, isDebugEnabled } from "./debug";
 // The wire shapes below are GENERATED from api/v1/openapi.json, not
 // declared here. Before issue #166 this file carried its own hand-written
 // copy of every snake_case response body, transcribed from the Go
@@ -189,6 +189,38 @@ export function bootstrapTokenFromLocation(): string | null {
   return token === null || token === "" ? null : token;
 }
 
+/**
+ * The header carrying this browser's own name for one attempt, and the
+ * generator for it (issue #730's review).
+ *
+ * Why it exists at all: a correlation id travels on a RESPONSE, and the
+ * fault this whole diagnostic was built for is a request that gets no
+ * response. So the browser names the attempt on the way out, the server
+ * writes that name into its line for the request
+ * (apps/common/webhost/requestscope.go), and a console screenshot
+ * showing `request.no-response` can then be matched against a server log
+ * that proves the request arrived and what was sent back - which is
+ * exactly the question "TypeError: Failed to fetch" leaves open.
+ *
+ * Bounded to sixteen hex characters, in the character set the server is
+ * willing to write down (it drops anything longer or stranger rather
+ * than truncating it), so this header can never be the reason a log line
+ * is unreadable. `getRandomValues` where the browser has it and
+ * `Math.random` where it does not: a NAS is reached over plain HTTP on a
+ * local network, where parts of WebCrypto are unavailable, and a
+ * diagnostic id is not a secret - uniqueness among a handful of
+ * in-flight requests is the entire requirement.
+ */
+const CLIENT_ATTEMPT_HEADER = "X-Client-Attempt-Id";
+
+function newClientAttemptId(): string {
+  const bytes = new Uint8Array(8);
+  const c = globalThis.crypto;
+  if (c && typeof c.getRandomValues === "function") c.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -209,6 +241,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (bootstrapToken) headers[BOOTSTRAP_TOKEN_HEADER] = bootstrapToken;
   }
 
+  // Issue #730's review. The one identifier that still exists for a
+  // request that gets NO response at all: there is no response to carry
+  // a correlation id back on, so the browser has to name the attempt
+  // itself and the server has to write that name down (webhost's
+  // requestscope.go reads this header, bounded and validated). Minted
+  // per ATTEMPT, deliberately unlike Idempotency-Key above, which is
+  // per logical submission and is reused across retries: what this
+  // answers is "which of my three tries is the line in your log", and a
+  // value shared by all three cannot.
+  const attemptId = newClientAttemptId();
+  headers[CLIENT_ATTEMPT_HEADER] = attemptId;
+
   // Issue #598. Everything from here down is the one place that can tell
   // this API's three failures apart, so it is the one place that labels
   // them. A `fetch` that rejects and a 2xx body that will not parse used
@@ -216,13 +260,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // then only say something generic about them.
   let res: Response;
   // Issue #730. The URL asked for and how long the attempt lasted are
-  // knowable only here, and a rejected `fetch` carries neither. The timer
-  // runs whether or not diagnostics are on: one `performance.now()` is
-  // cheaper than asking the toggle an extra time, and a reading nobody
-  // logs costs nothing.
-  const url = BASE + path;
-  const startedAt = performance.now();
-  debugLog("request.start", { method, url });
+  // knowable only here, and a rejected `fetch` carries neither.
+  //
+  // The toggle is read ONCE per request rather than at each of the four
+  // lines below, and everything those lines need - the joined URL, the
+  // clock, the detail objects - is built only when it is on. This
+  // function is on the path of every API call this bundle makes, so a
+  // detail object built unconditionally is one built on every request of
+  // every deployment that never asked for a diagnostic.
+  const debug = isDebugEnabled();
+  const startedAt = debug ? performance.now() : 0;
+  if (debug) debugLog("request.start", { method, url: BASE + path, attemptId });
   try {
     // `BASE + path` spelled out again here rather than passing `url`:
     // scripts/api/check-client-paths.sh reduces every path expression in
@@ -255,14 +303,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // it, and it is written only when diagnostics were asked for.
     debugLog(
       "request.no-response",
-      {
+      () => ({
         path,
-        url,
+        url: BASE + path,
         method,
+        attemptId,
         cause: describeError(cause),
         ...debugEnvironment(),
         elapsedMs: Math.round(performance.now() - startedAt)
-      },
+      }),
       "error"
     );
     throw new RequestFailure({ kind: "no-response", path, cause });
@@ -313,7 +362,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // a bug report is one nobody can match up; a logged id is.
     debugLog(
       "request.error-status",
-      { path, status: res.status, code: api.code, correlationId: api.correlationId },
+      () => ({ path, status: res.status, code: api.code, correlationId: api.correlationId, attemptId }),
       "error"
     );
     throw new BackupManagerError(api);
@@ -333,7 +382,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const correlationId = res.headers.get("x-correlation-id") ?? undefined;
     debugLog(
       "request.unreadable-body",
-      { path, status, contentType, correlationId, cause: describeError(cause) },
+      () => ({ path, status, contentType, correlationId, attemptId, cause: describeError(cause) }),
       "error"
     );
     throw new RequestFailure({ kind: "unreadable-body", path, status, contentType, correlationId, cause });

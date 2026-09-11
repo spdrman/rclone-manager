@@ -34,8 +34,9 @@
  */
 
 /** Where the toggle is persisted, and the query parameter that sets it.
- *  Spelled once: the backend's own half of this switch is `RM_DEBUG=1`,
- *  and the two names are meant to read as one feature. */
+ *  Spelled once: the backend's own half of this switch is `LOG_LEVEL`
+ *  (with `RM_DEBUG=1` as its shortcut), and the two are meant to read as
+ *  one feature. */
 const DEBUG_KEY = "rm-debug";
 const DEBUG_PARAM = "debug";
 
@@ -43,10 +44,10 @@ const DEBUG_PARAM = "debug";
  *  `rm-debug` shows this channel and nothing else. */
 const PREFIX = "[rm-debug]";
 
-/** Whether `?debug=1` has already been folded into storage. The URL is
- *  read once per page rather than on every log line: the query parameter
- *  is a way to TURN the toggle on, and the toggle itself lives in
- *  storage. */
+/** Whether the query parameter has already been folded into storage. The
+ *  URL is read once per page rather than on every log line: `?debug=1`
+ *  and `?debug=0` are ways to CHANGE the toggle, and the toggle itself
+ *  lives in storage. */
 let queryPromoted = false;
 
 /**
@@ -72,8 +73,18 @@ function usableStorage(): Storage | null {
  *
  * Read live rather than cached, so an operator who sets the key in the
  * console sees the next failure logged without reloading the page. The
- * cost is one `getItem` per call, which is why every call site goes
- * through `debugLog` and not through a hand-rolled `if`.
+ * cost is one `getItem` per call, which is why a caller that asks
+ * several times about one request (client.ts's `request`) resolves it
+ * ONCE into a local and then branches on that.
+ *
+ * `?debug=1` turns it on and `?debug=0` turns it off, both persisting,
+ * because the off switch is the half an operator needs at the end of the
+ * call: a toggle that can only be set from the URL is one they have to
+ * be walked through the developer console to clear, and a browser left
+ * logging every request forever is how a diagnostic becomes a support
+ * burden of its own. Any other value is left alone rather than read as
+ * "off", so an unrelated `?debug=something` cannot silently clear a
+ * toggle somebody set deliberately.
  */
 export function isDebugEnabled(): boolean {
   const store = usableStorage();
@@ -82,7 +93,9 @@ export function isDebugEnabled(): boolean {
   if (!queryPromoted) {
     queryPromoted = true;
     try {
-      if (new URLSearchParams(window.location.search).get(DEBUG_PARAM) === "1") store.setItem(DEBUG_KEY, "1");
+      const asked = new URLSearchParams(window.location.search).get(DEBUG_PARAM);
+      if (asked === "1") store.setItem(DEBUG_KEY, "1");
+      else if (asked === "0") store.removeItem(DEBUG_KEY);
     } catch {
       // A location this build cannot parse is not a reason to fail the
       // request that was being diagnosed.
@@ -108,11 +121,25 @@ export type DebugLevel = "debug" | "error";
  * The gate is INSIDE this function on purpose: a caller that had to ask
  * first is a caller that can forget to, and a `console.debug` shipped
  * without a gate is noise in every deployment that never asked for it.
+ *
+ * `detail` may be a function, and a caller whose detail object costs
+ * anything to build should pass one: it is invoked only if the line is
+ * actually written, so a default deployment pays for neither the object
+ * nor the values inside it. That is not a micro-optimisation for its own
+ * sake - this module is imported by the ONE function every API call in
+ * this bundle goes through (client.ts's `request`), so anything eagerly
+ * built here is built on every request of every deployment, including
+ * every deployment that asked for nothing.
  */
-export function debugLog(event: string, detail: Record<string, unknown>, level: DebugLevel = "debug"): void {
+export function debugLog(
+  event: string,
+  detail: Record<string, unknown> | (() => Record<string, unknown>),
+  level: DebugLevel = "debug"
+): void {
   if (!isDebugEnabled()) return;
-  if (level === "error") console.error(PREFIX, event, detail);
-  else console.debug(PREFIX, event, detail);
+  const fields = typeof detail === "function" ? detail() : detail;
+  if (level === "error") console.error(PREFIX, event, fields);
+  else console.debug(PREFIX, event, fields);
 }
 
 /** A thrown value as three readable facts. */

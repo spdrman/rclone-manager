@@ -34,12 +34,53 @@
   loading a deployment's entire lifecycle record on open. The record is
   append-only and nothing prunes it, so the previous shape got slower every
   week a deployment stayed up, and clamping alone would have left everything
-  older than the newest thousand events unreachable. The cursor is opaque, it
-  pages on the journal's own ordering rather than on an offset — so a
-  transition recorded between two requests cannot make a page repeat itself —
-  and a cursor the feed did not issue is ignored rather than refused, the same
-  way an unparseable `limit` already was. The filters above the list apply to
-  every page loaded, not only the newest one.
+  older than the newest thousand events unreachable. The cursor is a row
+  position echoed straight back from `next_cursor` — described that way rather
+  than as "opaque", because a token a client is told to hand back unchanged is
+  the honest description of what it is — it pages on the journal's own ordering
+  rather than on an offset, so a transition recorded between two requests
+  cannot make a page repeat itself, and any value the feed could not have
+  issued (unparseable, negative, zero, too large to name a row) is ignored and
+  answered with the newest page rather than refused, the same way an
+  unparseable `limit` already was. The filters above the list apply to every
+  page loaded, not only the newest one.
+
+- **`LOG_LEVEL` is the diagnostics switch, and it reaches every process**
+  (#730). It was already read by the web host's own surfaces while the engine
+  built its log sink at a hard-coded `info`, so an operator who set it got the
+  reverse-proxy trace and nothing from the process the trace describes.
+  `core/service.Open` and the CLI's own sink now take the level from the
+  environment (`obs.LevelFromEnv`), and `container/compose.yaml` passes
+  `LOG_LEVEL` to BOTH services — with `container/.env.example`, the provider
+  adapters and the Portainer template carrying it too — because the two halves
+  of one request are recorded in two containers and one of them at `debug`
+  gives half of every story. `RM_DEBUG=1` stays as the shortcut, and
+  `docs/deployment.md`'s new "Turning on diagnostics" covers all three
+  switches, the browser's `?debug=1`/`?debug=0` included.
+
+- **The proxy reports what the body turned out to be, not only what it
+  declared** (#730). At `debug`, `web-ui` wraps the upstream body in a
+  transparent observer and emits `proxy_upstream_complete` once per request:
+  bytes actually copied against the `Content-Length` declared, whether the read
+  ended at EOF, and any read or close error, at `warn` when the two disagree.
+  This is the shape the reported fault takes from JavaScript — a well-formed
+  status line, a body that stops early, a browser that refuses the response
+  before `fetch` sees any of it — and until now nothing in the container
+  recorded that the transfer came apart. The header-phase line is renamed
+  `proxy_upstream_headers`, since that is what it is.
+
+- **Every response carries a correlation id, and the browser names its own
+  attempt** (#730). The id is minted in one middleware at the web host's edge,
+  before authentication and routing, and set on every response rather than only
+  on refusals: a 200 whose body the browser could not read used to carry none,
+  so "the browser could not read this" and "here is what was sent" were two
+  records with nothing in common. `serve-ui` forwards it to the engine, which
+  adopts a valid inbound id instead of minting a second, so the two containers'
+  lines join. And because a request that gets no response carries nothing back,
+  the browser now sends `X-Client-Attempt-Id` and logs it in the `[rm-debug]`
+  line, which the server writes down (bounded and validated) — so a console
+  screenshot of a failed `fetch` can still be matched to the server's record of
+  the same request.
 
 ### Fixed
 
@@ -50,6 +91,17 @@
   path` — a URL built any other way is one the gate never saw. It had been
   failing for every path in the file, which is a CI step red for reasons that
   have nothing to do with the change being checked.
+
+- **A deployment that asked for no diagnostics pays for none** (#730). The
+  activity feed's debug line reports the bytes a counting response writer
+  actually wrote, instead of marshalling the whole payload a second time to
+  guess the size; the browser client resolves the toggle once per request and
+  builds its detail objects through a thunk, so nothing is constructed on the
+  path every API call in the bundle takes; and the reverse proxy no longer
+  allocates a per-request context value of its own for the clock, riding along
+  in the one the correlation id already needs — which is also what keeps
+  `proxy_error` reporting how long the browser waited on a default `info`
+  deployment, where the failure it describes actually happens.
 
 ## [0.4.0] - 2026-09-09
 

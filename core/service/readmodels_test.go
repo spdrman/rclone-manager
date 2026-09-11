@@ -353,6 +353,52 @@ func TestListActivity_PagesOlderEventsWithTheCursor(t *testing.T) {
 	}
 }
 
+// TestListActivity_IgnoresACursorItCouldNotHaveIssued is the contract
+// ?before= publishes (api/v1/openapi.json, issue #730's review): the
+// token is a row position echoed from next_cursor, and anything that is
+// not one reads as the newest page.
+//
+// Every row below is a value a real client can send - a stale bookmark,
+// a hand-edited URL, a query string a proxy mangled - and the point is
+// that they all answer the same way. The alternative an implementation
+// drifts towards is refusing one of them, which turns an operator's
+// diagnostic page into an error page over a query parameter that was
+// only ever advisory.
+func TestListActivity_IgnoresACursorItCouldNotHaveIssued(t *testing.T) {
+	svc, _ := openTestService(t)
+	ctx := context.Background()
+	runOneCycle(t, svc)
+
+	newest, _, err := svc.ListActivity(ctx, 1, "")
+	if err != nil {
+		t.Fatalf("ListActivity: %v", err)
+	}
+	if len(newest) != 1 {
+		t.Fatalf("len = %d after a cycle, want 1; there is nothing to compare pages against", len(newest))
+	}
+
+	for _, before := range []string{
+		"not-a-cursor",
+		"-1",
+		"0",
+		" 12",
+		"12.5",
+		// Larger than any int64 id: strconv.ParseInt reports this as the
+		// clamped maximum rather than as zero, so a feed that trusted
+		// its return value would be paging from a position no row can
+		// ever hold.
+		"99999999999999999999999",
+	} {
+		got, _, err := svc.ListActivity(ctx, 1, before)
+		if err != nil {
+			t.Fatalf("ListActivity(before=%q): %v, want the newest page rather than a refusal", before, err)
+		}
+		if len(got) != 1 || got[0].ArtifactID != newest[0].ArtifactID || got[0].To != newest[0].To {
+			t.Errorf("before=%q returned %+v, want the newest page %+v", before, got, newest)
+		}
+	}
+}
+
 // TestListOperations_ReportsSubmittedOperationsNewestFirst is GET
 // /api/v1/operations, which was a 405 before issue #211.
 func TestListOperations_ReportsSubmittedOperationsNewestFirst(t *testing.T) {

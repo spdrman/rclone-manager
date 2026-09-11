@@ -92,9 +92,11 @@ type ActivityEvent struct {
 // A limit of zero or less means DefaultActivityLimit; anything above
 // MaxActivityLimit is clamped to it.
 //
-// before is a cursor from an earlier call's second return value and
-// selects the events OLDER than the one it names; empty means start at
-// the newest. A value this feed did not issue is ignored rather than
+// before is a row-position token echoed back from an earlier call's
+// second return value (see the cursor's shape below), and selects the
+// events OLDER than the row it names; empty means start at the newest. A
+// value this feed did not issue - garbage, a negative number, one too
+// large to be an id - is IGNORED and reads as the newest page, never
 // refused, for the same reason a nonsensical limit is: the caller asked
 // for a feed, and a page an operator went to look at should not be an
 // error because a bookmark went stale.
@@ -112,11 +114,7 @@ func (b *BackupService) ListActivity(ctx context.Context, limit int, before stri
 		limit = MaxActivityLimit
 	}
 
-	// An unparseable cursor reads as no cursor, so cursorBefore stays
-	// zero and the journal starts at the newest row.
-	cursorBefore, _ := strconv.ParseInt(before, 10, 64)
-
-	records, err := b.journal.RecentActivityBefore(ctx, cursorBefore, limit)
+	records, err := b.journal.RecentActivityBefore(ctx, activityCursor(before), limit)
 	if err != nil {
 		return nil, "", fmt.Errorf("service: listing activity: %w", err)
 	}
@@ -141,4 +139,25 @@ func (b *BackupService) ListActivity(ctx context.Context, limit int, before stri
 		nextCursor = strconv.FormatInt(records[len(records)-1].ID, 10)
 	}
 	return out, nextCursor, nil
+}
+
+// activityCursor turns a caller's ?before= into the row position
+// RecentActivityBefore takes, and is the one place this feed decides what
+// a cursor it did not issue means.
+//
+// Zero is "start at the newest row", and every value that is not a
+// positive decimal id lands there: empty, garbage, a negative number, a
+// number too large for an int64. Explicit rather than leaning on
+// strconv.ParseInt's own error return, which gives 0 for a malformed
+// value but the CLAMPED extreme for one that is merely out of range -
+// the same answer today only because every real id is below it. A feed
+// whose paging behaviour depends on that is one nobody can reason about
+// from the documented contract, which for a diagnostic surface (issue
+// #730) is the wrong way round.
+func activityCursor(before string) int64 {
+	id, err := strconv.ParseInt(before, 10, 64)
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
 }

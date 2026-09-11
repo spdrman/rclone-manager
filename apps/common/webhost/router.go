@@ -144,15 +144,23 @@ func DebugEnabled() bool { return envLogLevel() == slog.LevelDebug }
 // the default is unchanged: INFO, exactly what this handler emitted
 // before there was anything to configure. An operator diagnosing a
 // report we cannot reproduce (issue #730: a browser that gets no HTTP
-// response at all while curl gets a clean 401) sets RM_DEBUG=1, or
-// LOG_LEVEL for the finer choice, and gets the debug events this
-// package and serve/ui.go emit; nobody who sets neither sees one extra
-// line.
+// response at all while curl gets a clean 401) sets LOG_LEVEL=debug, or
+// RM_DEBUG=1 as the shortcut, and gets the debug events this package and
+// serve/ui.go emit; nobody who sets neither sees one extra line.
 //
 // RM_DEBUG wins over LOG_LEVEL because it is the shortcut an operator is
 // told to set over a phone call, and an unparseable LOG_LEVEL falls back
 // to INFO rather than refusing to start: a typo in a diagnostic knob
 // must never take a backup host down.
+//
+// core/internal/obs.LevelFromEnv is the other reader of these same two
+// variables, with the same precedence and the same fallback, and it is
+// what the ENGINE builds its sink from. Two readers rather than one
+// shared helper because apps/ may import core/ and never the reverse,
+// and core/internal is unreachable from here by construction. They have
+// to agree: a deployment where the two containers answered "how loud am
+// I" differently is the half of #730 where an operator got the proxy
+// trace and nothing from the process it describes.
 func envLogLevel() slog.Level {
 	if os.Getenv("RM_DEBUG") == "1" {
 		return slog.LevelDebug
@@ -263,6 +271,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}
 
 	r := chi.NewRouter()
+
+	// Outermost, and over the health probes as well as /api/v1: the id
+	// this mints is on every response this router produces, and the
+	// clock it starts is the only place a later hop can read how long
+	// the request has been in this process (requestscope.go). Registered
+	// before any route below, which is chi's own requirement for a
+	// root-level Use.
+	r.Use(RequestScope)
 
 	r.Get("/health/live", healthLive)
 	r.Get("/health/ready", h.healthReady)

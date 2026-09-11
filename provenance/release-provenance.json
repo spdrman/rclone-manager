@@ -56,14 +56,14 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "c183e3cfa5827a50df2a7f98e9cd946779bdee254f5c17252cdb9621b28a0518",
+    "sha256": "b51118523f522d7aa7de7dfe04d9e1072a427f9d803ddf84f69089d0263624ad",
     "format": "sha256sum"
   },
   "artifacts": [
     {
       "target": "casaos",
       "path": "apps/casaos/compose/backup-manager.yml",
-      "sha256": "adda42d34395364d8c6066fc606a0381f58df51c0e7d02de053ad9e69b1609c9"
+      "sha256": "31382cb731ec49677cfd9e7aa7bf5dd6d7953d5831dd8b41180d220ce2669c16"
     },
     {
       "target": "casaos",
@@ -78,17 +78,17 @@
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.yml",
-      "sha256": "1f015410824b821eefa73ab47b20015f4990b3c6890537a03ac138c466131929"
+      "sha256": "9bd6a8bcce02d7179f9c36e0f465fcb51a627e58c1a062ddee80be9946b83398"
     },
     {
       "target": "portainer",
       "path": "apps/portainer/compose/backup-manager.env",
-      "sha256": "9a1ca1a38b819dbe588e7158777e7af579389621c3f52601cfc52084d6fcf16d"
+      "sha256": "b5ee2d449c649e6fb7647c0842ddc8d25717eee297aeb381ca07d45a3526014c"
     },
     {
       "target": "portainer",
       "path": "apps/portainer/compose/backup-manager.yml",
-      "sha256": "db072f2d02be0f2150a3c2361e23715c31f9a518443924cdf0ea30095c78a30a"
+      "sha256": "136075aa3a57d0de456f87aeead355662aea70ad99dd9da28b8677b7d2469a9c"
     },
     {
       "target": "portainer",
@@ -98,7 +98,7 @@
     {
       "target": "portainer",
       "path": "apps/portainer/templates.json",
-      "sha256": "b07f6ef39e4087aa94498328717c9656e844af85f2da35334b6e1304ded03c38"
+      "sha256": "99fcc0e8756980278f8858199592c0f03db2029ca0665b5dba06bab394cb3645"
     },
     {
       "target": "proxmox",
@@ -108,7 +108,7 @@
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backup-manager.yml",
-      "sha256": "960a6020a30d02003b4ffc0ebaa90a9d66d73e999fdfafb3e40241388bc00451"
+      "sha256": "0dfaa215f063a41549d431d976f757d55085adcc1159b62aa807a882b96ab525"
     },
     {
       "target": "truenas",
@@ -128,12 +128,12 @@
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/templates/docker-compose.yaml",
-      "sha256": "b98863e83a246636d9b8955b619fc3b322acdd8bc4c2f95e0641ba72c2f794cd"
+      "sha256": "4f7f3f77a97288a46b8dbcc74b2a7059eaabf09951186a673e1ee671cb9983f3"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/compose/backup-manager.yaml",
-      "sha256": "d3f2e3b69fb414669421728855c195ae764dcfa871fdd1f8fe90780619651bff"
+      "sha256": "22c7f02d801b9698c32434f6902f63a7df982fdfdfa0adf9ce0fbe905d48815f"
     },
     {
       "target": "unraid",
@@ -148,7 +148,7 @@
     {
       "target": "zimaos",
       "path": "apps/zimaos/compose/backup-manager.yml",
-      "sha256": "2e3b20da949c3738b69138f93f0cc5b07ccceb8c98b5c177586b002d9088f507"
+      "sha256": "b7fc053e31e2a568a4195a1e48ce0537ce7b891257f4c65839099cd2d1aa21e1"
     },
     {
       "target": "zimaos",
@@ -158,7 +158,7 @@
     {
       "target": "generic",
       "path": "container/.env.example",
-      "sha256": "44516790cbbebfed6826f115d23d9d87faa2f3c317eb45818b3878b4346656cf"
+      "sha256": "1b7c77ae85e9c21b8860e0d66b0237f1375026f2f9417b6f9f1ae4d71785609a"
     },
     {
       "target": "generic",
@@ -168,7 +168,7 @@
     {
       "target": "generic",
       "path": "container/compose.yaml",
-      "sha256": "ab5363e02f4d44b250a85735a0ba203243f466b665c64afe1ddaf0bd43d4b2d7"
+      "sha256": "5ab23c0ea604d24e7023dd571392746c81e7a4b5421228f67908ca4041c86ef0"
     }
   ],
   "unbuiltTargets": [

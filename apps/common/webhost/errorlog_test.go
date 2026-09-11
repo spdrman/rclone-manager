@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -303,6 +304,14 @@ func calls(call *ast.CallExpr, name string) bool {
 // whole feature is worth nothing without. Diagnostics that cost a
 // default deployment anything get turned off and are then unavailable
 // when they are needed.
+//
+// The correlation id is deliberately NOT part of that claim anymore. It
+// used to be a debug-only addition on a success, and this test used to
+// require its absence; issue #730's review moved it to the edge, on
+// every response, because the browser reads it off whatever response it
+// got and an id that exists only while diagnostics are on is an id that
+// never exists when the fault is first reported. What a default
+// deployment must still not pay is the extra LINE.
 func TestListActivity_ServesNoDebugRecordByDefault(t *testing.T) {
 	t.Setenv("RM_DEBUG", "")
 	t.Setenv("LOG_LEVEL", "")
@@ -315,9 +324,6 @@ func TestListActivity_ServesNoDebugRecordByDefault(t *testing.T) {
 	defer log.mu.Unlock()
 	if len(log.records) != 0 {
 		t.Errorf("a default deployment logged %d events serving the activity feed, want none: %+v", len(log.records), log.records)
-	}
-	if got := rec.Header().Get("X-Correlation-Id"); got != "" {
-		t.Errorf("a 200 carried X-Correlation-Id %q by default; the header on a success is a debug-only addition and must not appear otherwise", got)
 	}
 }
 
@@ -334,6 +340,7 @@ func TestListActivity_DebugRecordsWhatWasServedUnderAQuotableId(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "203.0.113.7")
 	req.Header.Set("X-Forwarded-Proto", "https")
 	req.Header.Set("X-Forwarded-Host", "nas.example")
+	req.Header.Set(ClientAttemptHeader, "attempt0123456789")
 	rec := httptest.NewRecorder()
 	rt.router.ServeHTTP(rec, req)
 	mustStatus(t, rec, http.StatusOK)
@@ -356,8 +363,18 @@ func TestListActivity_DebugRecordsWhatWasServedUnderAQuotableId(t *testing.T) {
 	if entry.attrs["limit"] != "25" {
 		t.Errorf("limit = %q, want 25", entry.attrs["limit"])
 	}
-	if entry.attrs["bytes"] == "" || entry.attrs["bytes"] == "0" {
-		t.Errorf("bytes = %q; the size the client should have received is the one fact the browser's side cannot report", entry.attrs["bytes"])
+	// The EXACT size, not merely a non-zero one: this number used to come
+	// from a second json.Marshal of the same value, and the whole reason
+	// it now comes from a counting writer around the one real encode is
+	// that a client's problem is the bytes that actually left this
+	// process.
+	if got, want := entry.attrs["bytes"], strconv.Itoa(rec.Body.Len()); got != want {
+		t.Errorf("bytes = %q, want %q (the response body's real length)", got, want)
+	}
+	// The browser's own attempt id: the only identifier that still
+	// exists for a request the browser got no response to at all.
+	if got := entry.attrs["client_attempt_id"]; got != "attempt0123456789" {
+		t.Errorf("client_attempt_id = %q, want the one the browser sent", got)
 	}
 	if _, ok := entry.attrs["event_count"]; !ok {
 		t.Error("no event_count attribute")

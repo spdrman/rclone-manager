@@ -596,6 +596,82 @@ yourself. The connection stays refused until you do.
 clears and later comes back does alert again, so a recurrence is never lost behind a
 notification you already dismissed.
 
+## Turning on diagnostics
+
+Some faults only happen on a real deployment. Issue #730 is the example this
+section exists for: one NAS whose Activity page failed with `TypeError: Failed to
+fetch` — no HTTP response reaching JavaScript at all — while `curl` against the
+same route answered cleanly, and a rig built from the shipped image never
+reproduced it. Nothing in the default log said anything, because nothing had been
+asked to.
+
+There are **three** switches, and they are three because a request crosses three
+places that each know something the other two cannot see.
+
+**Both containers.** `LOG_LEVEL=debug` in `container/.env`, which
+`container/compose.yaml` passes to `rclone-manager` and to `web-ui` alike:
+
+```
+# container/.env
+LOG_LEVEL=debug
+```
+
+```
+docker compose -f container/compose.yaml up -d
+docker compose -f container/compose.yaml logs -f
+```
+
+`RM_DEBUG=1` is the same switch under a shorter name, kept because it is the one
+an operator can be given over a phone call; it wins if both are set. An
+unparseable value falls back to `info` rather than refusing to start — a typo in a
+diagnostic knob must never take a backup host down.
+
+**Set it on both services or neither.** The engine records what it built and
+served; `web-ui` records what the engine answered, what framing the body arrived
+with, and how many bytes of it actually reached the browser. Every line on both
+sides names the same `correlation_id`, which is what lets the two accounts of one
+request be read as one story — and one container at `debug` gives you half of
+every story with nothing to join it to.
+
+What appears at `debug` that does not appear at `info`:
+
+| event | container | what it answers |
+| --- | --- | --- |
+| `activity_debug` | `rclone-manager` | what the activity feed actually served: how many events, how many bytes, which cursor, and the forwarded headers it was asked under |
+| `proxy_upstream_headers` | `web-ui` | what the engine answered and with what framing — status, `Content-Length`, `Content-Encoding`, `Transfer-Encoding` |
+| `proxy_upstream_complete` | `web-ui` | what the body turned out to be: bytes actually copied against the length declared, whether the read ended at EOF, and any read or close error. A body that ends short of its declared length is logged at `warn` |
+
+Two events are recorded whatever the level, because a failure to answer the
+browser at all is not something an operator should have to have predicted:
+`proxy_error` (the reverse proxy could not produce a response — an unreachable
+engine, or one that accepted the connection and never replied) and `http_refusal`
+(the API returned a 500 and could say why in the log without saying it to the
+client).
+
+**The browser.** The page has its own half, and it is not an environment
+variable: the two containers cannot see what `fetch` threw, and a request that got
+no response carries nothing back to correlate with. Open the deployment with
+`?debug=1`:
+
+```
+http://your-nas.local:8080/activity?debug=1
+```
+
+That persists (it sets `rm-debug` in `localStorage`), so a reload or a navigation
+keeps logging; `?debug=0` clears it again, and so does
+`localStorage.removeItem('rm-debug')` in the browser console. Filter the console
+on `rm-debug` and every line this channel writes appears and nothing else. Each
+line carries an `attemptId` — the browser's own name for that one attempt, sent as
+`X-Client-Attempt-Id` — and the server writes the same value into its line for the
+request, which is how a console screenshot of a request that produced **no
+response at all** can still be matched to what the server did with it. Where a
+response did arrive, both sides also name the same `correlation_id`, which every
+response carries in `X-Correlation-Id`.
+
+**Turn it back off when you are done.** At `debug` both containers write a line
+per API request, and the browser writes one per `fetch`. That is a diagnostic
+posture, not an operating one.
+
 ## Release hashes
 
 `scripts/release/record-release-hashes.sh` builds `container/Dockerfile` for both

@@ -2122,7 +2122,7 @@
           },
           "next_cursor": {
             "type": "string",
-            "description": "An opaque cursor to send back as `before` to fetch the next page, which here means the events OLDER than the last one above. Present only when this page came back full, so there may be more behind it; absent means the caller has reached the end of the record and asking again would return nothing. Opaque on purpose: it is the journal's own ordering key today, and a client that parses it or does arithmetic on it is relying on something this contract does not promise.",
+            "description": "The row position this page ended at, to be sent back verbatim as `before` to fetch the events OLDER than the last one above. Present only when this page came back full, so there may be more behind it; absent means the caller has reached the end of the record and asking again would return nothing. It is a decimal token naming a position in the durable lifecycle record, not an opaque blob and not a promise about that record's internal numbering: echo it, do not parse it, and never do arithmetic on it - the only supported use is handing it back unchanged.",
             "x-go-omitempty": true
           }
         },
@@ -6547,7 +6547,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A cursor from a previous response's next_cursor. Only events OLDER than the one it names come back, which is what lets a client read past the newest page instead of raising limit until the whole record arrives at once. Omitted means start at the newest event. An unparseable value is ignored rather than refused, exactly as an unparseable limit is: a page an operator went to look at should not be blanked over a query string."
+            "description": "The row-position token echoed from a previous response's next_cursor. Only events OLDER than the row it names come back, which is what lets a client read past the newest page instead of raising limit until the whole record arrives at once. Omitted means start at the newest event. Any value this feed could not have issued - unparseable, negative, zero, or too large to name a row - is IGNORED and answered with the newest page rather than refused, exactly as an unparseable limit is: a page an operator went to look at should not be blanked over a query string."
           }
         ],
         "responses": {

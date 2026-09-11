@@ -184,6 +184,17 @@ what the application used to leave at the browser's default and paint black on b
 ![The settings page switching to dark mode, scrolling through a form of native selects and number inputs, then switching back](docs/site/screens/ui-dark-mode.gif)
 
 
+## When it will not work and the log says nothing
+
+Diagnostics are opt-in, and all three switches are in one place:
+[**Turning on diagnostics**](docs/deployment.md#turning-on-diagnostics). The short
+version is `LOG_LEVEL=debug` in `container/.env` — which both containers read, and
+both have to have, because one request's story is written half in each — and
+`?debug=1` on the page itself for the half only the browser can see. `?debug=0`
+turns that one back off. Every response carries an `X-Correlation-Id` and every
+request carries the browser's own attempt id, so a console screenshot and a
+container log can be matched up even when the browser never got a response at all.
+
 
 ## Licence
 

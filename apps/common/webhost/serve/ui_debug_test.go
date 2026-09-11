@@ -16,14 +16,17 @@ package serve_test
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/webhost"
 	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
@@ -206,11 +209,17 @@ func TestUI_DebugTracesTheUpstreamResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET through the proxy: %v", err)
 	}
-	defer res.Body.Close()
+	// Read it to the end: the header-phase event below is emitted before
+	// the body moves, but the completion event this test also covers can
+	// only exist once the body has been copied and closed.
+	if _, err := io.ReadAll(res.Body); err != nil {
+		t.Fatalf("reading the proxied body: %v", err)
+	}
+	res.Body.Close()
 
-	got := log.named("proxy_upstream")
+	got := log.named("proxy_upstream_headers")
 	if len(got) != 1 {
-		t.Fatalf("logged %d proxy_upstream events, want exactly 1: %+v", len(got), log.records)
+		t.Fatalf("logged %d proxy_upstream_headers events, want exactly 1: %+v", len(got), log.records)
 	}
 	entry := got[0]
 	if entry.level != slog.LevelDebug {
@@ -226,6 +235,219 @@ func TestUI_DebugTracesTheUpstreamResponse(t *testing.T) {
 		if _, ok := entry.attrs[key]; !ok {
 			t.Errorf("no %s attribute: response framing is exactly what a browser rejects before fetch() sees anything", key)
 		}
+	}
+	// The completion half, on a body that arrived whole: declared and
+	// observed agree, the read ended at EOF, and nothing failed. This is
+	// the baseline the truncated case below is only meaningful against.
+	done := log.named("proxy_upstream_complete")
+	if len(done) != 1 {
+		t.Fatalf("logged %d proxy_upstream_complete events, want exactly 1: %+v", len(done), log.records)
+	}
+	body := done[0]
+	if body.attrs["bytes_read"] != body.attrs["content_length"] {
+		t.Errorf("bytes_read = %q for a declared content_length of %q; a clean transfer must report them equal",
+			body.attrs["bytes_read"], body.attrs["content_length"])
+	}
+	if body.attrs["eof"] != "true" {
+		t.Errorf("eof = %q on a body that arrived whole, want true", body.attrs["eof"])
+	}
+	if body.attrs["read_error"] != "" {
+		t.Errorf("read_error = %q on a clean transfer, want empty", body.attrs["read_error"])
+	}
+	if body.level != slog.LevelDebug {
+		t.Errorf("level = %v on a clean transfer, want %v", body.level, slog.LevelDebug)
+	}
+}
+
+// TestUI_DebugReportsABodyThatDidNotArriveWhole is the finding this
+// event exists for, and the shape #730 looks like from JavaScript.
+//
+// The upstream declares a length and then sends less of the body than it
+// promised. Every earlier line in this process still reads as a success:
+// the round trip returned, the status was 200, the declared framing was
+// well formed. The browser's HTTP stack refuses the response outright
+// and fetch() rejects with a bare TypeError, and without this event
+// nothing in this container ever recorded that the transfer came apart.
+func TestUI_DebugReportsABodyThatDidNotArriveWhole(t *testing.T) {
+	const declared = 4096
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Content-Length set by hand, then a short write: net/http's own
+		// server notices, stops writing and drops the connection, which
+		// is exactly what a proxy or a kernel dropping a transfer mid
+		// body looks like from this side.
+		w.Header().Set("Content-Length", strconv.Itoa(declared))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"events":[`))
+	}))
+	t.Cleanup(upstream.Close)
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parsing upstream URL: %v", err)
+	}
+
+	log := &recordingLogger{}
+	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
+		Upstream: upstreamURL,
+		StaticFS: uiShell(),
+		Logger:   log,
+		Debug:    true,
+	}))
+	t.Cleanup(ui.Close)
+
+	// The client's own outcome is deliberately not asserted, because
+	// this is the shape that has no single one: the transfer comes apart
+	// mid body, so depending on timing a caller either gets a response
+	// whose read then fails or no response at all. That is precisely the
+	// reported symptom ("TypeError: Failed to fetch" against a route
+	// curl reads), and it is the reason the record below has to exist
+	// here rather than being inferred from what the caller saw.
+	if res, err := http.Get(ui.URL + "/api/v1/activity"); err == nil {
+		_, _ = io.ReadAll(res.Body)
+		res.Body.Close()
+	}
+
+	var done []loggedEvent
+	// The body is copied and closed on the proxy's own goroutine, which
+	// can outlive the client's read by a moment.
+	for i := 0; i < 100; i++ {
+		if done = log.named("proxy_upstream_complete"); len(done) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(done) != 1 {
+		t.Fatalf("logged %d proxy_upstream_complete events, want exactly 1: %+v", len(done), log.records)
+	}
+	entry := done[0]
+
+	if entry.attrs["content_length"] != strconv.Itoa(declared) {
+		t.Errorf("content_length = %q, want the declared %d", entry.attrs["content_length"], declared)
+	}
+	read, err := strconv.ParseInt(entry.attrs["bytes_read"], 10, 64)
+	if err != nil {
+		t.Fatalf("bytes_read = %q, which is not a number", entry.attrs["bytes_read"])
+	}
+	if read <= 0 || read >= declared {
+		t.Errorf("bytes_read = %d, want more than nothing and less than the declared %d: a truncation this event cannot see is a truncation nobody can see", read, declared)
+	}
+	// An operator reading a default-level log has to be able to find
+	// this without also reading every debug line around it: the transfer
+	// coming apart is the fault, not a detail of one.
+	if entry.level != slog.LevelWarn {
+		t.Errorf("level = %v for a body that did not arrive whole, want %v", entry.level, slog.LevelWarn)
+	}
+}
+
+// TestUI_CorrelatesTheRequestAcrossBothHops is issue #730's review,
+// medium finding 3. Three accounts of one request - the browser's, this
+// hop's and the engine's - are only worth anything if they name it the
+// same way.
+func TestUI_CorrelatesTheRequestAcrossBothHops(t *testing.T) {
+	seen := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Get(webhost.CorrelationHeader)
+		// The engine echoes the id it was handed, exactly as
+		// webhost.RequestScope does on the other side of this proxy.
+		w.Header().Set(webhost.CorrelationHeader, r.Header.Get(webhost.CorrelationHeader))
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(upstream.Close)
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatalf("parsing upstream URL: %v", err)
+	}
+
+	log := &recordingLogger{}
+	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
+		Upstream: upstreamURL,
+		StaticFS: uiShell(),
+		Logger:   log,
+		Debug:    true,
+	}))
+	t.Cleanup(ui.Close)
+
+	req, err := http.NewRequest(http.MethodGet, ui.URL+"/api/v1/activity", nil)
+	if err != nil {
+		t.Fatalf("building the request: %v", err)
+	}
+	req.Header.Set(webhost.ClientAttemptHeader, "attempt-0123456789")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET through the proxy: %v", err)
+	}
+	_, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+
+	served := res.Header.Values(webhost.CorrelationHeader)
+	if len(served) != 1 || served[0] == "" {
+		t.Fatalf("%s = %v, want exactly one non-empty value: the engine echoes the id this hop forwarded, and both copies reaching the browser is a response with two answers to one question",
+			webhost.CorrelationHeader, served)
+	}
+
+	forwarded := <-seen
+	if forwarded != served[0] {
+		t.Errorf("forwarded %q upstream but answered the browser with %q; the two hops' log lines cannot be joined", forwarded, served[0])
+	}
+
+	traced := log.named("proxy_upstream_headers")
+	if len(traced) != 1 {
+		t.Fatalf("logged %d proxy_upstream_headers events, want exactly 1: %+v", len(traced), log.records)
+	}
+	if traced[0].attrs["correlation_id"] != served[0] {
+		t.Errorf("the trace names correlation_id %q, the response carried %q", traced[0].attrs["correlation_id"], served[0])
+	}
+	// The browser's own attempt id, which is the only identifier that
+	// survives a request that gets no response at all.
+	if traced[0].attrs["client_attempt_id"] != "attempt-0123456789" {
+		t.Errorf("client_attempt_id = %q, want the one the browser sent", traced[0].attrs["client_attempt_id"])
+	}
+}
+
+// TestUI_StaticResponsesCarryACorrelationIdToo. The app shell is served
+// by this container itself, and a browser that got HTML where it
+// expected JSON is one of #730's live hypotheses - so that response is
+// exactly one an operator needs to be able to name.
+func TestUI_StaticResponsesCarryACorrelationId(t *testing.T) {
+	handler := serve.NewUI(serve.UIConfig{Upstream: deadUpstream(t), StaticFS: uiShell()})
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sets/abc", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the app shell)", rec.Code)
+	}
+	if got := rec.Header().Get(webhost.CorrelationHeader); got == "" {
+		t.Errorf("the app shell carried no %s", webhost.CorrelationHeader)
+	}
+}
+
+// TestUI_UnreachableUpstreamStillReportsHowLongTheBrowserWaited is the
+// clause the off-path cost review could have cost. The start time moved
+// out of this file's own per-request context value and into the one the
+// edge middleware already allocates, and the whole point of that value
+// was telling "the engine refused instantly" apart from "we sat on
+// ResponseHeaderTimeout" - at DEFAULT level, since a browser that gets
+// no answer is not a debug-only event.
+func TestUI_UnreachableUpstreamStillReportsHowLongTheBrowserWaited(t *testing.T) {
+	t.Setenv("RM_DEBUG", "")
+	t.Setenv("LOG_LEVEL", "")
+
+	log := &recordingLogger{}
+	handler := serve.NewUI(serve.UIConfig{Upstream: deadUpstream(t), StaticFS: uiShell(), Logger: log})
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/activity", nil))
+
+	got := log.named("proxy_error")
+	if len(got) != 1 {
+		t.Fatalf("logged %d proxy_error events, want exactly 1: %+v", len(got), log.records)
+	}
+	if _, ok := got[0].attrs["elapsed_ms"]; !ok {
+		t.Error("no elapsed_ms on a default deployment's proxy_error: how long the browser waited is the fact that separates a refused connection from a timeout")
+	}
+	if got[0].attrs["correlation_id"] == "" {
+		t.Error("no correlation_id on proxy_error: the id the browser was handed is what joins its report to this line")
 	}
 }
 
