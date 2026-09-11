@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	// local and sftp are the two backends FR-4 requires, and s3 is the
@@ -27,6 +28,7 @@ import (
 
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
+	"github.com/rclone/rclone/fs/filter"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/fs/operations"
 	"github.com/rclone/rclone/fs/walk"
@@ -367,14 +369,29 @@ func toArtifact(o fs.Object) transport.RemoteArtifact {
 // basename that turns up at two different depths (and therefore collides as
 // one model.ArtifactID) gets handled explicitly, loudly, and by name.
 //
+// What an operator CAN describe, since issue #737, is one subtree not to
+// enter at all (src.ExcludePaths, from config.BackupSet.ExcludePaths). That
+// is a path rather than a depth, and it subtracts from the recursion
+// instead of bounding it: excludeScope below turns it into an rclone
+// filter, so the walk declines to descend into exactly the directories
+// named and everything not named stays as fully recursive as it was.
+//
 // walk.GetAll with maxLevel -1 is rclone's own idiom for this (see its
 // fstest package): it uses the backend's native recursive listing when one
 // is available and falls back to walking directory by directory otherwise,
-// so this works identically against local and sftp. includeAll=true is
-// passed explicitly because this adapter never configures an rclone filter
-// for a caller to accidentally rely on; making that explicit here is
-// cheaper than leaving the answer to whatever ambient default happens to be
-// in effect.
+// so this works identically against local and sftp.
+//
+// includeAll is what decides whether rclone's own filter machinery is
+// consulted at all, and it is passed from excludeScope rather than pinned,
+// because the two answers are two different promises. With no
+// exclude_paths configured this adapter installs no filter and passes
+// true, which says "ignore whatever ambient filter configuration exists" —
+// the same posture it has always had, so nothing a caller left in the
+// context can quietly narrow a backup listing. With exclude_paths
+// configured it passes false alongside a filter of its own making, which
+// is the only way rclone will prune: the flag does not mean "filter the
+// answer", it means "let the walk skip directories", and skipping is the
+// whole point (see excludeScope).
 //
 // Full recursion is also where a plain listing turns into a fan-out of
 // connections, because sftp has no native recursive listing and rclone
@@ -382,13 +399,16 @@ func toArtifact(o fs.Object) transport.RemoteArtifact {
 // oneConnectionAtATime below is what bounds that; see its doc for the
 // measurement.
 func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.RemoteArtifact, error) {
-	ctx = oneConnectionAtATime(ctx)
+	ctx, includeAll, err := excludeScope(oneConnectionAtATime(ctx), src)
+	if err != nil {
+		return nil, WrapCtx(ctx, "list", err)
+	}
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
 		return nil, WrapCtx(ctx, "list", err)
 	}
 	defer shutdownFs(ctx, f)
-	objs, _, err := walk.GetAll(ctx, f, "", true, -1)
+	objs, _, err := walk.GetAll(ctx, f, "", includeAll, -1)
 	if err != nil {
 		return nil, WrapCtx(ctx, "list", err)
 	}
@@ -417,6 +437,73 @@ func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.R
 	// model.ArtifactID and to everything keyed on it.
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
+}
+
+// excludeScope returns the context List's walk runs under and the
+// includeAll flag that walk has to be called with, given one source's
+// ExcludePaths (issue #737).
+//
+// # Why a filter, and not a check on the result
+//
+// The complaint #737 reports is a discovery pass that does not finish, not
+// a listing that contains too much. A backup set aimed at a directory an
+// application also caches under (65k files across 1.6k subdirectories, in
+// the deployment that reported it) costs one directory read per
+// subdirectory, and on a remote with no native recursive listing every one
+// of those is a round trip. Dropping those objects from the returned slice
+// pays all of it and then throws the receipts away.
+//
+// rclone will decline to descend, but only through its filter: fs/list's
+// DirSorted asks Filter.IncludeDirectory about every directory it read and
+// removes the ones it refuses from the entries it returns, and fs/walk
+// recurses into exactly the directories that survive that. So an excluded
+// directory is never a job in the walk queue at all. That is also why the
+// rule is registered as a DIRECTORY exclude ("<path>/**"): a file-only rule
+// would match the same objects and prune nothing, which is the version of
+// this fix that would look right in a result-set test and change nothing
+// about the hang. TestAnExcludedSubtreeIsNeverListed is what holds the
+// difference.
+//
+// # Why includeAll comes back from here
+//
+// includeAll=true tells rclone to ignore filters entirely, which is what
+// List has always passed and what it must keep passing when nothing is
+// excluded: no ambient filter configuration a caller happened to leave in
+// the context is allowed to narrow a backup listing. Once this source
+// names exclusions there IS a filter that has to be honoured, and it is
+// this adapter's own: filter.AddConfig copies whatever was in the context
+// and installs the copy, so the rules added here are the only ones that
+// can reach this listing from this call, and they cannot leak back out to
+// the caller's context either.
+//
+// # The rule spelling
+//
+// Anchored with a leading "/", so it names one place under the set's
+// remote_path (the Fs root) rather than every directory in the tree that
+// shares a basename -- an operator excluding uploads/tiles must not
+// silently lose archive/tiles. The "/**" suffix is what makes it a
+// directory rule in rclone's filter syntax.
+//
+// Surrounding slashes are trimmed rather than refused, because "tiles",
+// "tiles/" and "/tiles" are three ways of writing one directory and
+// internal/config's validation accepts all three (see validateExcludePaths
+// for what it does refuse, and why a pattern is not accepted here).
+func excludeScope(ctx context.Context, src transport.Source) (context.Context, bool, error) {
+	if len(src.ExcludePaths) == 0 {
+		return ctx, true, nil
+	}
+
+	filtered, fi := filter.AddConfig(ctx)
+	for _, dir := range src.ExcludePaths {
+		trimmed := strings.Trim(dir, "/")
+		if trimmed == "" {
+			return ctx, false, fmt.Errorf("source %q: an excluded path must name a directory under the remote path, not %q", src.ID, dir)
+		}
+		if err := fi.Add(false, "/"+trimmed+"/**"); err != nil {
+			return ctx, false, fmt.Errorf("source %q: excluding %q from the listing: %w", src.ID, dir, err)
+		}
+	}
+	return filtered, false, nil
 }
 
 // Stat resolves one object and, unlike List, asks the backend for the

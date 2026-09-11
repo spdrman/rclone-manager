@@ -1218,6 +1218,86 @@ func TestIncludePatternValidation(t *testing.T) {
 	})
 }
 
+// --- exclude_paths (issue #737) ---
+
+// exclude_paths is the other half of a pair that is easy to read as one
+// setting and is deliberately two: include is a basename PATTERN, applied
+// to whatever discovery walked, and exclude_paths is a PATH, applied to
+// the walk itself. The rules are therefore almost each other's opposite,
+// and this is where that is pinned from both sides: a "/" is the whole
+// point of one field and a rejection in the other.
+func TestExcludePathValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		ok   bool
+	}{
+		{"a subdirectory", "tiles", true},
+		{"a nested subdirectory", "uploads/tiles", true},
+		{"a trailing slash", "uploads/tiles/", true},
+		{"a leading slash, meaning the same directory", "/uploads/tiles", true},
+		{"empty", "", false},
+		{"a backslash", `uploads\tiles`, false},
+		{"parent traversal", "uploads/../../etc", false},
+		{"a bare parent", "..", false},
+		{"a current-directory segment", "uploads/./tiles", false},
+		{"a glob pattern, which this field is not", "uploads/*", false},
+		{"a character class, which this field is not", "uploads/[ab]", false},
+		{"a trailing space, which would filter nothing", "tiles ", false},
+		{"a leading space, which would filter nothing", " tiles", false},
+		{"a space inside a nested segment", "uploads/ tiles", false},
+		{"all whitespace", "  ", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Sources[0].BackupSets[0].ExcludePaths = []string{tc.path}
+			err := cfg.Validate()
+			if tc.ok && err != nil {
+				t.Fatalf("exclude_paths %q was rejected: %v", tc.path, err)
+			}
+			if !tc.ok {
+				if err == nil {
+					t.Fatalf("exclude_paths %q was accepted", tc.path)
+				}
+				if !strings.Contains(err.Error(), "exclude_paths") {
+					t.Errorf("the refusal of exclude_paths %q does not name the field, so an operator cannot find it: %v", tc.path, err)
+				}
+			}
+		})
+	}
+
+	t.Run("no exclude_paths is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].ExcludePaths = nil
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("an absent exclude_paths list was rejected: %v", err)
+		}
+	})
+
+	// The two fields are independent: a set may carry a basename include
+	// and a path exclude at once, which is the configuration #737 is
+	// about ("*.pdf, but never walk into tiles/").
+	t.Run("a basename include and a path exclude together", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = []string{"*.pdf"}
+		cfg.Sources[0].BackupSets[0].ExcludePaths = []string{"tiles"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("include plus exclude_paths was rejected: %v", err)
+		}
+	})
+
+	// And the include rule is untouched by any of this: a path is still
+	// not a legal include pattern, whatever exclude_paths now accepts.
+	t.Run("a path is still not an include pattern", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = []string{"tiles/*.webp"}
+		cfg.Sources[0].BackupSets[0].ExcludePaths = []string{"tiles"}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("an include pattern containing \"/\" was accepted; exclude_paths is where a path belongs, and include is still basename-only")
+		}
+	})
+}
+
 // --- validation block ---
 
 func TestValidationHash(t *testing.T) {

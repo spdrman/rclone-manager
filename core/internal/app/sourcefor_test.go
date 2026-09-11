@@ -205,3 +205,40 @@ func TestSourceForForwardsTheConnectionCeiling(t *testing.T) {
 		})
 	}
 }
+
+// TestSourceForForwardsTheExcludedPaths is #737's row in the same ledger,
+// and the failure it guards is the one this file's own doc describes: a
+// field that works in the adapter's tests and does nothing in a real run.
+//
+// It is worth being explicit about what "nothing" costs here. An operator
+// who wrote exclude_paths did so because a discovery pass was not
+// finishing; a value that never reaches the adapter leaves them with a
+// configuration file that says the walk is bounded and a daemon still
+// walking 65k cached files every poll, which is the worst of both (the
+// symptom unchanged, and the explanation for it now looks handled).
+func TestSourceForForwardsTheExcludedPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  []string
+	}{
+		{"unset", nil},
+		{"one subtree", []string{"tiles"}},
+		{"several", []string{"uploads/tiles", "cache"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bs := testBackupSet(t, "/var/backups/postgres")
+			bs.ExcludePaths = tc.set
+
+			got := sourceFor(&config.Config{}, testSource("production", bs), bs)
+
+			if len(got.ExcludePaths) != len(tc.set) {
+				t.Fatalf("ExcludePaths = %q, want %q", got.ExcludePaths, tc.set)
+			}
+			for i := range tc.set {
+				if got.ExcludePaths[i] != tc.set[i] {
+					t.Errorf("ExcludePaths[%d] = %q, want %q", i, got.ExcludePaths[i], tc.set[i])
+				}
+			}
+		})
+	}
+}
