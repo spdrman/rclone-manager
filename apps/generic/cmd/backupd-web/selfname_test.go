@@ -90,7 +90,7 @@ var selfNameRoots = []string{
 // that constant moves again, THIS is still the string that must not come
 // back, and a check that followed the constant would quietly start
 // asserting something else.
-const legacyName = "backupd"
+const legacyName = "rbm"
 
 // TestNothingPrintsANameThisBinaryDoesNotHave walks the source this binary
 // is built from and requires every string literal in it to spell

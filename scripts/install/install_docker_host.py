@@ -3037,7 +3037,7 @@ services:
 """
 
 # Written by scripts/install/embed_compose.py alongside the blob above.
-EMBEDDED_COMPOSE_SHA256 = "5ab23c0ea604d24e7023dd571392746c81e7a4b5421228f67908ca4041c86ef0"
+EMBEDDED_COMPOSE_SHA256 = "95438574623ec135b5bfc167d44b7a0f7db0a49dc915bc4313bc89ce44af252b"
 
 
 def embedded_compose_bytes() -> bytes:
