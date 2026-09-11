@@ -31,6 +31,11 @@
  * nothing, not draw the wrong thing confidently.
  */
 import { BackupManagerError, RequestFailure, toApiErrorCode } from "./contracts";
+// Issue #730's diagnostics, opt-in and silent unless an operator turns
+// them on. Imported rather than inlined because the gate, the console
+// format and the non-browser guards belong to one module, not to the
+// three catch blocks below.
+import { debugEnvironment, debugLog, describeError } from "./debug";
 // The wire shapes below are GENERATED from api/v1/openapi.json, not
 // declared here. Before issue #166 this file carried its own hand-written
 // copy of every snake_case response body, transcribed from the Go
@@ -210,8 +215,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // to escape as whatever the browser threw, and the callers above could
   // then only say something generic about them.
   let res: Response;
+  // Issue #730. The URL asked for and how long the attempt lasted are
+  // knowable only here, and a rejected `fetch` carries neither. The timer
+  // runs whether or not diagnostics are on: one `performance.now()` is
+  // cheaper than asking the toggle an extra time, and a reading nobody
+  // logs costs nothing.
+  const url = BASE + path;
+  const startedAt = performance.now();
+  debugLog("request.start", { method, url });
   try {
-    res = await fetch(BASE + path, {
+    res = await fetch(url, {
       credentials: "same-origin",
       ...init,
       // headers last: spreading ...init after a merged `headers` object
@@ -226,6 +239,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // deliberately does NOT claim nothing was changed: a request that got
     // no reply may still have been carried out with only the response
     // lost.
+    //
+    // This is #730's exact site: one deployment's Activity page reaches
+    // here with `TypeError: Failed to fetch` while curl to the same route
+    // answers 401. The typed failure below is all an operator sees; the
+    // line above it is everything the browser knew and could not put in
+    // it, and it is written only when diagnostics were asked for.
+    debugLog(
+      "request.no-response",
+      {
+        path,
+        url,
+        method,
+        cause: describeError(cause),
+        ...debugEnvironment(),
+        elapsedMs: Math.round(performance.now() - startedAt)
+      },
+      "error"
+    );
     throw new RequestFailure({ kind: "no-response", path, cause });
   }
 
@@ -268,6 +299,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         correlationId: res.headers.get("x-correlation-id") ?? undefined
       };
     }
+    // #730: the correlation id is the one string that joins this refusal
+    // to the server's own log line for it, and until now it only ever
+    // reached the screen. A refusal that renders as "Failed to fetch" in
+    // a bug report is one nobody can match up; a logged id is.
+    debugLog(
+      "request.error-status",
+      { path, status: res.status, code: api.code, correlationId: api.correlationId },
+      "error"
+    );
     throw new BackupManagerError(api);
   }
 
@@ -280,14 +320,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // from a body that was cut off mid-transfer, and the correlation id is
     // read here on the SUCCESS path as well as on a refusal (#598) so a
     // body that fails to parse can still name the response it came from.
-    throw new RequestFailure({
-      kind: "unreadable-body",
-      path,
-      status: res.status,
-      contentType: res.headers.get("content-type") ?? undefined,
-      correlationId: res.headers.get("x-correlation-id") ?? undefined,
-      cause
-    });
+    const status = res.status;
+    const contentType = res.headers.get("content-type") ?? undefined;
+    const correlationId = res.headers.get("x-correlation-id") ?? undefined;
+    debugLog(
+      "request.unreadable-body",
+      { path, status, contentType, correlationId, cause: describeError(cause) },
+      "error"
+    );
+    throw new RequestFailure({ kind: "unreadable-body", path, status, contentType, correlationId, cause });
   }
 }
 

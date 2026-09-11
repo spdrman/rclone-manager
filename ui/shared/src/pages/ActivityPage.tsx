@@ -21,6 +21,8 @@ import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
+import { isDebugEnabled } from "@shared/api/debug";
+import type { ApiError } from "@shared/api/contracts";
 import type { Severity } from "@shared/types/operation";
 
 /** Deliberately not overbuilt (§19): two filters, one list. It said four
@@ -76,6 +78,7 @@ export function ActivityPage() {
             events.reload();
           }}
         />
+        {isDebugEnabled() ? <DebugFailure error={events.error} /> : null}
       </>
     );
 
@@ -130,5 +133,52 @@ export function ActivityPage() {
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Issue #730's on-screen half, shown only when diagnostics are on.
+ *
+ * The deployment this exists for reaches the operator as "Backup Manager
+ * did not answer", and that is the right thing to SAY: the request got no
+ * reply, so there is no status and no correlation id to quote. What it
+ * does not do is get the facts off the screen and into the hands of
+ * whoever is reading the server log. ErrorState folds them into a
+ * collapsed disclosure, omits the code entirely, and says nothing at all
+ * about an ABSENT correlation id — and "the response carried no id" is
+ * itself the finding on this failure, because a proxy that never reached
+ * the service cannot have produced one.
+ *
+ * So with `?debug=1` the same failure's three machine-facing facts are
+ * put on screen open: the code the hooks branch on, the correlation id
+ * when there was one (and the fact that there was not, when there was
+ * not), and the technical detail failure.ts assembled. An operator reads
+ * the id back to whoever is grepping the service log for
+ * `activity_debug`.
+ *
+ * Deliberately a paragraph of monospace text rather than a panel: it is
+ * for selecting and pasting, nobody who did not ask for it ever sees it,
+ * and it must not look like part of the product.
+ */
+function DebugFailure({ error }: { error: ApiError }) {
+  const lines = [
+    "code " + error.code,
+    "correlation id " + (error.correlationId ?? "(none: the failing response carried no X-Correlation-Id)"),
+    error.detail
+  ].filter((line): line is string => !!line);
+
+  return (
+    <div
+      className="mono"
+      style={{
+        marginTop: 8,
+        fontSize: "var(--text-sm)",
+        color: "var(--text-3)",
+        whiteSpace: "pre-wrap",
+        userSelect: "text"
+      }}
+    >
+      {"[rm-debug]\n" + lines.join("\n")}
+    </div>
   );
 }

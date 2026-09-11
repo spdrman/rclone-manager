@@ -1,7 +1,9 @@
 package serve
 
 import (
+	"context"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
 	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
+	"github.com/spdrman/rclone-manager/apps/common/webhost"
 )
 
 // The UI half of the two-container split: the only process with a
@@ -79,6 +82,21 @@ type UIConfig struct {
 	// use a short timeout instead of waiting out a multi-second one for
 	// real.
 	ProxyResponseHeaderTimeout time.Duration
+
+	// Logger is where this hop's own failures go (issue #730). Nil means
+	// the same stdout JSON default NewRouter uses, so a host that wired
+	// none still gets the one line that says the browser's request died
+	// HERE rather than at the engine — the distinction the reported
+	// symptom ("TypeError: Failed to fetch" in the browser, a clean 401
+	// from curl) cannot be made from the browser's side at all.
+	Logger webhost.Logger
+
+	// Debug turns on the per-request upstream trace below regardless of
+	// the environment. It only exists so a test can assert the trace
+	// without setting process-wide environment; a deployment turns it on
+	// with RM_DEBUG=1 or LOG_LEVEL=debug, which webhost.DebugEnabled
+	// reads.
+	Debug bool
 }
 
 // # Which hop owns the strip
@@ -163,6 +181,12 @@ func NewUI(cfg UIConfig) http.Handler {
 		timeout = defaultProxyResponseHeaderTimeout
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = webhost.NewStdoutLogger()
+	}
+	debug := cfg.Debug || webhost.DebugEnabled()
+
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = timeout
 
@@ -179,8 +203,46 @@ func NewUI(cfg UIConfig) http.Handler {
 			// second place for the two to disagree about which peers
 			// are trusted.
 			pr.SetXForwarded()
+			// Issue #730. The ErrorHandler below is handed the
+			// OUTBOUND request and nothing else, so the only way it
+			// can say how long the browser waited before this hop
+			// gave up — the difference between "the engine refused
+			// instantly" and "we sat on ResponseHeaderTimeout for
+			// five seconds" — is for the clock to start here. One
+			// small allocation on a path that already clones a whole
+			// request.
+			pr.Out = pr.Out.WithContext(context.WithValue(pr.Out.Context(), proxyStartKey{}, time.Now()))
 		},
-		Transport: transport,
+		Transport: &debugTransport{base: transport, logger: logger, debug: debug},
+		// Issue #730: a UGREEN deployment where the browser gets
+		// "TypeError: Failed to fetch" — no HTTP response at all — for
+		// /api/v1/activity while curl to the same route answers 401.
+		// Every way this proxy can fail to produce a response looks
+		// exactly like that from JavaScript, and before this there was
+		// no ErrorHandler, so net/http's default wrote a bare 502 to
+		// its own logger and this process said nothing.
+		//
+		// This one ALWAYS logs, at Warn, whatever the log level: a
+		// failure to answer the browser at all is not a debug-only
+		// event, and an operator who has to turn a knob on before the
+		// fault is recorded has already lost the occurrence that
+		// prompted them. It fires for an unreachable engine and for
+		// ResponseHeaderTimeout (above); a failure while streaming a
+		// body the upstream already started never reaches here, by
+		// httputil's design, since the status line is long gone.
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			attrs := []slog.Attr{
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+				slog.Int64("elapsed_ms", elapsedMillis(r.Context())),
+				slog.String("error", err.Error()),
+			}
+			logger.Event(r.Context(), slog.LevelWarn, "proxy_error", "reverse proxy could not answer", attrs...)
+			// The status net/http's own default ErrorHandler writes,
+			// unchanged: this exists to record the failure, not to
+			// change what a client sees.
+			w.WriteHeader(http.StatusBadGateway)
+		},
 		// The engine sets the same browser response headers this
 		// container does, so without this an /api/v1 response would carry
 		// each of them twice once ReverseProxy has ADDED the upstream's
@@ -214,6 +276,72 @@ func NewUI(cfg UIConfig) http.Handler {
 	return StripUntrustedIdentity(cfg.Gateway)(
 		SecurityHeaders(
 			local.EnsureCSRFCookie(false)(mux)))
+}
+
+// proxyStartKey carries the moment the Rewrite above handed a request to
+// the upstream, so the ErrorHandler can report how long the browser
+// waited. Unexported empty-struct key: nothing outside this file can
+// collide with it or read it.
+type proxyStartKey struct{}
+
+func elapsedMillis(ctx context.Context) int64 {
+	start, ok := ctx.Value(proxyStartKey{}).(time.Time)
+	if !ok {
+		return 0
+	}
+	return time.Since(start).Milliseconds()
+}
+
+// debugTransport is the second half of issue #730's instrumentation: the
+// per-request record of what the engine actually answered, which is the
+// only place a response the BROWSER rejected can still be described.
+// Content-Encoding and Transfer-Encoding are in the attribute list for
+// exactly that reason — a body whose declared encoding does not match
+// its bytes, or a length that disagrees with what is sent, is refused by
+// the browser's HTTP stack before any of it reaches fetch(), producing
+// precisely the reported "TypeError: Failed to fetch" against a route
+// curl reads without complaint.
+//
+// Off by default and free when off: with debug false this is one
+// interface call straight through to the cloned *http.Transport, with no
+// clock read and no attribute slice built.
+type debugTransport struct {
+	base   http.RoundTripper
+	logger webhost.Logger
+	debug  bool
+}
+
+func (d *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !d.debug {
+		return d.base.RoundTrip(req)
+	}
+
+	start := time.Now()
+	res, err := d.base.RoundTrip(req)
+	elapsed := time.Since(start).Milliseconds()
+
+	if err != nil {
+		// The ErrorHandler logs this one too, from one layer out. Two
+		// lines for one failure is the right trade for a diagnostic
+		// build: this one is the only place that can say the failure
+		// was in the transport rather than in ModifyResponse.
+		d.logger.Event(req.Context(), slog.LevelWarn, "proxy_error", "upstream round trip failed",
+			slog.String("method", req.Method),
+			slog.String("path", req.URL.Path),
+			slog.Int64("elapsed_ms", elapsed),
+			slog.String("error", err.Error()))
+		return res, err
+	}
+
+	d.logger.Event(req.Context(), slog.LevelDebug, "proxy_upstream", "upstream answered",
+		slog.String("method", req.Method),
+		slog.String("path", req.URL.Path),
+		slog.Int("status", res.StatusCode),
+		slog.Int64("content_length", res.ContentLength),
+		slog.String("content_encoding", res.Header.Get("Content-Encoding")),
+		slog.String("transfer_encoding", strings.Join(res.TransferEncoding, ",")),
+		slog.Int64("elapsed_ms", elapsed))
+	return res, nil
 }
 
 // staticHandler serves fsys, falling back to index.html for any path

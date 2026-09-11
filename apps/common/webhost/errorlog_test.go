@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -285,4 +286,92 @@ func calls(call *ast.CallExpr, name string) bool {
 		return fn.Sel.Name == name
 	}
 	return false
+}
+
+// Issue #730's handler half. The reported deployment's Activity page
+// gets "TypeError: Failed to fetch" - no HTTP response reaches
+// JavaScript at all - while curl to the same route answers cleanly, and
+// a rig built from the shipped image did not reproduce it. So the only
+// remaining move is to record, on the real deployment, what this handler
+// produced for the request the browser could not read.
+//
+// Both halves of that are tested: the record exists when an operator
+// asks for it, and a deployment that asked for nothing behaves exactly
+// as it did before.
+
+// TestListActivity_ServesNoDebugRecordByDefault is the constraint the
+// whole feature is worth nothing without. Diagnostics that cost a
+// default deployment anything get turned off and are then unavailable
+// when they are needed.
+func TestListActivity_ServesNoDebugRecordByDefault(t *testing.T) {
+	t.Setenv("RM_DEBUG", "")
+	t.Setenv("LOG_LEVEL", "")
+
+	rt, log := newLoggedRouter(t)
+	rec := rt.get(t, "/api/v1/activity")
+	mustStatus(t, rec, http.StatusOK)
+
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	if len(log.records) != 0 {
+		t.Errorf("a default deployment logged %d events serving the activity feed, want none: %+v", len(log.records), log.records)
+	}
+	if got := rec.Header().Get("X-Correlation-Id"); got != "" {
+		t.Errorf("a 200 carried X-Correlation-Id %q by default; the header on a success is a debug-only addition and must not appear otherwise", got)
+	}
+}
+
+// TestListActivity_DebugRecordsWhatWasServedUnderAQuotableId is what an
+// operator turns on. The correlation id is the load-bearing part: the
+// browser-side debug log reads X-Correlation-Id off the response it got,
+// so without one on the success path there is no way to join "the
+// browser could not read this" to "here is what was sent".
+func TestListActivity_DebugRecordsWhatWasServedUnderAQuotableId(t *testing.T) {
+	t.Setenv("RM_DEBUG", "1")
+
+	rt, log := newLoggedRouter(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/activity?limit=25", nil)
+	req.Header.Set("X-Forwarded-For", "203.0.113.7")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "nas.example")
+	rec := httptest.NewRecorder()
+	rt.router.ServeHTTP(rec, req)
+	mustStatus(t, rec, http.StatusOK)
+
+	entry := log.only(t)
+	if entry.event != "activity_debug" {
+		t.Fatalf("event = %q, want activity_debug", entry.event)
+	}
+	if entry.level != slog.LevelDebug {
+		t.Errorf("level = %v, want %v", entry.level, slog.LevelDebug)
+	}
+
+	served := rec.Header().Get("X-Correlation-Id")
+	if served == "" {
+		t.Fatal("the debug response carried no X-Correlation-Id, so a browser-side record of a failed read matches no line here")
+	}
+	if entry.attrs["correlation_id"] != served {
+		t.Errorf("logged correlation id %q, response carried %q", entry.attrs["correlation_id"], served)
+	}
+	if entry.attrs["limit"] != "25" {
+		t.Errorf("limit = %q, want 25", entry.attrs["limit"])
+	}
+	if entry.attrs["bytes"] == "" || entry.attrs["bytes"] == "0" {
+		t.Errorf("bytes = %q; the size the client should have received is the one fact the browser's side cannot report", entry.attrs["bytes"])
+	}
+	if _, ok := entry.attrs["event_count"]; !ok {
+		t.Error("no event_count attribute")
+	}
+	// The forwarded headers are here because the operator's own front
+	// end is the other live suspect: a proto or host that disagrees with
+	// what the browser asked for means the hop in front rewrote it.
+	for key, want := range map[string]string{
+		"x_forwarded_for":   "203.0.113.7",
+		"x_forwarded_proto": "https",
+		"x_forwarded_host":  "nas.example",
+	} {
+		if entry.attrs[key] != want {
+			t.Errorf("%s = %q, want %q", key, entry.attrs[key], want)
+		}
+	}
 }

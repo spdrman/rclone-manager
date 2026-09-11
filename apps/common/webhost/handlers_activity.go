@@ -8,6 +8,8 @@
 package webhost
 
 import (
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 )
@@ -76,5 +78,52 @@ func (h *handlers) listActivity(w http.ResponseWriter, r *http.Request) {
 			Detail:       e.Detail,
 		})
 	}
+	h.logActivityDebug(w, r, limit, resp)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// logActivityDebug is issue #730's server half: a UGREEN NAS deployment
+// where the browser's fetch('/api/v1/activity') fails with a bare
+// TypeError — no HTTP response reaches JS at all — while curl against
+// the same route answers 401 cleanly. A synthetic three-container rig
+// did not reproduce it, so the only way left is to record, on the real
+// deployment, what this handler actually produced for the request the
+// browser could not read.
+//
+// Everything here is behind h.debug (RM_DEBUG=1 or LOG_LEVEL=debug), and
+// a default INFO deployment neither marshals the payload a second time
+// nor sets a header it did not set before. That includes the correlation
+// id: a 200 carries none normally, but the browser-side debug log reads
+// X-Correlation-Id off every response, and without one on the success
+// path there is nothing to join a browser's record of a failed read to
+// the line below describing what was sent.
+//
+// The forwarded headers are logged because the operator's own front end
+// is the other live suspect: if the request reaching this handler has
+// a proto or host that disagrees with what the browser asked for, the
+// hop in front rewrote it, and the fault is there rather than here.
+func (h *handlers) logActivityDebug(w http.ResponseWriter, r *http.Request, limit int, resp listActivityResponse) {
+	if h == nil || !h.debug || h.logger == nil {
+		return
+	}
+
+	id := correlationID()
+	w.Header().Set("X-Correlation-Id", id)
+
+	// Marshalled a second time purely to report the size the client
+	// should have received; writeJSON does its own encoding and is left
+	// exactly as it is on every other path. An error here is not worth
+	// reporting as anything but the size it produced, since writeJSON is
+	// about to hit the same one.
+	body, _ := json.Marshal(resp)
+
+	h.logger.Event(r.Context(), slog.LevelDebug, "activity_debug", "served activity feed",
+		slog.String("correlation_id", id),
+		slog.Int("limit", limit),
+		slog.Int("event_count", len(resp.Events)),
+		slog.Int("bytes", len(body)),
+		slog.String("x_forwarded_for", r.Header.Get("X-Forwarded-For")),
+		slog.String("x_forwarded_proto", r.Header.Get("X-Forwarded-Proto")),
+		slog.String("x_forwarded_host", r.Header.Get("X-Forwarded-Host")),
+	)
 }

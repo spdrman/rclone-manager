@@ -797,7 +797,16 @@ func cmdServeUI(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	handler := serve.NewUI(serve.UIConfig{Upstream: upstreamURL, StaticFS: bundle.FS, Gateway: edgeGateway})
+	// The Logger is named rather than left nil so this hop's failures go
+	// through the same seam (and the same stdout JSON shape) as the
+	// engine's, which is what lets one log stream answer "did the
+	// browser's request die at the proxy or at the engine" — issue #730.
+	handler := serve.NewUI(serve.UIConfig{
+		Upstream: upstreamURL,
+		StaticFS: bundle.FS,
+		Gateway:  edgeGateway,
+		Logger:   webhost.NewStdoutLogger(),
+	})
 	httpServer := serve.NewHTTPServer(*listenAddr, handler)
 
 	if err := serve.RunEngine(ctx, httpServer, nil, shutdownGrace, os.Stderr); err != nil {
