@@ -3,10 +3,10 @@ module github.com/backupdproject/backupd/apps/common
 go 1.27.0
 
 require (
-	github.com/go-chi/chi/v5 v5.3.2
 	github.com/backupdproject/backupd/core v0.0.0-00010101000000-000000000000
+	github.com/go-chi/chi/v5 v5.3.2
 	golang.org/x/crypto v0.55.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 )
 
 require (
