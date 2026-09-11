@@ -3,8 +3,8 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { MemoryRouter } from "react-router-dom";
 import { BackupSetsPage } from "@shared/pages/BackupSetsPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import type { BackupManagerApi } from "@shared/api/contracts";
-import { BackupManagerError } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import { createMockApi, resetMockFixtures } from "@shared/api/mock";
 import { backupSetIdentity } from "@shared/utilities/backupSetIdentity";
 import type { BackupSet } from "@shared/types/backup";
@@ -32,12 +32,12 @@ import { useResource } from "@shared/state/resource";
  *  `sets.reload()` is a real re-read and not a spy. Without this the
  *  "the list refreshes in place" tests would be asserting against a
  *  fixture the page never re-fetched. */
-function ListScreen({ api, readOnly = false }: { api: BackupManagerApi; readOnly?: boolean }) {
+function ListScreen({ api, readOnly = false }: { api: BackupdApi; readOnly?: boolean }) {
   const sets = useResource(setsNode, () => api.listSets(), [api]);
   return <BackupSetsPage sets={sets} readOnly={readOnly} />;
 }
 
-async function renderList(api: BackupManagerApi, readOnly = false): Promise<BackupSet[]> {
+async function renderList(api: BackupdApi, readOnly = false): Promise<BackupSet[]> {
   const expected = await createMockApi().listSets();
   render(
     <MemoryRouter>
@@ -438,7 +438,7 @@ describe("acting on a backup set from the list", () => {
   it("says so and keeps the dialog open when the removal is refused", async () => {
     const api = createMockApi();
     vi.spyOn(api, "removeSet").mockRejectedValue(
-      new BackupManagerError({
+      new BackupdError({
         code: "unknown",
         message: "The configuration file is not writable.",
         correlationId: "cid_test"

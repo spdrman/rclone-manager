@@ -20,8 +20,8 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { artifactPath } from "@shared/utilities/routes";
 import { BackupDetailPage } from "@shared/pages/BackupDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import type { BackupManagerApi } from "@shared/api/contracts";
-import { BackupManagerError } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import type { BackupArtifact } from "@shared/types/backup";
 
@@ -32,7 +32,7 @@ import type { BackupArtifact } from "@shared/types/backup";
  * not disagree with a route no real id could match, which is how #677
  * survived five cases in this file. The path is spelled out rather than
  * imported because it IS the assertion: change App.tsx and these fail. */
-function renderDetail(artifactId: string, api: BackupManagerApi) {
+function renderDetail(artifactId: string, api: BackupdApi) {
   return render(
     <MemoryRouter initialEntries={[artifactPath(artifactId)]}>
       <ApiProvider api={api}>
@@ -153,7 +153,7 @@ describe("backup detail page reads the artifact", () => {
   it("shows an error state when the fetch fails, never a blank page", async () => {
     const api = createMockApi();
     vi.spyOn(api, "getArtifact").mockRejectedValue(
-      new BackupManagerError({ code: "unknown", message: "That artifact no longer exists.", correlationId: "cid_test" })
+      new BackupdError({ code: "unknown", message: "That artifact no longer exists.", correlationId: "cid_test" })
     );
 
     // Three parts, because a URL that is not three parts no longer

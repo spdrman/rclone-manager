@@ -217,7 +217,7 @@ describe("operationsNode: live progress without a per-page re-fetch", () => {
     const api = { ...createMockApi(), listActivity: () => Promise.resolve({ events: [] }) };
     const opsError = {
       code: "unknown" as const,
-      message: "Backup Manager could not complete that request.",
+      message: "Backupd could not complete that request.",
       correlationId: "test-correlation-id"
     };
 

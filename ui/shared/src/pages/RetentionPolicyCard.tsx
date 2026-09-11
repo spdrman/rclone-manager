@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import type {
   ApiError,
   AppSettings,
@@ -269,11 +269,11 @@ function RetentionPolicyEditor({
       })
       .catch((e: unknown) => {
         setSaveError(
-          e instanceof BackupManagerError
+          e instanceof BackupdError
             ? e.api
             : {
                 code: "unknown",
-                message: "Backup Manager could not save the retention policy.",
+                message: "Backupd could not save the retention policy.",
                 correlationId: "unavailable"
               }
         );
@@ -428,7 +428,7 @@ function RetentionPolicyEditor({
       {!protect ? (
         <WarningBanner tone="danger" title="Last-known-good protection is off">
           With this off, the newest known-good backup can be deleted by a retention pass purely
-          because of its age. Backup Manager treats that as a materially more dangerous
+          because of its age. Backupd treats that as a materially more dangerous
           configuration.
         </WarningBanner>
       ) : null}

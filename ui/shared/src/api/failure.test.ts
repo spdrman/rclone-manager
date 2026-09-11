@@ -16,7 +16,7 @@
  * read as no answer at all, and neither is allowed to invent an id.
  */
 import { describe, expect, it } from "vitest";
-import { BackupManagerError, RequestFailure } from "./contracts";
+import { BackupdError, RequestFailure } from "./contracts";
 import { asApiError, describeFailure } from "./failure";
 
 describe("describeFailure keeps what the exception said", () => {
@@ -101,7 +101,7 @@ describe("describeFailure keeps what the exception said", () => {
 describe("asApiError is the one conversion the fetch hooks use", () => {
   it("hands a typed refusal through with its own code and id", () => {
     const api = asApiError(
-      new BackupManagerError({ code: "NOT_CONFIGURED", message: "this instance has no configuration", correlationId: "cid_x1" })
+      new BackupdError({ code: "NOT_CONFIGURED", message: "this instance has no configuration", correlationId: "cid_x1" })
     );
 
     // isNotConfigured() reads .code off this, so the code has to survive
@@ -114,7 +114,7 @@ describe("asApiError is the one conversion the fetch hooks use", () => {
 
   it("keeps the service's own sentence for an INTERNAL refusal and adds where to look", () => {
     const api = asApiError(
-      new BackupManagerError({ code: "INTERNAL", message: "failed to list activity", correlationId: "cid_x2" })
+      new BackupdError({ code: "INTERNAL", message: "failed to list activity", correlationId: "cid_x2" })
     );
 
     expect(api.message).toBe("failed to list activity");

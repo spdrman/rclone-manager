@@ -195,7 +195,7 @@ describe("SettingsPage reads the shared version node", () => {
     const api = createMockApi();
     const versionError = {
       code: "unknown" as const,
-      message: "Backup Manager could not complete that request.",
+      message: "Backupd could not complete that request.",
       correlationId: "test-correlation-id"
     };
 

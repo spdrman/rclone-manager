@@ -24,7 +24,7 @@
 #         lib/atexit/atexit.go:45
 #
 # It is reachable only in the order the "disabled-after" row exercises on
-# purpose (register, then disable). cmd/backup-manager's daemon disables
+# purpose (register, then disable). cmd/backupd's daemon disables
 # first, before any transfer, which never installs the handler and never
 # writes the variable, so nothing in the shipped startup path provokes it.
 # There is nothing to fix on this side either: the racing pair is two

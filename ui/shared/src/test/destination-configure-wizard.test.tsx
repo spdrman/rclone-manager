@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ApiProvider } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import type {
   BackendManifest,
-  BackupManagerApi,
+  BackupdApi,
   MediumPreflight,
   StorageMedium,
   StorageMediumConfiguration
@@ -121,13 +121,13 @@ function unconfigured() {
 }
 
 async function openWizard(
-  overrides: Partial<BackupManagerApi> & { destination?: StorageMedium | null }
+  overrides: Partial<BackupdApi> & { destination?: StorageMedium | null }
 ) {
   const api = {
     ...createMockApi(),
     getStorageMediumConfiguration: unconfigured(),
     ...overrides
-  } as BackupManagerApi;
+  } as BackupdApi;
   const onSaved = vi.fn();
   render(
     <ApiProvider api={api}>
@@ -448,14 +448,14 @@ describe("the review step", () => {
     // flag switch. The gap is printed as a gap rather than papered over
     // with an invented flag, which is what makes EPIC G's parity rule
     // fail visibly instead of silently.
-    expect(screen.getByText("rbm medium edit locker_one --prefix widgets/2026")).toBeInTheDocument();
+    expect(screen.getByText("backupd medium edit locker_one --prefix widgets/2026")).toBeInTheDocument();
     expect(screen.getByTestId("configure-command-gap")).toHaveTextContent("cannot carry path");
   });
 
   it("repeats the manager's refusal when the save itself is refused", async () => {
     const configure = vi.fn(() =>
       Promise.reject(
-        new BackupManagerError({
+        new BackupdError({
           code: "MEDIUM_CONNECTION_NOT_PROVEN",
           message: "service: the destination refused the write before this configuration was written",
           correlationId: "cid_669save"
@@ -644,7 +644,7 @@ describe("the assertions #594 made about the add path, on the manifest renderer"
     expect(shown).not.toContain(PLACEHOLDER_KEY_ID);
   });
 
-  it("prints the equivalent rbm command, and it carries no secret", async () => {
+  it("prints the equivalent backupd command, and it carries no secret", async () => {
     await openWizard({
       importStorageCredentials: vi.fn(() => Promise.resolve("cred-669")),
       preflightStorageMediumConfiguration: vi.fn(() => Promise.resolve(report(true)))
@@ -653,7 +653,7 @@ describe("the assertions #594 made about the add path, on the manifest renderer"
     // On the step where the material is typed, before it has been, which
     // is possible because this CLI has no flag that takes a secret: the
     // material only ever arrives on stdin.
-    expect(screen.getByText("rbm medium import-credentials --stdin")).toBeTruthy();
+    expect(screen.getByText("backupd medium import-credentials --stdin")).toBeTruthy();
 
     await describeTheLocker();
 
@@ -672,7 +672,7 @@ describe("the assertions #594 made about the add path, on the manifest renderer"
 
     const group = screen.getByRole("group", { name: "Configure locker_one" });
     const shown = group.textContent ?? "";
-    expect(shown).toContain("rbm medium edit locker_one");
+    expect(shown).toContain("backupd medium edit locker_one");
     expect(shown).not.toContain("--secret-access-key");
     expect(shown).not.toContain(CANARY_SECRET);
     expect(shown).not.toContain(PLACEHOLDER_KEY_ID);
@@ -785,8 +785,8 @@ describe("configuring a destination that does not exist yet", () => {
     // `widgetlocker`, and the two coincide for s3 while diverging for
     // local_volume, so a test using a manifest where they matched would
     // pass on the spelling that prints a command that fails.
-    expect(shown).toContain("rbm medium add locker_one --type widget_locker");
+    expect(shown).toContain("backupd medium add locker_one --type widget_locker");
     expect(shown).not.toContain("widgetlocker");
-    expect(shown).not.toContain("rbm medium edit");
+    expect(shown).not.toContain("backupd medium edit");
   });
 });

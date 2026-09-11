@@ -9,15 +9,15 @@
  *   [you] [browser] This deployment will not start a backup run.
  *     Destructive operations are disabled until the trusted-proxy
  *     authentication gate has been verified for this deployment, so
- *     retrying will not help. Run rbm fetch --backup-set
+ *     retrying will not help. Run backupd fetch --backup-set
  *     cicd-pipeline/var-backups from a shell on this host instead.
- *   $ rbm fetch --backup-set cicd-pipeline/var-backups
+ *   $ backupd fetch --backup-set cicd-pipeline/var-backups
  *   [you] post /operations refused: DESTRUCTIVE_OPERATIONS_DISABLED
- *   # no rbm equivalent yet · POST /api/v1/operations
+ *   # no backupd equivalent yet · POST /api/v1/operations
  *
  * The advice is sound; the operator ran that command and it repaired the
  * set. What is broken is that the same window, about the same command,
- * prints "no rbm equivalent yet" and names the route that just refused.
+ * prints "no backupd equivalent yet" and names the route that just refused.
  * One surface says "run this" and "this does not exist" in four lines.
  *
  * The contract pinned is the property, not the wording: a remedy a message
@@ -55,9 +55,9 @@ import type { DockEntry } from "@shared/components/ActivityDock";
 import { clearBrowserNoticesForTests, emitBrowserNotice } from "@shared/state/browserNotices";
 import { describeRunRefusal } from "@shared/hooks/useRunControls";
 import { resetGraphForTests } from "@shared/state/graph";
-import { BackupManagerError, RequestFailure } from "@shared/api/contracts";
+import { BackupdError, RequestFailure } from "@shared/api/contracts";
 import type { AsyncState } from "@shared/hooks/useAsync";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import type { AuthContext, PlatformBridge } from "@shared/types/platform";
 import type { BackupArtifact } from "@shared/types/backup";
 import type { VersionInfo } from "@shared/types/operation";
@@ -75,7 +75,7 @@ const SET_ID = "cicd-pipeline/var-backups";
  *  `state=FAILED` is reached with `ValidationPassed` still nil (nothing on
  *  the collision path records a verdict), and core/service/artifacts.go
  *  maps a nil verdict to "pending". Staging the issue's own sequence
- *  (core/cmd/backup-manager's stage662DeadEnd + drive662ToFailed, whose
+ *  (core/cmd/backupd's stage662DeadEnd + drive662ToFailed, whose
  *  own assertion is `stateOf(...) == FAILED`) and reading the journal back
  *  gives exactly the three values below.
  *
@@ -174,7 +174,7 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
       kind: "set",
       id: SET_ID
     });
-    const remedy = "rbm fetch --backup-set " + SET_ID;
+    const remedy = "backupd fetch --backup-set " + SET_ID;
     expect(refusal.remediation).toContain(remedy);
 
     // The window as the operator had it: the browser's own refusal line
@@ -201,9 +201,9 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
           fields: {
             actor: "rom",
             route: "POST /api/v1/operations",
-            command_gap: "no rbm equivalent yet",
+            command_gap: "no backupd equivalent yet",
             command_gap_detail:
-              "`rbm fetch` starts a cycle in your own shell, not in this engine"
+              "`backupd fetch` starts a cycle in your own shell, not in this engine"
           }
         })
       }
@@ -220,11 +220,11 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
       text,
       "#662 defect 4: the docked terminal offers `" +
         remedy +
-        "` as the remedy and, four lines later, says the same operation has no rbm equivalent and maps to the " +
+        "` as the remedy and, four lines later, says the same operation has no backupd equivalent and maps to the " +
         "route that just refused. One window, two contradictory statements about one command. The operator " +
         "reported being told to run the only thing this console cannot do.\n\n" +
         text
-    ).not.toContain("no rbm equivalent yet");
+    ).not.toContain("no backupd equivalent yet");
   });
 
   it("control: a refusal that offers no command carries no contradiction to find", () => {
@@ -242,8 +242,8 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
             fields: {
               actor: "rom",
               route: "POST /api/v1/operations",
-              command_gap: "no rbm equivalent yet",
-              command_gap_detail: "`rbm run` starts a cycle in your own shell, not in this engine"
+              command_gap: "no backupd equivalent yet",
+              command_gap_detail: "`backupd run` starts a cycle in your own shell, not in this engine"
             }
           })
         }
@@ -253,13 +253,13 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
 
     // The gap line is legitimate here and must keep being printed: nothing
     // on screen claimed this route had a command an operator could type.
-    expect(text).toContain("# no rbm equivalent yet · POST /api/v1/operations");
-    expect(text).not.toContain("rbm fetch --backup-set");
+    expect(text).toContain("# no backupd equivalent yet · POST /api/v1/operations");
+    expect(text).not.toContain("backupd fetch --backup-set");
   });
 
   /** A deployment whose feed carries exactly one line: the api_action the
    *  engine logged for the POST that was refused, gap and all. */
-  function dockApi(events: SetActivityEvent[]): BackupManagerApi {
+  function dockApi(events: SetActivityEvent[]): BackupdApi {
     const deployment: DeploymentActivity = {
       events,
       truncated: false,
@@ -274,7 +274,7 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
       sets: [],
       deployment
     };
-    return { getLiveActivity: () => Promise.resolve(answer) } as unknown as BackupManagerApi;
+    return { getLiveActivity: () => Promise.resolve(answer) } as unknown as BackupdApi;
   }
 
   /**
@@ -283,7 +283,7 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
    * `withoutContradictedGaps` is applied twice — inside `dockText`, which
    * is Copy and Save, and on ActivityDock's own window, which is what is
    * DRAWN. Only the first was ever exercised, so reverting the second
-   * left the whole suite green while the panel went on printing "no rbm
+   * left the whole suite green while the panel went on printing "no backupd
    * equivalent yet" four lines under a remedy it contradicts. That panel
    * is the surface #662 reported: the operator was reading a window, not
    * a clipboard, and a Copy that quietly disagreed with the screen is the
@@ -295,8 +295,8 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
    */
   it("does not print the contradiction on the panel either, which is the window the operator was reading", async () => {
     const refusal = describeRunRefusal("DESTRUCTIVE_OPERATIONS_DISABLED", "", { kind: "set", id: SET_ID });
-    const remedy = "rbm fetch --backup-set " + SET_ID;
-    const detail = "`rbm fetch` starts a cycle in your own shell, not in this engine";
+    const remedy = "backupd fetch --backup-set " + SET_ID;
+    const detail = "`backupd fetch` starts a cycle in your own shell, not in this engine";
 
     render(
       <MemoryRouter>
@@ -307,7 +307,7 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
                 fields: {
                   actor: "rom",
                   route: "POST /api/v1/operations",
-                  command_gap: "no rbm equivalent yet",
+                  command_gap: "no backupd equivalent yet",
                   command_gap_detail: detail
                 }
               })
@@ -321,7 +321,7 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
 
     // Control, and the whole point of doing this on a live panel: with no
     // remedy on screen the gap line is legitimate and IS drawn.
-    expect(await screen.findByText(/no rbm equivalent yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/no backupd equivalent yet/)).toBeInTheDocument();
 
     // Now the browser's own refusal arrives, carrying the command. This is
     // the window the issue describes, assembled the way the operator got
@@ -341,10 +341,10 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
 
     await waitFor(() =>
       expect(
-        screen.queryByText(/no rbm equivalent yet/),
+        screen.queryByText(/no backupd equivalent yet/),
         "#662 defect 4, on the surface it was reported from: the panel offers `" +
           remedy +
-          "` as the remedy and still prints \"no rbm equivalent yet\" for the same operation, in the same window. " +
+          "` as the remedy and still prints \"no backupd equivalent yet\" for the same operation, in the same window. " +
           "withoutContradictedGaps is applied to ActivityDock's own window for exactly this, and nothing watched " +
           "that application — only its use inside dockText, which is Copy and Save."
       ).toBeNull()
@@ -360,7 +360,7 @@ describe("the remedy a blocked run offers, and the console it is offered in (#66
 });
 
 describe("what the browser offers an operator whose backup is stuck (#662 defect 3)", () => {
-  function renderQuarantine(artifacts: BackupArtifact[], api: BackupManagerApi = createMockApi()) {
+  function renderQuarantine(artifacts: BackupArtifact[], api: BackupdApi = createMockApi()) {
     const quarantine: AsyncState<BackupArtifact[]> = {
       data: artifacts,
       error: null,
@@ -449,7 +449,7 @@ describe("what the browser offers an operator whose backup is stuck (#662 defect
     );
 
     // And the answer, which must not read as a recovery. Measured against
-    // a real rbm in a container: `retry` exits 0 and prints "re-entering
+    // a real backupd in a container: `retry` exits 0 and prints "re-entering
     // the pipeline" for a backup whose very next cycle lands FAILED again
     // on the same collision. So a 204 says the row moved and nothing
     // about the outcome, and a card that announced success here would be
@@ -577,7 +577,7 @@ describe("what the browser offers an operator whose backup is stuck (#662 defect
     const api = createMockApi();
     vi.spyOn(api, "getArtifact").mockResolvedValue(STUCK);
     vi.spyOn(api, "retryFailedIngestion").mockRejectedValue(
-      new BackupManagerError({
+      new BackupdError({
         code: "ARTIFACT_NOT_FAILED",
         message: "this backup is not failed",
         correlationId: "cid_NrcGcTMo"

@@ -89,7 +89,7 @@ export function ActivityPage() {
         // events already on screen are still true, and replacing a
         // rendered timeline with an error panel because the page BEHIND
         // it could not be read would lose the thing the reader came for.
-        setOlderFailure(describeFailure(e, "Backup Manager could not read older events.").message);
+        setOlderFailure(describeFailure(e, "Backupd could not read older events.").message);
       })
       .finally(() => setLoadingOlder(false));
   }, [api, cursor, loadingOlder]);
@@ -114,7 +114,7 @@ export function ActivityPage() {
       <>
         <PageHeader title="Activity" subtitle="Nothing has happened yet" />
         <EmptyState title="No activity yet">
-          Backup Manager records what it does here. It has done nothing yet, because this
+          Backupd records what it does here. It has done nothing yet, because this
           instance has no configuration and no backup set to run.
         </EmptyState>
       </>
@@ -219,7 +219,7 @@ export function ActivityPage() {
 /**
  * Issue #730's on-screen half, shown only when diagnostics are on.
  *
- * The deployment this exists for reaches the operator as "Backup Manager
+ * The deployment this exists for reaches the operator as "Backupd
  * did not answer", and that is the right thing to SAY: the request got no
  * reply, so there is no status and no correlation id to quote. What it
  * does not do is get the facts off the screen and into the hands of

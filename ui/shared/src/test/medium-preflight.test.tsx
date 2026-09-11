@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { MemoryRouter } from "react-router-dom";
 import { SettingsPage } from "@shared/pages/SettingsPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import type { AppSettings, MediumPreflight, StorageMedium } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
@@ -216,7 +216,7 @@ describe("checking a storage medium before the first save that points a tier at 
   it("reports a refusal without pretending the medium passed", async () => {
     const preflight = vi.fn(() =>
       Promise.reject(
-        new BackupManagerError({
+        new BackupdError({
           code: "MEDIUM_NOT_FOUND",
           message: "this configuration declares no storage medium with that id",
           correlationId: "cid_1"

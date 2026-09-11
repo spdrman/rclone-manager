@@ -21,7 +21,7 @@ import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
 import { ActivityDock } from "@shared/components/ActivityDock";
 import { mergeActivity, nextCursor, useActivityFeed } from "@shared/pages/useActivityFeed";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import type { DeploymentActivity, LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
 
 function event(sequence: number, over: Partial<SetActivityEvent> = {}): SetActivityEvent {
@@ -91,7 +91,7 @@ function reading(over: Partial<LiveActivity> = {}): LiveActivity {
   };
 }
 
-function renderDock(api: BackupManagerApi) {
+function renderDock(api: BackupdApi) {
   return render(
     <MemoryRouter>
       <PlatformProvider bridge={genericBridge}>
@@ -175,7 +175,7 @@ describe("the cursor the dock actually sends", () => {
       sets: [set("a/b", [], { oldestSequence: 4000, latestSequence: 4200 })]
     });
     const getLiveActivity = vi.fn().mockResolvedValueOnce(busy).mockResolvedValue(idle);
-    renderDock({ getLiveActivity } as unknown as BackupManagerApi);
+    renderDock({ getLiveActivity } as unknown as BackupdApi);
 
     await act(async () => {});
     expect(getLiveActivity).toHaveBeenLastCalledWith({ since: 0, limit: 200 });
@@ -205,7 +205,7 @@ describe("the cursor the dock actually sends", () => {
       ]
     });
     const getLiveActivity = vi.fn().mockResolvedValue(paged);
-    renderDock({ getLiveActivity } as unknown as BackupManagerApi);
+    renderDock({ getLiveActivity } as unknown as BackupdApi);
 
     await act(async () => {});
     await act(async () => {
@@ -219,18 +219,18 @@ describe("the cursor the dock actually sends", () => {
     vi.useFakeTimers();
     const first = reading({
       sets: [],
-      deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "rbm starting" })], {
+      deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "backupd starting" })], {
         latestSequence: 1
       })
     });
     const idle = reading({ sets: [], deployment: deployment([], { oldestSequence: 1, latestSequence: 1 }) });
     const getLiveActivity = vi.fn().mockResolvedValueOnce(first).mockResolvedValue(idle);
-    renderDock({ getLiveActivity } as unknown as BackupManagerApi);
+    renderDock({ getLiveActivity } as unknown as BackupdApi);
 
     // findBy* polls on a timer, and the timers here are fake, so the
     // reading is awaited by flushing the microtask queue instead.
     await act(async () => {});
-    expect(screen.getByText(/rbm starting/)).toBeInTheDocument();
+    expect(screen.getByText(/backupd starting/)).toBeInTheDocument();
     await act(async () => {
       vi.advanceTimersByTime(1100);
     });
@@ -262,7 +262,7 @@ describe("when a surface changes which set it is asking about", () => {
     const getLiveActivity = vi.fn().mockImplementation((options: { setId?: string }) =>
       Promise.resolve(options.setId === "busy/set" ? busy : quiet)
     );
-    const api = { getLiveActivity } as unknown as BackupManagerApi;
+    const api = { getLiveActivity } as unknown as BackupdApi;
 
     const view = render(
       <ApiProvider api={api}>

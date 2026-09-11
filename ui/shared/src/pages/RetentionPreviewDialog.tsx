@@ -15,7 +15,7 @@
  */
 import { useEffect, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import type { ApiError } from "@shared/api/contracts";
 import {
   commitRetentionRevisions,
@@ -33,11 +33,11 @@ import { Icon } from "@shared/design-system/icons";
 import { bytes } from "@shared/utilities/format";
 
 function describeApplyError(e: unknown): ApiError {
-  return e instanceof BackupManagerError
+  return e instanceof BackupdError
     ? e.api
     : {
         code: "unknown",
-        message: "Backup Manager could not complete that request.",
+        message: "Backupd could not complete that request.",
         correlationId: "unavailable"
       };
 }

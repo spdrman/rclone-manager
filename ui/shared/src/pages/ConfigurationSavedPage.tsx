@@ -21,7 +21,7 @@ export function ConfigurationSavedPage() {
       <h1 style={{ marginTop: 0 }}>Configuration saved</h1>
       <p style={{ color: "var(--text-2)" }}>
         Your configuration has been written and is safe. This instance could not start
-        serving it without a restart, so restart the Backup Manager container or service
+        serving it without a restart, so restart the Backupd container or service
         and open this page again. You do not need to enter any of it a second time.
       </p>
     </div>

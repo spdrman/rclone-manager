@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { useApi } from "@shared/api/ApiContext";
-import { BackupManagerError, LOCAL_DESTINATION_ID } from "@shared/api/contracts";
+import { BackupdError, LOCAL_DESTINATION_ID } from "@shared/api/contracts";
 import { Banner } from "@shared/components/Banner";
 import { HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
@@ -349,7 +349,7 @@ export function TierRow({
               // in the visible label is "Stored on", the group beside it
               // is already named "Storage medium disclosure", and this
               // accessible name is what the black-box suite in
-              // spdrman/rclone-manager-tests queries the picker by at the
+              // spdrman/backupd-tests queries the picker by at the
               // sha this repository pins. Renaming it is invisible to a
               // sighted operator, buys nothing #622 asked for, and would
               // turn five specs over there red for a word. See #622's PR
@@ -462,7 +462,7 @@ export function TierRow({
  * destinations are, and that is where it now appears (see
  * StorageDestinationsCard's describeDestination).
  *
- * It is also the name the black-box suite in spdrman/rclone-manager-tests
+ * It is also the name the black-box suite in spdrman/backupd-tests
  * pins at the sha this repository pins, which is a reason to keep a good
  * word rather than a reason to keep any word: renaming it would cost a
  * spec over there and buy an operator a path they already have one screen
@@ -587,9 +587,9 @@ function TierDestinationActions({
         setError({
           medium: asked,
           message:
-            e instanceof BackupManagerError
+            e instanceof BackupdError
               ? e.api.message
-              : "Backup Manager could not test the connection to this destination."
+              : "Backupd could not test the connection to this destination."
         })
       )
       .finally(() => setBusy(false));
@@ -957,9 +957,9 @@ function MediumPreflightRow({ mediumId, disabled }: { mediumId: string; disabled
       .then(setReport)
       .catch((e: unknown) =>
         setError(
-          e instanceof BackupManagerError
+          e instanceof BackupdError
             ? e.api.message
-            : "Backup Manager could not check this storage medium."
+            : "Backupd could not check this storage medium."
         )
       )
       .finally(() => setBusy(false));

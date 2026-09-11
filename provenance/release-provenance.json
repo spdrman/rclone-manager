@@ -1,5 +1,5 @@
 {
-  "schema": "backup-manager/release-provenance/1",
+  "schema": "backupd/release-provenance/1",
   "note": [
     "Generated. Do not hand-edit: run `go run ./cmd/provenance -write` from apps/common.",
     "",
@@ -15,10 +15,10 @@
     "TestProvenanceBundleIsTiedToTheReleaseManifest goes red."
   ],
   "semanticVersion": "0.4.0",
-  "imageReference": "ghcr.io/spdrman/backup-manager:0.4.0",
+  "imageReference": "ghcr.io/spdrman/backupd:0.4.0",
   "releaseManifest": {
     "path": "container/release-manifest.json",
-    "sha256": "ea56ffbd911b659574717775c2bbccf1c68a8ca0b29ddf9898d81d5917dd1cde",
+    "sha256": "a4537c2a468d7edbbf6759c35cfb411adae8cf761880ed70b0f2c1023f4b728f",
     "commit": "77427012c8f6b23faa01713d59c0df8ba3bf1657",
     "recordedBuildVersion": "0.4.0",
     "architectures": [
@@ -40,135 +40,135 @@
     },
     "notice": {
       "path": "NOTICE",
-      "sha256": "9d808d274fe1ea3cc0ade3d902c5013564521d02929d664a89c9d70104b2e042"
+      "sha256": "017de92b085c0f15973dc9ed7384c826891c8be14e5d8b3fdf3948595085b9dc"
     },
     "inventory": {
       "path": "provenance/third-party-licenses.json",
-      "sha256": "42f094bf3ee8ec9451b9321af9d716dd3f6c68073e8b0f746c363b8e875c2790",
-      "format": "backup-manager/third-party-licenses/1"
+      "sha256": "0fb863ef9632456274cf009fd8e409fd54aecbf5e5303e5090ddea0bf7d34035",
+      "format": "backupd/third-party-licenses/1"
     },
     "componentCount": 97
   },
   "sbom": {
     "path": "provenance/sbom.spdx.json",
-    "sha256": "a965c016f089dbd5bc31e7cbf28be13d5db5995c973db4da031ce16962c5a7b1",
+    "sha256": "f59b451247c7b7df8ceb9efd11fe28ac9a94af8a62983dabe9249552a5f850aa",
     "format": "SPDX-2.3"
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "b51118523f522d7aa7de7dfe04d9e1072a427f9d803ddf84f69089d0263624ad",
+    "sha256": "4b9f0b646e3357a00f2e64c588d809951b342b00d3522724bcb44665352f8498",
     "format": "sha256sum"
   },
   "artifacts": [
     {
       "target": "casaos",
-      "path": "apps/casaos/compose/backup-manager.yml",
-      "sha256": "31382cb731ec49677cfd9e7aa7bf5dd6d7953d5831dd8b41180d220ce2669c16"
+      "path": "apps/casaos/compose/backupd.yml",
+      "sha256": "262a5f6c0c9f01c830eaa8f42777f31fda5585842665da0a9083c0364a965741"
     },
     {
       "target": "casaos",
       "path": "apps/casaos/icon.svg",
-      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
+      "sha256": "e83f92d42a95a7e8d5977a8a05f994fca631cfd5c6d5c5d7209d1403cb0104ba"
     },
     {
       "target": "openmediavault",
-      "path": "apps/openmediavault/compose/backup-manager.env",
-      "sha256": "0eff8ed27c9386e479506e9ce611e97b1e781af171106affde78b8647531e7fc"
+      "path": "apps/openmediavault/compose/backupd.env",
+      "sha256": "2e7fb8cedc32ff847330fbd53af6d7a74897cb0a7bf598c684385fb787ab833c"
     },
     {
       "target": "openmediavault",
-      "path": "apps/openmediavault/compose/backup-manager.yml",
-      "sha256": "9bd6a8bcce02d7179f9c36e0f465fcb51a627e58c1a062ddee80be9946b83398"
+      "path": "apps/openmediavault/compose/backupd.yml",
+      "sha256": "ebb0f4a0f482cb94f7868b8ba69a8cdd0dd23e25c1eff018b5e0405656a1265e"
     },
     {
       "target": "portainer",
-      "path": "apps/portainer/compose/backup-manager.env",
-      "sha256": "b5ee2d449c649e6fb7647c0842ddc8d25717eee297aeb381ca07d45a3526014c"
+      "path": "apps/portainer/compose/backupd.env",
+      "sha256": "40903ddc4b8744a97805d0e74a43a9721cde2bad37bb09b090ac425886ec52a4"
     },
     {
       "target": "portainer",
-      "path": "apps/portainer/compose/backup-manager.yml",
-      "sha256": "136075aa3a57d0de456f87aeead355662aea70ad99dd9da28b8677b7d2469a9c"
+      "path": "apps/portainer/compose/backupd.yml",
+      "sha256": "dc0e5cdc16d3a074b1764539dd7c18b53c4e5e8036293da083be158aeb71becd"
     },
     {
       "target": "portainer",
       "path": "apps/portainer/logo.svg",
-      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
+      "sha256": "e83f92d42a95a7e8d5977a8a05f994fca631cfd5c6d5c5d7209d1403cb0104ba"
     },
     {
       "target": "portainer",
       "path": "apps/portainer/templates.json",
-      "sha256": "99fcc0e8756980278f8858199592c0f03db2029ca0665b5dba06bab394cb3645"
+      "sha256": "f61d9418dfcdd19bb48ca2acc4781ae21f99208ed369b89249b0a5738d2f8cdb"
     },
     {
       "target": "proxmox",
-      "path": "apps/proxmox/compose/backup-manager.env",
-      "sha256": "fac5649e6c46d9edd60c2ef4203bfb965494dcab76ba52aa5634f12bbed93dea"
+      "path": "apps/proxmox/compose/backupd.env",
+      "sha256": "b7346694093fc16854927d8a56c4cd377d356f4c75260c3002521f70bf4ca424"
     },
     {
       "target": "proxmox",
-      "path": "apps/proxmox/compose/backup-manager.yml",
-      "sha256": "0dfaa215f063a41549d431d976f757d55085adcc1159b62aa807a882b96ab525"
+      "path": "apps/proxmox/compose/backupd.yml",
+      "sha256": "630a91f4f258cb495d3946614a919360cf86da970780ebaecda9ea4198ca6836"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/app.yaml",
-      "sha256": "0020035f02a02eaf6922ba228b12799e151107f05faeca0cfbf88f7bbc6c5742"
+      "sha256": "aa1377e1a76bac1d226f0f62a4d4c53514319b016106b746a9c9957c251b3309"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/ix_values.yaml",
-      "sha256": "0124c9350baa95bd48c56db741d64cba9a8e26e25908ed552f6a3382a7b095fa"
+      "sha256": "ac4d191255e4d24179a03a59a80b234562705dc7c9bd9afdd9fb9b8d53e9c1c0"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/questions.yaml",
-      "sha256": "0c088b6e75aa688921e023607c8999c04b28a08569adc09f36af45fee037ab63"
+      "sha256": "9caa1d4874f6b8adaf2c1b25f666b1ffff0ff1c3d8ceadbf36f2e7db32b43197"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/templates/docker-compose.yaml",
-      "sha256": "4f7f3f77a97288a46b8dbcc74b2a7059eaabf09951186a673e1ee671cb9983f3"
+      "sha256": "abaaacf42e34d217f0899616d3989bda50b94ffe37ad5d91a9732d333fc1957d"
     },
     {
       "target": "truenas",
-      "path": "apps/truenas/compose/backup-manager.yaml",
-      "sha256": "22c7f02d801b9698c32434f6902f63a7df982fdfdfa0adf9ce0fbe905d48815f"
+      "path": "apps/truenas/compose/backupd.yaml",
+      "sha256": "be016389ae5ead4a6aa76ef58e779fdd9dcb552a7bbad964957162d418ea4280"
     },
     {
       "target": "unraid",
-      "path": "apps/unraid/template/backup-manager-ui.xml",
-      "sha256": "3d5d2c56952ab457f8cf4038d3e776fe913a12fa1963fc71e64697c15b2632e6"
+      "path": "apps/unraid/template/backupd-ui.xml",
+      "sha256": "da42cda94fb7d6c8cd546985a91966f0906eb2c45974c6ff6d89e4a04402152e"
     },
     {
       "target": "unraid",
-      "path": "apps/unraid/template/backup-manager.xml",
-      "sha256": "e1ad1e6ad416796b806df7be77288e3102ba6a83262a2604679373b1bedd749d"
+      "path": "apps/unraid/template/backupd.xml",
+      "sha256": "638047e6daa8814654af31cce6e80024e62c9b50e72b0ec01ec07cca5d1ddfed"
     },
     {
       "target": "zimaos",
-      "path": "apps/zimaos/compose/backup-manager.yml",
-      "sha256": "b7fc053e31e2a568a4195a1e48ce0537ce7b891257f4c65839099cd2d1aa21e1"
+      "path": "apps/zimaos/compose/backupd.yml",
+      "sha256": "7634f959f8e986879f3827ff88c179b50a4ad02cd2faee580d69b81aa8e0ae7e"
     },
     {
       "target": "zimaos",
       "path": "apps/zimaos/icon.svg",
-      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
+      "sha256": "e83f92d42a95a7e8d5977a8a05f994fca631cfd5c6d5c5d7209d1403cb0104ba"
     },
     {
       "target": "generic",
       "path": "container/.env.example",
-      "sha256": "1b7c77ae85e9c21b8860e0d66b0237f1375026f2f9417b6f9f1ae4d71785609a"
+      "sha256": "60344c2a56d390f9468b426ef17c2866e271988346b70cd3736aa85be8b9f966"
     },
     {
       "target": "generic",
       "path": "container/Dockerfile",
-      "sha256": "282180fdb998c071f224126a97826659dfb4d5a3d063a6aba62e46b27156ca48"
+      "sha256": "86c8f74aad1e5ca8f826ef395fc8f42cc5151279b7c47dd136e8312011688f58"
     },
     {
       "target": "generic",
       "path": "container/compose.yaml",
-      "sha256": "5ab23c0ea604d24e7023dd571392746c81e7a4b5421228f67908ca4041c86ef0"
+      "sha256": "95438574623ec135b5bfc167d44b7a0f7db0a49dc915bc4313bc89ce44af252b"
     }
   ],
   "unbuiltTargets": [
@@ -192,10 +192,10 @@
   "signing": {
     "status": "signed",
     "method": "sigstore-keyless",
-    "identity": "https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release",
+    "identity": "https://github.com/spdrman/backupd/.github/workflows/release.yml@refs/heads/release",
     "transparencyLog": "https://rekor.sigstore.dev",
     "note": [
-      "Verify with: cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release ghcr.io/spdrman/backup-manager:0.4.0"
+      "Verify with: cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity https://github.com/spdrman/backupd/.github/workflows/release.yml@refs/heads/release ghcr.io/spdrman/backupd:0.4.0"
     ]
   },
   "performance": {

@@ -19,7 +19,7 @@ import { QuarantinePage } from "@shared/pages/QuarantinePage";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { createMockApi } from "@shared/api/mock";
 import type { AsyncState } from "@shared/hooks/useAsync";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import type { BackupArtifact } from "@shared/types/backup";
 
 const ARTIFACT: BackupArtifact = {
@@ -56,7 +56,7 @@ const ARTIFACT: BackupArtifact = {
   ]
 };
 
-function renderPage(api: BackupManagerApi, reload: () => void) {
+function renderPage(api: BackupdApi, reload: () => void) {
   const quarantine: AsyncState<BackupArtifact[]> = {
     data: [ARTIFACT],
     error: null,

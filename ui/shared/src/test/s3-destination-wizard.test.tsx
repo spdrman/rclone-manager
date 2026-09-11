@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { StorageDestinationsCard } from "@shared/pages/StorageDestinationsCard";
 import { ApiProvider } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import type {
   MediumPreflight,
   StorageMedium,
@@ -179,7 +179,7 @@ describe("re-testing a destination backups already live on (FR-30)", () => {
   it("renders the removal refusal with what is on the destination behind it", async () => {
     const remove = vi.fn(() =>
       Promise.reject(
-        new BackupManagerError({
+        new BackupdError({
           code: "MEDIUM_IN_USE",
           message: "service: storage medium still holds copies: 148 copies on storage medium \"offsite_s3\"",
           correlationId: "cid_test"

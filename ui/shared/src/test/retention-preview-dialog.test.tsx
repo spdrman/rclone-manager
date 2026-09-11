@@ -24,7 +24,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { RetentionPreviewDialog } from "@shared/pages/RetentionPreviewDialog";
 import { ApiProvider } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import { resetGraphForTests } from "@shared/state/graph";
 import { commitRetentionRevisions } from "@shared/state/appNodes";
@@ -310,7 +310,7 @@ describe("RetentionPreviewDialog", () => {
   it("a RETENTION_PLAN_STALE apply rejection hides the plan detail and offers to review a fresh one, instead of silently failing", async () => {
     const applyRetention = vi.fn(() =>
       Promise.reject(
-        new BackupManagerError({
+        new BackupdError({
           // The literal code apps/common/webhost/handlers_retention.go
           // writes and handlers_retention_test.go asserts on
           // (TestApplyRetention_StalePlanReturns409WithItsOwnCode), not a

@@ -22,7 +22,7 @@ import { ApiProvider } from "@shared/api/ApiContext";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { httpApi } from "@shared/api/client";
 import { createMockApi, scenarioFromLocation } from "@shared/api/mock";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import type { PlatformBridge } from "@shared/types/platform";
 import { ErrorBoundary } from "./ErrorBoundary";
 
@@ -32,7 +32,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 export function createApp(
   container: HTMLElement,
   bridge: PlatformBridge,
-  api: BackupManagerApi = import.meta.env.DEV ? createMockApi(scenarioFromLocation()) : httpApi
+  api: BackupdApi = import.meta.env.DEV ? createMockApi(scenarioFromLocation()) : httpApi
 ) {
   createRoot(container).render(
     <StrictMode>

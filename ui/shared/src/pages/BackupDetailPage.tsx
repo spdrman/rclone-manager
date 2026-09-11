@@ -26,7 +26,7 @@ import { LifecycleTimeline } from "@shared/components/LifecycleTimeline";
 import { PlacementList } from "@shared/components/PlacementList";
 import { ErrorState } from "@shared/components/EmptyState";
 import { bytes, stamp } from "@shared/utilities/format";
-import { BackupManagerError, RequestFailure } from "@shared/api/contracts";
+import { BackupdError, RequestFailure } from "@shared/api/contracts";
 import type { ApiErrorCode } from "@shared/api/contracts";
 import type { ArtifactRetentionPolicy, BackupArtifact } from "@shared/types/backup";
 
@@ -127,7 +127,7 @@ export function BackupDetailPage({ readOnly = false }: { readOnly?: boolean }) {
         // Accepted, not recovered, and the difference is measurable: the
         // CLI's `retry` exits 0 and prints "re-entering the pipeline" for
         // a backup whose very next cycle lands FAILED again on the same
-        // FR-12 collision (measured in a container against a real rbm).
+        // FR-12 collision (measured in a container against a real backupd).
         // The verb's success says the row moved to DISCOVERED and nothing
         // about what happens next, so this sentence must not read as "it
         // is fixed", and the page goes and looks rather than asserting an
@@ -298,7 +298,7 @@ export function BackupDetailPage({ readOnly = false }: { readOnly?: boolean }) {
  * the card above.
  */
 function retryRefusalSentence(e: unknown): string {
-  if (e instanceof BackupManagerError) {
+  if (e instanceof BackupdError) {
     const step = RETRY_REFUSAL_NEXT_STEP[e.api.code] ?? "";
     return [e.api.message, step, correlationSuffix(e.api.correlationId)].filter((part) => part !== "").join(" ");
   }
@@ -393,7 +393,7 @@ function retentionPolicySentence(policy: ArtifactRetentionPolicy): string {
     default:
       return (
         "This server did not say, so this page cannot tell you whether anything will ever delete this" +
-        " backup. Updating Backup Manager restores the answer; the rbm unconfigured command" +
+        " backup. Updating Backupd restores the answer; the backupd unconfigured command" +
         " has it in the meantime."
       );
   }

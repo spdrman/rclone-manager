@@ -22,8 +22,8 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import type { BackupManagerApi } from "@shared/api/contracts";
-import { BackupManagerError } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import { createMockApi, resetMockFixtures } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
 import { resetGraphForTests } from "@shared/state/graph";
@@ -31,7 +31,7 @@ import { backupSetPath } from "@shared/utilities/routes";
 
 const CANCEL = "CANCEL & EXIT EDIT MODE";
 
-function renderDetail(source: string, set: string, api: BackupManagerApi, readOnly = false) {
+function renderDetail(source: string, set: string, api: BackupdApi, readOnly = false) {
   return render(
     <MemoryRouter initialEntries={[backupSetPath(source, set)]}>
       <ApiProvider api={api}>
@@ -44,7 +44,7 @@ function renderDetail(source: string, set: string, api: BackupManagerApi, readOn
   );
 }
 
-async function openEditMode(api: BackupManagerApi, target: BackupSet) {
+async function openEditMode(api: BackupdApi, target: BackupSet) {
   renderDetail(target.source, target.set, api);
   await screen.findByText(target.name);
   await act(async () => {
@@ -264,7 +264,7 @@ describe("issue #591: CANCEL & EXIT EDIT MODE", () => {
   it("drops a pending refusal, its acknowledgement and its refused body", async () => {
     const api = createMockApi();
     const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
-      new BackupManagerError({
+      new BackupdError({
         code: "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
         message:
           "service: this backup set has 32 artifacts recorded against /var/backups and this change points it at /var/backups-new",

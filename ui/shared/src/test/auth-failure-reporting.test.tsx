@@ -6,12 +6,12 @@ import { EnrollmentPage } from "@shared/auth/EnrollmentPage";
 import { LoginPage } from "@shared/auth/LoginPage";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { createMockApi } from "@shared/api/mock";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import type { ApiErrorCode } from "@shared/api/contracts";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 
 /**
- * Issue #274. An operator opened the enrolment link Backup Manager itself
+ * Issue #274. An operator opened the enrolment link Backupd itself
  * printed, after the token had lapsed, and was told:
  *
  *     The administrator account could not be created.
@@ -31,15 +31,15 @@ import type { BackupManagerApi } from "@shared/api/contracts";
  *  whether the link carried one at all. */
 const A_LINK_WITH_A_TOKEN = "/enroll?token=placeholder-value-for-this-test";
 
-function apiRefusing(code: ApiErrorCode, message: string, correlationId: string): BackupManagerApi {
+function apiRefusing(code: ApiErrorCode, message: string, correlationId: string): BackupdApi {
   const api = createMockApi();
-  const rejection = new BackupManagerError({ code, message, correlationId });
+  const rejection = new BackupdError({ code, message, correlationId });
   vi.spyOn(api, "enrollAdministrator").mockRejectedValue(rejection);
   vi.spyOn(api, "login").mockRejectedValue(rejection);
   return api;
 }
 
-function renderEnrollment(api: BackupManagerApi) {
+function renderEnrollment(api: BackupdApi) {
   return render(
     <MemoryRouter>
       <ApiProvider api={api}>
@@ -59,7 +59,7 @@ async function enroll() {
   await userEvent.click(screen.getByRole("button", { name: "Create administrator" }));
 }
 
-async function signIn(api: BackupManagerApi) {
+async function signIn(api: BackupdApi) {
   render(
     <MemoryRouter>
       <ApiProvider api={api}>
@@ -104,7 +104,7 @@ describe("enrolment says why it refused", () => {
     );
     await enroll();
 
-    const remediation = await screen.findByText(/Restart Backup Manager/);
+    const remediation = await screen.findByText(/Restart Backupd/);
     expect(remediation.textContent).toMatch(/log/i);
   });
 
@@ -139,7 +139,7 @@ describe("enrolment says why it refused", () => {
 
     await screen.findByText(/administrator account already exists on this instance/i);
     expect(screen.getByRole("link", { name: /sign in/i })).toBeInTheDocument();
-    expect(screen.queryByText(/Restart Backup Manager/)).toBeNull();
+    expect(screen.queryByText(/Restart Backupd/)).toBeNull();
   });
 
   it("says to wait when the address is rate limited", async () => {

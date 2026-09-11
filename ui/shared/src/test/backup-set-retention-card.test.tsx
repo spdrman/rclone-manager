@@ -3,8 +3,8 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import type { BackupManagerApi, RetentionOverride } from "@shared/api/contracts";
-import { BackupManagerError } from "@shared/api/contracts";
+import type { BackupdApi, RetentionOverride } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import { resetGraphForTests } from "@shared/state/graph";
 import { backupSetPath } from "@shared/utilities/routes";
@@ -18,7 +18,7 @@ import { backupSetPath } from "@shared/utilities/routes";
  * because a card that answered "your own policy" for everything would
  * pass every assertion aimed only at the override.
  */
-function renderDetail(source: string, set: string, api: BackupManagerApi, readOnly = false) {
+function renderDetail(source: string, set: string, api: BackupdApi, readOnly = false) {
   return render(
     <MemoryRouter initialEntries={[backupSetPath(source, set)]}>
       <ApiProvider api={api}>
@@ -249,7 +249,7 @@ describe("a backup set's retention policy, on its own page", () => {
   it("shows the server's own refusal rather than a wording of its own", async () => {
     const api = createMockApi();
     vi.spyOn(api, "setBackupSetRetention").mockRejectedValue(
-      new BackupManagerError({
+      new BackupdError({
         code: "INVALID_REQUEST",
         message:
           "invalid config: sources[0].backup_sets[0].retention: a backup set's own policy replaces the deployment's whole chain",
@@ -307,7 +307,7 @@ describe("mapping one backup set's tier to a storage medium", () => {
   const panel = () => screen.getByRole("group", { name: "Storage medium disclosure" });
   const save = () => screen.getByRole("button", { name: "Save this set's policy" });
 
-  async function openEditor(api: BackupManagerApi, source = "production", set = "postgres-primary") {
+  async function openEditor(api: BackupdApi, source = "production", set = "postgres-primary") {
     renderDetail(source, set, api);
     fireEvent.click(await screen.findByRole("button", { name: "Give this set its own policy" }));
     await screen.findByRole("group", { name: "Tier 1" });
@@ -392,7 +392,7 @@ describe("mapping one backup set's tier to a storage medium", () => {
     expect(words).toMatch(/offsite_s3/);
     expect(words).toMatch(/I delete the copy on this machine/);
     expect(words).toMatch(/billed by your provider/i);
-    // No figure comes with it (rclone-manager#211).
+    // No figure comes with it (backupd#211).
     expect(words).not.toMatch(/\$\s?\d/);
     // The chain is edited and valid, and Save still waits for the tick.
     expect((save() as HTMLButtonElement).disabled).toBe(true);
@@ -426,7 +426,7 @@ describe("mapping one backup set's tier to a storage medium", () => {
   it("shows the server's refusal in the server's own words when it still disagrees about consent", async () => {
     const api = createMockApi();
     vi.spyOn(api, "setBackupSetRetention").mockRejectedValue(
-      new BackupManagerError({
+      new BackupdError({
         code: "MEDIUM_DISCLOSURE_REQUIRED",
         message:
           "This write sends daily -> offsite_s3. After a backup uploads and I verify it, I delete the copy on this machine.",

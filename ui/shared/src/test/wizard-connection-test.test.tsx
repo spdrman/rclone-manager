@@ -25,10 +25,10 @@ import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { createMockApi } from "@shared/api/mock";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import { resetGraphForTests } from "@shared/state/graph";
 
-function renderWizard(api: BackupManagerApi = createMockApi()) {
+function renderWizard(api: BackupdApi = createMockApi()) {
   return render(
     <MemoryRouter>
       <ApiProvider api={api}>

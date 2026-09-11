@@ -6,7 +6,7 @@ import { App } from "@shared/App";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { createMockApi } from "@shared/api/mock";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import type { AuthContext, PlatformBridge } from "@shared/types/platform";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
 import { resetGraphForTests } from "@shared/state/graph";
@@ -26,7 +26,7 @@ import type { BackupSet } from "@shared/types/backup";
 const AUTHENTICATED: AuthContext = { authenticated: true, username: "bm-admin", mode: "local-account" };
 const bridge: PlatformBridge = { ...genericBridge, getAuthContext: () => Promise.resolve(AUTHENTICATED) };
 
-function renderApp(api: BackupManagerApi, route = "/") {
+function renderApp(api: BackupdApi, route = "/") {
   return render(
     <MemoryRouter initialEntries={[route]}>
       <ApiProvider api={api}>
@@ -86,7 +86,7 @@ function slashIdSet(overrides: Partial<BackupSet> = {}): BackupSet {
   };
 }
 
-function apiWithSets(sets: BackupSet[]): BackupManagerApi {
+function apiWithSets(sets: BackupSet[]): BackupdApi {
   const api = createMockApi();
   vi.spyOn(api, "listSets").mockResolvedValue(sets);
   vi.spyOn(api, "getSet").mockImplementation((id) => {

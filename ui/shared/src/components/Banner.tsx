@@ -51,7 +51,7 @@ export interface BannerProps {
    * A dismissal is about the sentence that was on screen, so when this
    * changes the banner comes back without waiting for a remount. That is
    * the half of #620 that is a safety property rather than a convenience:
-   * without it, an operator who put away "Backup Manager could not log in
+   * without it, an operator who put away "Backupd could not log in
    * to nas-01" would never see "the SSH host key for nas-01 has changed"
    * arrive in its place, because the second condition would render into a
    * box that is already dismissed.

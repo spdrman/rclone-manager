@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { DashboardPage } from "@shared/pages/DashboardPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
 import type { SystemHealth } from "@shared/types/operation";
@@ -66,7 +66,7 @@ const idleHealth: SystemHealth = {
   storageReadingsUnavailable: 0
 };
 
-function renderDashboard(sets: BackupSet[], api: BackupManagerApi = createMockApi()) {
+function renderDashboard(sets: BackupSet[], api: BackupdApi = createMockApi()) {
   return render(
     <MemoryRouter>
       <ApiProvider api={api}>
