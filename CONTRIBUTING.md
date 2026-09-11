@@ -1,4 +1,4 @@
-# Contributing to rclone-manager
+# Contributing to backupd
 
 ## Your first pull request needs one extra file
 
