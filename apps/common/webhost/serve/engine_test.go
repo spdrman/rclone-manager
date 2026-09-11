@@ -334,6 +334,39 @@ func TestEngine_NoAuthRoutesMeansNoUnauthenticatedAuthEndpoint(t *testing.T) {
 	}
 }
 
+// TestEngine_EveryResponseCarriesExactlyOneCorrelationId is issue #730's
+// review, medium finding 3, at the composition it actually has to hold
+// for.
+//
+// The engine is three surfaces behind one mux - the auth routes, the
+// /api/v1 router and the mux's own 404 - and an id that exists on some
+// of them is an id an operator cannot be told to quote. Exactly one
+// value is the other half: webhost.RequestScope wraps the whole
+// composition AND the API router installs it for a provider that builds
+// a route table directly, so a second mint would give one request two
+// names and put whichever lost the race in the log.
+func TestEngine_EveryResponseCarriesExactlyOneCorrelationId(t *testing.T) {
+	h := newEngineHarness(t)
+
+	for _, target := range []string{
+		"/health/live",
+		"/api/v1/system/version", // 401: no session on this client
+		"/api/v1/auth/login",     // the auth surface, mounted separately
+		"/not-a-route-at-all",    // the mux's own refusal
+	} {
+		res, err := http.Get(h.server.URL + target)
+		if err != nil {
+			t.Fatalf("GET %s: %v", target, err)
+		}
+		ids := res.Header.Values("X-Correlation-Id")
+		res.Body.Close()
+
+		if len(ids) != 1 || ids[0] == "" {
+			t.Errorf("GET %s answered %d with X-Correlation-Id %v, want exactly one non-empty value", target, res.StatusCode, ids)
+		}
+	}
+}
+
 // uiHarness wraps an engineHarness with a real NewUI httptest.Server
 // proxying to it, modelling the real two-container topology: engine has
 // no published port and the UI host proxies through.

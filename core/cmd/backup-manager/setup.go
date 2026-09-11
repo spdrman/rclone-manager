@@ -389,8 +389,16 @@ func openConfigWriteRoute(ctx context.Context, configPath string) (configWriteRo
 // this binary constructs shares: newline-delimited JSON on stdout, so the
 // process's own supervisor (systemd, a container runtime) owns rotation
 // and shipping, exactly as internal/obs's package doc describes.
+//
+// The level is the environment's (obs.LevelFromEnv: LOG_LEVEL, or
+// RM_DEBUG=1 as the shortcut), the same knob service.Open reads and the
+// same one the web host's own surfaces read. Unset is INFO, unchanged.
+// `rbm daemon` is a documented deployment shape of its own
+// (container/compose.yaml names it as a command override), so a
+// hard-coded level here would mean the one engine an operator can run
+// headless is the one they cannot turn up.
 func logger() *obs.Logger {
-	return obs.New(os.Stdout, obs.LevelInfo)
+	return obs.New(os.Stdout, obs.LevelFromEnv())
 }
 
 // logStartup emits FR-23's two mandatory startup log lines (binary

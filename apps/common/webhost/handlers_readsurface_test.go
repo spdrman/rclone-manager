@@ -519,6 +519,45 @@ func TestListActivity_LimitIsAdvisoryInBothDirections(t *testing.T) {
 	}
 }
 
+// TestListActivity_CursorGoesDownAndComesBackUp is the wire half of
+// issue #730's paging: the browser can only ask for the page behind the
+// one it has if ?before= reaches the backend and next_cursor comes back.
+//
+// Both halves are asserted on one route because either alone is useless:
+// a cursor the handler accepts and drops silently looks exactly like one
+// it honoured, and a cursor the backend produced and the handler dropped
+// leaves the client with no way to ask again.
+func TestListActivity_CursorGoesDownAndComesBackUp(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.activityNextCursor = "8231"
+
+	rec := rt.get(t, "/api/v1/activity?limit=2&before=9004")
+	mustStatus(t, rec, http.StatusOK)
+	if got := rt.backend.lastActivityBefore; got != "9004" {
+		t.Errorf("before reached the backend as %q, want %q", got, "9004")
+	}
+
+	var body listActivityResponse
+	decodeInto(t, rec, &body)
+	if body.NextCursor != "8231" {
+		t.Errorf("next_cursor = %q, want the one the backend handed over", body.NextCursor)
+	}
+
+	// And a page with nothing behind it says so by omitting the key
+	// rather than sending an empty string a client would have to test
+	// for: an absent cursor is what stops a "load older" control being
+	// offered for events that do not exist.
+	rt.backend.activityNextCursor = ""
+	rec = rt.get(t, "/api/v1/activity")
+	mustStatus(t, rec, http.StatusOK)
+	if raw := rec.Body.String(); strings.Contains(raw, "next_cursor") {
+		t.Errorf("an exhausted page carries a cursor: %s", raw)
+	}
+	if got := rt.backend.lastActivityBefore; got != "" {
+		t.Errorf("before reached the backend as %q on a request that sent none", got)
+	}
+}
+
 func TestListActivity_AFailedReadIs500Internal(t *testing.T) {
 	rt := newReadSurfaceRouter(t)
 	rt.backend.errOnActivity = errors.New("boom")

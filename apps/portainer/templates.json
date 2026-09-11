@@ -98,6 +98,12 @@
           "default": "UTC"
         },
         {
+          "name": "LOG_LEVEL",
+          "label": "Log level",
+          "description": "How much both containers log: info, debug, warn or error. debug adds a per-request diagnostic line to each container's log and is meant to be turned on while reproducing a fault, not left on.",
+          "default": "info"
+        },
+        {
           "name": "PUBLIC_BASE_URL",
           "label": "Externally reachable base URL",
           "description": "Used for the one-time enrollment link the engine prints on first start. localhost is only right when you open the link on the Docker host itself.",

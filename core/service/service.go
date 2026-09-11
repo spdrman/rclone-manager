@@ -423,8 +423,17 @@ func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Confi
 // The returned cleanup func closes the journal; callers should always
 // `defer cleanup()` (or handle its error) once they are done with the
 // returned BackupService.
+//
+// The sink's level comes from the environment (obs.LevelFromEnv:
+// LOG_LEVEL, or RM_DEBUG=1 as the shortcut) rather than from a constant.
+// This is the engine's composition root, so a hard-coded LevelInfo here
+// meant the ENGINE could not be turned up at all - the half of issue
+// #730 where an operator set LOG_LEVEL on both containers of one
+// deployment, got the UI host's proxy trace, and had nothing from the
+// process the trace describes to join it to. Unset is still INFO, so a
+// deployment that asked for nothing is byte-identical to before.
 func Open(ctx context.Context, configPath string) (*BackupService, func() error, error) {
-	logger := obs.New(os.Stdout, obs.LevelInfo)
+	logger := obs.New(os.Stdout, obs.LevelFromEnv())
 
 	// Issue #665: loads the bundled backend manifests and refuses loudly
 	// if one is malformed, before anything else opens. Nothing reads the

@@ -56,8 +56,7 @@ func writeError(w http.ResponseWriter, status int, code, message string) string 
 	// ui/shared/src/api/client.ts reads this off every non-2xx response's
 	// X-Correlation-Id header - which, before this package set it, it
 	// never found for any route here.
-	id := correlationID()
-	w.Header().Set("X-Correlation-Id", id)
+	id := responseCorrelationID(w)
 	writeJSON(w, status, resp)
 	return id
 }
@@ -101,8 +100,32 @@ func writeConfigRevisionStale(w http.ResponseWriter, message, current string) {
 	resp.Error.Code = "CONFIG_REVISION_STALE"
 	resp.Error.Message = message
 	resp.ConfigRevision = current
-	w.Header().Set("X-Correlation-Id", correlationID())
+	responseCorrelationID(w)
 	writeJSON(w, http.StatusConflict, resp)
+}
+
+// responseCorrelationID is the id this response will carry, minting one
+// only if nothing already has.
+//
+// The edge mints it for every request that goes through RequestScope
+// (requestscope.go), which sets the header before any handler runs, so
+// the ordinary case here is reading back the id the log line for this
+// request already names. Overwriting it with a fresh one would hand the
+// operator an id that matches the response in their browser and nothing
+// in the process's own log - the failure mode this package's own
+// errorlog_test.go exists to prevent, one layer up.
+//
+// The mint is still here for the surface that has no edge: a handler
+// driven directly, and any future caller that builds a route table
+// without the middleware. A refusal with no id at all is the state
+// issue #598 was reported for.
+func responseCorrelationID(w http.ResponseWriter) string {
+	if id := w.Header().Get(CorrelationHeader); id != "" {
+		return id
+	}
+	id := correlationID()
+	w.Header().Set(CorrelationHeader, id)
+	return id
 }
 
 // writeJSON encodes v as the response body with the given status code and

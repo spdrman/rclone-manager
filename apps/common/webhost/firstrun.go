@@ -365,6 +365,12 @@ func writeNotConfigured(w http.ResponseWriter, r *http.Request) {
 func newUnconfiguredRouter(h *handlers, platform capabilities.PlatformAdapter) http.Handler {
 	r := chi.NewRouter()
 
+	// The same edge as the configured table's (see NewRouter): a
+	// first-run instance is the one an operator is most likely to be
+	// diagnosing, so it is the last place a response should arrive
+	// without an id to quote.
+	r.Use(RequestScope)
+
 	r.Get("/health/live", healthLive)
 	r.Get("/health/ready", h.healthReady)
 

@@ -2691,6 +2691,28 @@ services:
       # hardcoded list ending in /tmp) — see docs/deployment.md.
       TMPDIR: /tmp
 
+      # How loud both processes are, and the one knob an operator is
+      # asked to set when a fault cannot be reproduced (issue #730).
+      # Unset is `info`, which is what this deployment has always
+      # emitted. `debug` adds the per-request diagnostics: this
+      # container's own activity-feed record of what it served, and
+      # web-ui's reverse-proxy trace of what this container answered.
+      #
+      # Set it on BOTH services or neither. The two halves of one
+      # request are recorded in two containers - web-ui sees what the
+      # browser asked for and what came back over the wire, this one
+      # sees what it built - and each line names the same correlation
+      # id, so one container at `debug` gives half of every story and
+      # nothing to join it to.
+      #
+      # RM_DEBUG=1 is the same switch as LOG_LEVEL=debug, kept as the
+      # shortcut an operator can be told over a phone call; it wins if
+      # both are set. An unparseable value falls back to `info` rather
+      # than refusing to start, because a typo in a diagnostic knob must
+      # never take a backup host down. See docs/deployment.md's
+      # "Turning on diagnostics" for the browser's own half of this.
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
       # Retention is evaluated against calendar boundaries (FR-18's
       # daily/weekly/monthly tiers), so the timezone is not cosmetic: left
       # to the image's UTC default, the day an operator thinks a restore
@@ -2921,6 +2943,13 @@ services:
     environment:
       TMPDIR: /tmp
       TZ: ${TZ:-UTC}
+      # The same switch as the engine's above, and it has to be the same
+      # VALUE: at `debug` this container adds its reverse-proxy trace -
+      # what the engine answered, what framing the body arrived with,
+      # and how much of it actually got copied to the browser - which is
+      # only half of each story without the engine's own line for the
+      # same request. RM_DEBUG=1 is the shortcut, and wins over this.
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       # Published to the host (see `ports:` below); LISTEN_ADDR is this
       # container's own internal bind address, always :8080 regardless of
       # what host port LISTEN_PORT maps it to.
@@ -3008,7 +3037,7 @@ services:
 """
 
 # Written by scripts/install/embed_compose.py alongside the blob above.
-EMBEDDED_COMPOSE_SHA256 = "ab5363e02f4d44b250a85735a0ba203243f466b665c64afe1ddaf0bd43d4b2d7"
+EMBEDDED_COMPOSE_SHA256 = "5ab23c0ea604d24e7023dd571392746c81e7a4b5421228f67908ca4041c86ef0"
 
 
 def embedded_compose_bytes() -> bytes:

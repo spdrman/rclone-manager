@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -11,14 +12,14 @@ import (
 // through the pipeline, projected into types a package outside core/ can
 // name.
 //
-// The feed is deployment-wide and takes no filter beyond a count. That is
-// the shape its audience needs rather than an unfinished API: somebody
-// reading it has just been told something is wrong and does not yet know
-// where, so a list that made them name the backup set first would be
-// useless to exactly the person who opened it. Everything narrower is
-// already answered per set by the read models the same journal backs, and
-// a second filtered query shape here would only give the two answers a
-// way to disagree.
+// The feed is deployment-wide and takes no filter beyond a count and a
+// position. That is the shape its audience needs rather than an
+// unfinished API: somebody reading it has just been told something is
+// wrong and does not yet know where, so a list that made them name the
+// backup set first would be useless to exactly the person who opened it.
+// Everything narrower is already answered per set by the read models the
+// same journal backs, and a second filtered query shape here would only
+// give the two answers a way to disagree.
 //
 // The clamping in ListActivity is not defensive tidiness either.
 // Journal.RecentActivity refuses a non-positive limit outright, because
@@ -28,6 +29,13 @@ import (
 // caller that asked for the whole deployment's history gets the newest
 // thousand instead of whatever the journal has accumulated since the day
 // it was created.
+//
+// The cursor is the other half of that bound (issue #730). Clamping on
+// its own would mean the newest thousand events are the only ones any
+// client can ever reach, which for a deployment that has been running a
+// year is most of its history made unreadable in the name of not sending
+// it all at once. A caller pages instead: this hands back where the page
+// ended, and asking again from there costs the same bounded read.
 
 // DefaultActivityLimit is how many events ListActivity returns when a
 // caller does not ask for a number. It bounds a read of an append-only
@@ -78,11 +86,27 @@ type ActivityEvent struct {
 }
 
 // ListActivity returns the most recent lifecycle transitions across every
-// backup set, newest first.
+// backup set, newest first, together with a cursor for the page behind
+// them.
 //
 // A limit of zero or less means DefaultActivityLimit; anything above
 // MaxActivityLimit is clamped to it.
-func (b *BackupService) ListActivity(ctx context.Context, limit int) ([]ActivityEvent, error) {
+//
+// before is a row-position token echoed back from an earlier call's
+// second return value (see the cursor's shape below), and selects the
+// events OLDER than the row it names; empty means start at the newest. A
+// value this feed did not issue - garbage, a negative number, one too
+// large to be an id - is IGNORED and reads as the newest page, never
+// refused, for the same reason a nonsensical limit is: the caller asked
+// for a feed, and a page an operator went to look at should not be an
+// error because a bookmark went stale.
+//
+// The cursor comes back non-empty only when the page was filled, which is
+// the honest answer this read can give cheaply: it means there MAY be
+// older events, not that there are. Counting the rest of an append-only
+// table to promise otherwise would cost a full scan on every page, and
+// the client's own next request answers it for free.
+func (b *BackupService) ListActivity(ctx context.Context, limit int, before string) ([]ActivityEvent, string, error) {
 	if limit <= 0 {
 		limit = DefaultActivityLimit
 	}
@@ -90,9 +114,9 @@ func (b *BackupService) ListActivity(ctx context.Context, limit int) ([]Activity
 		limit = MaxActivityLimit
 	}
 
-	records, err := b.journal.RecentActivity(ctx, limit)
+	records, err := b.journal.RecentActivityBefore(ctx, activityCursor(before), limit)
 	if err != nil {
-		return nil, fmt.Errorf("service: listing activity: %w", err)
+		return nil, "", fmt.Errorf("service: listing activity: %w", err)
 	}
 
 	out := make([]ActivityEvent, 0, len(records))
@@ -109,5 +133,31 @@ func (b *BackupService) ListActivity(ctx context.Context, limit int) ([]Activity
 			Detail:       rec.Detail,
 		})
 	}
-	return out, nil
+
+	nextCursor := ""
+	if len(records) == limit {
+		nextCursor = strconv.FormatInt(records[len(records)-1].ID, 10)
+	}
+	return out, nextCursor, nil
+}
+
+// activityCursor turns a caller's ?before= into the row position
+// RecentActivityBefore takes, and is the one place this feed decides what
+// a cursor it did not issue means.
+//
+// Zero is "start at the newest row", and every value that is not a
+// positive decimal id lands there: empty, garbage, a negative number, a
+// number too large for an int64. Explicit rather than leaning on
+// strconv.ParseInt's own error return, which gives 0 for a malformed
+// value but the CLAMPED extreme for one that is merely out of range -
+// the same answer today only because every real id is below it. A feed
+// whose paging behaviour depends on that is one nobody can reason about
+// from the documented contract, which for a diagnostic surface (issue
+// #730) is the wrong way round.
+func activityCursor(before string) int64 {
+	id, err := strconv.ParseInt(before, 10, 64)
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
 }

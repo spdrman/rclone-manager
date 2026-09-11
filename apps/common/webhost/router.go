@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -123,8 +124,57 @@ func (l stdoutLogger) Event(ctx context.Context, level slog.Level, event, msg st
 	l.base.LogAttrs(ctx, level, msg, append([]slog.Attr{slog.String("event", event)}, attrs...)...)
 }
 
+// NewStdoutLogger is the package default Logger, exported so a sibling
+// surface that is not built by NewRouter (apps/common/webhost/serve's
+// UI host, which has its own config struct) writes through the same
+// seam and the same shape rather than inventing a second one.
+func NewStdoutLogger() Logger { return newStdoutLogger() }
+
 func newStdoutLogger() Logger {
-	return stdoutLogger{base: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+	return stdoutLogger{base: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: envLogLevel()}))}
+}
+
+// DebugEnabled reports whether this process was started with diagnostics
+// on. It exists so a sibling package building its own surface
+// (apps/common/webhost/serve) reads the same environment in the same
+// way rather than growing a second answer to "are we in debug".
+func DebugEnabled() bool { return envLogLevel() == slog.LevelDebug }
+
+// envLogLevel is the one place this process decides how loud it is, and
+// the default is unchanged: INFO, exactly what this handler emitted
+// before there was anything to configure. An operator diagnosing a
+// report we cannot reproduce (issue #730: a browser that gets no HTTP
+// response at all while curl gets a clean 401) sets LOG_LEVEL=debug, or
+// RM_DEBUG=1 as the shortcut, and gets the debug events this package and
+// serve/ui.go emit; nobody who sets neither sees one extra line.
+//
+// RM_DEBUG wins over LOG_LEVEL because it is the shortcut an operator is
+// told to set over a phone call, and an unparseable LOG_LEVEL falls back
+// to INFO rather than refusing to start: a typo in a diagnostic knob
+// must never take a backup host down.
+//
+// core/internal/obs.LevelFromEnv is the other reader of these same two
+// variables, with the same precedence and the same fallback, and it is
+// what the ENGINE builds its sink from. Two readers rather than one
+// shared helper because apps/ may import core/ and never the reverse,
+// and core/internal is unreachable from here by construction. They have
+// to agree: a deployment where the two containers answered "how loud am
+// I" differently is the half of #730 where an operator got the proxy
+// trace and nothing from the process it describes.
+func envLogLevel() slog.Level {
+	if os.Getenv("RM_DEBUG") == "1" {
+		return slog.LevelDebug
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL"))) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 // handlers bundles what the HTTP methods in handlers_system.go and
@@ -157,6 +207,12 @@ type handlers struct {
 	// logger is RouterConfig.Logger, resolved: never nil after NewRouter,
 	// so internalError (refusal.go) has nothing to branch on.
 	logger Logger
+
+	// debug is envLogLevel() == slog.LevelDebug, resolved once here
+	// rather than per request. It gates the diagnostic events a handler
+	// emits in addition to its normal work (issue #730), so a default
+	// INFO deployment does not even pay for building their attributes.
+	debug bool
 }
 
 // NewRouter builds the /api/v1 HTTP surface plus /health/live and
@@ -200,6 +256,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		firstRun:      cfg.FirstRun,
 		onConfigured:  cfg.OnConfigured,
 		logger:        logger,
+		debug:         envLogLevel() == slog.LevelDebug,
 	}
 
 	// An instance with a first-run surface and no backend has no
@@ -214,6 +271,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}
 
 	r := chi.NewRouter()
+
+	// Outermost, and over the health probes as well as /api/v1: the id
+	// this mints is on every response this router produces, and the
+	// clock it starts is the only place a later hop can read how long
+	// the request has been in this process (requestscope.go). Registered
+	// before any route below, which is chi's own requirement for a
+	// root-level Use.
+	r.Use(RequestScope)
 
 	r.Get("/health/live", healthLive)
 	r.Get("/health/ready", h.healthReady)

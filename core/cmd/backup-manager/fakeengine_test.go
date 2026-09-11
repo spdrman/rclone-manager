@@ -723,12 +723,15 @@ func (e *fakeEngine) listActivity(w http.ResponseWriter, r *http.Request) {
 			limit = parsed
 		}
 	}
-	events, err := e.svc.ListActivity(r.Context(), limit)
+	events, nextCursor, err := e.svc.ListActivity(r.Context(), limit, r.URL.Query().Get("before"))
 	if err != nil {
 		refuse(w, http.StatusInternalServerError, apicontract.ErrorCodeInternal, "failed to list activity")
 		return
 	}
-	resp := apicontract.ListActivityResponse{Events: make([]apicontract.ActivityEvent, 0, len(events))}
+	resp := apicontract.ListActivityResponse{
+		Events:     make([]apicontract.ActivityEvent, 0, len(events)),
+		NextCursor: nextCursor,
+	}
 	for _, ev := range events {
 		resp.Events = append(resp.Events, apicontract.ActivityEvent{
 			ArtifactID:   ev.ArtifactID,

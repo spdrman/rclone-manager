@@ -210,7 +210,7 @@ describe("the dashboard's Recent activity panel does not swallow the same failur
 
   it("draws no alert at all when the feed simply has nothing in it", async () => {
     const api = createMockApi();
-    vi.spyOn(api, "listActivity").mockResolvedValue([]);
+    vi.spyOn(api, "listActivity").mockResolvedValue({ events: [] });
     render(
       <MemoryRouter>
         <ApiProvider api={api}>

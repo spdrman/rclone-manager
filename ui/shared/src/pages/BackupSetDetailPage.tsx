@@ -95,7 +95,11 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   // history behind it to check staleness against (see
   // state/backupSetDetailNodes.ts's captureSetEditSnapshot/isSetEditStale).
   const set = useResource(currentSetDetailNode, () => api.getSet(setId), [api, setId]);
-  const activity = useResource(currentSetActivityNode, () => api.listActivity(), [api]);
+  // One page of the deployment-wide feed, narrowed to this set below.
+  // Deliberately the service's default page with no cursor: this panel is
+  // "what happened here lately", and a reader following the record
+  // further back goes to the Activity page, which pages (#730).
+  const activity = useResource(currentSetActivityNode, () => api.listActivity().then((page) => page.events), [api]);
   // Issue #597. Both run controls on this page go through one hook: it
   // owns the idempotency key, refuses before sending when the
   // configuration revision has not loaded, and turns whatever comes back

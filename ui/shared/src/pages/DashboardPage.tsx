@@ -113,7 +113,10 @@ export function DashboardPage({
   // for a cycle nobody has measured yet is the loudest possible wrong
   // answer.
   const lastCycle = operations.data?.find((op) => op.cycle !== null) ?? null;
-  const activity = useAsync(() => api.listActivity(), [api]);
+  // This panel shows the newest few events and never pages: it takes the
+  // service's own default page and keeps the events out of it. The
+  // Activity page is where a reader goes to walk further back (#730).
+  const activity = useAsync(() => api.listActivity().then((page) => page.events), [api]);
   // See the Recent activity panel below: a fetch that failed has to say so
   // rather than draw an empty list, and a Try again that failed the same
   // way has to leave evidence it ran (#598).

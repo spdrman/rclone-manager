@@ -284,7 +284,7 @@ describe("ActivityPage no longer renders the Time range control #299 removed", (
   });
 
   it("has no Time range control", async () => {
-    const api = { ...createMockApi(), listActivity: () => Promise.resolve([]) };
+    const api = { ...createMockApi(), listActivity: () => Promise.resolve({ events: [] }) };
 
     render(
       <MemoryRouter>
@@ -319,7 +319,7 @@ describe("ActivityPage reads the shared sets node", () => {
     const listSets = vi.fn(() =>
       Promise.reject(new Error("ActivityPage must not fetch its own sets list — it reads setsNode"))
     );
-    const api = { ...createMockApi(), listSets, listActivity: () => Promise.resolve([]) };
+    const api = { ...createMockApi(), listSets, listActivity: () => Promise.resolve({ events: [] }) };
 
     act(() => {
       graph.commit("test/seed-sets", (tx) =>
@@ -343,7 +343,7 @@ describe("ActivityPage reads the shared sets node", () => {
 
   it("updates the backup-set filter options when setsNode changes, with no new fetch from the page", async () => {
     const listSets = vi.fn(() => Promise.reject(new Error("must not be called")));
-    const api = { ...createMockApi(), listSets, listActivity: () => Promise.resolve([]) };
+    const api = { ...createMockApi(), listSets, listActivity: () => Promise.resolve({ events: [] }) };
 
     render(
       <MemoryRouter>

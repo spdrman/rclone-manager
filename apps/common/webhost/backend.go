@@ -393,8 +393,10 @@ type BackupServiceClient interface {
 	ConfigureStorageMedium(ctx context.Context, id string, cfg service.StorageMediumConfiguration) (service.StorageMediumSummary, error)
 
 	// ListActivity backs GET /api/v1/activity: a read of the durable,
-	// append-only lifecycle record, not a second event stream.
-	ListActivity(ctx context.Context, limit int) ([]service.ActivityEvent, error)
+	// append-only lifecycle record, not a second event stream. before is
+	// the caller's cursor into it and the second return value is where
+	// the page handed back ended, empty when there is no page behind it.
+	ListActivity(ctx context.Context, limit int, before string) ([]service.ActivityEvent, string, error)
 
 	// LiveActivity backs GET /api/v1/activity/live (issue #573): what
 	// each backup set is doing right now, plus a bounded tail of the

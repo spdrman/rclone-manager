@@ -234,7 +234,9 @@ type syncFakeBackend struct {
 	errOnTestPersisted   error
 
 	lastArtifactFilter    service.ArtifactFilter
+	activityNextCursor    string
 	lastActivityLimit     int
+	lastActivityBefore    string
 	lastLiveActivity      service.LiveActivityRequest
 	lastOperationsLimit   int
 	lastRevalidated       string
@@ -997,14 +999,15 @@ func (f *syncFakeBackend) ReinstateArtifact(_ context.Context, id, _ string) (se
 	return f.reinstateResult, nil
 }
 
-func (f *syncFakeBackend) ListActivity(_ context.Context, limit int) ([]service.ActivityEvent, error) {
+func (f *syncFakeBackend) ListActivity(_ context.Context, limit int, before string) ([]service.ActivityEvent, string, error) {
 	if f.errOnActivity != nil {
-		return nil, f.errOnActivity
+		return nil, "", f.errOnActivity
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lastActivityLimit = limit
-	return f.activity, nil
+	f.lastActivityBefore = before
+	return f.activity, f.activityNextCursor, nil
 }
 
 // The live activity feed's half of this double: what to serve, what went
@@ -1343,8 +1346,8 @@ func (f *asyncFakeBackend) ReinstateArtifact(context.Context, string, string) (s
 	return service.ArtifactReinstatement{}, nil
 }
 
-func (f *asyncFakeBackend) ListActivity(context.Context, int) ([]service.ActivityEvent, error) {
-	return nil, nil
+func (f *asyncFakeBackend) ListActivity(context.Context, int, string) ([]service.ActivityEvent, string, error) {
+	return nil, "", nil
 }
 
 func (f *asyncFakeBackend) LiveActivity(context.Context, service.LiveActivityRequest) (service.LiveActivity, error) {

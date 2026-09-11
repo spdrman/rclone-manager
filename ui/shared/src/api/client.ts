@@ -31,6 +31,11 @@
  * nothing, not draw the wrong thing confidently.
  */
 import { BackupManagerError, RequestFailure, toApiErrorCode } from "./contracts";
+// Issue #730's diagnostics, opt-in and silent unless an operator turns
+// them on. Imported rather than inlined because the gate, the console
+// format and the non-browser guards belong to one module, not to the
+// three catch blocks below.
+import { debugEnvironment, debugLog, describeError, isDebugEnabled } from "./debug";
 // The wire shapes below are GENERATED from api/v1/openapi.json, not
 // declared here. Before issue #166 this file carried its own hand-written
 // copy of every snake_case response body, transcribed from the Go
@@ -184,6 +189,38 @@ export function bootstrapTokenFromLocation(): string | null {
   return token === null || token === "" ? null : token;
 }
 
+/**
+ * The header carrying this browser's own name for one attempt, and the
+ * generator for it (issue #730's review).
+ *
+ * Why it exists at all: a correlation id travels on a RESPONSE, and the
+ * fault this whole diagnostic was built for is a request that gets no
+ * response. So the browser names the attempt on the way out, the server
+ * writes that name into its line for the request
+ * (apps/common/webhost/requestscope.go), and a console screenshot
+ * showing `request.no-response` can then be matched against a server log
+ * that proves the request arrived and what was sent back - which is
+ * exactly the question "TypeError: Failed to fetch" leaves open.
+ *
+ * Bounded to sixteen hex characters, in the character set the server is
+ * willing to write down (it drops anything longer or stranger rather
+ * than truncating it), so this header can never be the reason a log line
+ * is unreadable. `getRandomValues` where the browser has it and
+ * `Math.random` where it does not: a NAS is reached over plain HTTP on a
+ * local network, where parts of WebCrypto are unavailable, and a
+ * diagnostic id is not a secret - uniqueness among a handful of
+ * in-flight requests is the entire requirement.
+ */
+const CLIENT_ATTEMPT_HEADER = "X-Client-Attempt-Id";
+
+function newClientAttemptId(): string {
+  const bytes = new Uint8Array(8);
+  const c = globalThis.crypto;
+  if (c && typeof c.getRandomValues === "function") c.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -204,13 +241,45 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (bootstrapToken) headers[BOOTSTRAP_TOKEN_HEADER] = bootstrapToken;
   }
 
+  // Issue #730's review. The one identifier that still exists for a
+  // request that gets NO response at all: there is no response to carry
+  // a correlation id back on, so the browser has to name the attempt
+  // itself and the server has to write that name down (webhost's
+  // requestscope.go reads this header, bounded and validated). Minted
+  // per ATTEMPT, deliberately unlike Idempotency-Key above, which is
+  // per logical submission and is reused across retries: what this
+  // answers is "which of my three tries is the line in your log", and a
+  // value shared by all three cannot.
+  const attemptId = newClientAttemptId();
+  headers[CLIENT_ATTEMPT_HEADER] = attemptId;
+
   // Issue #598. Everything from here down is the one place that can tell
   // this API's three failures apart, so it is the one place that labels
   // them. A `fetch` that rejects and a 2xx body that will not parse used
   // to escape as whatever the browser threw, and the callers above could
   // then only say something generic about them.
   let res: Response;
+  // Issue #730. The URL asked for and how long the attempt lasted are
+  // knowable only here, and a rejected `fetch` carries neither.
+  //
+  // The toggle is read ONCE per request rather than at each of the four
+  // lines below, and everything those lines need - the joined URL, the
+  // clock, the detail objects - is built only when it is on. This
+  // function is on the path of every API call this bundle makes, so a
+  // detail object built unconditionally is one built on every request of
+  // every deployment that never asked for a diagnostic.
+  const debug = isDebugEnabled();
+  const startedAt = debug ? performance.now() : 0;
+  if (debug) debugLog("request.start", { method, url: BASE + path, attemptId });
   try {
+    // `BASE + path` spelled out again here rather than passing `url`:
+    // scripts/api/check-client-paths.sh reduces every path expression in
+    // this file statically and then REFUSES to trust its own result
+    // unless the single fetch() in it literally reads `fetch(BASE +
+    // path`, because a fetch given anything else could be requesting a
+    // URL the gate never saw. `url` above reads identically at runtime
+    // and still failed that check, which is how #730's diagnostics
+    // commit turned a CI step red.
     res = await fetch(BASE + path, {
       credentials: "same-origin",
       ...init,
@@ -226,6 +295,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // deliberately does NOT claim nothing was changed: a request that got
     // no reply may still have been carried out with only the response
     // lost.
+    //
+    // This is #730's exact site: one deployment's Activity page reaches
+    // here with `TypeError: Failed to fetch` while curl to the same route
+    // answers 401. The typed failure below is all an operator sees; the
+    // line above it is everything the browser knew and could not put in
+    // it, and it is written only when diagnostics were asked for.
+    debugLog(
+      "request.no-response",
+      () => ({
+        path,
+        url: BASE + path,
+        method,
+        attemptId,
+        cause: describeError(cause),
+        ...debugEnvironment(),
+        elapsedMs: Math.round(performance.now() - startedAt)
+      }),
+      "error"
+    );
     throw new RequestFailure({ kind: "no-response", path, cause });
   }
 
@@ -268,6 +356,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         correlationId: res.headers.get("x-correlation-id") ?? undefined
       };
     }
+    // #730: the correlation id is the one string that joins this refusal
+    // to the server's own log line for it, and until now it only ever
+    // reached the screen. A refusal that renders as "Failed to fetch" in
+    // a bug report is one nobody can match up; a logged id is.
+    debugLog(
+      "request.error-status",
+      () => ({ path, status: res.status, code: api.code, correlationId: api.correlationId, attemptId }),
+      "error"
+    );
     throw new BackupManagerError(api);
   }
 
@@ -280,14 +377,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // from a body that was cut off mid-transfer, and the correlation id is
     // read here on the SUCCESS path as well as on a refusal (#598) so a
     // body that fails to parse can still name the response it came from.
-    throw new RequestFailure({
-      kind: "unreadable-body",
-      path,
-      status: res.status,
-      contentType: res.headers.get("content-type") ?? undefined,
-      correlationId: res.headers.get("x-correlation-id") ?? undefined,
-      cause
-    });
+    const status = res.status;
+    const contentType = res.headers.get("content-type") ?? undefined;
+    const correlationId = res.headers.get("x-correlation-id") ?? undefined;
+    debugLog(
+      "request.unreadable-body",
+      () => ({ path, status, contentType, correlationId, attemptId, cause: describeError(cause) }),
+      "error"
+    );
+    throw new RequestFailure({ kind: "unreadable-body", path, status, contentType, correlationId, cause });
   }
 }
 
@@ -2094,8 +2192,26 @@ export const httpApi: BackupManagerApi = {
 
   listOperations: () =>
     request<WireListOperationsResponse>("/operations").then((r) => r.operations.map(fromWireOperation)),
-  listActivity: () =>
-    request<WireListActivityResponse>("/activity").then((r) => r.events.map(fromWireActivityEvent)),
+  // Bounded by construction: a caller that names no limit still gets the
+  // service's default rather than the whole record, and the cursor it
+  // hands back is how the next page is asked for.
+  //
+  // Same always-present "?" and per-parameter trailing separator as
+  // getLiveActivity below, for the reason spelled out there: it is what
+  // keeps every branch of this expression a path whose query begins in
+  // the same place.
+  listActivity: (query) =>
+    request<WireListActivityResponse>(
+      "/activity?" +
+        (query?.limit ? "limit=" + query.limit + "&" : "") +
+        (query?.before ? "before=" + encodeURIComponent(query.before) : "")
+    ).then((r) => ({
+      events: r.events.map(fromWireActivityEvent),
+      // Absent stays absent: a client tests for the key to decide
+      // whether there is a page behind this one, and an empty string
+      // would answer that question wrongly in every truthy check.
+      ...(r.next_cursor ? { nextCursor: r.next_cursor } : {})
+    })),
   // Every parameter is optional and each one is appended with its own
   // trailing separator after a "?" that is always present. That is not
   // fussiness: it means every branch of this expression builds a path

@@ -45,6 +45,15 @@ services:
       # days an operator reasons about and the ones the engine applies
       # are silently different.
       TZ: ${TZ:-UTC}
+      # How loud both containers are (issue #730). Unset is `info`,
+      # exactly what this stack has always emitted; `debug` adds the
+      # per-request diagnostics - the engine's record of what it
+      # served and the Web UI's trace of what the engine answered -
+      # and the two containers' lines name the same correlation id, so
+      # this belongs on both or neither. RM_DEBUG=1 is the same switch
+      # as the shortcut, and wins if both are set. Derived from
+      # container/compose.yaml; see docs/deployment.md.
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
       LISTEN_ADDR: ":8080"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8080}"
       # Safe here specifically because this container joins only the
@@ -134,6 +143,11 @@ services:
       # days an operator reasons about and the ones the engine applies
       # are silently different.
       TZ: ${TZ:-UTC}
+      # The same switch as the engine's above, and it has to carry the
+      # same value: at `debug` this container adds its reverse-proxy
+      # trace, which is half of each request's story without the
+      # engine's own line for it.
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
       LISTEN_ADDR: ":8080"
       UPSTREAM_ADDR: "http://backup-manager:8080"
       # The per-provider UI bundles the canonical image carries. With
