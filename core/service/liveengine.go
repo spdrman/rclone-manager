@@ -7,8 +7,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/obs"
 )
 
 // Issue #537, Phase 1 of #536: telling whether an engine is already

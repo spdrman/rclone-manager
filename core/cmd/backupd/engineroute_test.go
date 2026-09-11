@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Issue #543, Phase 2 of #536: a mutating backup-set command REACHES the

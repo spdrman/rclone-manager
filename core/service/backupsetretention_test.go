@@ -30,7 +30,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // deploymentChain is a deployment policy that is deliberately NOT the

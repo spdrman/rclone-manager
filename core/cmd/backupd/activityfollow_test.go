@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/apicontract"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // `backupd activity --follow`, driven against a real route.

@@ -1,6 +1,6 @@
 package service
 
-import "github.com/spdrman/backupd/core/internal/transport/rclone"
+import "github.com/backupdproject/backupd/core/internal/transport/rclone"
 
 // This file is where a process decides who owns SIGINT and SIGTERM when
 // rclone is embedded in it, and it is two forwarding calls because the

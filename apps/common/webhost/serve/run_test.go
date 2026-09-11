@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/apps/common/webhost/serve"
+	"github.com/backupdproject/backupd/apps/common/webhost/serve"
 )
 
 // fakeScheduler is a serve.Scheduler test double whose RunOnSchedule

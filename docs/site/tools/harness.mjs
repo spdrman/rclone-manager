@@ -36,7 +36,7 @@
 // # Why Playwright is borrowed rather than installed
 //
 // Issue #158 moved the browser suite out of `ui/shared` into
-// `spdrman/backupd-tests`, and adding a Playwright dependency back
+// `backupdproject/backupd-tests`, and adding a Playwright dependency back
 // here would undo that. So this resolves `playwright-core` out of the
 // checkout `scripts/e2e/run-tests-repo-gate.sh` already maintains, keyed
 // by the sha in `scripts/e2e/tests-repo.pin`. That file is read, never

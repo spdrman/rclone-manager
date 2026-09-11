@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/apicontract"
 )
 
 // Issue #663's Go half, the CLI side of the four-expert panel's finding: a

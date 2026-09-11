@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/cliecho"
 )
 
 // Every command the Web UI's terminal can print, fed through the real

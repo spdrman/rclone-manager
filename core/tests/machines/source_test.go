@@ -33,7 +33,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/spdrman/backupd/core/tests/dockerlease"
+	"github.com/backupdproject/backupd/core/tests/dockerlease"
 )
 
 // sourceHelperEnv guards the helper tests below so they only run in a child

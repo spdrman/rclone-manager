@@ -177,7 +177,7 @@ somewhere else:
 | was | is | who |
 |---|---|---|
 | `apps/common/packaging/` | `distribution/packaging/` | #165, done |
-| `github.com/spdrman/backupd/apps/common/packaging` | `github.com/spdrman/backupd/distribution/packaging` (new module) | #165, done |
+| `github.com/backupdproject/backupd/apps/common/packaging` | `github.com/backupdproject/backupd/distribution/packaging` (new module) | #165, done |
 | `cd apps/common && go test ./packaging/` | `cd distribution && go test ./packaging/` | #165, done |
 | `apps/common/cmd/provenance` | `distribution/cmd/provenance` | #165, done |
 | `cd apps/common && go run ./cmd/provenance -write` | `cd distribution && go run ./cmd/provenance -write` | #165, done |

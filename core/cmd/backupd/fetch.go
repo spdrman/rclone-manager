@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
 )
 
 // cmdFetch is `backupd fetch --source S --backup-set B [--dry-run]`:

@@ -34,7 +34,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // validConfig returns a Config that Validate accepts as-is. Individual

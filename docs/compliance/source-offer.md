@@ -211,12 +211,12 @@ has to notice.
 
 ## Getting the source
 
-The source repository is <https://github.com/spdrman/backupd>.
+The source repository is <https://github.com/backupdproject/backupd>.
 
 It is public, and that is recorded rather than assumed, in
 `distribution/packaging/compliance.json` (`sourceRepository.visibility`) and in
 `provenance/release-provenance.json` (`links.publiclyReachable`). Both are read
-from `gh repo view spdrman/backupd --json visibility`, and both said
+from `gh repo view backupdproject/backupd --json visibility`, and both said
 private for a while after the repository stopped being private, which is issue
 #484's finding: a recorded measurement with a note asserting its freshness is
 worse than an unmeasured value, because the note is what stops anyone checking.
@@ -231,7 +231,7 @@ open.
 **Written offer.** Anyone who has received a
 distributed copy of Backupd may obtain the complete corresponding source
 for that copy by opening an issue at
-<https://github.com/spdrman/backupd/issues>, or by contacting the
+<https://github.com/backupdproject/backupd/issues>, or by contacting the
 distributor of the package they received. The copy supplied is the exact commit
 recorded in `container/release-manifest.json` for that release, which is the
 same commit the binaries were built from and the same commit the SBOM describes.

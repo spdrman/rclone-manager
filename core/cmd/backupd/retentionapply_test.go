@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // `backupd retention apply` (issue #602).
@@ -347,7 +347,7 @@ func TestRetentionApplyRefusalNamesAStalePlan(t *testing.T) {
 //
 // `retention` previews in both its modes and says so, and that sentence
 // is pinned by core/tests/compat and by the black-box suite in
-// spdrman/backupd-tests. Adding a verb beside it must not turn the
+// backupdproject/backupd-tests. Adding a verb beside it must not turn the
 // bare form into something that deletes, which is the exact confusion
 // `retention --dry-run` being inert was designed to avoid.
 func TestRun_RetentionApplyIsNotTheBarePreview(t *testing.T) {

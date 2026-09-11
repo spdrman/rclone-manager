@@ -28,8 +28,8 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/spdrman/backupd/apps/common/webhost"
-	"github.com/spdrman/backupd/apps/common/webhost/serve"
+	"github.com/backupdproject/backupd/apps/common/webhost"
+	"github.com/backupdproject/backupd/apps/common/webhost/serve"
 )
 
 // recordingLogger is webhost.Logger, recording instead of writing. The

@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/apicontract"
 )
 
 // This file asks the two questions the client's own behaviour cannot

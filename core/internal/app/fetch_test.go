@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
 )
 
 // The dry run's promise, and the real run being the same pipeline.

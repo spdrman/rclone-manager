@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/cliecho"
 )
 
 // Set at build time with -ldflags (see container/Dockerfile).

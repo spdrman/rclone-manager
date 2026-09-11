@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // A backup set's standing connection refusal: the manager could not reach

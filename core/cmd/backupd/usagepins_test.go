@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/tests/compat"
+	"github.com/backupdproject/backupd/core/tests/compat"
 )
 
 // Where the pinned copy of the usage block lives, and how a line of it is

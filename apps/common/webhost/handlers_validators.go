@@ -20,7 +20,7 @@ package webhost
 import (
 	"net/http"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // validatorResponse is one catalog entry on the wire: the id

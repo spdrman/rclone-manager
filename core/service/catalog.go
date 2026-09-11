@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/app"
 )
 
 // This file is FR-9's answer to "the journal is gone, or it is missing

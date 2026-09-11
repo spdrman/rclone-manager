@@ -15,7 +15,7 @@ package webhost
 import (
 	"net/http"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // backupSetHealthResponse is one backup set's verdict. It carries no

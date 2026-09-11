@@ -1,8 +1,8 @@
 package service
 
 import (
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // This file is the shared tail of every configuration write: once the new

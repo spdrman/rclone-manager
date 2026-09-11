@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/alert"
+	"github.com/backupdproject/backupd/core/internal/alert"
 )
 
 // The dispatcher's whole job is deciding when not to say anything, so every

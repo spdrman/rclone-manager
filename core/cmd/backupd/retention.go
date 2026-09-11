@@ -6,11 +6,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/retention"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/retention"
 )
 
 // cmdRetention is `backupd retention` / `backupd retention
@@ -253,7 +253,7 @@ func cmdRetention(args []string) int {
 		//
 		// An inheriting set prints exactly what it printed before this
 		// field existed, which matters because this output is pinned by
-		// the black-box contract suite in spdrman/backupd-tests
+		// the black-box contract suite in backupdproject/backupd-tests
 		// (suites/cli/cases/retention/), and inheriting is what every case
 		// there does. That asymmetry is a real limitation, not a design:
 		// absence of a marker is the only signal for the common case, and
@@ -295,7 +295,7 @@ func cmdRetention(args []string) int {
 	// that has never removed a backup set gets byte-identical output to
 	// the one it got before. That is not only taste: this command's
 	// output is pinned by the black-box contract suite in
-	// spdrman/backupd-tests (suites/cli/cases/retention/), and
+	// backupdproject/backupd-tests (suites/cli/cases/retention/), and
 	// every case there is a configured-sets-only deployment.
 	//
 	// Only for the whole-deployment form. An operator who named one set
@@ -465,7 +465,7 @@ func ungovernedElsewhere(ctx context.Context, svc *app.Service, only model.Backu
 // deliberately lives on that type rather than here: FR-20's own KEEP
 // reason sentence spells a selection the same way, and two renderers
 // would eventually spell it differently. This line is pinned by the
-// black-box contract suite in spdrman/backupd-tests
+// black-box contract suite in backupdproject/backupd-tests
 // (suites/cli/cases/retention/), so changing its shape means moving those
 // cases in lockstep.
 //
@@ -522,7 +522,7 @@ func mediumSuffix(loc retention.Location) string {
 //
 // That is a compatibility decision with a reason outside this repository.
 // This command's output is pinned by the black-box contract suite in
-// spdrman/backupd-tests (suites/cli/cases/retention/), and every
+// backupdproject/backupd-tests (suites/cli/cases/retention/), and every
 // case there is a medium-free deployment; adding a line to those means
 // moving them in lockstep with this change, across two repositories. It
 // is also the honest answer: a deployment with exactly one place to put

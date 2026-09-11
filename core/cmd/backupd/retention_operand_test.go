@@ -193,7 +193,7 @@ func TestRun_RetentionRefusesAnArgumentThatIsNotABackupSetId(t *testing.T) {
 // TestRun_RetentionWithNoOperandStillPreviewsEveryConfiguredSet is the
 // compatibility control, and it is the one that protects something
 // outside this repository: the no-operand form is what the black-box
-// contract suite in spdrman/backupd-tests pins
+// contract suite in backupdproject/backupd-tests pins
 // (suites/cli/cases/retention/), and core/tests/compat's own retention
 // cell drives it too. Reading an operand must not narrow the form that
 // carries none.

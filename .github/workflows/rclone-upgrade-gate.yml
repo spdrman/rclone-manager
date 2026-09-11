@@ -7,7 +7,7 @@ name: rclone upgrade gate
 # upstream release notes.
 #
 # As of this workflow, most of those suites do not exist yet (they are
-# being built under spdrman/backupd#30 and #31). This gate runs the
+# being built under backupdproject/backupd#30 and #31). This gate runs the
 # checks that are real today and writes an honest PENDING line for the
 # ones that are not, instead of reporting a suite as green when nothing
 # ran. See docs/rclone-upgrade.md for the full checklist and the
@@ -80,7 +80,7 @@ jobs:
           if git ls-files '*_test.go' | grep -v '^core/tests/' | grep -q .; then
             echo "ENFORCED: go test -race ./... ran the unit suite above." | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            echo "PENDING: no *_test.go files exist in the module yet, so go test -race ./... ran clean but exercised nothing. Tracked in spdrman/backupd#30." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "PENDING: no *_test.go files exist in the module yet, so go test -race ./... ran clean but exercised nothing. Tracked in backupdproject/backupd#30." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: "4. Transport contract tests"
@@ -89,27 +89,27 @@ jobs:
           if git ls-files 'core/internal/transport/*_test.go' 'core/internal/transport/**/*_test.go' | grep -q .; then
             echo "ENFORCED: core/internal/transport has test files, and go test ./... above already ran them. If they specifically exercise the common transport contract required by FR-2/FR-3, this item is covered; verify the suite covers list/stat/copy/hash/delete/cancel/not-found/permission-denied/changed-object." | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            echo "PENDING: core/internal/transport has no test files yet, so the transport contract suite required by FR-2 does not exist. Tracked in spdrman/backupd#30." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "PENDING: core/internal/transport has no test files yet, so the transport contract suite required by FR-2 does not exist. Tracked in backupdproject/backupd#30." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: "5. SFTP integration tests"
         run: |
           echo "### 5. SFTP integration tests" >> "$GITHUB_STEP_SUMMARY"
           if [ -d core/tests ] && [ -n "$(find core/tests -type f -name '*.go' 2>/dev/null)" ]; then
-            echo "A core/tests/ suite exists, but this workflow does not yet know how to invoke it (it likely needs a disposable SFTP server via Docker). Update this step before relying on it. Tracked in spdrman/backupd#31." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "A core/tests/ suite exists, but this workflow does not yet know how to invoke it (it likely needs a disposable SFTP server via Docker). Update this step before relying on it. Tracked in backupdproject/backupd#31." | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            echo "PENDING: no disposable-SFTP-server integration suite exists yet. Tracked in spdrman/backupd#31." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "PENDING: no disposable-SFTP-server integration suite exists yet. Tracked in backupdproject/backupd#31." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: "6. Crash and reconciliation tests"
         run: |
           echo "### 6. Crash and reconciliation tests" >> "$GITHUB_STEP_SUMMARY"
-          echo "PENDING: the crash matrix in docs/EPIC.md (Testing Requirements) is not implemented yet. Tracked in spdrman/backupd#31." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "PENDING: the crash matrix in docs/EPIC.md (Testing Requirements) is not implemented yet. Tracked in backupdproject/backupd#31." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: "7. Destructive-safety tests"
         run: |
           echo "### 7. Destructive-safety tests" >> "$GITHUB_STEP_SUMMARY"
-          echo "PENDING: the destructive-safety suite (malicious paths, symlinks, replaced remote objects, malformed config, stale journal state) is not implemented yet. Tracked in spdrman/backupd#31." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "PENDING: the destructive-safety suite (malicious paths, symlinks, replaced remote objects, malformed config, stale journal state) is not implemented yet. Tracked in backupdproject/backupd#31." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: "8. Upstream release notes review"
         run: |

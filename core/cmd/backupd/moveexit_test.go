@@ -67,7 +67,7 @@ func TestRun_SaysNothingOnStdoutAboutMoves(t *testing.T) {
 // repository.
 //
 // `run`'s exit status is pinned by the black-box contract suite in
-// spdrman/backupd-tests, and every case there is a medium-free
+// backupdproject/backupd-tests, and every case there is a medium-free
 // deployment. A medium-free deployment attempts no moves, so the new
 // verdict's denominator is zero and it can never be true, which is what
 // keeps those cases exiting 0 by arithmetic rather than by a guard

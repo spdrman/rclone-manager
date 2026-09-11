@@ -98,7 +98,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/obs"
 )
 
 // Kind is one of the four conditions §71's Work Package 3.5 names. There

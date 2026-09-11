@@ -14,8 +14,8 @@ package service
 import (
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // TestARestoreOperationNeverCarriesAProgressReading is FR-34's "no

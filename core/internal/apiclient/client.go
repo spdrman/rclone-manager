@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/apicontract"
 )
 
 // The three names on the wire that the generated binding does not carry.

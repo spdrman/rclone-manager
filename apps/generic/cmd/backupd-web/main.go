@@ -62,15 +62,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spdrman/backupd/apps/common/auth/local"
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
-	"github.com/spdrman/backupd/apps/common/platform/notify"
-	"github.com/spdrman/backupd/apps/common/platform/profile"
-	"github.com/spdrman/backupd/apps/common/webhost"
-	"github.com/spdrman/backupd/apps/common/webhost/serve"
-	"github.com/spdrman/backupd/apps/generic/webui"
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/apps/common/auth/local"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/apps/common/platform/notify"
+	"github.com/backupdproject/backupd/apps/common/platform/profile"
+	"github.com/backupdproject/backupd/apps/common/webhost"
+	"github.com/backupdproject/backupd/apps/common/webhost/serve"
+	"github.com/backupdproject/backupd/apps/generic/webui"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Set at build time with -ldflags (see container/Dockerfile), exactly

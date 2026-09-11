@@ -120,10 +120,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/artifactstore"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/artifactstore"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // prunePartialSuffix mirrors lifecycle/transfer.go's own unexported

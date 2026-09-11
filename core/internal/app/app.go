@@ -47,15 +47,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/alert"
-	"github.com/spdrman/backupd/core/internal/capacity"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/obs"
-	"github.com/spdrman/backupd/core/internal/state"
-	"github.com/spdrman/backupd/core/internal/transport"
-	"github.com/spdrman/backupd/core/internal/transport/retry"
+	"github.com/backupdproject/backupd/core/internal/alert"
+	"github.com/backupdproject/backupd/core/internal/capacity"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport/retry"
 )
 
 // Journal is the slice of internal/state.Journal every use case in this

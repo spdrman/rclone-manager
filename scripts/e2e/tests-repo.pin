@@ -236,7 +236,7 @@
 # landing a four-byte dangling link and exec'ing it. They pass `-L` now, which
 # is a no-op against a pre-rename image. The same defect was in this
 # repository's own release scripts and is fixed on the image branch.
-TESTS_REPO_URL=https://github.com/spdrman/backupd-tests.git
+TESTS_REPO_URL=https://github.com/backupdproject/backupd-tests.git
 #
 # Moved to 1b79f8d, backupd-tests#60, off their merged main and not
 # off the branch, for the reason the paragraph about a794c38 above already

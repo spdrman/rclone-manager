@@ -3,7 +3,7 @@ package app
 import (
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // The thinnest use case in the package, kept anyway.

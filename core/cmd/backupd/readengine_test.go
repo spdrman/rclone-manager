@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/apicontract"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // The engine the read commands in issue #544 are asked to agree with, and

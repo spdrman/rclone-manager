@@ -26,11 +26,11 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/spdrman/backupd/apps/common/auth/local"
-	"github.com/spdrman/backupd/apps/common/platform/profile"
-	"github.com/spdrman/backupd/apps/common/webhost/serve"
-	"github.com/spdrman/backupd/core/apicontract"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/apps/common/auth/local"
+	"github.com/backupdproject/backupd/apps/common/platform/profile"
+	"github.com/backupdproject/backupd/apps/common/webhost/serve"
+	"github.com/backupdproject/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Issue #545, the last of #536: the two routes an operator can change this
@@ -97,7 +97,7 @@ import (
 // # The Web UI itself
 //
 // A browser is not driven from here. The Web UI's data is these responses:
-// it holds no configuration of its own, and spdrman/backupd-tests
+// it holds no configuration of its own, and backupdproject/backupd-tests
 // Suite B is what drives the rendered thing. What is driven here is the
 // exact HTTP surface the browser talks to, through the published port,
 // which is the half of "visible in the Web UI" that can be wrong.

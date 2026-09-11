@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // TestDeleteRemote_RefusesWhenTheDurableCopyIsOnAMedium is issue #434's

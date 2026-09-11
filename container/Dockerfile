@@ -49,7 +49,7 @@
 # below 0.3.3 rather than write a deployment an older image cannot start.
 #
 # What did NOT change is everything that is not the CLI: the image
-# reference (ghcr.io/spdrman/backupd), the compose service names,
+# reference (ghcr.io/backupdproject/backupd), the compose service names,
 # the config directory at /etc/backupd, the Go package paths under
 # cmd/, and the product's own name.
 

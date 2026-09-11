@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // This file is issue #140's INTEGRATION requirement: config file, CLI and
@@ -61,7 +61,7 @@ func backupManagerCLI(t *testing.T) string {
 			return
 		}
 		bin := filepath.Join(dir, "backupd")
-		cmd := exec.Command("go", "build", "-o", bin, "github.com/spdrman/backupd/core/cmd/backupd")
+		cmd := exec.Command("go", "build", "-o", bin, "github.com/backupdproject/backupd/core/cmd/backupd")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			cliBuildErr = fmtBuildError(err, out)
 			return

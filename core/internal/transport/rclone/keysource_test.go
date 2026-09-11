@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/obs"
 )
 
 // This file covers #74's env and command key resolvers, and #269's

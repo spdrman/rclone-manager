@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // runOneCycleForHistory drives one real cycle so the fixture set has

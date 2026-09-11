@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/app"
 )
 
 // This file is the volatile half of the operation model, and everything

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/cliecho"
 )
 
 // What this binary calls itself, checked in the one place it can be checked.
@@ -49,7 +49,7 @@ import (
 // naming itself (cliname.go argues each one at length): the filesystem
 // paths packaging mounts and an operator already has on disk
 // (/etc/backupd/config), the project, image and compose service
-// (ghcr.io/spdrman/backupd), and the User-Agent core sends. A check
+// (ghcr.io/backupdproject/backupd), and the User-Agent core sends. A check
 // that banned the word outright would have to be suppressed at
 // defaultConfigPath on its first run, and a check somebody has to suppress
 // is a check somebody deletes.

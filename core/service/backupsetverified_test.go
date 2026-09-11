@@ -15,9 +15,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/sourcecheck"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/sourcecheck"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // Issue #624 (H2.3): the durable half of "this connection was never

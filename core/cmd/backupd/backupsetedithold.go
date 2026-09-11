@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spdrman/backupd/core/apicontract"
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // cmdBackupSetEditHold is `backupd backup-set edit-hold

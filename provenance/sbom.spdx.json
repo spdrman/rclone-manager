@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "backupd 0.4.0",
-  "documentNamespace": "https://github.com/spdrman/backupd/spdx/77427012c8f6b23faa01713d59c0df8ba3bf1657",
+  "documentNamespace": "https://github.com/backupdproject/backupd/spdx/77427012c8f6b23faa01713d59c0df8ba3bf1657",
   "creationInfo": {
     "created": "2026-09-10T07:54:41Z",
     "creators": [

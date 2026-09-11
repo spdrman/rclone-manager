@@ -27,7 +27,7 @@ import { resetGraphForTests } from "@shared/state/graph";
  * and a door for the one class `config.Validate` refuses a retention tier
  * (#442). Nothing caught it because `s3-destination-wizard.test.tsx`
  * drives the component against its own stub, and the browser suite in
- * spdrman/backupd-tests had never driven the wizard past the
+ * backupdproject/backupd-tests had never driven the wizard past the
  * credentials pane, so the mock's projection of a submitted spec was on
  * nobody's path.
  */

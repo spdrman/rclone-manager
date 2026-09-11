@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/recovery"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/recovery"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // walkToVerifiedWithEvidence is walkToVerified plus the Remote/Transfer/

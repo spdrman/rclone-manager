@@ -43,7 +43,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"github.com/spdrman/backupd/core/internal/transport/rclone"
+	"github.com/backupdproject/backupd/core/internal/transport/rclone"
 )
 
 // newHostKey generates one throwaway ed25519 host key and renders it as

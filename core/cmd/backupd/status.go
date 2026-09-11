@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/app"
 )
 
 // cmdStatus is `backupd status`: FR-24's health surface, rendered

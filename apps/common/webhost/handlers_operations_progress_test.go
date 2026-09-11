@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // How live progress is serialised, including the two shapes that are easy

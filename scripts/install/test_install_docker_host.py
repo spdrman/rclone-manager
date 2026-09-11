@@ -1183,9 +1183,9 @@ class TestRendering(unittest.TestCase):
 
     def test_the_override_pins_the_image_and_changes_nothing_else(self):
         fx = Fixture(self)
-        args = fx.args("--image", "ghcr.io/spdrman/backupd:0.1.0")
+        args = fx.args("--image", "ghcr.io/backupdproject/backupd:0.1.0")
         override = installer.render_image_override(args)
-        self.assertIn("ghcr.io/spdrman/backupd:0.1.0", override)
+        self.assertIn("ghcr.io/backupdproject/backupd:0.1.0", override)
         body = [ln for ln in override.splitlines() if ln and not ln.lstrip().startswith("#")]
         keys = [ln.strip().split(":")[0] for ln in body if ln.startswith("    ")]
         self.assertEqual(set(keys), {"image", "pull_policy"},
@@ -1197,7 +1197,7 @@ class TestRendering(unittest.TestCase):
 
     def test_the_version_in_the_env_tracks_the_image_tag(self):
         fx = Fixture(self)
-        args = fx.args("--image", "ghcr.io/spdrman/backupd:0.1.0")
+        args = fx.args("--image", "ghcr.io/backupdproject/backupd:0.1.0")
         self.assertIn("VERSION=0.1.0", installer.render_env(args))
 
     def test_the_env_is_written_owner_only(self):
@@ -1289,7 +1289,7 @@ class TestVersionOrdering(unittest.TestCase):
     offering to "upgrade" a host onto an older build."""
 
     def test_a_tag_is_read_out_of_a_full_reference(self):
-        self.assertEqual(installer.image_tag("ghcr.io/spdrman/backupd:0.2.0"), "0.2.0")
+        self.assertEqual(installer.image_tag("ghcr.io/backupdproject/backupd:0.2.0"), "0.2.0")
         self.assertEqual(installer.image_tag("backupd:1.4.2"), "1.4.2")
 
     def test_a_registry_port_is_not_mistaken_for_a_tag(self):
@@ -1360,12 +1360,12 @@ class TestWhichVersionIsInstalled(unittest.TestCase):
     orphans from an older layout in whatever order it likes."""
 
     def engine(self, tag, service="backupd"):
-        return {"Service": service, "Image": f"ghcr.io/spdrman/backupd:{tag}"}
+        return {"Service": service, "Image": f"ghcr.io/backupdproject/backupd:{tag}"}
 
     def test_the_engines_container_is_the_one_that_answers(self):
         fx = Fixture(self)
         containers = [
-            {"Service": "some-orphan", "Image": "ghcr.io/spdrman/backupd:0.1.0"},
+            {"Service": "some-orphan", "Image": "ghcr.io/backupdproject/backupd:0.1.0"},
             self.engine("0.2.0"),
         ]
         tag, source = installer.installed_image_tag(containers, fx.prefix)
@@ -2342,9 +2342,9 @@ class TestCounterDeltaNamesTheRule(unittest.TestCase):
 # container this project's own compose project labelled, and two it did
 # not.
 PS_NDJSON_MIXED_HOST = (
-    '{"Names": "backupd", "Image": "ghcr.io/spdrman/backupd:0.1.0", '
+    '{"Names": "backupd", "Image": "ghcr.io/backupdproject/backupd:0.1.0", '
     '"Labels": "com.docker.compose.project=backupd,com.docker.compose.service=backupd"}\n'
-    '{"Names": "backupd-ui", "Image": "ghcr.io/spdrman/backupd:0.1.0", '
+    '{"Names": "backupd-ui", "Image": "ghcr.io/backupdproject/backupd:0.1.0", '
     '"Labels": "com.docker.compose.project=backupd,com.docker.compose.service=backupd-ui"}\n'
     '{"Names": "plex", "Image": "plexinc/pms-docker:latest", "Labels": "com.docker.compose.project=media"}\n'
     '{"Names": "portainer", "Image": "portainer/portainer-ce:latest", "Labels": ""}\n'
@@ -3881,16 +3881,16 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
     """
 
     def test_a_digest_is_not_a_tag(self):
-        ref = "ghcr.io/spdrman/backupd@sha256:" + "ab" * 32
+        ref = "ghcr.io/backupdproject/backupd@sha256:" + "ab" * 32
         self.assertEqual(installer.image_tag(ref), "")
         self.assertEqual(installer.image_digest(ref), "sha256:" + "ab" * 32)
-        self.assertEqual(installer.image_name(ref), "ghcr.io/spdrman/backupd")
+        self.assertEqual(installer.image_name(ref), "ghcr.io/backupdproject/backupd")
 
     def test_a_tag_and_a_digest_together_are_read_apart(self):
-        ref = "ghcr.io/spdrman/backupd:0.1.0@sha256:" + "cd" * 32
+        ref = "ghcr.io/backupdproject/backupd:0.1.0@sha256:" + "cd" * 32
         self.assertEqual(installer.image_tag(ref), "0.1.0")
         self.assertEqual(installer.image_digest(ref), "sha256:" + "cd" * 32)
-        self.assertEqual(installer.image_name(ref), "ghcr.io/spdrman/backupd")
+        self.assertEqual(installer.image_name(ref), "ghcr.io/backupdproject/backupd")
 
     def test_a_registry_port_is_still_not_a_tag(self):
         """The case the old image_tag() got right, kept."""
@@ -3900,14 +3900,14 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
 
     def test_a_reference_with_no_version_in_it_says_so_rather_than_guessing(self):
         self.assertEqual(installer.reference_version("localhost:5000/backupd"), "")
-        self.assertEqual(installer.reference_version("ghcr.io/spdrman/backupd@sha256:" + "ef" * 32), "")
+        self.assertEqual(installer.reference_version("ghcr.io/backupdproject/backupd@sha256:" + "ef" * 32), "")
 
     def test_the_digest_this_release_recorded_names_this_release(self):
         """A pinned digest IS answerable when it is the one recorded, and
         that is not a guess: it is the same identity check_release holds
         the tag to."""
         with carrying_a_recorded_digest() as recorded:
-            ref = "ghcr.io/spdrman/backupd@" + recorded
+            ref = "ghcr.io/backupdproject/backupd@" + recorded
             self.assertEqual(installer.reference_version(ref), installer.CARRIED_RELEASE)
             self.assertEqual(
                 installer.compare_versions(installer.reference_version(ref), installer.CARRIED_RELEASE),
@@ -3920,13 +3920,13 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
         nothing a digest can be equal to, so the answer is "" rather than
         a guess at the carried release."""
         with carrying_a_recorded_digest(None):
-            ref = "ghcr.io/spdrman/backupd@" + RECORDED_DIGEST
+            ref = "ghcr.io/backupdproject/backupd@" + RECORDED_DIGEST
             self.assertEqual(installer.reference_version(ref), "")
 
     def test_the_env_of_a_digest_pinned_install_names_the_release(self):
         fx = Fixture(self)
         with carrying_a_recorded_digest() as recorded:
-            args = fx.args("--image", "ghcr.io/spdrman/backupd@" + recorded)
+            args = fx.args("--image", "ghcr.io/backupdproject/backupd@" + recorded)
             rendered = installer.render_env(args)
             self.assertIn(f"VERSION={installer.CARRIED_RELEASE}", rendered)
             self.assertNotIn("VERSION=sha256", rendered)
@@ -3952,7 +3952,7 @@ class TestOneWayToReadAVersionOutOfAReference(unittest.TestCase):
         implementation."""
         with carrying_a_recorded_digest() as recorded:
             containers = [{"Service": installer.ENGINE_SERVICE,
-                           "Image": "ghcr.io/spdrman/backupd@" + recorded}]
+                           "Image": "ghcr.io/backupdproject/backupd@" + recorded}]
             tag, source = installer.installed_image_tag(containers, Path("/nonexistent"))
         self.assertEqual(tag, installer.CARRIED_RELEASE)
         self.assertIn(installer.ENGINE_SERVICE, source)
@@ -4043,8 +4043,8 @@ class TestNamingAPreviousRelease(unittest.TestCase):
         self.assertEqual(args.image, "registry.example:5000/backupd:0.4.0")
 
     def test_an_image_that_already_agrees_is_not_a_conflict(self):
-        args = self.args("--image", "ghcr.io/spdrman/backupd:0.4.0", "--release", "0.4.0")
-        self.assertEqual(args.image, "ghcr.io/spdrman/backupd:0.4.0")
+        args = self.args("--image", "ghcr.io/backupdproject/backupd:0.4.0", "--release", "0.4.0")
+        self.assertEqual(args.image, "ghcr.io/backupdproject/backupd:0.4.0")
 
     def test_it_refuses_a_release_older_than_the_binaries_it_writes(self):
         # The embedded compose runs /backupd-web. That path exists from 0.3.3
@@ -4073,7 +4073,7 @@ class TestNamingAPreviousRelease(unittest.TestCase):
         )
 
     def test_two_flags_naming_different_versions_refuse_rather_than_pick_one(self):
-        exc = refusal_from(self.args, "--image", "ghcr.io/spdrman/backupd:0.5.0",
+        exc = refusal_from(self.args, "--image", "ghcr.io/backupdproject/backupd:0.5.0",
                            "--release", "0.4.0")
         self.assertIsNotNone(exc, "installing a version other than the one that was named, quietly, "
                                   "is the whole failure this flag exists to prevent")
@@ -4083,7 +4083,7 @@ class TestNamingAPreviousRelease(unittest.TestCase):
 
     def test_a_digest_is_not_weakened_into_a_tag(self):
         exc = refusal_from(self.args,
-                           "--image", "ghcr.io/spdrman/backupd@sha256:" + "ab" * 32,
+                           "--image", "ghcr.io/backupdproject/backupd@sha256:" + "ab" * 32,
                            "--release", "0.4.0")
         self.assertIsNotNone(exc)
         self.assertEqual(exc.code, installer.EXIT_RELEASE_CONFLICT)
@@ -4425,7 +4425,7 @@ class TestTheRegistryClientSpeaksTheProtocol(unittest.TestCase):
         answers = [TOKEN_ANSWER,
                    ("last=", _CannedResponse(page2)),
                    ("tags/list", _CannedResponse(page1, headers={
-                       "Link": '</v2/spdrman/backupd/tags/list?n=100&last=0.2.0>; rel="next"'})),
+                       "Link": '</v2/backupdproject/backupd/tags/list?n=100&last=0.2.0>; rel="next"'})),
                    ]
         with _StubbedHTTP(answers) as http:
             versions = installer.Registry().released_versions()
@@ -4439,7 +4439,7 @@ class TestTheRegistryClientSpeaksTheProtocol(unittest.TestCase):
     def test_it_stops_rather_than_following_a_previous_link_forever(self):
         answers = [TOKEN_ANSWER,
                    ("tags/list", _CannedResponse(json.dumps({"tags": ["0.2.0"]}).encode(), headers={
-                       "Link": '</v2/spdrman/backupd/tags/list?n=100>; rel="previous"'}))]
+                       "Link": '</v2/backupdproject/backupd/tags/list?n=100>; rel="previous"'}))]
         with _StubbedHTTP(answers) as http:
             self.assertEqual(installer.Registry().released_versions(), ["0.2.0"])
         self.assertEqual(len([r for r in http.requests if "tags/list" in r[1]]), 1,
@@ -4913,12 +4913,12 @@ class TestACliOnlyInstallRunsNoWebUi(unittest.TestCase):
         down, and it reads it line by line. The extra keys CLI-only adds
         are exactly the kind of thing that breaks a line-oriented read."""
         fx = Fixture(self)
-        args = fx.args("--cli-only", "--image", "ghcr.io/spdrman/backupd:9.9.9",
+        args = fx.args("--cli-only", "--image", "ghcr.io/backupdproject/backupd:9.9.9",
                        command="install")
         (args.prefix / "compose.image.yaml").write_text(
             installer.render_image_override(args), encoding="utf-8")
         self.assertEqual(installer._image_from_override(args.prefix),
-                         "ghcr.io/spdrman/backupd:9.9.9")
+                         "ghcr.io/backupdproject/backupd:9.9.9")
 
     def test_the_env_records_the_shape_so_a_bare_rerun_keeps_it(self):
         fx = Fixture(self)

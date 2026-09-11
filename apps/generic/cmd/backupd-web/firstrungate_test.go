@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spdrman/backupd/apps/common/webhost"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/apps/common/webhost"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // PR #581's review, at the seam this binary owns.

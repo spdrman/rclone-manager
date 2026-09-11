@@ -7,10 +7,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/spdrman/backupd/core/apicontract"
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/apiclient"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/apiclient"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // The one place core/service's vocabulary and core/apicontract's meet.

@@ -27,11 +27,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/apps/common/auth/local"
-	"github.com/spdrman/backupd/apps/common/platform/profile"
-	"github.com/spdrman/backupd/apps/common/webhost"
-	"github.com/spdrman/backupd/apps/common/webhost/serve"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/apps/common/auth/local"
+	"github.com/backupdproject/backupd/apps/common/platform/profile"
+	"github.com/backupdproject/backupd/apps/common/webhost"
+	"github.com/backupdproject/backupd/apps/common/webhost/serve"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // firstRunFixtureKey is a throwaway, unencrypted ed25519 private key

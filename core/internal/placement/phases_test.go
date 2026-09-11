@@ -5,11 +5,11 @@ import (
 
 	"context"
 	"fmt"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/placement"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // This file turns phases.go's prose into properties of the graph.

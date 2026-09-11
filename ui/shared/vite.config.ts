@@ -49,7 +49,7 @@ export default defineConfig({
     css: true,
     // e2e/ used to hold the Playwright suite, and this exclusion kept
     // `vitest run` from collecting its specs. The suite left in #158: it
-    // is Suite B of spdrman/backupd-tests now, and backupd's
+    // is Suite B of backupdproject/backupd-tests now, and backupd's
     // own gate runs it from there on every commit (#197). The pattern
     // stays because nothing costs less than an exclusion for a directory
     // that does not exist, and because it is the one line that would have

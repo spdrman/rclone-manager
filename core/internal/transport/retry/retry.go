@@ -22,7 +22,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // Policy bounds one Transient retry loop.

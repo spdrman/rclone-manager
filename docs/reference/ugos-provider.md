@@ -28,7 +28,7 @@
 ## Status
 
 **Type:** Reference material for EPIC B's UGOS provider work  
-**Repository:** `spdrman/backupd`  
+**Repository:** `backupdproject/backupd`  
 **Parent / predecessor EPIC:** `Embedded-rclone NAS Backup Lifecycle Manager` (EPIC A, complete)  
 **Active EPIC:** `docs/EPIC-B-multi-nas.md`  
 **Primary implementation root:** repository root (the `tools/backupd/` path this originally assumed was corrected when EPIC A moved into its own repository)  

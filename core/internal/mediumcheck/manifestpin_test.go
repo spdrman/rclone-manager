@@ -13,8 +13,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/backend"
-	"github.com/spdrman/backupd/core/internal/mediumcheck"
+	"github.com/backupdproject/backupd/core/internal/backend"
+	"github.com/backupdproject/backupd/core/internal/mediumcheck"
 )
 
 // TestTheProbeStepVocabularyMatchesMediumcheckSteps is issue #665's test

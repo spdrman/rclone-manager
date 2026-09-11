@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // Where a backup set id was last pointing, written when its configuration

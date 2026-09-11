@@ -14,9 +14,9 @@ package platform
 import (
 	"context"
 
-	"github.com/spdrman/backupd/apps/common/auth/local"
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
-	"github.com/spdrman/backupd/apps/common/platform/profile"
+	"github.com/backupdproject/backupd/apps/common/auth/local"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/apps/common/platform/profile"
 )
 
 // Adapter is the generic provider's capabilities.PlatformAdapter,

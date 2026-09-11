@@ -7,9 +7,9 @@ import (
 	"os"
 	"sort"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // cmdRetentionApply is `backupd retention apply

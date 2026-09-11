@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/apicontract"
 )
 
 // What this file plants, and why each one is planted rather than reasoned

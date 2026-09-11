@@ -39,10 +39,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/apps/common/auth/local"
-	"github.com/spdrman/backupd/apps/common/webhost"
-	"github.com/spdrman/backupd/apps/common/webhost/serve"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/apps/common/auth/local"
+	"github.com/backupdproject/backupd/apps/common/webhost"
+	"github.com/backupdproject/backupd/apps/common/webhost/serve"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // openGate is a DestructiveGate that passes, supplied by this test and

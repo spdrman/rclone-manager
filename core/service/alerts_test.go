@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/capacity"
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/capacity"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 type countingSink struct {

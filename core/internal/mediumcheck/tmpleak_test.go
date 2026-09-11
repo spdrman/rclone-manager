@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/placement"
 )
 
 // TestPreflight_LeavesNothingBehindOnThisMachineEither is the local half

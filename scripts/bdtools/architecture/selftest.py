@@ -544,7 +544,7 @@ def body(st: Selftest) -> int:
     d = st.mutant("dep-core-to-distribution")
     (d / "apps/common/webhost").mkdir(parents=True, exist_ok=True)
     (d / "apps/common/webhost/selftest_reverse_import.go").write_text(
-        "package webhost\n\nimport _ \"github.com/spdrman/backupd/distribution/packaging\"\n"
+        "package webhost\n\nimport _ \"github.com/backupdproject/backupd/distribution/packaging\"\n"
     )
     # The reverse import has to resolve, so the mutant module gets a
     # replace pointing at its own sibling copy. Without it `go list`
@@ -561,7 +561,7 @@ def body(st: Selftest) -> int:
     d = st.mutant("dep-platform-to-distribution")
     (d / "apps/generic/platform").mkdir(parents=True, exist_ok=True)
     (d / "apps/generic/platform/selftest_reverse_import.go").write_text(
-        "package platform\n\nimport _ \"github.com/spdrman/backupd/distribution/packaging\"\n"
+        "package platform\n\nimport _ \"github.com/backupdproject/backupd/distribution/packaging\"\n"
     )
     _go_mod_edit(d / "apps/generic", "../../distribution")
     st.expect_check_fails(
@@ -612,7 +612,7 @@ def body(st: Selftest) -> int:
     d = st.mutant("dep-unclassified-module")
     (d / "apps/selftest-unclassified-provider").mkdir(parents=True, exist_ok=True)
     (d / "apps/selftest-unclassified-provider/go.mod").write_text(
-        "module github.com/spdrman/backupd/apps/selftest-unclassified-provider\n\ngo 1.27.0\n"
+        "module github.com/backupdproject/backupd/apps/selftest-unclassified-provider\n\ngo 1.27.0\n"
     )
     harness.sh(["git", "-C", str(d), "add", "-A"])
     st.expect_check_fails(
@@ -633,7 +633,7 @@ def body(st: Selftest) -> int:
     d = st.mutant("dep-untracked-module")
     (d / ".claude/worktrees/selftest-planted/core").mkdir(parents=True, exist_ok=True)
     (d / ".claude/worktrees/selftest-planted/core/go.mod").write_text(
-        "module github.com/spdrman/backupd/core\n\ngo 1.27.0\n"
+        "module github.com/backupdproject/backupd/core\n\ngo 1.27.0\n"
     )
     (d / "selftest-untracked-module").mkdir(parents=True, exist_ok=True)
     (d / "selftest-untracked-module/go.mod").write_text(
@@ -976,8 +976,8 @@ def _rewrite_layers_to_container(path: Path) -> None:
 def _go_mod_edit(module_dir: Path, replace_target: str) -> None:
     env = {**os.environ, "GOWORK": "off"}
     for arg in (
-        "-require=github.com/spdrman/backupd/distribution@v0.0.0",
-        f"-replace=github.com/spdrman/backupd/distribution={replace_target}",
+        "-require=github.com/backupdproject/backupd/distribution@v0.0.0",
+        f"-replace=github.com/backupdproject/backupd/distribution={replace_target}",
     ):
         harness.sh(["go", "mod", "edit", arg], cwd=module_dir, env=env)
 

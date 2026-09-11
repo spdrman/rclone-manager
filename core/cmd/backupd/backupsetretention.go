@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // cmdBackupSetRetention is `backupd backup-set retention

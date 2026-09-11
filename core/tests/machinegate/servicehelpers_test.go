@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // A deliberate copy of two of core/service's own test helpers, and the one

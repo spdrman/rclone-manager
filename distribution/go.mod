@@ -20,7 +20,7 @@
 // pins the same version apps/common already pinned, so the move introduces
 // no new dependency and no new version to reconcile. See
 // distribution/README.md.
-module github.com/spdrman/backupd/distribution
+module github.com/backupdproject/backupd/distribution
 
 go 1.27.0
 

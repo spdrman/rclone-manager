@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/cliecho"
 )
 
 // The process lifecycle: one HTTP server, optionally one scheduler, and

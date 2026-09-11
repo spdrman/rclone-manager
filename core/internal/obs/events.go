@@ -2,7 +2,7 @@ package obs
 
 import (
 	"context"
-	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/cliecho"
 	"log/slog"
 	"time"
 )

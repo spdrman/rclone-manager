@@ -24,7 +24,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/testenv"
+	"github.com/backupdproject/backupd/core/internal/testenv"
 )
 
 // TestSnapshotSQLite_RestoreRecoversExactPreSnapshotBytes is the RED

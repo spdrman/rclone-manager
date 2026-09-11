@@ -22,7 +22,7 @@ services:
   # backup scheduler, one process sharing one shutdown context. It holds
   # the state database and the credentials, and publishes no port at all.
   backupd:
-    image: ${IMAGE:-ghcr.io/spdrman/backupd:0.4.0}
+    image: ${IMAGE:-ghcr.io/backupdproject/backupd:0.4.0}
     command: ["/backupd-web", "serve", "--profile=synology"]
 
     user: "${PUID:-1026}:${PGID:-100}"
@@ -107,7 +107,7 @@ services:
   # operator ever opens. There is no DSM desktop launcher on this path,
   # which is one of the two things the .spk still does that this does not.
   backupd-ui:
-    image: ${IMAGE:-ghcr.io/spdrman/backupd:0.4.0}
+    image: ${IMAGE:-ghcr.io/backupdproject/backupd:0.4.0}
     command: ["/backupd-web", "serve-ui", "--profile=synology"]
 
     depends_on:

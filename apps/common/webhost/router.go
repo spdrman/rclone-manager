@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
 )
 
 // The route table, which is where this package's security tiering

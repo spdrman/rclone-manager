@@ -5,9 +5,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
 
-	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/cliecho"
 )
 
 // The composition root: everything this package's doc comment lays out,

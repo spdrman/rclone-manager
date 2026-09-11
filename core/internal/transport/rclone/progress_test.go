@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/transport"
-	"github.com/spdrman/backupd/core/tests/bwlimit"
+	"github.com/backupdproject/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/tests/bwlimit"
 )
 
 // This file is where the progress numbers are actually proved, against a

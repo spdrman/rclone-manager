@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // cmdSettings is `backupd settings` (report the live retention and

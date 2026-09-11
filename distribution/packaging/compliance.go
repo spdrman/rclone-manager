@@ -18,7 +18,7 @@
 // repository they point into can be opened. One field, one truth. It reads
 // public today, and it read private for a while after the repository had
 // stopped being private, which is issue #484: the value is measured with
-// `gh repo view spdrman/backupd --json visibility`, nothing in this
+// `gh repo view backupdproject/backupd --json visibility`, nothing in this
 // package can re-measure it, and a note claiming it was measured is not
 // evidence that it still is.
 //

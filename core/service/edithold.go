@@ -59,8 +59,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // editHoldLease is how long one hold lasts without being renewed. Short,

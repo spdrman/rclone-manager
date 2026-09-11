@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/retention"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/retention"
 )
 
 // FR-18 and FR-19 classification: which backups are KEPT, and nothing about

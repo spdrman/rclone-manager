@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/apicontract"
 )
 
 // `backupd activity --follow`: the live feed, in a terminal.

@@ -46,8 +46,8 @@ import (
 	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/sourcecheck"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/sourcecheck"
 )
 
 // testFixtureEd25519Key is a throwaway, unencrypted ed25519 private key

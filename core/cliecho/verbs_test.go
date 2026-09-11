@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/apicontract"
 )
 
 // A gap is a promise that a verb does not exist, and this tree ships five

@@ -15,10 +15,10 @@
     "TestProvenanceBundleIsTiedToTheReleaseManifest goes red."
   ],
   "semanticVersion": "0.4.0",
-  "imageReference": "ghcr.io/spdrman/backupd:0.4.0",
+  "imageReference": "ghcr.io/backupdproject/backupd:0.4.0",
   "releaseManifest": {
     "path": "container/release-manifest.json",
-    "sha256": "a4537c2a468d7edbbf6759c35cfb411adae8cf761880ed70b0f2c1023f4b728f",
+    "sha256": "bbe7b0879b40bcc70c605c493653354bcc550174528afb5e63bc94b41cab7018",
     "commit": "77427012c8f6b23faa01713d59c0df8ba3bf1657",
     "recordedBuildVersion": "0.4.0",
     "architectures": [
@@ -51,19 +51,19 @@
   },
   "sbom": {
     "path": "provenance/sbom.spdx.json",
-    "sha256": "f59b451247c7b7df8ceb9efd11fe28ac9a94af8a62983dabe9249552a5f850aa",
+    "sha256": "c55b42fbdac0552ed02599c336be005d8b7e3a4477178067b0a3410706fff4f7",
     "format": "SPDX-2.3"
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "4b9f0b646e3357a00f2e64c588d809951b342b00d3522724bcb44665352f8498",
+    "sha256": "2ce2df2dac320a15829a396fc529db50eca12e0acbea1d5ac22e5d35ab6d987c",
     "format": "sha256sum"
   },
   "artifacts": [
     {
       "target": "casaos",
       "path": "apps/casaos/compose/backupd.yml",
-      "sha256": "262a5f6c0c9f01c830eaa8f42777f31fda5585842665da0a9083c0364a965741"
+      "sha256": "bef6b1b69a8fab9ebe03adcb2d012180817caf9bbba85475f8580ad934793845"
     },
     {
       "target": "casaos",
@@ -73,22 +73,22 @@
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backupd.env",
-      "sha256": "2e7fb8cedc32ff847330fbd53af6d7a74897cb0a7bf598c684385fb787ab833c"
+      "sha256": "7b7914cd134154bca921b58be134be0fb9078841997ec3cd6554ef954cab2e69"
     },
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backupd.yml",
-      "sha256": "ebb0f4a0f482cb94f7868b8ba69a8cdd0dd23e25c1eff018b5e0405656a1265e"
+      "sha256": "7826a54d80f5473b79d3bd98759acb555dd0226068e0d4b7da9934064401db36"
     },
     {
       "target": "portainer",
       "path": "apps/portainer/compose/backupd.env",
-      "sha256": "40903ddc4b8744a97805d0e74a43a9721cde2bad37bb09b090ac425886ec52a4"
+      "sha256": "e8fba0241e143fbe5ec776bb3d98e197f4c017da78eb9a3331689b978f69980c"
     },
     {
       "target": "portainer",
       "path": "apps/portainer/compose/backupd.yml",
-      "sha256": "dc0e5cdc16d3a074b1764539dd7c18b53c4e5e8036293da083be158aeb71becd"
+      "sha256": "3c63dac4dd200caa93871ac8e9f94961b02349a8831ad54a7ae5402803dff060"
     },
     {
       "target": "portainer",
@@ -98,32 +98,32 @@
     {
       "target": "portainer",
       "path": "apps/portainer/templates.json",
-      "sha256": "f61d9418dfcdd19bb48ca2acc4781ae21f99208ed369b89249b0a5738d2f8cdb"
+      "sha256": "213ef258130ae2ba0832b82048e567f52df42376f063288a86f6d20647bab25a"
     },
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backupd.env",
-      "sha256": "b7346694093fc16854927d8a56c4cd377d356f4c75260c3002521f70bf4ca424"
+      "sha256": "7715dea79107850fa20115654379727780f80a20073e8b39dc84f754f23df054"
     },
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backupd.yml",
-      "sha256": "630a91f4f258cb495d3946614a919360cf86da970780ebaecda9ea4198ca6836"
+      "sha256": "27a1b8ebe769dfc1e934350852bfe91a77c996c88cf13bf9f195f385dcaaebd4"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/app.yaml",
-      "sha256": "aa1377e1a76bac1d226f0f62a4d4c53514319b016106b746a9c9957c251b3309"
+      "sha256": "a38efbbec1cf3e6d22078c71de3ee2ec4c7e082b3cf336316a145f5dbf7864bc"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/ix_values.yaml",
-      "sha256": "ac4d191255e4d24179a03a59a80b234562705dc7c9bd9afdd9fb9b8d53e9c1c0"
+      "sha256": "460d734d1a78749c9fee2726f0344a653712b5f133d11d3b498d2c4f34cfafa0"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/questions.yaml",
-      "sha256": "9caa1d4874f6b8adaf2c1b25f666b1ffff0ff1c3d8ceadbf36f2e7db32b43197"
+      "sha256": "4310d9bdea156757e509d53dfb8b3caa30be6570bf417512ad13661c7d04d2d6"
     },
     {
       "target": "truenas",
@@ -133,22 +133,22 @@
     {
       "target": "truenas",
       "path": "apps/truenas/compose/backupd.yaml",
-      "sha256": "be016389ae5ead4a6aa76ef58e779fdd9dcb552a7bbad964957162d418ea4280"
+      "sha256": "b51f7cb5a3797038b35090a4d3d678483fa09919d81857c0f36209ccb21e6a16"
     },
     {
       "target": "unraid",
       "path": "apps/unraid/template/backupd-ui.xml",
-      "sha256": "da42cda94fb7d6c8cd546985a91966f0906eb2c45974c6ff6d89e4a04402152e"
+      "sha256": "fbf2aa5d2586461e56296e6e33ab01b04507291e0a91d3e171a5296ff565cec8"
     },
     {
       "target": "unraid",
       "path": "apps/unraid/template/backupd.xml",
-      "sha256": "638047e6daa8814654af31cce6e80024e62c9b50e72b0ec01ec07cca5d1ddfed"
+      "sha256": "cdcb8e5adb32301f50b6bde43df84351d88a70ede58ee2310fb0f4086064772c"
     },
     {
       "target": "zimaos",
       "path": "apps/zimaos/compose/backupd.yml",
-      "sha256": "7634f959f8e986879f3827ff88c179b50a4ad02cd2faee580d69b81aa8e0ae7e"
+      "sha256": "74715c5bed419bf8cda0b7eaeb4324442c5fe9fc5964250648d6ef15916d010f"
     },
     {
       "target": "zimaos",
@@ -163,7 +163,7 @@
     {
       "target": "generic",
       "path": "container/Dockerfile",
-      "sha256": "86c8f74aad1e5ca8f826ef395fc8f42cc5151279b7c47dd136e8312011688f58"
+      "sha256": "c934fd6cf719b714ee68a137dabc93b80879b422349a0be0c5308840606cc374"
     },
     {
       "target": "generic",
@@ -192,10 +192,10 @@
   "signing": {
     "status": "signed",
     "method": "sigstore-keyless",
-    "identity": "https://github.com/spdrman/backupd/.github/workflows/release.yml@refs/heads/release",
+    "identity": "https://github.com/backupdproject/backupd/.github/workflows/release.yml@refs/heads/release",
     "transparencyLog": "https://rekor.sigstore.dev",
     "note": [
-      "Verify with: cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity https://github.com/spdrman/backupd/.github/workflows/release.yml@refs/heads/release ghcr.io/spdrman/backupd:0.4.0"
+      "Verify with: cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity https://github.com/backupdproject/backupd/.github/workflows/release.yml@refs/heads/release ghcr.io/backupdproject/backupd:0.4.0"
     ]
   },
   "performance": {

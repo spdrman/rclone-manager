@@ -33,7 +33,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // defaultChainRetentionBlock is the retention block writeTestConfigFile

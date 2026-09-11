@@ -10,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spdrman/backupd/core/internal/state"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // This file answers one question, and the shape of the answer is the part

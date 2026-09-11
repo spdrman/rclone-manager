@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/apiclient"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/internal/apiclient"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Issue #555: a routed write checks that the engine at the other end is

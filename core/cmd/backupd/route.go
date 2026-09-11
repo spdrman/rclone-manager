@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spdrman/backupd/core/apicontract"
-	"github.com/spdrman/backupd/core/internal/apiclient"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/internal/apiclient"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Issue #543, Phase 2 of #536: where a mutating backup-set command's work
@@ -84,7 +84,7 @@ import (
 // Environment rather than flags, and rather than a block in config.yaml.
 // A flag would be operator-visible surface on six commands' usage text at
 // once, and that text is pinned both by core/tests/compat and by
-// spdrman/backupd-tests. The address also belongs to the HOST a
+// backupdproject/backupd-tests. The address also belongs to the HOST a
 // command is typed on rather than to the deployment: the same config.yaml
 // is read from inside the container, where the engine is on loopback, and
 // from a NAS shell, where it is a published port, so one field could not

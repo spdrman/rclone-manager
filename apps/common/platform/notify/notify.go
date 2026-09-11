@@ -34,8 +34,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // PlatformSink delivers a core alert through one platform's native local

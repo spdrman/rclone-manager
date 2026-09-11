@@ -1,7 +1,7 @@
 # The browser end-to-end suite, on demand.
 #
 # WHERE THE SUITE IS NOW. It is not in this repository. Issue #158 moved it
-# to spdrman/backupd-tests as Suite B, pinned here by
+# to backupdproject/backupd-tests as Suite B, pinned here by
 # scripts/e2e/tests-repo.pin, and this workflow checks that repository out
 # at the pinned sha and runs it against this repository's ui/shared.
 #
@@ -73,7 +73,7 @@ jobs:
       - name: Checkout the tests repository at the pin
         uses: actions/checkout@v7
         with:
-          repository: spdrman/backupd-tests
+          repository: backupdproject/backupd-tests
           ref: ${{ steps.pin.outputs.sha }}
           path: tests
           token: ${{ secrets.TESTS_REPO_TOKEN || github.token }}

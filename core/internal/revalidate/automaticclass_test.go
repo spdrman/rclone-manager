@@ -15,7 +15,7 @@ package revalidate
 import (
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/placement"
 )
 
 // TestTheAutomaticCeilingIsAClassThisPassMayRunAgainstEveryMedium is

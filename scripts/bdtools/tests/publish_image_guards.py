@@ -160,7 +160,7 @@ def new_repo(tmpdirs: list[str]) -> Path:
     (d / "ui" / "marker").write_text("ui\n")
     (d / "container" / "Dockerfile").write_text("FROM scratch\n")
     (d / "distribution" / "packaging" / "canonical.json").write_text(
-        '{ "image": { "reference": "ghcr.io/spdrman/backupd:1.0.0", "published": false } }\n'
+        '{ "image": { "reference": "ghcr.io/backupdproject/backupd:1.0.0", "published": false } }\n'
     )
     (d / "container" / "release-manifest.json").write_text(
         '{ "version": "test", "commit": "0000000000000000000000000000000000000000" }\n'
@@ -311,7 +311,7 @@ def main() -> int:
         pin_manifest_to_head(repo)
         rc, out = run_guards(repo, "SKIP_PROVENANCE_CHECK=1")
         expect(rc, out, 0, "every guard passed")
-        expect(rc, out, 0, "Would publish ghcr.io/spdrman/backupd:1.0.0")
+        expect(rc, out, 0, "Would publish ghcr.io/backupdproject/backupd:1.0.0")
 
         # --- guard 1: the files it reads are not there
         current = "canonical.json missing"

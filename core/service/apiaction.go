@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/obs"
 )
 
 // What somebody did in the Web UI, recorded where an operator can read it

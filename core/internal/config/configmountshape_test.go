@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // TestAConfigMountThatIsStillAFileSaysSo covers the upgrade path two

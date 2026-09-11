@@ -73,8 +73,8 @@ records no identity:
 ```
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity 'https://github.com/spdrman/backupd/.github/workflows/release.yml@refs/heads/release' \
-  ghcr.io/spdrman/backupd:0.3.3
+  --certificate-identity 'https://github.com/backupdproject/backupd/.github/workflows/release.yml@refs/heads/release' \
+  ghcr.io/backupdproject/backupd:0.3.3
 ```
 
 That command passes against the published image, and it is the whole point of this
@@ -90,7 +90,7 @@ above would answer
 ```
 Error: no matching signatures: none of the expected identities matched what was in
 the certificate, got subjects
-[https://github.com/spdrman/backupd/.github/workflows/release.yml@refs/heads/release]
+[https://github.com/backupdproject/backupd/.github/workflows/release.yml@refs/heads/release]
 with issuer https://token.actions.githubusercontent.com
 ```
 
@@ -134,7 +134,7 @@ release time through the environment and never written down:
 
 ```
 COSIGN_PRIVATE_KEY="$(pass show backupd/cosign)" \
-  cosign sign --key env://COSIGN_PRIVATE_KEY ghcr.io/spdrman/backupd@<digest>
+  cosign sign --key env://COSIGN_PRIVATE_KEY ghcr.io/backupdproject/backupd@<digest>
 ```
 
 `scripts/release/publish-image.sh` enforces that. Guard 5 asks git for every path
@@ -168,7 +168,7 @@ not hold where the script runs.
 
 ## Publishing
 
-`ghcr.io/spdrman/backupd:0.4.0` is cut and not pushed.
+`ghcr.io/backupdproject/backupd:0.4.0` is cut and not pushed.
 `distribution/packaging/canonical.json` records `image.published: false`, and the release
 manifest records the same fact from the other side as a `registry_digest` of `null` per
 architecture and a null `index_digest`. The two are held together by
@@ -256,7 +256,7 @@ met.
 That value went stale once and the note above it claimed it had been measured,
 which is how issue #484 found it: the repository was made public and nothing came
 back to re-read the field, so the record said private for a repository anyone
-could open. Re-run `gh repo view spdrman/backupd --json visibility` rather
+could open. Re-run `gh repo view backupdproject/backupd --json visibility` rather
 than trusting the note, and regenerate the bundle with
 `go run ./cmd/provenance -write` from `distribution/`.
 

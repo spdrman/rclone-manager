@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // The doubles every handler test in this package is built on.

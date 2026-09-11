@@ -87,20 +87,20 @@ func TestEachHardRuleFiresOnTheShapeItIsAbout(t *testing.T) {
 			rule: CheckNoFloatingTag,
 			path: "fixture/compose.yaml",
 			trips: []string{
-				"    image: ghcr.io/spdrman/backupd:latest\n",
-				"    image: ghcr.io/spdrman/backupd\n",
-				"    image: ghcr.io/spdrman/backupd:${TAG:-latest}\n",
-				"<Repository>ghcr.io/spdrman/backupd</Repository>",
-				"  reference: ghcr.io/spdrman/backupd:LATEST\n",
+				"    image: ghcr.io/backupdproject/backupd:latest\n",
+				"    image: ghcr.io/backupdproject/backupd\n",
+				"    image: ghcr.io/backupdproject/backupd:${TAG:-latest}\n",
+				"<Repository>ghcr.io/backupdproject/backupd</Repository>",
+				"  reference: ghcr.io/backupdproject/backupd:LATEST\n",
 			},
 			clean: []string{
-				"    image: ghcr.io/spdrman/backupd:1.0.0\n",
+				"    image: ghcr.io/backupdproject/backupd:1.0.0\n",
 				"    image: backupd:${VERSION:-dev}\n",
-				"    image: ghcr.io/spdrman/backupd@sha256:" + strings.Repeat("a", 64) + "\n",
-				"    image: registry.invalid:5000/spdrman/backupd:1.0.0\n",
-				"<Repository>ghcr.io/spdrman/backupd:1.0.0</Repository>",
+				"    image: ghcr.io/backupdproject/backupd@sha256:" + strings.Repeat("a", 64) + "\n",
+				"    image: registry.invalid:5000/backupdproject/backupd:1.0.0\n",
+				"<Repository>ghcr.io/backupdproject/backupd:1.0.0</Repository>",
 				"# never deploy the latest tag\n",
-				"image:\n  reference: ghcr.io/spdrman/backupd:1.0.0\n",
+				"image:\n  reference: ghcr.io/backupdproject/backupd:1.0.0\n",
 			},
 		},
 		{
@@ -151,8 +151,8 @@ func TestEachHardRuleFiresOnTheShapeItIsAbout(t *testing.T) {
 				"      PUBLIC_BASE_URL: http://localhost:8080\n",
 				"      UPSTREAM_ADDR: http://backupd:8080\n",
 				"      PUBLIC_BASE_URL: http://tower.local:8080\n",
-				"  home: https://github.com/spdrman/backupd\n",
-				"  icon: https://raw.githubusercontent.com/spdrman/backupd/main/docs/submission/icon.svg\n",
+				"  home: https://github.com/backupdproject/backupd\n",
+				"  icon: https://raw.githubusercontent.com/backupdproject/backupd/main/docs/submission/icon.svg\n",
 				"      ENGINE: http://192.168.1.20:8080\n",
 				"      ENGINE: http://127.0.0.1:8080\n",
 				"      ENGINE: http://10.7.0.4:8080\n",
@@ -228,7 +228,7 @@ func TestMutatingARealPackagedFileTripsTheHardRules(t *testing.T) {
 		body string
 	}{
 		{CheckNoSelfUpdate, "no-self-update", "\npull_policy: always\n"},
-		{CheckNoFloatingTag, "no-floating-tag", "\n    image: ghcr.io/spdrman/backupd:latest\n"},
+		{CheckNoFloatingTag, "no-floating-tag", "\n    image: ghcr.io/backupdproject/backupd:latest\n"},
 		{CheckNoPrivilegedMode, "no-privileged-mode", "\n    privileged: true\n"},
 		{CheckNoMandatoryTelemetry, "no-mandatory-telemetry", "\n      TELEMETRY_ENDPOINT: https://collector.example.invalid/ingest\n"},
 	}
@@ -294,14 +294,14 @@ func TestImageTagUnderstandsEveryFloatingForm(t *testing.T) {
 		ref  string
 		kind tagKind
 	}{
-		{"ghcr.io/spdrman/backupd:1.0.0", tagPinned},
-		{"ghcr.io/spdrman/backupd@sha256:" + strings.Repeat("b", 64), tagPinned},
-		{"registry.invalid:5000/spdrman/backupd:1.0.0", tagPinned},
+		{"ghcr.io/backupdproject/backupd:1.0.0", tagPinned},
+		{"ghcr.io/backupdproject/backupd@sha256:" + strings.Repeat("b", 64), tagPinned},
+		{"registry.invalid:5000/backupdproject/backupd:1.0.0", tagPinned},
 		{"backupd:${VERSION:-dev}", tagVariable},
-		{"ghcr.io/spdrman/backupd", tagAbsent},
-		{"registry.invalid:5000/spdrman/backupd", tagAbsent},
-		{"ghcr.io/spdrman/backupd:latest", tagLatest},
-		{"ghcr.io/spdrman/backupd:LATEST", tagLatest},
+		{"ghcr.io/backupdproject/backupd", tagAbsent},
+		{"registry.invalid:5000/backupdproject/backupd", tagAbsent},
+		{"ghcr.io/backupdproject/backupd:latest", tagLatest},
+		{"ghcr.io/backupdproject/backupd:LATEST", tagLatest},
 		{"backupd:${VERSION:-latest}", tagFloatingDefault},
 	}
 	for _, tc := range cases {
@@ -323,7 +323,7 @@ func TestImageTagUnderstandsEveryFloatingForm(t *testing.T) {
 const canonicalCompose = `
 services:
   backupd:
-    image: ghcr.io/spdrman/backupd:0.4.0
+    image: ghcr.io/backupdproject/backupd:0.4.0
     command: ["/backupd-web", "serve"]
     user: "568:568"
     read_only: true
@@ -340,7 +340,7 @@ services:
       - "/host/id_ed25519:/etc/backupd/id_ed25519:ro"
       - "/host/known_hosts:/etc/backupd/known_hosts:ro"
   backupd-ui:
-    image: ghcr.io/spdrman/backupd:0.4.0
+    image: ghcr.io/backupdproject/backupd:0.4.0
     command: ["/backupd-web", "serve-ui"]
     user: "568:568"
     read_only: true

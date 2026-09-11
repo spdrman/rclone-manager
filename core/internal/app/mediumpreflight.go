@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/mediumcheck"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/mediumcheck"
 )
 
 // Proving a storage medium works before a real backup finds out for an

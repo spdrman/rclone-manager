@@ -25,8 +25,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/health"
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/health"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // TestListArtifacts_ReportsWhatARealCycleProduced is GET /api/v1/backups.

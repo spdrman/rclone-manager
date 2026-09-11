@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // cmdQuarantine is `backupd quarantine <revalidate|retry|reinstate>

@@ -31,9 +31,9 @@
       "note": "This stack does NOT need the Docker socket, privileged mode or host networking, and it must never be given them. Create the four host directories in the environment values below and chown them to PUID:PGID before deploying: the runtime image is distroless, so nothing inside the container can create or chown them for you. The engine prints a one-time enrollment link on first start; read it with the container logs.",
       "categories": ["backup", "storage"],
       "platform": "linux",
-      "logo": "https://raw.githubusercontent.com/spdrman/backupd/main/apps/portainer/logo.svg",
+      "logo": "https://raw.githubusercontent.com/backupdproject/backupd/main/apps/portainer/logo.svg",
       "repository": {
-        "url": "https://github.com/spdrman/backupd",
+        "url": "https://github.com/backupdproject/backupd",
         "stackfile": "apps/portainer/compose/backupd.yml"
       },
       "env": [
@@ -41,7 +41,7 @@
           "name": "IMAGE",
           "label": "Canonical image reference",
           "description": "The one multi-architecture image both containers run. 0.4.0 is not pushed to ghcr.io yet, so until the release lands, change this to wherever you pushed or loaded a build, or to the previous release 0.3.3.",
-          "default": "ghcr.io/spdrman/backupd:0.4.0"
+          "default": "ghcr.io/backupdproject/backupd:0.4.0"
         },
         {
           "name": "PUID",

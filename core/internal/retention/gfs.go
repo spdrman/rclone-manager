@@ -62,10 +62,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // GFSTier names one tier of FR-18's retention chain, as it appears on the
@@ -558,7 +558,7 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 		// TestGFSDecideDoesNotFlagTheBatchIngestDiscoveryTieAsASiblingCollision
 		// (bucketkey_test.go) pins exactly this against the six-artifact
 		// backlog fixture the pinned CLI contract suite in
-		// spdrman/backupd-tests also exercises. A producer
+		// backupdproject/backupd-tests also exercises. A producer
 		// timestamp tie has no such innocent explanation: two artifacts
 		// in one backup set reporting an identical remote modification
 		// time, to the second, is what two files of one backup run

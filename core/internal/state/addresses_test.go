@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // TestBackupSetAddress_RecordsReplacesAndTellsAbsenceApartFromEmpty is the

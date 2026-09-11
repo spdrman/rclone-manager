@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/apicontract"
 )
 
 // The table: every route the /api/v1 router registers, and what an

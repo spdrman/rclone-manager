@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/state"
 
 	// Imported so this test binary's build info includes
 	// github.com/rclone/rclone, exactly as app/version_test.go does, so
 	// BuildVersion's EngineVersion has something real to report instead of
 	// "unknown".
-	_ "github.com/spdrman/backupd/core/internal/transport/rclone"
+	_ "github.com/backupdproject/backupd/core/internal/transport/rclone"
 )
 
 // resolveTestRetention fills in every backup set's resolved Retention, by

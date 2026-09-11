@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Issue #542, Phase 2 of #536: engine-attached or direct is a decision,

@@ -31,7 +31,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spdrman/backupd/apps/synology/spk"
+	"github.com/backupdproject/backupd/apps/synology/spk"
 )
 
 // main defers to run so the whole CLI is reachable from a test without a

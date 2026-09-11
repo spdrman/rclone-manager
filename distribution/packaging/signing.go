@@ -24,7 +24,7 @@ import "strings"
 //
 //	Error: no matching signatures: none of the expected identities matched
 //	what was in the certificate, got subjects
-//	[https://github.com/spdrman/backupd/.github/workflows/release.yml@refs/heads/release]
+//	[https://github.com/backupdproject/backupd/.github/workflows/release.yml@refs/heads/release]
 //	with issuer https://token.actions.githubusercontent.com
 //
 // and the certificate on that signature carries
@@ -55,7 +55,7 @@ const (
 	// repeats sourceRepository.url from compliance.json rather than
 	// reading it, because this is a security contract that should be
 	// readable in one place, and the test holds the two to each other.
-	SigningRepositoryURL = "https://github.com/spdrman/backupd"
+	SigningRepositoryURL = "https://github.com/backupdproject/backupd"
 
 	// SigningCertificateIssuer is the OIDC issuer a verifier pins
 	// alongside the identity. Pinning the identity without the issuer

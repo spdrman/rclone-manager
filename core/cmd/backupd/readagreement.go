@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // The five questions the read commands put to the engine, one per surface

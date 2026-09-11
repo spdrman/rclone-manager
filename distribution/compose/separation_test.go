@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/backupd/distribution/compose"
+	"github.com/backupdproject/backupd/distribution/compose"
 )
 
 // separation_test.go is issue #87 (B5.1)'s state-separation regression

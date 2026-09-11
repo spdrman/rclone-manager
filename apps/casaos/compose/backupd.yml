@@ -29,7 +29,7 @@ x-casaos:
   developer: spdrman
   category: Backup
   store_app_id: backupd
-  icon: https://raw.githubusercontent.com/spdrman/backupd/main/apps/casaos/icon.svg
+  icon: https://raw.githubusercontent.com/backupdproject/backupd/main/apps/casaos/icon.svg
   scheme: http
   hostname: ""
   port_map: "8080"
@@ -62,7 +62,7 @@ services:
   # scheduler in one process. Holds the state database and the
   # credentials, and publishes no port at all.
   backupd:
-    image: ghcr.io/spdrman/backupd:0.4.0
+    image: ghcr.io/backupdproject/backupd:0.4.0
     command: ["/backupd-web", "serve", "--profile=generic"]
 
     user: "1000:1000"
@@ -183,7 +183,7 @@ services:
   # engine. The only container with a published port, and the app CasaOS
   # opens when the tile is clicked.
   backupd-ui:
-    image: ghcr.io/spdrman/backupd:0.4.0
+    image: ghcr.io/backupdproject/backupd:0.4.0
     command: ["/backupd-web", "serve-ui", "--profile=generic"]
 
     depends_on:

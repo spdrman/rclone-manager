@@ -2,7 +2,7 @@
 
 The Playwright suite used to live in `ui/shared/e2e/`. It does not any
 more: issue #158 moved it to
-[`spdrman/backupd-tests`](https://github.com/spdrman/backupd-tests)
+[`backupdproject/backupd-tests`](https://github.com/backupdproject/backupd-tests)
 as Suite B, so it tests this product the way an operator meets it, from
 outside, with nothing but a browser and a built artefact.
 
@@ -209,13 +209,13 @@ Run it against the real published 0.4.0 image (the artefact #730 was seen
 on), rather than a build from this tree:
 
 ```sh
-docker pull ghcr.io/spdrman/backupd:0.4.0
+docker pull ghcr.io/backupdproject/backupd:0.4.0
 scripts/e2e/three-machine-web-ui.sh \
-  --image ghcr.io/spdrman/backupd:0.4.0 \
+  --image ghcr.io/backupdproject/backupd:0.4.0 \
   --front-proxy-tls
 # optionally enlarge the authenticated /api/v1/activity payload:
 RM_SEED_CYCLES=8 scripts/e2e/three-machine-web-ui.sh \
-  --image ghcr.io/spdrman/backupd:0.4.0 --front-proxy-tls
+  --image ghcr.io/backupdproject/backupd:0.4.0 --front-proxy-tls
 ```
 
 The built-in `web-ui-smoke.mjs` client counts a failed request or an

@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // cmdArtifacts is `backupd artifacts`.
@@ -165,7 +165,7 @@ func cmdArtifacts(args []string) int {
 	// The marker only ever appears on those rows, so a deployment that
 	// has never removed a backup set prints exactly what it printed
 	// before. That keeps this command's pinned cases in
-	// spdrman/backupd-tests (suites/cli/) unchanged.
+	// backupdproject/backupd-tests (suites/cli/) unchanged.
 	ungoverned, err := unconfiguredSetIDs(ctx, svc)
 	if err != nil {
 		return fail(err)

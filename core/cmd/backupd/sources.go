@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // cmdSources is `backupd sources`: a read-only dump of every

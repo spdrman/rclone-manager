@@ -164,7 +164,7 @@ exit 1
 STUB
 chmod +x "$STUB_BIN/gh"
 
-REPO="spdrman/backupd"
+REPO="backupdproject/backupd"
 MERGE="1111111111111111111111111111111111111111"
 BASE="2222222222222222222222222222222222222222"
 HEAD="3333333333333333333333333333333333333333"
@@ -220,7 +220,7 @@ runs = [
     {"id": 2, "name": "release gate", "status": status,
      "conclusion": None if conclusion == "none" else conclusion,
      "started_at": "2026-09-05T10:30:00Z", "app": {"slug": slug},
-     "html_url": "https://github.com/spdrman/backupd/runs/2"},
+     "html_url": "https://github.com/backupdproject/backupd/runs/2"},
 ]
 print(json.dumps({"total_count": len(runs), "check_runs": runs}))
 PY

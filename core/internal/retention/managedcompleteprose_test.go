@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
 )
 
 // This file is issue #505's answer to "why did this reach eleven places".

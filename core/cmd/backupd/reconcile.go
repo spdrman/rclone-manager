@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/app"
 )
 
 // cmdReconcile is `backupd reconcile`: an on-demand, operator-

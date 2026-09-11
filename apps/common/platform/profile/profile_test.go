@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
-	"github.com/spdrman/backupd/apps/common/platform/profile"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/apps/common/platform/profile"
 )
 
 // These tests hold the line that makes runtime profiles an adapter

@@ -189,7 +189,7 @@ func deleteSource(ctx context.Context, s store, medium, key string) error {
 import (
 	"context"
 
-	"github.com/spdrman/backupd/core/internal/archive"
+	"github.com/backupdproject/backupd/core/internal/archive"
 )
 
 type store interface {
@@ -236,7 +236,7 @@ func (e *Engine) reclaimSourceEarly(ctx context.Context, medium, key string) err
 import (
 	"context"
 
-	"github.com/spdrman/backupd/core/internal/archive"
+	"github.com/backupdproject/backupd/core/internal/archive"
 )
 
 type Engine struct{ Store interface {
@@ -266,7 +266,7 @@ func (e *Engine) deleteSource(ctx context.Context, src archive.Copy, all []archi
 import (
 	"context"
 
-	arc "github.com/spdrman/backupd/core/internal/archive"
+	arc "github.com/backupdproject/backupd/core/internal/archive"
 )
 
 type store interface {
@@ -303,7 +303,7 @@ const compliantChain = `package placement
 import (
 	"context"
 
-	"github.com/spdrman/backupd/core/internal/archive"
+	"github.com/backupdproject/backupd/core/internal/archive"
 )
 
 type Engine struct{ Store interface {
