@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Backup Manager</title>
+<title>Backupd</title>
 <style>
   body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; color: #1f2933; }
   code { background: #eef1f4; padding: 0 .25em; border-radius: 3px; }
@@ -11,10 +11,10 @@
 </head>
 <body>
 <!--
-  DSM serves this directory (INFO's dsmuidir) at /webman/3rdparty/BackupManager/,
+  DSM serves this directory (INFO's dsmuidir) at /webman/3rdparty/Backupd/,
   and the desktop launcher entry in ./config points here. The application
   itself is not served by DSM's own web server: it is this package's own
-  backup-manager-web process, listening on port 8477, so this page's only
+  backupd-web process, listening on port 8477, so this page's only
   job is to send the browser there on the same host the DSM session is
   already open against.
 
@@ -22,7 +22,7 @@
   here would have to run as DSM's web user, and nothing about this package
   needs code executing outside its own package user.
 -->
-<p id="status">Opening Backup Manager&hellip;</p>
+<p id="status">Opening Backupd&hellip;</p>
 <p id="fallback" hidden>
   If nothing happens, open <code id="target"></code> directly.
 </p>
@@ -47,7 +47,7 @@
   })();
 </script>
 <noscript>
-  <p>JavaScript is disabled. Open Backup Manager on port <code>8477</code> of this NAS.</p>
+  <p>JavaScript is disabled. Open Backupd on port <code>8477</code> of this NAS.</p>
 </noscript>
 </body>
 </html>

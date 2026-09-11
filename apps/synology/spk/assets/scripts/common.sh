@@ -105,7 +105,7 @@ pid_alive() {
     [ -n "${pid}" ] || return 1
     kill -0 "${pid}" 2>/dev/null || return 1
     case "$(pid_command "${pid}")" in
-        *"${PKG_BIN}/rbm-web"*)
+        *"${PKG_BIN}/backupd-web"*)
             return 0
             ;;
     esac

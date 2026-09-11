@@ -2,10 +2,10 @@
     "data-share": {
         "shares": [
             {
-                "name": "backup-manager",
+                "name": "backupd",
                 "once": false,
                 "permission": {
-                    "rw": ["BackupManager"]
+                    "rw": ["Backupd"]
                 }
             }
         ]

@@ -1,7 +1,7 @@
 # TrueNAS Apps catalog metadata (WP4.3, deliverable D-6).
 #
 # This directory is the contribution-ready shape for the TrueNAS apps
-# catalog: copy it in as ix-dev/community/backup-manager/ and run that
+# catalog: copy it in as ix-dev/community/backupd/ and run that
 # repository's own validation and render tooling. Nothing on a developer
 # laptop can run that validator, so it is step 8 of
 # docs/acceptance/truenas-provider-acceptance.md rather than a CI check.
@@ -13,8 +13,8 @@
 annotations:
   min_scale_version: "24.10.0"
 
-name: backup-manager
-title: Backup Manager
+name: backupd
+title: Backupd
 train: community
 
 # app_version is the upstream application version; version is this catalog
@@ -45,10 +45,10 @@ description: >-
   them, retains them under a configurable policy, and keeps a durable
   catalog of everything it holds.
 
-home: https://github.com/spdrman/rclone-manager
+home: https://github.com/spdrman/backupd
 sources:
-  - https://github.com/spdrman/rclone-manager
-icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/docs/submission/icon.svg
+  - https://github.com/spdrman/backupd
+icon: https://raw.githubusercontent.com/spdrman/backupd/main/docs/submission/icon.svg
 
 # No added capabilities and no host mounts. The container drops ALL
 # capabilities, runs non-root on a read-only rootfs, and every path it
@@ -58,7 +58,7 @@ host_mounts: []
 
 run_as_context:
   - description: >-
-      Backup Manager runs as the uid/gid you choose at install time, which
+      Backupd runs as the uid/gid you choose at install time, which
       must already own the four host paths. The runtime image is
       distroless: no shell, no root step, no init process, so nothing
       inside the container can fix ownership for you at startup.
@@ -69,6 +69,6 @@ run_as_context:
 
 maintainers:
   - name: spdrman
-    url: https://github.com/spdrman/rclone-manager
+    url: https://github.com/spdrman/backupd
 
 screenshots: []

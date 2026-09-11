@@ -8,6 +8,6 @@
 // them. Everything in this module is packaging and conformance-checking
 // machinery, which is why its dependency set is the standard library and
 // nothing else.
-module github.com/spdrman/rclone-manager/apps/synology
+module github.com/spdrman/backupd/apps/synology
 
 go 1.27.0

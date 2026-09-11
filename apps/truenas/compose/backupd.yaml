@@ -1,4 +1,4 @@
-# TrueNAS custom-app deployment for Backup Manager (WP4.3, issue #84).
+# TrueNAS custom-app deployment for Backupd (WP4.3, issue #84).
 #
 # Paste this whole file into Apps -> Discover Apps -> Custom App ->
 # Install via YAML. It is the same two-container shape
@@ -30,11 +30,11 @@ services:
   # The engine: local authentication, the versioned /api/v1 API and the
   # backup scheduler, one process sharing one shutdown context. It holds
   # the state database and the credentials, and it publishes no port at
-  # all. Reachable only from backup-manager-ui, over this project's own
+  # all. Reachable only from backupd-ui, over this project's own
   # network.
-  backup-manager:
-    image: ghcr.io/spdrman/backup-manager:0.4.0
-    command: ["/rbm-web", "serve", "--profile=truenas"]
+  backupd:
+    image: ghcr.io/spdrman/backupd:0.4.0
+    command: ["/backupd-web", "serve", "--profile=truenas"]
 
     user: "568:568"
     read_only: true
@@ -71,14 +71,14 @@ services:
       # works from another machine.
       PUBLIC_BASE_URL: "http://localhost:8080"
       # Safe here specifically because the engine joins only the private
-      # network below, whose only other member is backup-manager-ui: the
+      # network below, whose only other member is backupd-ui: the
       # forwarded headers can only have come from that proxy. Never set
       # this on the Web UI container, which is the actual edge.
       TRUST_FORWARDED_HEADERS: "true"
 
     volumes:
-      - /mnt/tank/backup-manager/state:/data/state
-      - /mnt/tank/backup-manager/backups:/data/backups
+      - /mnt/tank/backupd/state:/data/state
+      - /mnt/tank/backupd/backups:/data/backups
       # A writable directory, with config.yaml inside it (issue
       # #196). A read-only single-file mount is what this line used
       # to be, and it made adding a backup set, saving settings and
@@ -86,15 +86,15 @@ services:
       # config.yaml through a temp file created in its own
       # directory, which on that shape is the image's read-only
       # rootfs.
-      - /mnt/tank/backup-manager/config:/etc/backup-manager/config
-      - /mnt/tank/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
-      - /mnt/tank/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
+      - /mnt/tank/backupd/config:/etc/backupd/config
+      - /mnt/tank/backupd/secrets/id_ed25519:/etc/backupd/id_ed25519:ro
+      - /mnt/tank/backupd/secrets/known_hosts:/etc/backupd/known_hosts:ro
 
     # The start gate, and a liveness question rather than a health
     # verdict (issue #206). The Web UI below declares
-    # `depends_on: backup-manager: condition: service_healthy`, so
+    # `depends_on: backupd: condition: service_healthy`, so
     # whatever this asks stands between an operator and the only
-    # container with a published port. `/rbm status` is
+    # container with a published port. `/backupd status` is
     # FR-24's backup-freshness verdict and exits non-zero on any
     # DEGRADED, STALE or FAILING set, and on a fresh install, which has
     # backed nothing up yet: gating the Web UI on it means a new install
@@ -105,12 +105,12 @@ services:
     # is the right default for a plain `docker run` and for the headless
     # `daemon` command, which serves no HTTP and so has no liveness
     # endpoint to ask. Backup freshness is not lost - read it with
-    # `docker exec backup-manager /rbm status`, or let the
+    # `docker exec backupd /backupd status`, or let the
     # alerts block deliver it.
     #
     # Derived from container/compose.yaml, never authored here.
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      test: ["CMD", "/backupd-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -128,12 +128,12 @@ services:
   # The Web UI: the shared static bundle plus a reverse proxy to the
   # engine. The only container with a published port, and the only one
   # TrueNAS's Web Portal button should ever open.
-  backup-manager-ui:
-    image: ghcr.io/spdrman/backup-manager:0.4.0
-    command: ["/rbm-web", "serve-ui", "--profile=truenas"]
+  backupd-ui:
+    image: ghcr.io/spdrman/backupd:0.4.0
+    command: ["/backupd-web", "serve-ui", "--profile=truenas"]
 
     depends_on:
-      backup-manager:
+      backupd:
         condition: service_healthy
 
     user: "568:568"
@@ -159,7 +159,7 @@ services:
       # engine's own line for it.
       LOG_LEVEL: "info"
       LISTEN_ADDR: ":8080"
-      UPSTREAM_ADDR: "http://backup-manager:8080"
+      UPSTREAM_ADDR: "http://backupd:8080"
       # The per-provider UI bundles the canonical image carries. With
       # `--profile=truenas` selected above, the bundle served is
       # /ui/bundles/truenas, so an operator who installed through this
@@ -173,11 +173,11 @@ services:
     # construction rather than by discipline.
 
     # Overrides the image's own HEALTHCHECK, which runs
-    # `/rbm status` and needs a config file and a state
+    # `/backupd status` and needs a config file and a state
     # database this container does not have. Without this override the
     # container runs correctly and TrueNAS reports it unhealthy forever.
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck"]
+      test: ["CMD", "/backupd-web", "healthcheck"]
       interval: 30s
       timeout: 5s
       start_period: 5s
