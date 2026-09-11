@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="rclone-manager">
-  <title>rclone-manager</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="backupd">
+  <title>backupd</title>
   <!-- The product's own mark, unchanged: a broken ring reading as a
        transfer cycle in progress. Drawn in white for the dark hero bar,
        which is the only place this file is used. -->

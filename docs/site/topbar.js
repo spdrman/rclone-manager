@@ -1,4 +1,4 @@
-/* rclone-manager docs shared header, used on every page.
+/* backupd docs shared header, used on every page.
  *
  * Three responsibilities:
  *   1. Scroll-collapse animation on the home page (.topbar.is-hero).

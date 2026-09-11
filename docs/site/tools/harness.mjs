@@ -30,13 +30,13 @@
 // request and Vite's own dev server replies with the SPA's index.html. The
 // app reads that as "not authenticated", forever, and the login page is
 // the only screen anyone can reach. Stubbing the one route is the same fix
-// `rclone-manager-tests`' Suite B applies in its own fixtures, for the
+// `backupd-tests`' Suite B applies in its own fixtures, for the
 // same reason.
 //
 // # Why Playwright is borrowed rather than installed
 //
 // Issue #158 moved the browser suite out of `ui/shared` into
-// `spdrman/rclone-manager-tests`, and adding a Playwright dependency back
+// `spdrman/backupd-tests`, and adding a Playwright dependency back
 // here would undo that. So this resolves `playwright-core` out of the
 // checkout `scripts/e2e/run-tests-repo-gate.sh` already maintains, keyed
 // by the sha in `scripts/e2e/tests-repo.pin`. That file is read, never
@@ -146,7 +146,7 @@ const PLAYWRIGHT_MIN = [1, 45];
 function playwrightCandidates() {
   const cacheRoot = resolve(
     process.env.XDG_CACHE_HOME ?? resolve(process.env.HOME ?? "", ".cache"),
-    "rclone-manager-tests-gate"
+    "backupd-tests-gate"
   );
   const pinned = readPin();
   const out = [{ why: "the pinned gate checkout " + pinned.slice(0, 12), dir: resolve(cacheRoot, pinned, "suites/web-ui") }];
