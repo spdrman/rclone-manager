@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/tests/dockerlease"
 )
 
 // minioImage is pinned by name rather than by digest, matching
@@ -120,7 +120,7 @@ func startMedium(t *testing.T, opts mediumOptions) *Medium {
 		SecretAccessKey: randomHex(t, 24),
 	}
 
-	name := fmt.Sprintf("rclone-manager-gate-minio-%d", time.Now().UnixNano())
+	name := fmt.Sprintf("backupd-gate-minio-%d", time.Now().UnixNano())
 	args := []string{
 		"run", "-d", "--name", name,
 		dockerlease.LabelFlag, dockerlease.LabelSpec,

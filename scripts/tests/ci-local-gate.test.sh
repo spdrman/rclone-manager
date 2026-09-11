@@ -452,8 +452,8 @@ make_full_tree() {
 
   # The Python lint step (EPIC I, I1.6 / #672), and this is the SEVENTH time
   # the lesson above has had to be written down here. The step runs
-  # `ruff check --config scripts/rcmtools/pyproject.toml scripts` and
-  # `mypy --strict --config-file ... scripts/rcmtools scripts/deploy
+  # `ruff check --config scripts/bdtools/pyproject.toml scripts` and
+  # `mypy --strict --config-file ... scripts/bdtools scripts/deploy
   # scripts/install/embed_compose.py`; a synthetic tree has none of that and
   # no reason to have it, so a tool exits 2 on a path that is not there, the
   # gate runs under `set -e`, and every full-tree case below dies for a
@@ -467,7 +467,7 @@ make_full_tree() {
   # tool is missing, which is exactly what D1 asserts the absence of. But
   # ci-local.sh prepends /opt/homebrew/bin to PATH ahead of everything, so a
   # Homebrew-installed ruff SHADOWS the stub and runs for real. It ran for
-  # real the whole time this step was `ruff check scripts/rcmtools`, and
+  # real the whole time this step was `ruff check scripts/bdtools`, and
   # passed only because that path happened to hold one clean file with no
   # configuration to find.
   #
@@ -475,10 +475,10 @@ make_full_tree() {
   # is copied in, the stub package and the two stub suites are written to be
   # clean under it, and the paths the step names all exist. Whichever ruff
   # wins the PATH race now measures the same thing.
-  mkdir -p "$tree/scripts/rcmtools"
+  mkdir -p "$tree/scripts/bdtools"
   printf '"""A stub package, so the lint step has a directory to point at."""\n' \
-    >"$tree/scripts/rcmtools/__init__.py"
-  cp "$SCRIPTS_DIR/rcmtools/pyproject.toml" "$tree/scripts/rcmtools/pyproject.toml"
+    >"$tree/scripts/bdtools/__init__.py"
+  cp "$SCRIPTS_DIR/bdtools/pyproject.toml" "$tree/scripts/bdtools/pyproject.toml"
   printf '"""A stub module, so the mypy half of the step has a file to point at."""\n' \
     >"$tree/scripts/install/embed_compose.py"
   printf '#!/bin/sh\nexit 0\n' >"$tree/bin/ruff"
@@ -1067,7 +1067,7 @@ fi
 # site somebody adds later, not only for the two that exist today.
 #
 # PORTED-CHECK HAZARD NOTE. EPIC I / I1.6 (#672) moved the proof to
-# scripts/rcmtools/e2e/two_machine_backup.py and left an exec shim at the old
+# scripts/bdtools/e2e/two_machine_backup.py and left an exec shim at the old
 # path, and this check went to the shim. Both halves broke, in the two
 # opposite ways a port breaks a check:
 #
@@ -1082,7 +1082,7 @@ fi
 # So the scan is repointed AND given a floor: the proof must contain at
 # least two `docker rm` sites (teardown and release_case), which is what
 # stops the absence of a finding from being mistaken for a clean result.
-proof_script="$(dirname "$0")/../rcmtools/e2e/two_machine_backup.py"
+proof_script="$(dirname "$0")/../bdtools/e2e/two_machine_backup.py"
 if [ ! -f "$proof_script" ]; then
   fail "I7 the two-machine proof is where this expects it" "no file at $proof_script"
 else
@@ -1185,7 +1185,7 @@ assert_contains "J3 the gate starts a sentinel container" \
   'run -d --rm --name ci-local-sentinel-' "$docker_log"
 assert_contains "J3 the sentinel just sleeps" 'sleep infinity' "$docker_log"
 assert_contains "J3 the sentinel is labelled" \
-  '--label rclone-manager-ci-local-sentinel=1' "$docker_log"
+  '--label backupd-ci-local-sentinel=1' "$docker_log"
 assert_contains "J3 the gate removes the sentinel on the way out" \
   'rm -f ci-local-sentinel-' "$docker_log"
 # Same container, not just some container of each shape: a start and a

@@ -13,8 +13,8 @@ import (
 
 	"golang.org/x/crypto/argon2"
 
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file covers #298's at-rest key encryption, and the property it

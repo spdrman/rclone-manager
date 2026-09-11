@@ -124,7 +124,7 @@ for (const provider of targets) {
   // provider, and distribution/packaging reads the same file.
   writeFileSync(
     resolve(target, BUNDLE_MARKER),
-    JSON.stringify({ schema: "rclone-manager/ui-bundle/1", platform: provider }, null, 2) + "\n"
+    JSON.stringify({ schema: "backupd/ui-bundle/1", platform: provider }, null, 2) + "\n"
   );
 }
 
@@ -134,12 +134,12 @@ if (failed.length > 0) {
 }
 
 console.log(`\nbuild-bundles: wrote ${targets.length} bundle(s) to ${outRoot}`);
-// `rbm-web` rather than `backup-manager-web`, which is what the image's
+// `backupd-web` rather than `backupd-web`, which is what the image's
 // symlink is called since 0.3.3 renamed the CLI (core/cliecho's
 // cliname.WebBinary). The Go package directory is still
-// apps/generic/cmd/backup-manager-web and stays that way, because a
+// apps/generic/cmd/backupd-web and stays that way, because a
 // package path is not something an operator types: a developer building
 // from a checkout gets a binary named after the directory and would run
 // that instead.
-console.log("Serve one with:  rbm-web serve-ui --ui-dir <dir>");
-console.log("Or the tree with: rbm-web serve-ui --ui-root <root> --profile <name>");
+console.log("Serve one with:  backupd-web serve-ui --ui-dir <dir>");
+console.log("Or the tree with: backupd-web serve-ui --ui-root <root> --profile <name>");

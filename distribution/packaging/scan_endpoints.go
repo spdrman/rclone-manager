@@ -70,7 +70,7 @@ var (
 	knownHostsLineRe = regexp.MustCompile(`(\S+)\s+(?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-[a-z0-9-]+|sk-[a-z0-9@.-]+)\s+AAAA[A-Za-z0-9+/]{20,}`)
 
 	// host:port, and the negative lookahead is doing real work: without
-	// it `ghcr.io/spdrman/backup-manager:0.3.0` reads as a host on port 0
+	// it `ghcr.io/spdrman/backupd:0.3.0` reads as a host on port 0
 	// and every image reference in the tree becomes an endpoint. Go's
 	// regexp has no lookahead, so the trailing character is captured and
 	// checked in code instead.

@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/rclone-manager/core/internal/discovery"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/reconcile"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/discovery"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/reconcile"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // One backup set's share of a cycle, on an operator's word rather than a
@@ -61,7 +61,7 @@ type FetchPreviewEntry struct {
 	State string
 }
 
-// FetchResult is `rbm fetch`'s use case output: either a
+// FetchResult is `backupd fetch`'s use case output: either a
 // dry-run preview (Preview populated, everything else zero) or a real,
 // on-demand run of one specific backup set's whole cycle share
 // (Reconcile/Discovery populated, Preview nil).
@@ -104,7 +104,7 @@ type FetchResult struct {
 	Progress CycleProgress
 }
 
-// Fetch is `rbm fetch --source ... --backup-set ...`'s use
+// Fetch is `backupd fetch --source ... --backup-set ...`'s use
 // case: an operator-triggered, on-demand run of exactly one backup set's
 // share of the same cycle RunCycle performs for every configured backup
 // set (reconcile, then discover, then drive every in-flight artifact
@@ -143,7 +143,7 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 	}
 
 	// Live progress and the per-set feed, for a caller that installed an
-	// observer (progress.go). Nothing here changes what `backup-manager
+	// observer (progress.go). Nothing here changes what `backupd
 	// fetch` does in its own process: with no observer on ctx, beginCycle
 	// returns ctx unchanged and every call below is a nil-receiver no-op.
 	//

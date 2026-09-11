@@ -60,8 +60,8 @@
 # and gets the same answer: the browser e2e step refuses and names the
 # install command, and CI_LOCAL_SKIP_E2E=1 is the out-loud opt-out that
 # ledgers. See scripts/e2e/run-tests-repo-gate.sh and the gate it execs,
-# scripts/rcmtools/e2e/run_tests_repo_gate.py, which is where that
-# suite now runs from (#158 moved it to spdrman/rclone-manager-tests, #197
+# scripts/bdtools/e2e/run_tests_repo_gate.py, which is where that
+# suite now runs from (#158 moved it to spdrman/backupd-tests, #197
 # is why it runs at all).
 #
 # The two-machine end-to-end backup proof (#356) is the fourth, with one
@@ -200,7 +200,7 @@ gate_warn_resource_saver
 gate_start_docker_sentinel
 
 if [ "$FAST" = "1" ]; then
-  gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix, the SFTP integration tests, the MinIO integration tests and the composed conformance scenario), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from rclone-manager-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
+  gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix, the SFTP integration tests, the MinIO integration tests and the composed conformance scenario), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from backupd-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
 fi
 
 # The mutation-anchor check (#458), added under separate work. An anchor here
@@ -299,7 +299,7 @@ bash scripts/tests/e2e-help.test.sh
 #
 # Nothing in this repository linted Python before #672: the gate ran gofmt,
 # go vet, golangci-lint and eslint, and for Python it ran one unittest suite
-# and stopped. The step landed scoped to scripts/rcmtools alone so that a new
+# and stopped. The step landed scoped to scripts/bdtools alone so that a new
 # rule would not turn up first as somebody else's untouched file going red.
 # It is wider now, and the two halves widened by different amounts because
 # the trial runs said different things.
@@ -319,7 +319,7 @@ bash scripts/tests/e2e-help.test.sh
 #
 # --config / --config-file explicitly, for both tools. ruff would otherwise
 # discover the configuration by walking up from each file, which finds it for
-# scripts/rcmtools and finds nothing for scripts/install -- and silently
+# scripts/bdtools and finds nothing for scripts/install -- and silently
 # linting half the tree at ruff's 88-column defaults is the failure this
 # change exists to avoid.
 #
@@ -333,7 +333,7 @@ bash scripts/tests/e2e-help.test.sh
 # its place.
 gate_step "scripts: ruff over every Python file, mypy --strict over the typed subset (#672)"
 if command -v ruff >/dev/null 2>&1; then
-  ruff check --config scripts/rcmtools/pyproject.toml scripts
+  ruff check --config scripts/bdtools/pyproject.toml scripts
 else
   gate_note_skip "ruff over scripts (#672): ruff is not on PATH. Install it (pipx install ruff) and re-run."
 fi
@@ -345,10 +345,10 @@ fi
 # whichever python3 the developer happened to have. `pipx install mypy` and
 # an activated virtualenv both put the binary on PATH.
 if command -v mypy >/dev/null 2>&1; then
-  mypy --strict --config-file scripts/rcmtools/pyproject.toml \
-    scripts/rcmtools scripts/deploy scripts/install/embed_compose.py
+  mypy --strict --config-file scripts/bdtools/pyproject.toml \
+    scripts/bdtools scripts/deploy scripts/install/embed_compose.py
 else
-  gate_note_skip "mypy --strict over scripts/rcmtools, scripts/deploy and scripts/install/embed_compose.py (#672): mypy is not on PATH. Install it (pipx install mypy) and re-run."
+  gate_note_skip "mypy --strict over scripts/bdtools, scripts/deploy and scripts/install/embed_compose.py (#672): mypy is not on PATH. Install it (pipx install mypy) and re-run."
 fi
 
 # The two-machine proof's exit statuses, which are this gate's own ledger
@@ -613,10 +613,10 @@ fi
 # and was dismissed twice as an ordering flake.
 #
 # The suite itself no longer lives in this repository; it is Suite B of
-# spdrman/rclone-manager-tests, pinned by scripts/e2e/tests-repo.pin. What
+# spdrman/backupd-tests, pinned by scripts/e2e/tests-repo.pin. What
 # it runs against is not the pin's own build, it is THIS working tree's
 # ui/shared, on a port the harness picks and proves free. The same step
-# also runs that repository's CLI smoke slice against a backup-manager
+# also runs that repository's CLI smoke slice against a backupd
 # built from this tree, which is a black-box signal this repository has
 # never had at all.
 #
@@ -626,9 +626,9 @@ fi
 # INCOMPLETE and says which check it left out.
 if [ "$FAST" != "1" ]; then
   if [ "${CI_LOCAL_SKIP_E2E:-0}" = "1" ]; then
-    gate_note_skip "the browser e2e suite and the CLI smoke slice from rclone-manager-tests, which are the only automated execution either of them gets (CI_LOCAL_SKIP_E2E=1)"
+    gate_note_skip "the browser e2e suite and the CLI smoke slice from backupd-tests, which are the only automated execution either of them gets (CI_LOCAL_SKIP_E2E=1)"
   else
-    gate_step "browser e2e + CLI smoke, from rclone-manager-tests at the pinned sha (#197)"
+    gate_step "browser e2e + CLI smoke, from backupd-tests at the pinned sha (#197)"
     bash scripts/e2e/run-tests-repo-gate.sh
   fi
 fi
@@ -702,7 +702,7 @@ bash scripts/architecture/check-ui-shared-provider-imports.sh
 # TestTheInstallerStillTravelsAlone is in there too, and it is the reason
 # this step matters to #672 rather than only to #262. The installer is
 # copied to a NAS on its own and may import only the standard library, so
-# it is the one script domain that can never become an rcmtools module.
+# it is the one script domain that can never become an bdtools module.
 # That claim had no test behind it until this change; now a repo-relative
 # import in install_docker_host.py fails here.
 gate_step "installer prerequisite refusals (#262)"
@@ -848,7 +848,7 @@ if [ "$FAST" != "1" ]; then
   # for the wrong reason. This runs each cell against a real planted
   # violation in a copy of the tree, including the two the EPIC E spec's own
   # section 4 table names by hand. It costs a few minutes because every
-  # mutant builds core/ and backup-manager and runs a real capture; that is
+  # mutant builds core/ and backupd and runs a real capture; that is
   # the price of the corpus meaning anything.
   gate_step "the FR-35 compatibility cells can actually fail (mutation self-test, #242)"
   bash scripts/compat/selftest.sh

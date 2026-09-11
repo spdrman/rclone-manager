@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/cliecho"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/obs"
 )
 
 // newRecordingService is newTestService with a real logger behind it.
@@ -42,7 +42,7 @@ func TestRecordAPIAction_ReachesTheDeploymentsFeedWithItsCommand(t *testing.T) {
 		Method:  "PATCH",
 		Route:   "/settings",
 		Status:  200,
-		Command: "rbm settings patch --timezone Europe/Berlin",
+		Command: "backupd settings patch --timezone Europe/Berlin",
 	})
 
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
@@ -66,7 +66,7 @@ func TestRecordAPIAction_ReachesTheDeploymentsFeedWithItsCommand(t *testing.T) {
 	if fields["route"] != "PATCH /api/v1/settings" {
 		t.Errorf("the line names route %q", fields["route"])
 	}
-	if !strings.Contains(fields["command"], "rbm settings patch") {
+	if !strings.Contains(fields["command"], "backupd settings patch") {
 		t.Errorf("the line carries command %q", fields["command"])
 	}
 	if _, present := fields["command_gap"]; present {
@@ -88,7 +88,7 @@ func TestRecordAPIAction_LandsOnTheSetItWasAbout(t *testing.T) {
 	svc.RecordAPIAction(context.Background(), cliecho.APIAction{
 		Actor: "alice", Method: "PATCH", Route: "/backup-sets/{source}/{set}",
 		Status: 200, BackupSetID: "alpha/nightly",
-		Command: "rbm backup-set patch alpha/nightly --stale-after 48h",
+		Command: "backupd backup-set patch alpha/nightly --stale-after 48h",
 	})
 
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
@@ -116,8 +116,8 @@ func TestRecordAPIAction_ARefusalCarriesItsReason(t *testing.T) {
 		Actor: "alice", Method: "POST", Route: "/operations", Status: 403,
 		ErrorCode: "DESTRUCTIVE_OPERATIONS_DISABLED",
 		Message:   "destructive operations are disabled until the gate has been verified",
-		Gap:       "no backup-manager equivalent yet",
-		GapDetail: "`rbm run` starts a cycle in your own shell, not in this engine",
+		Gap:       "no backupd equivalent yet",
+		GapDetail: "`backupd run` starts a cycle in your own shell, not in this engine",
 	})
 
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
@@ -156,7 +156,7 @@ func TestRecordAPIAction_AFailureIsAnErrorAndARefusalIsAWarning(t *testing.T) {
 
 	svc.RecordAPIAction(context.Background(), cliecho.APIAction{
 		Method: "POST", Route: "/catalog/rebuild", Status: 500, ErrorCode: "INTERNAL",
-		Command: "rbm catalog rebuild",
+		Command: "backupd catalog rebuild",
 	})
 	live, err := svc.LiveActivity(context.Background(), LiveActivityRequest{})
 	if err != nil {

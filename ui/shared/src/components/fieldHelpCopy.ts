@@ -99,14 +99,14 @@ export const FIELD_HELP = {
   // ---------------------------------------------------------------- auth
 
   loginUsername: {
-    what: "The Backup Manager account created on this NAS. Separate from the NAS's own administrator account, and separate from any login on a server you back up.",
+    what: "The Backupd account created on this NAS. Separate from the NAS's own administrator account, and separate from any login on a server you back up.",
     example: "backup-admin",
     effect:
       "Checked against the single administrator account this instance stores locally. No NAS OS account and no remote host is contacted, so a NAS password will not work here even if it is the one you use everywhere else."
   },
 
   loginPassword: {
-    what: "The password set for that Backup Manager account when it was created, or the one it was last rotated to.",
+    what: "The password set for that Backupd account when it was created, or the one it was last rotated to.",
     example: "a passphrase of at least 12 characters",
     effect:
       "A match starts a signed-in session in this browser and replaces this form with the application. A miss is reported as one combined failure, so a wrong username and a wrong password cannot be told apart from the message, and repeated attempts from one address are rate limited rather than answered faster."
@@ -209,7 +209,7 @@ export const FIELD_HELP = {
     what: "Where this tier's backups live: the hard drive on this machine, or a storage destination the configuration declares.",
     example: "offsite_s3 (STANDARD_IA)",
     effect:
-      "A backup that only this tier keeps is uploaded to that medium, verified there, and then its copy on this machine is deleted. That deletion is what the setting is for. A medium on an archive storage class cannot be read on demand at all: getting a backup back from one means asking for a restore and waiting hours, and the provider reports no progress while it waits. Reading anything back off a medium is billed by your provider, and Backup Manager holds no price list, so it will not show you a figure."
+      "A backup that only this tier keeps is uploaded to that medium, verified there, and then its copy on this machine is deleted. That deletion is what the setting is for. A medium on an archive storage class cannot be read on demand at all: getting a backup back from one means asking for a restore and waiting hours, and the provider reports no progress while it waits. Reading anything back off a medium is billed by your provider, and Backupd holds no price list, so it will not show you a figure."
   },
 
   protectLastKnownGood: {
@@ -252,7 +252,7 @@ export const FIELD_HELP = {
   // keys every journal row, artifact id and recovery manifest it has ever
   // produced, so renaming one is a migration rather than an edit.
   editSetHost: {
-    what: "The hostname or address Backup Manager connects to for this backup set's source.",
+    what: "The hostname or address Backupd connects to for this backup set's source.",
     effect:
       "Saving this box writes only the host, and the next cycle connects to the new one. The trusted host key is NOT re-fetched: pointing a set at a different machine without re-verifying its fingerprint would be trusting a host nobody looked at. The Trusted host key box below is where a genuinely different server's key goes, and it asks before it replaces one.",
     example: "prod-db-01.internal"
@@ -264,22 +264,22 @@ export const FIELD_HELP = {
       "Saving this box writes only the port. The set's own backups on this NAS are untouched; only where the next cycle connects changes."
   },
   editSetUser: {
-    what: "The account Backup Manager authenticates as on that host.",
+    what: "The account Backupd authenticates as on that host.",
     example: "backup-agent",
     effect:
       "Saving this box writes only the user. The private key is unchanged and never leaves this NAS, so a new account has to already trust the same key for the next cycle to connect."
   },
   editSetRemotePath: {
-    what: "The absolute folder on the source that Backup Manager reads backups out of.",
+    what: "The absolute folder on the source that Backupd reads backups out of.",
     example: "/var/backups/postgresql",
     effect:
       "Saving this box writes only the remote folder, and the next cycle discovers artifacts there instead. Backups already retained on this NAS stay exactly where they are, and nothing on the source is moved or deleted."
   },
   editSetLocalPath: {
-    what: "The absolute folder on this NAS that Backup Manager writes this set's backups into.",
+    what: "The absolute folder on this NAS that Backupd writes this set's backups into.",
     example: "/mnt/tank/backups/production/postgres",
     effect:
-      "Saving this box writes only the destination, and the next cycle writes new backups there. Backups already written to the old folder are NOT moved, and Backup Manager will keep listing them from where they are."
+      "Saving this box writes only the destination, and the next cycle writes new backups there. Backups already written to the old folder are NOT moved, and Backupd will keep listing them from where they are."
   },
   editSetInclude: {
     what: "A comma-separated list of filename patterns to back up. Matched against the artifact's own name, not its path.",
@@ -288,14 +288,14 @@ export const FIELD_HELP = {
       "Saving this box writes only the include list. Widening it means the next cycle discovers files it was ignoring; narrowing it means it stops discovering some, and clearing the box entirely means no pattern filters discovery at all. Nothing already backed up is deleted either way."
   },
   editSetCompletion: {
-    what: "How Backup Manager decides a file on the source has finished being written and is safe to copy.",
+    what: "How Backupd decides a file on the source has finished being written and is safe to copy.",
     example: "Atomic rename",
     effect:
       "Saving this box writes only the completion method. Stable file size infers completion rather than being told about it, which is materially less assurance than a producer-provided rename or marker, and the page says so beside the value."
   },
 
   editSetStableFor: {
-    what: "How long a file's size and timestamp have to stay unchanged before Backup Manager treats it as finished. Only used by the stable file size method.",
+    what: "How long a file's size and timestamp have to stay unchanged before Backupd treats it as finished. Only used by the stable file size method.",
     example: "300",
     effect:
       "Saving this box writes only the window. Too short and a slow write can be copied half-finished; too long and every backup waits that much longer before it is collected. This is the setting that makes the stable-size method usable at all, which is why it appears the moment you choose that method."
@@ -305,7 +305,7 @@ export const FIELD_HELP = {
   // say so, because an empty box that means "leave it alone" is the one
   // shape on this form an operator can misread as "there is nothing set".
   editSetSSHKey: {
-    what: "The id of a private key this Backup Manager has already imported, replacing the key this backup set signs in with. Leave it empty to keep the current key.",
+    what: "The id of a private key this Backupd has already imported, replacing the key this backup set signs in with. Leave it empty to keep the current key.",
     example: "key_9f3c1ab2",
     effect:
       "Saving this box writes only the key reference, and the next cycle authenticates with the new key. Nothing is checked against the source first, so a key the source account does not accept shows up as a failed connection on the next cycle rather than as a refusal here. The box is empty because a key is a reference to material this page never sees, not a value to show back."
@@ -337,14 +337,14 @@ export const FIELD_HELP = {
     what: "The TCP port the remote server's SSH/SFTP service listens on.",
     example: "22",
     effect:
-      "Sent with every probe and connection attempt to that host. Leave it blank, or clear it entirely, and Backup Manager treats it as port 22 rather than refusing to proceed. Like the hostname, changing this after trusting a fingerprint on the Verify server step revokes that trust, since port is part of what was trusted."
+      "Sent with every probe and connection attempt to that host. Leave it blank, or clear it entirely, and Backupd treats it as port 22 rather than refusing to proceed. Like the hostname, changing this after trusting a fingerprint on the Verify server step revokes that trust, since port is part of what was trusted."
   },
 
   wizardUsername: {
-    what: "The account on the remote server Backup Manager signs in as over SSH.",
+    what: "The account on the remote server Backupd signs in as over SSH.",
     example: "backup-agent",
     effect:
-      "Sent as the SSH username on every connection this backup set makes. That account needs read access to the remote folder you set on the Discovery step, and, once an artifact completes its full verify-and-commit chain, delete access there too: Backup Manager removes the remote copy after that (FR-15)."
+      "Sent as the SSH username on every connection this backup set makes. That account needs read access to the remote folder you set on the Discovery step, and, once an artifact completes its full verify-and-commit chain, delete access there too: Backupd removes the remote copy after that (FR-15)."
   },
 
   wizardKeySource: {
@@ -355,14 +355,14 @@ export const FIELD_HELP = {
   },
 
   wizardPrivateKey: {
-    what: "The SSH private key Backup Manager will use to sign in to the remote server. Pasted once, then discarded from this screen.",
+    what: "The SSH private key Backupd will use to sign in to the remote server. Pasted once, then discarded from this screen.",
     example: "-----BEGIN OPENSSH PRIVATE KEY-----…",
     effect:
       "Sent once to the backend when you click Import key, which hands back a fingerprint and an internal reference and nothing else; the pasted text is cleared from this page immediately afterward and the key material never appears here again. It has to be an unencrypted OpenSSH or PEM key: a passphrase-protected one fails to parse and is refused, since nothing later in this flow can ask for the passphrase."
   },
 
   wizardRemoteFolder: {
-    what: "The directory on the remote server Backup Manager watches for finished backup artifacts.",
+    what: "The directory on the remote server Backupd watches for finished backup artifacts.",
     example: "/backups/postgresql/",
     effect:
       "Sent as this set's remote path, and it has to be an absolute one; the server refuses the save otherwise. Only files discovered directly under this one directory are ever considered for this backup set, and each is then checked against the include patterns below."
@@ -376,7 +376,7 @@ export const FIELD_HELP = {
   },
 
   wizardCompletionMethod: {
-    what: "How Backup Manager decides a remote file has finished being written, rather than still being uploaded by its producer (FR-8).",
+    what: "How Backupd decides a remote file has finished being written, rather than still being uploaded by its producer (FR-8).",
     example: "Completion marker / manifest",
     effect:
       "Atomic rename and Completion marker both wait for a positive signal from whatever writes the file; one that never gets renamed, or never gets its marker, is never treated as complete and is never backed up, no matter how long it sits there. Stable file size / timestamp instead treats a file as done once it has looked unchanged for a period fixed at one hour, rather than waiting for a signal from the producer, which this wizard doesn't let you adjust; it exists for a producer that can't signal completion at all, and it's a weaker guarantee than the other two."
@@ -386,11 +386,11 @@ export const FIELD_HELP = {
     what: "The local directory on this NAS where this backup set's verified artifacts are committed and kept.",
     example: "/data/backups/production/postgres/",
     effect:
-      "Sent as this set's local path, and it has to be an absolute one. Every transferred, verified artifact is written here, and retention deletes old ones from here too, so this needs to be a path Backup Manager can actually write to, with room for however much you plan to retain."
+      "Sent as this set's local path, and it has to be an absolute one. Every transferred, verified artifact is written here, and retention deletes old ones from here too, so this needs to be a path Backupd can actually write to, with room for however much you plan to retain."
   },
 
   wizardValidatorId: {
-    what: "An optional external check Backup Manager runs against every artifact after it's transferred (FR-13), on top of that built-in verification.",
+    what: "An optional external check Backupd runs against every artifact after it's transferred (FR-13), on top of that built-in verification.",
     example: "None (transfer verification only)",
     effect:
       "Choosing a validator sends its id with the save, and every future artifact in this set runs that check before being trusted. An artifact the validator rejects is quarantined rather than committed, and its remote copy is kept rather than deleted, permanently: FR-13 requires a required validator's failure to block deletion of the source, and that block outlives even a later reinstatement out of quarantine."

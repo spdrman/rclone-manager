@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // Issue #570: a failed transfer has to be able to record its own failure,
@@ -23,7 +23,7 @@ import (
 //
 // The field report is two attempts running against one artifact at the same
 // time, which nothing in this product stops: `runOnce` (core/service) is an
-// in-process lock, `rbm fetch` and `run` open the journal in a
+// in-process lock, `backupd fetch` and `run` open the journal in a
 // second process behind a SHARED lock, and attemptKey carries only the
 // artifact and its retry count, so two live attempts derive the same
 // idempotency keys. The loser's copy failed, and by the time it went to

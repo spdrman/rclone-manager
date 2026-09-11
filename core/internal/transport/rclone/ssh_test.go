@@ -14,8 +14,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // ---------------------------------------------------------------------------
@@ -777,7 +777,7 @@ func generateClientSSHKeyPair(t *testing.T) (privateKeyPath string, authorizedKe
 	}
 	authorizedKeyLine = string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(sshPub)))
 
-	block, err := ssh.MarshalPrivateKey(priv, "rclone-manager-sftp-test-client")
+	block, err := ssh.MarshalPrivateKey(priv, "backupd-sftp-test-client")
 	if err != nil {
 		t.Fatalf("ssh.MarshalPrivateKey: %v", err)
 	}

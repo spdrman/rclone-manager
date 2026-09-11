@@ -1,11 +1,11 @@
-# EPIC: Multi-NAS Backup Manager Apps — Provider-Neutral Core, UGOS/Synology/TrueNAS/Unraid/OpenMediaVault/Proxmox Layers — Lean TDD Revision
+# EPIC: Multi-NAS Backupd Apps — Provider-Neutral Core, UGOS/Synology/TrueNAS/Unraid/OpenMediaVault/Proxmox Layers — Lean TDD Revision
 
 ## Status
 
 **Type:** EPIC / Detailed implementation specification  
 **Repository:** `iasbuilt/iac`  
 **Parent / predecessor EPIC:** `Embedded-rclone NAS Backup Lifecycle Manager — UI-Ready Architecture`  
-**Primary implementation root:** `tools/backup-manager/`  
+**Primary implementation root:** `tools/backupd/`  
 **Target platform:** UGREEN NAS / UGOS Pro  
 **Primary UI distribution:** UGOS Pro Docker Application packaged as `.UPK`  
 **Secondary distribution:** headless Docker image/package for terminal operation  
@@ -108,7 +108,7 @@ Critical findings:
 1. A twelve-step wizard is unnecessarily long and increases setup failure.
 2. "Restore Points" suggests restore functionality, but restore execution is explicitly out of scope.
 3. The most consequential behavior—deleting the remote source after safe ingestion—was not prominent enough in onboarding and configuration.
-4. A backup manager that only shows failures when someone opens the UI is operationally weak.
+4. A backupd that only shows failures when someone opens the UI is operationally weak.
 5. Stable-size completion detection was presented alongside producer atomic rename/manifest as if they provided equivalent assurance.
 6. The UI did not provide a clear reinstall/recovery path when application state is lost but backup files remain.
 
@@ -131,7 +131,7 @@ Required corrections:
 
 Critical findings:
 
-1. Separate `backup-manager-ugos` and `backup-manager-cli` images create needless artifact drift when the design already embeds the UI in the same Go binary.
+1. Separate `backupd-ugos` and `backupd-cli` images create needless artifact drift when the design already embeds the UI in the same Go binary.
 2. Four image builds (UGOS/CLI × amd64/arm64) double the release surface without adding lifecycle isolation.
 3. "Same core version" is weaker than using the exact same executable/image digest.
 4. Upgrade rollback could fail if an older binary sees a newer schema.
@@ -175,7 +175,7 @@ They further agree that this EPIC is not implementation-ready unless all of the 
 
 # 1. Purpose
 
-Build a **provider-neutral backup-manager core** and a family of thin NAS-platform application layers.
+Build a **provider-neutral backupd core** and a family of thin NAS-platform application layers.
 
 The core SHALL remain independent of UGOS, Synology DSM, TrueNAS, Unraid, OpenMediaVault, Proxmox VE, or any other NAS/hypervisor UI.
 
@@ -410,7 +410,7 @@ Provider-native authentication may replace local auth only after its trust bound
 The canonical release primitive SHALL be the provider-neutral Go binary per architecture:
 
 ```text
-backup-manager binary
+backupd binary
        │
        ├── canonical OCI image
        │      ├── Generic Docker
@@ -897,7 +897,7 @@ The core SHALL contain no provider SDK dependencies.
 
 Produce a provider-neutral React/TypeScript application under `ui/shared/`.
 
-It SHALL contain normal backup-manager product UI.
+It SHALL contain normal backupd product UI.
 
 Provider-specific bootstrap code SHALL not live here.
 
@@ -1046,12 +1046,12 @@ The implementation SHALL define these values centrally.
 Proposed values:
 
 ```text
-Display name: Backup Manager
-App ID:       com.iasbuilt.backupmanager
+Display name: Backupd
+App ID:       com.iasbuilt.backupd
 Category:     backup
 ```
 
-`com.iasbuilt.backupmanager` is a proposed identifier and MUST be confirmed before the first externally distributed or App Center-submitted package because the UGOS application ID is intended to remain stable.
+`com.iasbuilt.backupd` is a proposed identifier and MUST be confirmed before the first externally distributed or App Center-submitted package because the UGOS application ID is intended to remain stable.
 
 Do not derive runtime filesystem paths from the human-readable display name.
 
@@ -1065,14 +1065,14 @@ Target structure:
 
 ```text
 tools/
-  backup-manager/
+  backupd/
     README.md
     go.work
 
     core/
       go.mod
       cmd/
-        backup-manager/
+        backupd/
       app/
         service.go
         operations.go
@@ -1270,15 +1270,15 @@ The release manifest SHALL prove core parity through binary hashes and image/pac
 The provider-neutral core executable SHALL support at minimum:
 
 ```bash
-rbm run
-rbm daemon
-rbm status
-rbm check
-rbm retention --dry-run
-rbm retention
-rbm reconcile
-rbm validate <artifact-id>
-rbm version
+backupd run
+backupd daemon
+backupd status
+backupd check
+backupd retention --dry-run
+backupd retention
+backupd reconcile
+backupd validate <artifact-id>
+backupd version
 ```
 
 ## 9.1 Headless Docker default
@@ -1286,13 +1286,13 @@ rbm version
 The headless Docker distribution SHOULD default to:
 
 ```bash
-rbm daemon
+backupd daemon
 ```
 
 Users SHALL be able to override the command, for example:
 
 ```bash
-docker run --rm ... rbm check
+docker run --rm ... backupd check
 ```
 
 ## 9.2 Generic Web App host
@@ -1313,7 +1313,7 @@ It SHALL be used by generic Docker and provider packages that do not yet impleme
 The UPK Compose profile SHALL run the canonical image in a combined supervised mode such as:
 
 ```bash
-rbm serve --with-daemon --auth-mode=ugos
+backupd serve --with-daemon --auth-mode=ugos
 ```
 
 Exact command naming may vary.
@@ -1343,7 +1343,7 @@ Reason:
 - native UGOS desktop-window experience;
 - JSSDK support;
 - UGOS login/session integration;
-- no separate backup-manager password database.
+- no separate backupd password database.
 
 The application SHOULD initially support the UGOS `pc` client target.
 
@@ -1795,7 +1795,7 @@ Private state includes:
 Preferred container path:
 
 ```text
-/var/lib/backup-manager/
+/var/lib/backupd/
 ```
 
 The UPK SHALL mount this path from a **UGOS-owned private writable application location** proven in Phase 0.
@@ -1830,7 +1830,7 @@ Recovery metadata SHOULD preserve enough information to reconstruct safely:
 - checksum(s);
 - validation result summary;
 - retention-relevant timestamp;
-- backup-manager format version.
+- backupd format version.
 
 Recovery metadata MUST NOT contain:
 
@@ -1842,8 +1842,8 @@ Recovery metadata MUST NOT contain:
 Provide a dry-run recovery command such as:
 
 ```bash
-rbm catalog rebuild --dry-run
-rbm catalog rebuild
+backupd catalog rebuild --dry-run
+backupd catalog rebuild
 ```
 
 Reconstruction MUST NOT delete remote or local backup files.
@@ -1910,7 +1910,7 @@ Illustrative skeleton:
 
 ```yaml
 spec_version: "2.1"
-app_id: com.iasbuilt.backupmanager
+app_id: com.iasbuilt.backupd
 version: 0.1.0
 
 support_arch:
@@ -1924,7 +1924,7 @@ is_docker_app: true
 only_admin: true
 
 port: 29090
-proxy_path: backup-manager-api
+proxy_path: backupd-api
 open_type: inner
 
 tag_types:
@@ -1949,20 +1949,20 @@ parameters:
         description: Application logging verbosity.
 
 privacy_policy_link:
-  - https://<publisher>/backup-manager/privacy
+  - https://<publisher>/backupd/privacy
 
 # Current UGREEN project.yaml rules require these when
 # open-source code/components are used.
 license_agreement_link:
-  - https://<publisher>/backup-manager/licenses
+  - https://<publisher>/backupd/licenses
 source_code_link:
-  - https://<publisher>/backup-manager/source
+  - https://<publisher>/backupd/source
 technical_support_link:
-  - https://<publisher>/backup-manager/support
+  - https://<publisher>/backupd/support
 
 i18n:
   en-US:
-    name: Backup Manager
+    name: Backupd
     description: Pull, verify, retain, and monitor remote backup artifacts.
     author: <publisher>
     publisher: <publisher>
@@ -1984,7 +1984,7 @@ Illustrative:
 
 ```yaml
 services:
-  backup-manager:
+  backupd:
     image: <exact-versioned-canonical-image-tag>
     restart: always
 
@@ -1992,11 +1992,11 @@ services:
       TZ: ${TZ}
       BACKUP_MANAGER_LOG_LEVEL: ${LOG_LEVEL}
       BACKUP_MANAGER_AUTH_MODE: ugos
-      BACKUP_MANAGER_DATA_DIR: /var/lib/backup-manager
+      BACKUP_MANAGER_DATA_DIR: /var/lib/backupd
       BACKUP_MANAGER_BACKUP_ROOT: /data/backups
 
     volumes:
-      - <verified-private-state-source>:/var/lib/backup-manager
+      - <verified-private-state-source>:/var/lib/backupd
       - ${BACKUP_ROOT}:/data/backups
 
     ports:
@@ -2033,7 +2033,7 @@ The default application page SHALL be a concise operations dashboard.
 Show:
 
 ```text
-Backup Manager        HEALTHY
+Backupd        HEALTHY
 Last successful cycle  8 minutes ago
 Storage                1.8 TB free
 ```
@@ -2206,7 +2206,7 @@ Stable-size mode SHALL require:
 
 The UI SHALL prominently disclose:
 
-> After a backup has been transferred, verified, durably committed to the NAS, and recorded safe by Backup Manager, the original remote backup artifact is deleted from the source server.
+> After a backup has been transferred, verified, durably committed to the NAS, and recorded safe by Backupd, the original remote backup artifact is deleted from the source server.
 
 The administrator SHALL acknowledge this behavior before enabling a new backup set.
 
@@ -2541,7 +2541,7 @@ including:
 
 ```json
 {
-  "backup_manager": "...",
+  "backupd": "...",
   "api_version": "v1",
   "ui_build": "...",
   "rclone": "...",
@@ -2570,7 +2570,7 @@ The headless package supports operators who want:
 Publish:
 
 ```text
-<registry>/iasbuilt/backup-manager:<version>
+<registry>/iasbuilt/backupd:<version>
 ```
 
 The image is the same architecture-specific image digest bundled into the matching UPK release.
@@ -2583,24 +2583,24 @@ A convenience `latest` tag MAY exist in the registry, but it SHALL NOT be used b
 
 ```bash
 docker run --rm \
-  -v /path/to/config:/etc/backup-manager:ro \
-  -v /path/to/state:/var/lib/backup-manager \
+  -v /path/to/config:/etc/backupd:ro \
+  -v /path/to/state:/var/lib/backupd \
   -v /path/to/backups:/data/backups \
-  <registry>/iasbuilt/backup-manager:0.1.0 \
-  rbm check
+  <registry>/iasbuilt/backupd:0.1.0 \
+  backupd check
 ```
 
 Daemon:
 
 ```bash
 docker run -d \
-  --name backup-manager \
+  --name backupd \
   --restart unless-stopped \
-  -v /path/to/config:/etc/backup-manager:ro \
-  -v /path/to/state:/var/lib/backup-manager \
+  -v /path/to/config:/etc/backupd:ro \
+  -v /path/to/state:/var/lib/backupd \
   -v /path/to/backups:/data/backups \
-  <registry>/iasbuilt/backup-manager:0.1.0 \
-  rbm daemon
+  <registry>/iasbuilt/backupd:0.1.0 \
+  backupd daemon
 ```
 
 The HTTP/UI listener SHALL be disabled by default in headless mode unless explicitly enabled.
@@ -2613,17 +2613,17 @@ Provide a supported example:
 
 ```yaml
 services:
-  backup-manager:
-    image: <registry>/iasbuilt/backup-manager:0.1.0
+  backupd:
+    image: <registry>/iasbuilt/backupd:0.1.0
     restart: unless-stopped
 
     command:
-      - backup-manager
+      - backupd
       - daemon
 
     volumes:
-      - ./config:/etc/backup-manager:ro
-      - ./state:/var/lib/backup-manager
+      - ./config:/etc/backupd:ro
+      - ./state:/var/lib/backupd
       - /mnt/backups:/data/backups
 
     read_only: true
@@ -2674,8 +2674,8 @@ linux/arm64
 Build matrix SHALL produce one canonical image per architecture:
 
 ```text
-backup-manager:<version>  linux/amd64
-backup-manager:<version>  linux/arm64
+backupd:<version>  linux/amd64
+backupd:<version>  linux/arm64
 ```
 
 For registry publication this MAY be represented by a multi-architecture manifest.
@@ -2700,10 +2700,10 @@ packaging/ugos/
 │   └── docker-compose.yaml
 ├── rootfs_amd64/
 │   └── images/
-│       └── backup-manager-<version>-amd64.tar
+│       └── backupd-<version>-amd64.tar
 └── rootfs_arm64/
     └── images/
-        └── backup-manager-<version>-arm64.tar
+        └── backupd-<version>-arm64.tar
 ```
 
 Do not put additional arbitrary files into Docker App `rootfs_common`.
@@ -2985,7 +2985,7 @@ If the target App Center region/current UGREEN rules require first-launch privac
 
 Backup setup itself SHALL be skippable so experienced administrators can enter the main UI and configure manually.
 
-The welcome screen SHALL make clear that Backup Manager:
+The welcome screen SHALL make clear that Backupd:
 
 - manages backup artifacts that another system creates;
 - does not create the database/application backup itself;
@@ -3525,7 +3525,7 @@ Container/CLI behavior SHALL be specified as integration tests before the packag
 
 Test:
 
-- `rbm check`;
+- `backupd check`;
 - one-cycle `run`;
 - daemon;
 - clean `SIGTERM`;
@@ -3703,7 +3703,7 @@ Implement/prove:
 
 Implement/prove:
 
-- private writable state source for `/var/lib/backup-manager`;
+- private writable state source for `/var/lib/backupd`;
 - user-authorized backup root mounted at `/data/backups`;
 - update persistence;
 - disable/enable persistence;
@@ -3747,7 +3747,7 @@ Proceed only if the core/shared UI are provider-neutral **and** an authorized UG
 
 ---
 
-# 70. Phase 2 — Functional Backup Manager UI MVP
+# 70. Phase 2 — Functional Backupd UI MVP
 
 ## Objective
 
@@ -3895,7 +3895,7 @@ Keep filtering and diagnostics intentionally simple for v1.
 
 ### Phase 2 Exit Gate
 
-An administrator can install/open the app and perform normal backup-manager configuration and monitoring without using a terminal.
+An administrator can install/open the app and perform normal backupd configuration and monitoring without using a terminal.
 
 ---
 
@@ -4119,14 +4119,14 @@ Include:
 
 ## Work Package 4.3 — TrueNAS + Unraid + OpenMediaVault Container Provider Packages
 
-> If a packaging profile here runs `/rbm-web serve-ui` as its own
+> If a packaging profile here runs `/backupd-web serve-ui` as its own
 > container (the same two-container split B4.1 shipped for the generic Docker
 > app), remember to override the canonical image's own baked-in `HEALTHCHECK`
-> independently for that container: it runs `rbm status`, which
+> independently for that container: it runs `backupd status`, which
 > needs a config file and a state database `serve-ui` never has. See
 > `container/compose.yaml`'s `web-ui` service and docs/deployment.md's
 > "Healthchecks differ per container" for the working example
-> (`/rbm-web healthcheck` instead).
+> (`/backupd-web healthcheck` instead).
 
 ### TrueNAS
 
@@ -4379,7 +4379,7 @@ In addition to functional completion, every applicable child issue SHALL demonst
 
 This EPIC is complete when:
 
-- [ ] the predecessor backup-manager core remains the only lifecycle engine;
+- [ ] the predecessor backupd core remains the only lifecycle engine;
 - [ ] one canonical provider-neutral core binary exists per release/architecture;
 - [ ] container-based providers use the canonical OCI image built from that core binary;
 - [ ] Synology SPK proves the embedded core binary hash;
@@ -4507,19 +4507,19 @@ TDD itself is part of the safety system. Any change to authentication, deletion,
 Create/update:
 
 ```text
-tools/backup-manager/README.md
-tools/backup-manager/docs/architecture.md
-tools/backup-manager/docs/provider-apps.md
-tools/backup-manager/docs/testing-tdd.md
-tools/backup-manager/docs/security.md
-tools/backup-manager/docs/providers/ugos.md
-tools/backup-manager/docs/providers/synology.md
-tools/backup-manager/docs/providers/truenas.md
-tools/backup-manager/docs/providers/unraid.md
-tools/backup-manager/docs/providers/openmediavault.md
-tools/backup-manager/docs/providers/proxmox.md
-tools/backup-manager/docs/providers/docker.md
-tools/backup-manager/docs/release.md
+tools/backupd/README.md
+tools/backupd/docs/architecture.md
+tools/backupd/docs/provider-apps.md
+tools/backupd/docs/testing-tdd.md
+tools/backupd/docs/security.md
+tools/backupd/docs/providers/ugos.md
+tools/backupd/docs/providers/synology.md
+tools/backupd/docs/providers/truenas.md
+tools/backupd/docs/providers/unraid.md
+tools/backupd/docs/providers/openmediavault.md
+tools/backupd/docs/providers/proxmox.md
+tools/backupd/docs/providers/docker.md
+tools/backupd/docs/release.md
 ```
 
 `architecture.md` SHALL document the dependency rule:
@@ -4585,7 +4585,7 @@ ADR-UGOS-009
 Require test-driven development and safety-specification tests for all implementation work
 
 ADR-PLATFORM-001
-Keep backup-manager core provider-neutral; all NAS OS integrations live under apps/<provider>
+Keep backupd core provider-neutral; all NAS OS integrations live under apps/<provider>
 
 ADR-PLATFORM-002
 Use one shared provider-neutral React UI with thin provider bridges
@@ -4642,7 +4642,7 @@ Do not paper over an unresolved security-sensitive question with an assumption.
 # 81. Recommended Implementation Sequence
 
 ```text
-Parent backup-manager core behavior
+Parent backupd core behavior
         ↓
 Phase 1 — Extract provider-neutral core/shared UI + prove UGOS adapter
         ↓
@@ -4818,7 +4818,7 @@ download/install .UPK
         ↓
 App Center installs Docker dependency/app
         ↓
-Backup Manager icon appears
+Backupd icon appears
         ↓
 open inside UGOS desktop
         ↓
@@ -4862,9 +4862,9 @@ docker pull canonical versioned image
         ↓
 mount config/state/backups
         ↓
-rbm check
+backupd check
         ↓
-rbm daemon
+backupd daemon
         ↓
 manage via CLI
 ```
@@ -5017,7 +5017,7 @@ The adversarial panel required these substantive changes from the prior draft:
 
 ```text
                          REPOSITORY
-                tools/backup-manager/
+                tools/backupd/
                         │
         ┌───────────────┼────────────────┐
         │               │                │

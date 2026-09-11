@@ -14,10 +14,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/contract"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/contract"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/tests/machines"
 )
 
 // minioFixtures adapts the container fixture to the contract suite.
@@ -176,7 +176,7 @@ func TestMinioNeverCreatesABucket(t *testing.T) {
 	_, _ = adapter.UploadFromLocal(ctx, medium, local, "production/pg/artifact.dump", transport.UploadOptions{})
 
 	if fixture.HasBucket(t, "typo-in-the-config") {
-		t.Error("the failed upload created the bucket; a backup manager that provisions the bucket it was pointed at turns a typo into a silent second home for artifacts nobody looks in again")
+		t.Error("the failed upload created the bucket; a backupd that provisions the bucket it was pointed at turns a typo into a silent second home for artifacts nobody looks in again")
 	}
 	// A positive control, because the assertion above is an absence and an
 	// absence assertion that cannot fail is not an assertion.

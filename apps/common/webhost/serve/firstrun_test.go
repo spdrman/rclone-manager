@@ -27,11 +27,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
-	"github.com/spdrman/rclone-manager/apps/common/webhost"
-	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/apps/common/auth/local"
+	"github.com/spdrman/backupd/apps/common/platform/profile"
+	"github.com/spdrman/backupd/apps/common/webhost"
+	"github.com/spdrman/backupd/apps/common/webhost/serve"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // firstRunFixtureKey is a throwaway, unencrypted ed25519 private key

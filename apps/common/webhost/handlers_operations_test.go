@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/apps/common/csrf"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/apps/common/csrf"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // POST /api/v1/operations and the reads beside it.

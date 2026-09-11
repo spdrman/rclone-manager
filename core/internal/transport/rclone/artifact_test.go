@@ -11,7 +11,7 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/hash"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // modTimeOnlyObject is an fs.Object that exists to answer exactly one

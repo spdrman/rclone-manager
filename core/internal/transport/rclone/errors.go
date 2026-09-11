@@ -58,7 +58,7 @@ import (
 
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // integrityFailurePrefix is rclone's own wording for a transfer that failed

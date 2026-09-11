@@ -20,7 +20,7 @@ var (
 )
 
 // registeredCommands reads the dispatch table in main.go: the one place
-// that decides what `backup-manager <cmd>` actually accepts.
+// that decides what `backupd <cmd>` actually accepts.
 func registeredCommands(t *testing.T, src string) []string {
 	t.Helper()
 	block := commandsMapBlock.FindStringSubmatch(src)

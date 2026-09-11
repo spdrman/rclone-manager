@@ -51,10 +51,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/mediumcheck"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/mediumcheck"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
 )
 
 // ErrConfigAbsent is what Open returns when configPath does not exist at
@@ -138,7 +138,7 @@ func NewFirstRun(defaults FirstRunDefaults) (*FirstRun, error) {
 		return nil, fmt.Errorf("service: first run config path %q must be absolute", defaults.ConfigPath)
 	}
 	// Issue #196 made the packaged configuration mount a DIRECTORY, so
-	// `--config /etc/backup-manager/config` is a spelling an operator is
+	// `--config /etc/backupd/config` is a spelling an operator is
 	// actively invited to type (config.ResolvePath's own doc). Resolving
 	// it here, once, at the boundary where a deployment's answer becomes
 	// this type's, is what keeps everything derived from ConfigPath

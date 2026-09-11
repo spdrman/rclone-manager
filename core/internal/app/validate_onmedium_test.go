@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // Issue #434's refusal, kept after issue #435 replaced most of it.
@@ -58,7 +58,7 @@ func TestValidateArtifact_RefusesWhenTheDurableCopyIsOnAMedium(t *testing.T) {
 	size := int64(len("payload for validate"))
 	for _, p := range []state.PlacementUpdate{
 		{Medium: state.MediumLocal, Location: local.Location, Status: state.PlacementGone},
-		{Medium: "cold_offsite", Location: "rclone-manager/production/pg/" + f.artifact.Name, Size: &size,
+		{Medium: "cold_offsite", Location: "backupd/production/pg/" + f.artifact.Name, Size: &size,
 			Hash: before.LocalHash, HashAlg: before.LocalHashAlg,
 			VerificationClass: state.VerificationContent, Status: state.PlacementActive},
 	} {

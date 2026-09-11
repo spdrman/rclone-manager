@@ -23,8 +23,8 @@ import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { createMockApi } from "@shared/api/mock";
-import { BackupManagerError } from "@shared/api/contracts";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import { graph, resetGraphForTests } from "@shared/state/graph";
 import { versionNode } from "@shared/state/appNodes";
 import { wizardHostKeyChangedNode } from "@shared/state/wizardNodes";
@@ -35,7 +35,7 @@ import { wizardHostKeyChangedNode } from "@shared/state/wizardNodes";
 // deterministic fixture ui/shared/e2e's own Playwright suite runs
 // against (playwright.config.ts's own comment), reused here for the
 // same reason.
-function renderWizard(readOnly = false, api: BackupManagerApi = createMockApi()) {
+function renderWizard(readOnly = false, api: BackupdApi = createMockApi()) {
   return render(
     <MemoryRouter>
       <ApiProvider api={api}>
@@ -51,7 +51,7 @@ function renderWizard(readOnly = false, api: BackupManagerApi = createMockApi())
  *  (rather than a bare MemoryRouter) so navigate("/sets") on a
  *  successful save (issue #146) is observable — renderWizard alone has
  *  nowhere for that navigation to land. */
-function renderWizardWithRoutes(api: BackupManagerApi) {
+function renderWizardWithRoutes(api: BackupdApi) {
   return render(
     <MemoryRouter initialEntries={["/sets/new"]}>
       <ApiProvider api={api}>
@@ -549,7 +549,7 @@ describe("add backup set wizard", () => {
     it("says so when the validator catalog cannot be loaded, rather than showing an empty picklist (issue #162)", async () => {
       const api = createMockApi();
       vi.spyOn(api, "listValidators").mockRejectedValue(
-        new BackupManagerError({ code: "INTERNAL", message: "nope", correlationId: "cid_2" })
+        new BackupdError({ code: "INTERNAL", message: "nope", correlationId: "cid_2" })
       );
       renderWizard(false, api);
 
@@ -589,7 +589,7 @@ describe("add backup set wizard", () => {
     it("surfaces a failed save inline instead of navigating or silently doing nothing", async () => {
       const api = createMockApi();
       vi.spyOn(api, "createBackupSet").mockRejectedValue(
-        new BackupManagerError({ code: "INVALID_REQUEST", message: "remote_path is required", correlationId: "cid_1" })
+        new BackupdError({ code: "INVALID_REQUEST", message: "remote_path is required", correlationId: "cid_1" })
       );
       renderWizardWithRoutes(api);
 
@@ -609,7 +609,7 @@ describe("add backup set wizard", () => {
     it("offers a create-anyway decision, not a field error, when the id already has history somewhere else", async () => {
       const api = createMockApi();
       const create = vi.spyOn(api, "createBackupSet").mockRejectedValueOnce(
-        new BackupManagerError({
+        new BackupdError({
           code: "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED",
           message: "3 artifact(s) are already on record for api/postgres-primary",
           correlationId: "cid_2"

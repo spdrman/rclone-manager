@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // Two follow-on defects in #662's own fix, both about a fault that is
@@ -174,7 +174,7 @@ func TestIssue663_ContentIsStillCheckedOnAContradictoryRow(t *testing.T) {
 // at the layer that decides it.
 //
 // The clause is computed correctly and then dropped: it rides a noAction
-// finding, and `cmd/backup-manager/reconcile.go` prints a finding only when
+// finding, and `cmd/backupd/reconcile.go` prints a finding only when
 // `f.Changed() || f.NeedsInvestigation`.
 func TestIssue663_TheSettledFaultReachesAFindingAnOperatorSees(t *testing.T) {
 	for _, tc := range []struct {
@@ -221,7 +221,7 @@ func TestIssue663_TheSettledFaultReachesAFindingAnOperatorSees(t *testing.T) {
 						"  finding: %s -> %s (Changed=%v, NeedsInvestigation=%v)\n"+
 						"  reason:  %s\n"+
 						"  on disk: %s is %d bytes, sha256 %s\n"+
-						"cmd/backup-manager/reconcile.go prints a finding only when f.Changed() || "+
+						"cmd/backupd/reconcile.go prints a finding only when f.Changed() || "+
 						"f.NeedsInvestigation, and no journal transition is written for a converged row, so this "+
 						"row's self-contradiction is computed, formatted, and then discarded. The product printed "+
 						"\"reconciliation complete; no unresolved findings\" over it.",
@@ -239,7 +239,7 @@ func TestIssue663_TheSettledFaultReachesAFindingAnOperatorSees(t *testing.T) {
 }
 
 // TestIssue663_AnUncontradictedRowIsStillSilent is the fence on the case
-// above. NeedsInvestigation is what `rbm reconcile` prints on, so setting
+// above. NeedsInvestigation is what `backupd reconcile` prints on, so setting
 // it for a row with nothing wrong would turn every healthy artifact into a
 // line of output on every pass, which is the same defect as printing
 // nothing: an operator who is told about everything is told about nothing.

@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/health"
+	"github.com/spdrman/backupd/core/internal/health"
 )
 
-// Issue #444's third acceptance line: `rbm status` and the Web
+// Issue #444's third acceptance line: `backupd status` and the Web
 // UI read the same computation, which is the property this package exists
 // to keep.
 //

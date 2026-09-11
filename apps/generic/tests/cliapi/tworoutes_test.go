@@ -26,11 +26,11 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
-	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
-	"github.com/spdrman/rclone-manager/core/apicontract"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/apps/common/auth/local"
+	"github.com/spdrman/backupd/apps/common/platform/profile"
+	"github.com/spdrman/backupd/apps/common/webhost/serve"
+	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // Issue #545, the last of #536: the two routes an operator can change this
@@ -47,7 +47,7 @@ import (
 // against a stand-in engine for exactly that reason, and both said so.
 //
 // A test can still put the two together, as long as it does not import
-// them both: this package runs the real backup-manager BINARY as a
+// them both: this package runs the real backupd BINARY as a
 // subprocess, and stands up the real apps/common/webhost/serve engine and
 // the real UI host in process. Nothing here is a stand-in. The CSRF cookie
 // is minted by apps/common/csrf, the session by apps/common/auth/local, the
@@ -97,7 +97,7 @@ import (
 // # The Web UI itself
 //
 // A browser is not driven from here. The Web UI's data is these responses:
-// it holds no configuration of its own, and spdrman/rclone-manager-tests
+// it holds no configuration of its own, and spdrman/backupd-tests
 // Suite B is what drives the rendered thing. What is driven here is the
 // exact HTTP surface the browser talks to, through the published port,
 // which is the half of "visible in the Web UI" that can be wrong.
@@ -129,7 +129,7 @@ type stack struct {
 // startStack brings up everything a real deployment has except the
 // container boundary, over the configuration configPath names.
 //
-// The order is the order apps/generic/cmd/backup-manager-web uses and it
+// The order is the order apps/generic/cmd/backupd-web uses and it
 // is load-bearing: AnnounceServing before service.Open, so a CLI that
 // arrives mid-start finds the announcement rather than a half-open
 // journal. core/service's liveengine.go has the whole arrangement.
@@ -153,7 +153,7 @@ func startStack(t *testing.T, configPath string) *stack {
 	// administrator was never written to and every login would fail for a
 	// reason that has nothing to do with what is under test.
 	storePath := filepath.Join(t.TempDir(), "local-auth.json")
-	// The same provisioning path `rbm-web auth create-admin`
+	// The same provisioning path `backupd-web auth create-admin`
 	// takes, rather than the bootstrap-token enrolment the neighbouring
 	// file uses: this test needs a username and password to hand the CLI,
 	// and that is the command an operator runs to get one.
@@ -324,7 +324,7 @@ type invocation struct {
 }
 
 func (r invocation) String() string {
-	return fmt.Sprintf("backup-manager %s\nexit %d\nstdout:\n%s\nstderr:\n%s",
+	return fmt.Sprintf("backupd %s\nexit %d\nstdout:\n%s\nstderr:\n%s",
 		strings.Join(r.argv, " "), r.code, r.stdout, r.stderr)
 }
 
@@ -423,7 +423,7 @@ func createArgs(configPath, keyPath, id string, extra ...string) []string {
 		// Every test in this package is about where the change LANDS, on
 		// which route, in which mode, so they skip the check the way an
 		// operator building configuration offline does. Whether the check
-		// happens at all is core/cmd/backup-manager's own suite, and
+		// happens at all is core/cmd/backupd's own suite, and
 		// whether it happens against two real machines is
 		// scripts/e2e/two-machine-backup.sh.
 		"--no-verify",
@@ -526,7 +526,7 @@ func TestARoutedMutationIsVisibleOverHTTPWithoutARestart(t *testing.T) {
 // #535 fixed.
 //
 // It is the shipped container's own default: nothing sets
-// $BACKUP_MANAGER_API_URL, so a `docker exec ... rbm backup-set
+// $BACKUP_MANAGER_API_URL, so a `docker exec ... backupd backup-set
 // create` finds a serving engine, has no route to it, and stops. That is
 // worth driving on its own, because the first proof passes on a deployment
 // that has been told where its engine is and most have not been.
@@ -836,7 +836,7 @@ func newFixture(t *testing.T, bin string, s surface) fixture {
 // The verbs are read out of the binary's own usage block rather than typed
 // here, so a verb that lands over there fails here without anybody
 // remembering this file exists. What makes that sound is
-// core/cmd/backup-manager's TestUsage_NamesEveryTopLevelCommand, which pins
+// core/cmd/backupd's TestUsage_NamesEveryTopLevelCommand, which pins
 // the usage block against the dispatch map itself; without it a verb could be
 // dispatchable and unlisted, and this would be blind to exactly the verb
 // nobody had thought about. The same blindness is why `backup-set remove`
@@ -995,7 +995,7 @@ func TestNoCommandChangesTheConfigurationBesideAnEngineItCannotReach(t *testing.
 
 			// The announcement alone, with no HTTP surface behind it. That
 			// is what the probe reads, and it is also the honest shape of
-			// the case: a `rbm daemon` serves no HTTP at all,
+			// the case: a `backupd daemon` serves no HTTP at all,
 			// and an engine whose address nobody has configured is
 			// indistinguishable from one for a command with no route.
 			release, err := service.AnnounceServing(f.configPath)
@@ -1459,7 +1459,7 @@ func TestARoutedWriteIsAcceptedByTheDeploymentItWasTypedAt(t *testing.T) {
 // announcement itself is the subject: what is being checked is that the
 // process serving the setup flow announces at all, and a test that made its
 // own announcement would be checking its own copy of main.go. So the engine
-// below is the real `rbm-web serve`, started as a subprocess
+// below is the real `backupd-web serve`, started as a subprocess
 // against a directory with no configuration in it, exactly as the container
 // starts it.
 
@@ -1468,15 +1468,15 @@ func TestARoutedWriteIsAcceptedByTheDeploymentItWasTypedAt(t *testing.T) {
 // above: the first-run announcement is main.go's to make.
 func buildWeb(t *testing.T, root string) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "backup-manager-web")
+	bin := filepath.Join(t.TempDir(), "backupd-web")
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager-web")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backupd-web")
 	cmd.Dir = filepath.Join(root, "apps", "generic")
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build backup-manager-web: %v\n%s", err, out)
+		t.Fatalf("build backupd-web: %v\n%s", err, out)
 	}
 	return bin
 }
@@ -1514,7 +1514,7 @@ func startFirstRunStack(t *testing.T, webBin string) *firstRunStack {
 	stateDatabase := filepath.Join(stateDir, "state.db")
 	storePath := filepath.Join(stateDir, "local-auth.json")
 
-	// Step 2, done the way `rbm-web auth create-admin` does it,
+	// Step 2, done the way `backupd-web auth create-admin` does it,
 	// because this test needs a password to sign in with. An operator
 	// redeems the bootstrap token instead and ends up with the same record.
 	if _, err := local.CreateAdmin(local.CreateAdminConfig{
@@ -1536,7 +1536,7 @@ func startFirstRunStack(t *testing.T, webBin string) *firstRunStack {
 	)
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting backup-manager-web: %v", err)
+		t.Fatalf("starting backupd-web: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := cmd.Process.Signal(os.Interrupt); err != nil {

@@ -26,15 +26,15 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import type { BackupManagerApi } from "@shared/api/contracts";
-import { BackupManagerError } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import { createMockApi, resetMockFixtures } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
 import { graph, resetGraphForTests } from "@shared/state/graph";
 import { currentSetDetailNode } from "@shared/state/backupSetDetailNodes";
 import { backupSetPath } from "@shared/utilities/routes";
 
-function renderDetail(source: string, set: string, api: BackupManagerApi, readOnly = false) {
+function renderDetail(source: string, set: string, api: BackupdApi, readOnly = false) {
   return render(
     <MemoryRouter initialEntries={[backupSetPath(source, set)]}>
       <ApiProvider api={api}>
@@ -46,7 +46,7 @@ function renderDetail(source: string, set: string, api: BackupManagerApi, readOn
   );
 }
 
-async function openEditMode(api: BackupManagerApi, target: BackupSet) {
+async function openEditMode(api: BackupdApi, target: BackupSet) {
   renderDetail(target.source, target.set, api);
   await screen.findByText(target.name);
   await act(async () => {
@@ -226,7 +226,7 @@ describe("issue #350: Edit is an inline mode, not a dialog", () => {
   it("keeps edit mode, the typed value and a stated reason when a save fails", async () => {
     const api = createMockApi();
     vi.spyOn(api, "updateBackupSet").mockRejectedValue(
-      new BackupManagerError({
+      new BackupdError({
         code: "INVALID_REQUEST",
         message: "remote_path must be an absolute path",
         correlationId: "cid_test"
@@ -579,7 +579,7 @@ describe("issue #350: repointing a set that already has history", () => {
     const update = vi
       .spyOn(api, "updateBackupSet")
       .mockRejectedValueOnce(
-        new BackupManagerError({
+        new BackupdError({
           code: "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
           message:
             'service: this edit would point the backup set at different data: this would move local_path from "/data/old" to "/data/new" while 32 artifact(s) are on record',
@@ -611,7 +611,7 @@ describe("issue #350: repointing a set that already has history", () => {
   it("re-sends the same keys WITH the acknowledgement when the repoint is confirmed", async () => {
     const api = createMockApi();
     const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
-      new BackupManagerError({
+      new BackupdError({
         code: "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
         message: "this would move local_path",
         correlationId: "cid_repoint"
@@ -640,7 +640,7 @@ describe("issue #350: repointing a set that already has history", () => {
   it("declining a repoint writes nothing and leaves the form as it was", async () => {
     const api = createMockApi();
     const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
-      new BackupManagerError({
+      new BackupdError({
         code: "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
         message: "this would move local_path",
         correlationId: "cid_repoint"
@@ -668,7 +668,7 @@ describe("issue #350: repointing a set that already has history", () => {
   it("confirming a repoint that SAVE ALL asked for leaves edit mode, as SAVE ALL promised", async () => {
     const api = createMockApi();
     const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
-      new BackupManagerError({
+      new BackupdError({
         code: "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
         message: "this would move local_path",
         correlationId: "cid_repoint"

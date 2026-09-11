@@ -6,12 +6,12 @@
 # straight-line render on purpose: no conditionals, no loops, nothing that
 # would make the rendered shape depend on an answer. What comes out of
 # here must be the same two-container deployment
-# ../../compose/backup-manager.yaml describes, with the operator's answers
+# ../../compose/backupd.yaml describes, with the operator's answers
 # substituted and nothing else different.
 services:
-  backup-manager:
+  backupd:
     image: "{{ .Values.image.reference }}"
-    command: ["/rbm-web", "serve", "--profile=truenas"]
+    command: ["/backupd-web", "serve", "--profile=truenas"]
 
     user: "{{ .Values.runtime.puid }}:{{ .Values.runtime.pgid }}"
     read_only: true
@@ -46,15 +46,15 @@ services:
     volumes:
       - "{{ .Values.storage.state.hostPath }}:/data/state"
       - "{{ .Values.storage.backups.hostPath }}:/data/backups"
-      - "{{ .Values.storage.configDir.hostPath }}:/etc/backup-manager/config"
-      - "{{ .Values.storage.sshKey.hostPath }}:/etc/backup-manager/id_ed25519:ro"
-      - "{{ .Values.storage.knownHosts.hostPath }}:/etc/backup-manager/known_hosts:ro"
+      - "{{ .Values.storage.configDir.hostPath }}:/etc/backupd/config"
+      - "{{ .Values.storage.sshKey.hostPath }}:/etc/backupd/id_ed25519:ro"
+      - "{{ .Values.storage.knownHosts.hostPath }}:/etc/backupd/known_hosts:ro"
 
     # The start gate, and a liveness question rather than a health
     # verdict (issue #206). The Web UI below declares
-    # `depends_on: backup-manager: condition: service_healthy`, so
+    # `depends_on: backupd: condition: service_healthy`, so
     # whatever this asks stands between an operator and the only
-    # container with a published port. `/rbm status` is
+    # container with a published port. `/backupd status` is
     # FR-24's backup-freshness verdict and exits non-zero on any
     # DEGRADED, STALE or FAILING set, and on a fresh install, which has
     # backed nothing up yet: gating the Web UI on it means a new install
@@ -65,12 +65,12 @@ services:
     # is the right default for a plain `docker run` and for the headless
     # `daemon` command, which serves no HTTP and so has no liveness
     # endpoint to ask. Backup freshness is not lost - read it with
-    # `docker exec backup-manager /rbm status`, or let the
+    # `docker exec backupd /backupd status`, or let the
     # alerts block deliver it.
     #
     # Derived from container/compose.yaml, never authored here.
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      test: ["CMD", "/backupd-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -85,12 +85,12 @@ services:
     networks:
       - internal
 
-  backup-manager-ui:
+  backupd-ui:
     image: "{{ .Values.image.reference }}"
-    command: ["/rbm-web", "serve-ui", "--profile=truenas"]
+    command: ["/backupd-web", "serve-ui", "--profile=truenas"]
 
     depends_on:
-      backup-manager:
+      backupd:
         condition: service_healthy
 
     user: "{{ .Values.runtime.puid }}:{{ .Values.runtime.pgid }}"
@@ -116,7 +116,7 @@ services:
       # engine's own line for it.
       LOG_LEVEL: "info"
       LISTEN_ADDR: ":8080"
-      UPSTREAM_ADDR: "http://backup-manager:8080"
+      UPSTREAM_ADDR: "http://backupd:8080"
       # The per-provider UI bundles the canonical image carries. With
       # `--profile=truenas` selected above, the bundle served is
       # /ui/bundles/truenas, so an operator who installed through this
@@ -125,7 +125,7 @@ services:
       UI_ROOT: "/ui/bundles"
 
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck"]
+      test: ["CMD", "/backupd-web", "healthcheck"]
       interval: 30s
       timeout: 5s
       start_period: 5s

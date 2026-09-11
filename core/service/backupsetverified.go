@@ -50,7 +50,7 @@
 // #624's "which world does this run in" question rather than leaving it
 // to be discovered. The engine that serves a deployment owns its
 // configuration file; a CLI beside a serving engine routes the check to
-// that engine (core/cmd/backup-manager's backupSetRoute), so the process
+// that engine (core/cmd/backupd's backupSetRoute), so the process
 // that clears the mark is always the process whose configuration the mark
 // is in. There is no version of this where one process proves a
 // connection and another edits the file.
@@ -65,9 +65,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // ErrConnectionNotProven is a write that declares what a backup set
@@ -143,6 +143,7 @@ func connectionSourceFor(bs config.BackupSet, keyEnc config.KeyEncryption) trans
 		KeyEncryptionCommand: keyEnc.Command,
 		KnownHosts:           r.KnownHosts,
 		Root:                 root,
+		ExcludePaths:         bs.ExcludePaths,
 	}
 }
 

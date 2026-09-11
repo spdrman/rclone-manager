@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The retention preview and its apply, which are the two halves of the
@@ -56,8 +56,8 @@ type retentionVerdictResponse struct {
 	// the field, which is the one decision on this projection that is not
 	// a straight translation. It is what keeps a deployment that declares
 	// no storage medium serving exactly the bytes it served before this
-	// field existed, and `rbm retention` already states the
-	// same asymmetry the same way (mediumSuffix, core/cmd/backup-manager/
+	// field existed, and `backupd retention` already states the
+	// same asymmetry the same way (mediumSuffix, core/cmd/backupd/
 	// retention.go), so the two operator surfaces read alike.
 	//
 	// The service-side value is not tested against the literal "local"

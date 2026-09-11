@@ -190,7 +190,7 @@ describe("handing the default from one destination to another (#671)", () => {
     expect(control("offsite_s3", "Make default")).toBeEnabled();
     // And names the command it is equivalent to, on the row, which is
     // EPIC G's standing rule and the line an operator scripts from.
-    expect(row("offsite_s3").getByText("rbm medium default offsite_s3")).toBeTruthy();
+    expect(row("offsite_s3").getByText("backupd medium default offsite_s3")).toBeTruthy();
   });
 
   // The reversal of #622's choice, and the whole point of the issue. The

@@ -111,7 +111,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 //go:embed validators/*.sh

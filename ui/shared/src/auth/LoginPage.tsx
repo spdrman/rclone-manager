@@ -67,7 +67,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn(): void }) {
     <AuthFrame>
       <h1 style={{ margin: "0 0 6px", fontSize: 21 }}>Sign in</h1>
       <p style={{ margin: "0 0 22px", color: "var(--text-2)", fontSize: 13 }}>
-        Backup Manager local account — <strong style={{ color: "var(--text)" }}>not</strong> your
+        Backupd local account — <strong style={{ color: "var(--text)" }}>not</strong> your
         NAS operating-system login.
       </p>
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -123,7 +123,7 @@ export function AuthFrame({ children }: { children: React.ReactNode }) {
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: "48px 24px", background: "var(--bg)" }}>
       <div style={{ width: "100%", maxWidth: 452, display: "flex", flexDirection: "column", gap: 20 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
-          <Logo size={27} title="Backup Manager" />
+          <Logo size={27} title="Backupd" />
           <Wordmark size={15} />
         </div>
         <div className="card" style={{ padding: 28 }}>{children}</div>

@@ -29,8 +29,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/capacity"
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/capacity"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 type countingSink struct {

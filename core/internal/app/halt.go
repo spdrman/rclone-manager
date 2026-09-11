@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // The durable "this manager cannot get in" (issue #245), and the two halves
@@ -46,7 +46,7 @@ import (
 // reason it was worth adding a second category alongside the first: a
 // rejected login is a question for the remote account, a permission drift
 // is a question for this filesystem, and until KeyPermissions existed both
-// looked identical on an operator's screen, "Backup Manager could not log
+// looked identical on an operator's screen, "Backupd could not log
 // in".
 //
 // It stops there, though, and the boundary is the point. HostVerification,

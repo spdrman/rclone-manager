@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
 )
 
 // Three cases, and only the first one is about success.

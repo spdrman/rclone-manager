@@ -18,9 +18,9 @@
 // recomputing ConfigRevision — so the change is visible to every other
 // method on this BackupService (ListBackupSets, GetBackupSet,
 // SubmitRunCycle) immediately, without an operator restarting the
-// process, and visible to `rbm sources`/any other CLI
+// process, and visible to `backupd sources`/any other CLI
 // invocation the next time one runs, since that command already reads
-// the same file fresh on every invocation (core/cmd/backup-manager/
+// the same file fresh on every invocation (core/cmd/backupd/
 // sources.go).
 //
 // This was previously out of core/service's scope by design (see
@@ -41,11 +41,11 @@ import (
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-	"github.com/spdrman/rclone-manager/core/internal/sourcecheck"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/sourcecheck"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
 )
 
 // defaultSourceName groups every backup set created through the API under
@@ -582,8 +582,8 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	defer b.configMu.Unlock()
 
 	// Re-read from disk, not b.state.Load().inner.Config: this is the same "always
-	// read fresh" discipline `rbm sources` already uses
-	// (core/cmd/backup-manager/sources.go), and it is what makes this
+	// read fresh" discipline `backupd sources` already uses
+	// (core/cmd/backupd/sources.go), and it is what makes this
 	// method safe even if configPath was edited by hand (or by a second
 	// process) since this BackupService last loaded it — the write below
 	// is always based on the file's actual current content, never a
@@ -1298,7 +1298,7 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 		return ConnectionTestResult{}, err
 	}
 
-	tmp, err := os.CreateTemp("", "backup-manager-test-connection-known-hosts-*")
+	tmp, err := os.CreateTemp("", "backupd-test-connection-known-hosts-*")
 	if err != nil {
 		return ConnectionTestResult{}, fmt.Errorf("service: preparing connection test: %w", err)
 	}

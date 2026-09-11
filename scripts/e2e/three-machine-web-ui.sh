@@ -5,7 +5,7 @@
 #
 # # The blind spot this closes
 #
-# suites/web-ui over in spdrman/rclone-manager-tests starts `npm run dev`
+# suites/web-ui over in spdrman/backupd-tests starts `npm run dev`
 # and the app it drives resolves createMockApi out of
 # ui/shared/src/api/mock.ts. So every case in that suite is a claim about a
 # component rendering correctly GIVEN a fixture, and not one of them can go
@@ -36,11 +36,11 @@
 #             the machine being backed up.
 #
 # Three machines, four containers, and the difference is worth being plain
-# about. The product IS two containers: `/rbm-web serve` (the engine: local
-# authentication, /api/v1, the scheduler, SQLite) and `/rbm-web serve-ui`
+# about. The product IS two containers: `/backupd-web serve` (the engine: local
+# authentication, /api/v1, the scheduler, SQLite) and `/backupd-web serve-ui`
 # (the static bundle plus a reverse proxy to the engine). Collapsing them
 # into one would delete the reverse-proxy hop, and that hop is half of what
-# this suite exists to cover. So "the rclone-manager machine" here is the
+# this suite exists to cover. So "the backupd machine" here is the
 # product's own split, unchanged.
 #
 # # Why this drops docker-in-docker, and what that gives up
@@ -80,8 +80,8 @@
 # peer. Both of those are the topology doing work, so the topology is the
 # real one. Nothing is published to the host on any of them.
 #
-# The name `rclone-manager` lives on the edge network only, and it resolves
-# to the UI container: from outside the deployment that IS rclone-manager,
+# The name `backupd` lives on the edge network only, and it resolves
+# to the UI container: from outside the deployment that IS backupd,
 # and it is the address the browser is given. Inside the deployment the
 # containers keep compose's own names. One name per network, so nothing
 # ever resolves to two things.
@@ -102,7 +102,7 @@
 #
 # The client container gets these, and they are the whole contract:
 #
-#   RM_BASE_URL          http://rclone-manager:8080
+#   RM_BASE_URL          http://backupd:8080
 #   RM_ADMIN_USERNAME    the enrolled administrator
 #   RM_ADMIN_PASSWORD    its password, generated this run
 #   RM_BACKUP_SET        the seeded set's name
@@ -118,7 +118,7 @@
 #   scripts/e2e/three-machine-web-ui.sh
 #       stand the stack up and run the built-in browser check.
 #
-#   scripts/e2e/three-machine-web-ui.sh --suite ../rclone-manager-tests/suites/web-ui
+#   scripts/e2e/three-machine-web-ui.sh --suite ../backupd-tests/suites/web-ui
 #       stand it up and run that directory's Playwright suite inside the
 #       client container. The suite's own node_modules is not used: the
 #       image's is, because the checkout's was built for this host.
@@ -138,7 +138,7 @@
 #                     serve-ui, so the browser reaches the stack the way a
 #                     real NAS's front door does (h2 over TLS) rather than
 #                     the plain HTTP/1.1 this rig otherwise uses. The
-#                     reproduction for rclone-manager#730. RM_SEED_CYCLES=N
+#                     reproduction for backupd#730. RM_SEED_CYCLES=N
 #                     additionally runs N backup cycles to enlarge the feed.
 #
 # The exit status is the client container's, not the teardown's. A run that
@@ -215,7 +215,7 @@ artifacts_dir=""
 keep_on_failure=0
 keep_up=0
 prebuilt_image="${RM_PRODUCT_IMAGE:-}"
-# rclone-manager#730 reproduction: put an ordinary TLS + HTTP/2 reverse
+# backupd#730 reproduction: put an ordinary TLS + HTTP/2 reverse
 # proxy in front of serve-ui, so the browser reaches the stack the way it
 # reaches a real NAS (h2 over TLS) rather than the plain HTTP/1.1 the rig
 # otherwise uses. Off by default; the default rig is unchanged.
@@ -249,7 +249,7 @@ fi
 # ------------------------------------------------------------ identities
 
 run_id="${E2E_RUN_ID:-$$-$(date +%s)-${RANDOM}}"
-label="rclone-manager-e2e=three-machine-web-ui"
+label="backupd-e2e=three-machine-web-ui"
 
 net_edge="rm-webui-edge-$run_id"
 net_internal="rm-webui-internal-$run_id"
@@ -280,7 +280,7 @@ v_backups="rm-webui-backups-$run_id"
 # secret. It lives in a run directory OUTSIDE this repository, so nothing
 # this script writes can be committed by accident.
 tmp_root="${TMPDIR:-/tmp}"
-tmp_root="${tmp_root%/}/rclone-manager-e2e-web-ui"
+tmp_root="${tmp_root%/}/backupd-e2e-web-ui"
 run_dir="$tmp_root/$run_id"
 
 # Artifacts outlive the stack on purpose, so this is not $run_dir. Outside
@@ -289,10 +289,10 @@ run_dir="$tmp_root/$run_id"
 # credential material goes, dead or not.
 [ -n "$artifacts_dir" ] || artifacts_dir="$tmp_root/$run_id-artifacts"
 
-product_image="${prebuilt_image:-rclone-manager-web-ui-e2e:$run_id}"
-source_image="rclone-manager-e2e-source:1"
-client_image="rclone-manager-e2e-client:1"
-proxy_image="rclone-manager-e2e-proxy:1"
+product_image="${prebuilt_image:-backupd-web-ui-e2e:$run_id}"
+source_image="backupd-e2e-source:1"
+client_image="backupd-e2e-client:1"
+proxy_image="backupd-e2e-proxy:1"
 
 source_dockerfile="$repo_root/scripts/e2e/source-machine.Dockerfile"
 client_dockerfile="$repo_root/scripts/e2e/client-machine.Dockerfile"
@@ -314,7 +314,7 @@ app_gid=1000
 
 backup_set="e2e/vps"
 
-# What the client is told. `rclone-manager` is an alias on the edge network
+# What the client is told. `backupd` is an alias on the edge network
 # and on no other, so it resolves to exactly one container from exactly one
 # place, seen from the client: the UI container normally, or the TLS/HTTP-2
 # front proxy when --front-proxy-tls is set (which then upstreams to the UI
@@ -325,12 +325,12 @@ backup_set="e2e/vps"
 # certificate trust. front_proxy_probe_env is used UNQUOTED on purpose so
 # the empty default expands to no argument at all.
 if [ "$front_proxy" = 1 ]; then
-  base_url="https://rclone-manager"
+  base_url="https://backupd"
   edge_web_alias="origin"
   front_proxy_probe_env="-e NODE_NO_WARNINGS=1 -e NODE_TLS_REJECT_UNAUTHORIZED=0"
 else
-  base_url="http://rclone-manager:8080"
-  edge_web_alias="rclone-manager"
+  base_url="http://backupd:8080"
+  edge_web_alias="backupd"
   front_proxy_probe_env=""
 fi
 
@@ -505,10 +505,10 @@ oneshot() {  # oneshot <network, or "none"> <command...>
     --network "$net" \
     --label "$label" \
     --user "$app_uid:$app_gid" \
-    -v "$v_config:/etc/backup-manager/config" \
+    -v "$v_config:/etc/backupd/config" \
     -v "$v_state:/data/state" \
     -v "$v_backups:/data/backups" \
-    -v "$v_keys:/etc/backup-manager/keys:ro" \
+    -v "$v_keys:/etc/backupd/keys:ro" \
     -e TMPDIR=/tmp \
     "$product_image" "$@"
 }
@@ -584,7 +584,7 @@ step "seeding the VPS's files"
 # Deterministic bytes rather than /dev/urandom, so a digest mismatch can be
 # reasoned about rather than only observed.
 head -c 3145728 /dev/zero \
-  | openssl enc -aes-256-ctr -pbkdf2 -pass pass:rclone-manager-e2e-web-ui -nosalt 2>/dev/null \
+  | openssl enc -aes-256-ctr -pbkdf2 -pass pass:backupd-e2e-web-ui -nosalt 2>/dev/null \
   > "$run_dir/upload/payload.bin" \
   || die "could not generate the payload."
 printf 'CREATE TABLE artifacts (id text primary key);\n' > "$run_dir/upload/schema.sql"
@@ -615,7 +615,7 @@ done
 # design, and refuses a group- or world-writable ancestor as well.
 toolbox -v "$v_keys:/keys" -- "
     set -e
-    ssh-keygen -q -t ed25519 -N '' -C 'rclone-manager e2e' -f /keys/id_ed25519 </dev/null
+    ssh-keygen -q -t ed25519 -N '' -C 'backupd e2e' -f /keys/id_ed25519 </dev/null
     chown -R $app_uid:$app_gid /keys
     chmod 700 /keys
     chmod 600 /keys/id_ed25519
@@ -688,11 +688,11 @@ step "creating the backup set, before anything is serving"
 # the VPS is up first. The alternative, --known-hosts-line, would need a
 # key this script had settled in advance, and it settles none.
 oneshot "$net_backhaul" \
-  /rbm backup-set create "$backup_set" \
-    --config /etc/backup-manager/config \
+  /backupd backup-set create "$backup_set" \
+    --config /etc/backupd/config \
     --host vps \
     --user "$sftp_user" \
-    --ssh-key-file /etc/backup-manager/keys/id_ed25519 \
+    --ssh-key-file /etc/backupd/keys/id_ed25519 \
     --trust-host-key \
     --remote-path /upload \
     --local-path /data/backups/vps \
@@ -709,13 +709,13 @@ step "enrolling the administrator"
 # administrator without a browser, and it is what the deployment's first-run
 # flow would otherwise do interactively.
 printf '%s' "$admin_pass" | oneshot none \
-  /rbm-web auth create-admin --username "$admin_user" --password-stdin \
+  /backupd-web auth create-admin --username "$admin_user" --password-stdin \
   || die "could not enrol the administrator."
 note "administrator $admin_user enrolled, password generated this run"
 
 step "running one backup cycle, so the pages have something real to render"
 # BEFORE the engine starts, and this order is load-bearing rather than
-# stylistic. `rbm run` beside a serving engine is two processes writing the
+# stylistic. `backupd run` beside a serving engine is two processes writing the
 # same SQLite journal, and the loser gets SQLITE_BUSY: measured here, a
 # cycle run that way came back with
 #
@@ -733,7 +733,7 @@ step "running one backup cycle, so the pages have something real to render"
 # stronger one than a banner grab: it authenticates with the generated key,
 # lists a directory, pulls three files and verifies them.
 oneshot "$net_backhaul" \
-  /rbm run --config /etc/backup-manager/config \
+  /backupd run --config /etc/backupd/config \
   || die "the backup cycle exited non-zero, so the deployment could not pull from the VPS." \
          "Everything the browser is about to look at would be empty, and a suite passing against empty tables proves nothing."
 
@@ -748,7 +748,7 @@ if [ "$seed_cycles" -gt 1 ]; then
   step "running $((seed_cycles - 1)) more backup cycle(s) to enlarge the activity journal"
   i=1
   while [ "$i" -lt "$seed_cycles" ]; do
-    oneshot "$net_backhaul" /rbm run --config /etc/backup-manager/config \
+    oneshot "$net_backhaul" /backupd run --config /etc/backupd/config \
       || die "seed cycle $((i + 1)) of $seed_cycles exited non-zero."
     i=$((i + 1))
   done
@@ -770,7 +770,7 @@ note "three artifacts landed and every one matches the VPS by sha256"
 
 # --------------------------------------------------------- the engine
 
-step "starting the engine (/rbm-web serve)"
+step "starting the engine (/backupd-web serve)"
 # The environment is container/compose.yaml's own for this service, and the
 # values that differ from it differ for a reason written beside them.
 docker run -d \
@@ -783,11 +783,11 @@ docker run -d \
   -e LISTEN_ADDR=":8080" \
   -e PUBLIC_BASE_URL="$base_url" \
   -e TRUST_FORWARDED_HEADERS="true" \
-  -v "$v_config:/etc/backup-manager/config" \
+  -v "$v_config:/etc/backupd/config" \
   -v "$v_state:/data/state" \
   -v "$v_backups:/data/backups" \
-  -v "$v_keys:/etc/backup-manager/keys:ro" \
-  "$product_image" /rbm-web serve --profile=generic >/dev/null \
+  -v "$v_keys:/etc/backupd/keys:ro" \
+  "$product_image" /backupd-web serve --profile=generic >/dev/null \
   || die "could not start the engine."
 created_containers+=("$c_engine")
 
@@ -798,12 +798,12 @@ docker network connect --alias manager "$net_backhaul" "$c_engine" \
   || die "could not put the engine on the backhaul network, so it has no route to the VPS."
 
 wait_or_die 180 "the engine to report itself live" \
-  docker exec "$c_engine" /rbm-web healthcheck --url http://127.0.0.1:8080/health/live
+  docker exec "$c_engine" /backupd-web healthcheck --url http://127.0.0.1:8080/health/live
 note "$c_engine is serving on the internal network as \"engine\", and is on the backhaul network as \"manager\""
 
 # --------------------------------------------------------- the UI host
 
-step "starting the UI host (/rbm-web serve-ui)"
+step "starting the UI host (/backupd-web serve-ui)"
 docker run -d \
   --name "$c_web" \
   --network "$net_internal" \
@@ -815,7 +815,7 @@ docker run -d \
   -e TMPDIR=/tmp \
   -e LISTEN_ADDR=":8080" \
   -e UPSTREAM_ADDR="http://engine:8080" \
-  "$product_image" /rbm-web serve-ui --profile=generic >/dev/null \
+  "$product_image" /backupd-web serve-ui --profile=generic >/dev/null \
   || die "could not start the UI host."
 created_containers+=("$c_web")
 
@@ -827,11 +827,11 @@ docker network connect --alias "$edge_web_alias" "$net_edge" "$c_web" \
   || die "could not put the UI host on the edge network, so the client would have nothing to talk to."
 
 wait_or_die 180 "the UI host to answer its own listener" \
-  docker exec "$c_web" /rbm-web healthcheck
+  docker exec "$c_web" /backupd-web healthcheck
 note "$c_web is serving on the edge network as \"$edge_web_alias\", proxying to \"engine\""
 
 if [ "$front_proxy" = 1 ]; then
-  step "starting the TLS + HTTP/2 front proxy (rclone-manager#730 reproduction)"
+  step "starting the TLS + HTTP/2 front proxy (backupd#730 reproduction)"
   # An ordinary reverse proxy in front of serve-ui, taking the edge-network
   # name the client is given and upstreaming to serve-ui's "origin" alias.
   # This is the hop a real NAS has and the plain-HTTP rig did not: the
@@ -841,7 +841,7 @@ if [ "$front_proxy" = 1 ]; then
   docker run -d \
     --name "$c_proxy" \
     --network "$net_edge" \
-    --network-alias rclone-manager \
+    --network-alias backupd \
     --label "$label" \
     "$proxy_image" >/dev/null \
     || die "could not start the front proxy."
@@ -849,14 +849,14 @@ if [ "$front_proxy" = 1 ]; then
 
   proxy_up=0
   for _ in $(seq 1 30); do
-    if toolbox --network "$net_edge" -- 'nc -z -w 3 rclone-manager 443'; then
+    if toolbox --network "$net_edge" -- 'nc -z -w 3 backupd 443'; then
       proxy_up=1; break
     fi
     sleep 1
   done
   [ "$proxy_up" = 1 ] \
     || die "the front proxy never accepted TLS on 443 on the edge network."
-  note "$c_proxy terminates TLS + HTTP/2 as \"rclone-manager\", upstream to \"$edge_web_alias\""
+  note "$c_proxy terminates TLS + HTTP/2 as \"backupd\", upstream to \"$edge_web_alias\""
 fi
 
 # ============================================ the two reachability proofs

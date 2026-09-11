@@ -1,4 +1,4 @@
-# The TrueNAS install wizard for Backup Manager.
+# The TrueNAS install wizard for Backupd.
 #
 # Every variable here is consumed by templates/docker-compose.yaml and
 # given a default in ix_values.yaml. distribution/packaging checks that
@@ -37,7 +37,7 @@ questions:
           schema:
             type: string
             required: true
-            default: "ghcr.io/spdrman/backup-manager:0.4.0"
+            default: "ghcr.io/spdrman/backupd:0.4.0"
 
   - variable: storage
     label: Storage
@@ -59,7 +59,7 @@ questions:
                 schema:
                   type: hostpath
                   required: true
-                  default: "/mnt/tank/backup-manager/state"
+                  default: "/mnt/tank/backupd/state"
         - variable: backups
           label: Backup root
           schema:
@@ -74,12 +74,12 @@ questions:
                 schema:
                   type: hostpath
                   required: true
-                  default: "/mnt/tank/backup-manager/backups"
+                  default: "/mnt/tank/backupd/backups"
         # RENAMED from "config" on purpose (issue #196). TrueNAS carries
         # an installed application's answered values forward across an
         # upgrade, so keeping the identifier would have kept a Phase 4
-        # answer of /mnt/POOL/backup-manager/config/config.yaml and bind
-        # mounted that FILE at /etc/backup-manager/config, where --config
+        # answer of /mnt/POOL/backupd/config/config.yaml and bind
+        # mounted that FILE at /etc/backupd/config, where --config
         # then resolves to .../config/config.yaml and the engine
         # crash-loops with "not a directory" — a message naming neither
         # the mount nor the migration. A new identifier has no answer to
@@ -103,7 +103,7 @@ questions:
                 schema:
                   type: hostpath
                   required: true
-                  default: "/mnt/tank/backup-manager/config"
+                  default: "/mnt/tank/backupd/config"
         - variable: sshKey
           label: SFTP private key
           schema:
@@ -117,7 +117,7 @@ questions:
                 schema:
                   type: hostpath
                   required: true
-                  default: "/mnt/tank/backup-manager/secrets/id_ed25519"
+                  default: "/mnt/tank/backupd/secrets/id_ed25519"
         - variable: knownHosts
           label: Pinned known_hosts
           schema:
@@ -131,7 +131,7 @@ questions:
                 schema:
                   type: hostpath
                   required: true
-                  default: "/mnt/tank/backup-manager/secrets/known_hosts"
+                  default: "/mnt/tank/backupd/secrets/known_hosts"
 
   - variable: network
     label: Network

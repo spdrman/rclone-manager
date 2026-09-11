@@ -35,8 +35,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
 )
 
 const (
@@ -70,7 +70,7 @@ type transferRecord struct {
 
 func TestCaptureTransferBaseline(t *testing.T) {
 	if os.Getenv("PERF_BASELINE") != "1" {
-		t.Skip("perf baseline harness: set PERF_BASELINE=1 to run it (python3 scripts/rcmtools/perf/capture_baseline.py does)")
+		t.Skip("perf baseline harness: set PERF_BASELINE=1 to run it (python3 scripts/bdtools/perf/capture_baseline.py does)")
 	}
 
 	ctx := context.Background()

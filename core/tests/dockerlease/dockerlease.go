@@ -31,7 +31,7 @@ const (
 	// LabelKey marks a container as belonging to this repository's tests.
 	// Sweep only ever removes containers carrying it, so it is the whole
 	// safety boundary: an unlabelled container is never touched.
-	LabelKey = "rclone-manager-test"
+	LabelKey = "backupd-test"
 	// LabelValue is fixed; the key alone carries the meaning.
 	LabelValue = "1"
 

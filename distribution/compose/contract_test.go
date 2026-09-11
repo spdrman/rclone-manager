@@ -32,7 +32,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/distribution/compose"
+	"github.com/spdrman/backupd/distribution/compose"
 )
 
 // env is what an operator's .env supplies. The canonical definition uses
@@ -49,15 +49,15 @@ import (
 // quietly checking nothing.
 func env() map[string]string {
 	return map[string]string{
-		"STATE_DIR":        "/srv/backup-manager/state",
-		"BACKUP_DIR":       "/srv/backup-manager/backups",
-		"CONFIG_DIR":       "/srv/backup-manager/config",
-		"SSH_KEY_FILE":     "/srv/backup-manager/secrets/id_ed25519",
-		"KEY_FILE":         "/srv/backup-manager/secrets/id_ed25519",
-		"KNOWN_HOSTS_FILE": "/srv/backup-manager/secrets/known_hosts",
+		"STATE_DIR":        "/srv/backupd/state",
+		"BACKUP_DIR":       "/srv/backupd/backups",
+		"CONFIG_DIR":       "/srv/backupd/config",
+		"SSH_KEY_FILE":     "/srv/backupd/secrets/id_ed25519",
+		"KEY_FILE":         "/srv/backupd/secrets/id_ed25519",
+		"KNOWN_HOSTS_FILE": "/srv/backupd/secrets/known_hosts",
 		"DISK":             "/srv/dev-disk-by-uuid-11111111-2222-3333-4444-555555555555",
-		"APPDATA":          "/volume1/docker/backup-manager",
-		"BACKUP_ROOT":      "/volume1/backup-manager",
+		"APPDATA":          "/volume1/docker/backupd",
+		"BACKUP_ROOT":      "/volume1/backupd",
 	}
 }
 
@@ -447,8 +447,8 @@ func TestProhibitionScanSeesKeysTheParserHasNoFieldFor(t *testing.T) {
 	const doc = `
 services:
   something-nobody-modelled:
-    image: backup-manager:dev
-    command: ["/rbm-web", "serve"]
+    image: backupd:dev
+    command: ["/backupd-web", "serve"]
     privileged: true
     x-invented-key:
       nested:
@@ -468,7 +468,7 @@ services:
 // TestTheStartGateRejectsTheBackupFreshnessCommand is the control that
 // names the regression rather than a generic mutation: the exact
 // healthcheck this file used to declare, put back, has to be rejected.
-// web-ui waits on this check, so with `rbm status` in it a
+// web-ui waits on this check, so with `backupd status` in it a
 // DEGRADED backup set or an unconfigured instance keeps the only
 // LAN-facing listener from starting.
 func TestTheStartGateRejectsTheBackupFreshnessCommand(t *testing.T) {
@@ -491,10 +491,10 @@ func TestTheStartGateRejectsTheBackupFreshnessCommand(t *testing.T) {
 		t.Fatalf("the canonical definition already fails its own start-gate rule: %s", findingText(findings))
 	}
 
-	mutated := doc.WithServiceHealthcheckTest(compose.RoleEngine, []any{"CMD", "/rbm", "status"})
+	mutated := doc.WithServiceHealthcheckTest(compose.RoleEngine, []any{"CMD", "/backupd", "status"})
 	findings := mutated.CheckField(field)
 	if len(findings) == 0 {
-		t.Fatal("declaring `rbm status` as the engine's healthcheck passed the start-gate rule, so the rule cannot see the thing it exists to prevent")
+		t.Fatal("declaring `backupd status` as the engine's healthcheck passed the start-gate rule, so the rule cannot see the thing it exists to prevent")
 	}
 	if !strings.Contains(findingText(findings), "start-gate-liveness") {
 		t.Errorf("the finding %q does not name the rule that produced it", findingText(findings))
@@ -567,11 +567,11 @@ func TestMountsRefusesWhatItCannotResolveInsteadOfAnsweringWrongly(t *testing.T)
 	const doc = `
 services:
   engine:
-    image: backup-manager:dev
-    command: ["/rbm-web", "serve"]
+    image: backupd:dev
+    command: ["/backupd-web", "serve"]
     volumes:
-      - ${KEY_FILE:?set KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
-      - /srv/backup-manager/state:/data/state
+      - ${KEY_FILE:?set KEY_FILE in .env to the SFTP private key}:/etc/backupd/id_ed25519:ro
+      - /srv/backupd/state:/data/state
 `
 	parsed, err := compose.Parse([]byte(doc), "synthetic.yaml", map[string]string{})
 	if err != nil {
@@ -586,7 +586,7 @@ services:
 	if len(mounts) != 1 {
 		t.Fatalf("Mounts = %+v, want only the one entry that actually resolves: an unresolved host path must not be answered as a Mount", mounts)
 	}
-	if mounts[0].HostPath != "/srv/backup-manager/state" {
+	if mounts[0].HostPath != "/srv/backupd/state" {
 		t.Errorf("Mounts[0].HostPath = %q, want the resolved entry", mounts[0].HostPath)
 	}
 
@@ -687,11 +687,11 @@ func TestServiceRolesAreDerivedFromTheCommand(t *testing.T) {
 	renamed, err := compose.Parse([]byte(`
 services:
   totally-different-name:
-    image: backup-manager:dev
-    command: ["/rbm-web", "serve", "--profile=generic"]
+    image: backupd:dev
+    command: ["/backupd-web", "serve", "--profile=generic"]
   another-name-entirely:
-    image: backup-manager:dev
-    command: ["/rbm-web", "serve-ui", "--profile=generic"]
+    image: backupd:dev
+    command: ["/backupd-web", "serve-ui", "--profile=generic"]
 `), "synthetic.yaml", env())
 	if err != nil {
 		t.Fatalf("parse: %v", err)

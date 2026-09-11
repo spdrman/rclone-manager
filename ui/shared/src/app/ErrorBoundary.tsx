@@ -41,7 +41,7 @@ export class ErrorBoundary extends Component<Props, State> {
     // console.error is the honest floor: at least visible in the browser
     // console during development and in a bundled support log, rather
     // than silently swallowed.
-    console.error("Backup Manager UI crashed:", error, info.componentStack);
+    console.error("Backupd UI crashed:", error, info.componentStack);
   }
 
   render() {
@@ -58,7 +58,7 @@ export class ErrorBoundary extends Component<Props, State> {
             dismissible={false}
             style={{ maxWidth: "56ch", flexDirection: "column" }}
           >
-            <div style={{ fontWeight: 600, fontSize: 15 }}>Backup Manager hit an unexpected error</div>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>Backupd hit an unexpected error</div>
             <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-2)" }}>
               Reloading the page is the safest next step. No backup or deletion action runs from
               this screen, so nothing here is a data-loss risk — this only stops the page from

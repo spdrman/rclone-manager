@@ -33,7 +33,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
+	"github.com/spdrman/backupd/core/tests/dockerlease"
 )
 
 // sourceHelperEnv guards the helper tests below so they only run in a child
@@ -267,7 +267,7 @@ func TestHelperFixtureHangsWithAHealthyContainer(t *testing.T) {
 // --- a hard failure must not leak the container ---------------------------
 
 // TestFixtureRemovesItsContainerWhenTheTestPanics covers the other hard exit
-// path. #161 found orphaned rclone-manager-gate-sftp-* containers running
+// path. #161 found orphaned backupd-gate-sftp-* containers running
 // for 4 and 11 hours from crashed earlier runs; each one competes with the
 // next run for a Docker VM that has roughly 4 GB to give.
 func TestFixtureRemovesItsContainerWhenTheTestPanics(t *testing.T) {
@@ -635,8 +635,8 @@ func TestEnsureImageFetchesAMissingImageAndRidesOutATransientFailure(t *testing.
 	}
 
 	runID := time.Now().UnixNano()
-	source := fmt.Sprintf("rclone-manager-gate-243-source:%d", runID)
-	absent := fmt.Sprintf("rclone-manager-gate-243-absent:%d", runID)
+	source := fmt.Sprintf("backupd-gate-243-source:%d", runID)
+	absent := fmt.Sprintf("backupd-gate-243-absent:%d", runID)
 
 	// Both of these are tags this test creates and this test removes, and
 	// `docker rmi` on a tag that shares an image with another one only
@@ -711,7 +711,7 @@ func imageRefusalVerdict(out string, code int) error {
 func TestEnsureImageRefusesRatherThanSkippingWhenTheImageCannotBeObtained(t *testing.T) {
 	requireDocker(t)
 
-	absent := fmt.Sprintf("rclone-manager-gate-243-unobtainable:%d", time.Now().UnixNano())
+	absent := fmt.Sprintf("backupd-gate-243-unobtainable:%d", time.Now().UnixNano())
 
 	// The positive control, run first and on the checker rather than on
 	// the subject. A skipping fixture is the exact thing this test exists

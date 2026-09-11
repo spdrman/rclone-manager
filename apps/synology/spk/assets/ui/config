@@ -1,11 +1,11 @@
 {
     ".url": {
-        "SYNO.SDS._ThirdParty.App.BackupManager": {
+        "SYNO.SDS._ThirdParty.App.Backupd": {
             "type": "url",
-            "title": "Backup Manager",
-            "desc": "Pull-based backup manager",
-            "icon": "images/backup_manager_{0}.png",
-            "url": "/webman/3rdparty/BackupManager/index.html",
+            "title": "Backupd",
+            "desc": "Pull-based backupd",
+            "icon": "images/backupd_{0}.png",
+            "url": "/webman/3rdparty/Backupd/index.html",
             "allUsers": true
         }
     }

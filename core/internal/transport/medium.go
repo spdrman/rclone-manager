@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/model"
 )
 
 // This file is EPIC E's second boundary: everything about a storage MEDIUM

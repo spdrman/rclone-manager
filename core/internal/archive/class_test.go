@@ -6,7 +6,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // This file is the class table's suite, and every test in it is about a

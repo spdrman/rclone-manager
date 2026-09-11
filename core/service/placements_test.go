@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/archive"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/spdrman/backupd/core/internal/archive"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // EPIC E, FR-34's read half and FR-27's consent, at this boundary (#240).
@@ -111,7 +111,7 @@ func TestToServicePlacements_ACopyOnAMediumNobodyCanReachSaysSo(t *testing.T) {
 	verified := time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)
 	rec := state.Record{Placements: []state.Placement{{
 		Medium:            "offsite_s3",
-		Location:          "rclone-manager/production/pg/a.dump",
+		Location:          "backupd/production/pg/a.dump",
 		Status:            state.PlacementActive,
 		VerificationClass: state.VerificationContent,
 		VerifiedAt:        &verified,
@@ -281,7 +281,7 @@ func TestToStorageMediumSummaries_DescribeThePlaceAndNeverTheKey(t *testing.T) {
 		{ID: "offsite_s3", Type: config.StorageMediumTypeS3, Bucket: "nas-backups", Region: "us-east-1",
 			Credentials: config.MediumCredentials{Env: "BACKUP_S3_OFFSITE"}},
 		{ID: "offsite_cold", Type: config.StorageMediumTypeS3, Bucket: "nas-archive", StorageClass: config.StorageClassDeepArchive,
-			Credentials: config.MediumCredentials{File: "/var/lib/backup-manager/s3/cold.creds"}},
+			Credentials: config.MediumCredentials{File: "/var/lib/backupd/s3/cold.creds"}},
 	}}
 
 	// The local hard drive leads the list and is not declared anywhere

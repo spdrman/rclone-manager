@@ -2,7 +2,7 @@
 # Regenerate the /api/v1 bindings from the authoritative contract (#166), at
 # the path everything already names.
 #
-# The generator invocation itself is scripts/rcmtools/api/generate.py now
+# The generator invocation itself is scripts/bdtools/api/generate.py now
 # (EPIC I, I1.6 / #672). This file stays because the path is load bearing:
 #
 #   * scripts/api/selftest.sh (also a shim now) drives it as a subprocess,
@@ -19,4 +19,4 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-exec python3 "$repo_root/scripts/rcmtools/api/generate.py" "$@"
+exec python3 "$repo_root/scripts/bdtools/api/generate.py" "$@"

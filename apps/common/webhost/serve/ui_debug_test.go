@@ -28,8 +28,8 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/spdrman/rclone-manager/apps/common/webhost"
-	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
+	"github.com/spdrman/backupd/apps/common/webhost"
+	"github.com/spdrman/backupd/apps/common/webhost/serve"
 )
 
 // recordingLogger is webhost.Logger, recording instead of writing. The

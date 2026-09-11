@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // restoreOnlyTransport is a transport with nothing behind it: it satisfies

@@ -11,7 +11,7 @@
 // contract the Web UI's own confirmation dialog has been promising since
 // before this operation existed:
 //
-//	Backup Manager will stop collecting backups for <name>.
+//	Backupd will stop collecting backups for <name>.
 //	<n> retained backups (<size>) stay on NAS storage and remain listed
 //	under Backups.
 //
@@ -127,7 +127,7 @@
 //
 // That is issue #418, and it now has an answer rather than only a
 // warning. The event below counts what this removal stranded, so the
-// moment it happens says so; `backup-manager unconfigured` lists it
+// moment it happens says so; `backupd unconfigured` lists it
 // afterwards along with everything else this set still holds; and
 // internal/app's ClearStranded (unconfigured.go) is the operator-driven
 // sweep that removes the .partial and ends the row. None of that touches
@@ -141,11 +141,11 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // RemoveBackupSet removes one backup set's configuration and hot-reloads,

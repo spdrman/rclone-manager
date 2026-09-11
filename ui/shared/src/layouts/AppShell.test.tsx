@@ -17,7 +17,7 @@ import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
 import { AppShell } from "@shared/layouts/AppShell";
 import { DOCK_BAR_HEIGHT } from "@shared/components/ActivityDock";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 
 const quietApi = {
   getLiveActivity: () =>
@@ -28,7 +28,7 @@ const quietApi = {
       sets: [],
       deployment: null
     })
-} as unknown as BackupManagerApi;
+} as unknown as BackupdApi;
 
 function renderShell() {
   return render(

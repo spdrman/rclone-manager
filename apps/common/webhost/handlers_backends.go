@@ -3,7 +3,7 @@ package webhost
 import (
 	"net/http"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // This file is EPIC I's (#664) read-only half of the backend registry:

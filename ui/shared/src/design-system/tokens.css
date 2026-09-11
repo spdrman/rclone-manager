@@ -1,4 +1,4 @@
-/* Backup Manager design tokens.
+/* Backupd design tokens.
    The ONLY place raw colour values are declared. Provider layers may override
    --platform-accent / --platform-surface / --platform-titlebar and nothing else. */
 

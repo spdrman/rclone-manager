@@ -21,7 +21,7 @@ import { QuarantinePage } from "@shared/pages/QuarantinePage";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { createMockApi } from "@shared/api/mock";
 import type { AsyncState } from "@shared/hooks/useAsync";
-import type { ArtifactReinstatement, BackupManagerApi } from "@shared/api/contracts";
+import type { ArtifactReinstatement, BackupdApi } from "@shared/api/contracts";
 import type { BackupArtifact } from "@shared/types/backup";
 
 const ARTIFACT: BackupArtifact = {
@@ -74,7 +74,7 @@ const REFUSED: ArtifactReinstatement = {
   reason: "the durable local copy no longer matches the hash recorded at verification"
 };
 
-function renderPage(api: BackupManagerApi, reload: () => void, readOnly = false) {
+function renderPage(api: BackupdApi, reload: () => void, readOnly = false) {
   const quarantine: AsyncState<BackupArtifact[]> = {
     data: [ARTIFACT],
     error: null,
@@ -229,7 +229,7 @@ describe("QuarantinePage: the three reinstatement outcomes stay visibly differen
     vi.restoreAllMocks();
   });
 
-  async function confirm(api: BackupManagerApi, reload: () => void) {
+  async function confirm(api: BackupdApi, reload: () => void) {
     renderPage(api, reload);
     const user = await openConfirmation();
     await act(async () => {

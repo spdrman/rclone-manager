@@ -137,7 +137,7 @@ func TestSignalExitChildProcess(t *testing.T) {
 //
 // The other two rows are the fix, in the two orders it can be reached in:
 // before rclone has ever registered anything (which is what
-// cmd/backup-manager's daemon does, at startup, before its first
+// cmd/backupd's daemon does, at startup, before its first
 // transfer) and after it already has (which is what a later call, or any
 // reordering of that startup, would hit). Both have to hold, because
 // lib/atexit installs its handler lazily on the first registration and

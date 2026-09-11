@@ -177,7 +177,7 @@ describe("private key handling", () => {
  */
 describe("storage pressure (\u00a756)", () => {
   // httpApi, not createMockApi: the mock and the real client both satisfy
-  // BackupManagerApi, but TypeScript's structural typing lets the real
+  // BackupdApi, but TypeScript's structural typing lets the real
   // client carry a method the mock does not, and a scan of the mock's key
   // set would never see it. httpApi is the surface a browser can actually
   // reach, so it is the one worth scanning.

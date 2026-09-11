@@ -89,7 +89,7 @@ export interface BrowserNotice {
    */
   backupSetIds: string[];
   /**
-   * The `rbm` command line this action is equivalent to, copy-pasteable
+   * The `backupd` command line this action is equivalent to, copy-pasteable
    * exactly as written.
    *
    * The epic's standing rule, and it earns its keep hardest on a refused

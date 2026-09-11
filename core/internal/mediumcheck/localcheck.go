@@ -13,8 +13,8 @@ import (
 	"sort"
 	"syscall"
 
-	"github.com/spdrman/rclone-manager/core/internal/capacity"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/capacity"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // Test connection for the LOCAL hard drive (H2.2, issue #622).
@@ -235,7 +235,7 @@ func (t LocalTarget) id() string {
 // removed, which is the claim StepDelete actually makes: a destination
 // this manager can write to and not delete from is one no retention pass
 // could ever clean up.
-const localProbeDir = ".rclone-manager-preflight"
+const localProbeDir = ".backupd-preflight"
 
 // RunLocal performs one test connection against the local hard drive and
 // reports what it found, in the identical Report shape Run produces for a

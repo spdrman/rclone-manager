@@ -51,7 +51,7 @@ import { ConfigurationSavedPage } from "@shared/pages/ConfigurationSavedPage";
 import { LoginPage } from "@shared/auth/LoginPage";
 import { EnrollmentPage } from "@shared/auth/EnrollmentPage";
 
-const THEME_KEY = "backup-manager.theme";
+const THEME_KEY = "backupd.theme";
 
 export function App() {
   const api = useApi();
@@ -193,10 +193,10 @@ export function App() {
         <WarningBanner
           tone="info"
           eyebrow="First run"
-          title="Backup Manager has no configuration yet"
+          title="Backupd has no configuration yet"
           dismissible={false}
         >
-          {"Add your first backup set, under Backup sets, and Backup Manager writes its " +
+          {"Add your first backup set, under Backup sets, and Backupd writes its " +
             "configuration for you. Until that is done nothing is backed up, and the " +
             "pages here have nothing behind them to show."}
         </WarningBanner>
@@ -210,7 +210,7 @@ export function App() {
         // refusal into an application that silently does nothing.
         <WarningBanner
           tone="warn"
-          title="Backup Manager update required"
+          title="Backupd update required"
           eyebrow="Version mismatch"
           dismissible={false}
         >
@@ -275,7 +275,7 @@ export function App() {
       </Routes>
 
       <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-        {"Backup Manager running on " + bridge.name}
+        {"Backupd running on " + bridge.name}
         {" \u00b7 "}
         <button
           onClick={() => navigate("/catalog-recovery")}

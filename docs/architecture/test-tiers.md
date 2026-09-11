@@ -2,7 +2,7 @@
 
 Issue #447. Rom asked for every test to run the way
 `scripts/e2e/two-machine-backup.sh` does: two containers on a dedicated
-network, one playing the rclone-manager machine and one playing the VPS being
+network, one playing the backupd machine and one playing the VPS being
 backed up. I put that to four adversarial perspectives before writing
 anything, and the record is on the issue. This page is the rule that came
 out of it, the part that has to outlive the discussion.
@@ -77,7 +77,7 @@ tests run inside a manager container on that network nothing publishes a
 port and the source is reached by alias. `Source.Addr()` answers correctly
 either way, so a test never has to know.
 
-`scripts/rcmtools/e2e/run_machine_tier.py` (#451) is that second placement. It builds
+`scripts/bdtools/e2e/run_machine_tier.py` (#451) is that second placement. It builds
 a manager machine from a Go toolchain with a docker client, mounts the
 repository at the same absolute path inside as out, joins it to the network
 as an ordinary user, and runs the machine-tier packages inside it. The

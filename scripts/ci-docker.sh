@@ -72,7 +72,7 @@ esac
 # changed Dockerfile rebuilds and two users on one machine never collide
 # over an image whose passwd entry names only one of them.
 ci_uid="$(id -u)"; ci_gid="$(id -g)"
-image="rclone-manager-ci:$(shasum -a 256 "$here/ci/Dockerfile" | cut -c1-12)-u${ci_uid}"
+image="backupd-ci:$(shasum -a 256 "$here/ci/Dockerfile" | cut -c1-12)-u${ci_uid}"
 
 # Named volumes, and the reason is the same failure story as the image.
 # The Go build cache on the host was wiped by three concurrent `go clean
@@ -90,7 +90,7 @@ declare -a mounts=(
   -v "${vol_prefix}-gocache:/ci/.cache/go-build"
   -v "${vol_prefix}-gomodcache:/ci/go/pkg/mod"
   -v "${vol_prefix}-npm:/ci/.npm"
-  -v "${vol_prefix}-xdg:/ci/.cache/rclone-manager-tests-gate"
+  -v "${vol_prefix}-xdg:/ci/.cache/backupd-tests-gate"
 )
 
 # The host's own uid, not root, and group 0 for the socket.
@@ -141,7 +141,7 @@ fi
 # it every time would add more than the runner saves.
 prepare='
 set -eu
-for d in /ci/.cache/go-build /ci/go/pkg/mod /ci/.npm /ci/.cache/rclone-manager-tests-gate '"$(printf '%s ' "${nm_paths[@]}")"'; do
+for d in /ci/.cache/go-build /ci/go/pkg/mod /ci/.npm /ci/.cache/backupd-tests-gate '"$(printf '%s ' "${nm_paths[@]}")"'; do
   [ -d "$d" ] || continue
   if [ "$(stat -c %u "$d")" != "'"$ci_uid"'" ]; then
     chown "'"$ci_uid:$ci_gid"'" "$d"

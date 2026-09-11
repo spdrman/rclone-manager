@@ -131,7 +131,7 @@ var destructiveGateExemptRoutes = map[string]bool{
 	//
 	// What it writes is an object of its own: a fixed, tiny body at a
 	// randomly generated key under a reserved key segment
-	// (.rclone-manager-preflight) that no configured artifact can produce,
+	// (.backupd-preflight) that no configured artifact can produce,
 	// because transport.MediumKey composes an artifact's key out of a
 	// source, a backup set and an artifact name and config lets none of
 	// the three carry a separator. The only object it deletes is that same

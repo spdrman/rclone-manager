@@ -2,7 +2,7 @@
 # Positive controls for the architecture checks (#165), at the path
 # everything already names.
 #
-# The controls themselves are scripts/rcmtools/architecture/selftest.py now
+# The controls themselves are scripts/bdtools/architecture/selftest.py now
 # (EPIC I, I1.6 / #672 / #697). This file stays because the path is load
 # bearing in three places that are not this port's to move:
 #
@@ -28,4 +28,4 @@
 # from this file's location.
 set -euo pipefail
 
-exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/rcmtools/architecture/selftest.py" "$@"
+exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/bdtools/architecture/selftest.py" "$@"

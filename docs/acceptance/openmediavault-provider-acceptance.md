@@ -48,13 +48,13 @@ apt-get install openmediavault-compose
 
 ### 0.2 Make the canonical image resolvable
 
-`ghcr.io/spdrman/backup-manager:0.4.0` is cut but not pushed yet:
+`ghcr.io/spdrman/backupd:0.4.0` is cut but not pushed yet:
 `distribution/packaging/canonical.json` records `image.published: false`, and
 `container/release-manifest.json` carries a `registry_digest` of `null` per
 architecture. So the reference does not resolve from the registry today, and the
 steps below are how you make it resolve, by pushing a build to a registry this host
 can reach or building elsewhere and loading it. The previous release,
-`ghcr.io/spdrman/backup-manager:0.3.3`, stays published and signed if you would
+`ghcr.io/spdrman/backupd:0.3.3`, stays published and signed if you would
 rather run that. Either push to your own registry:
 
 ```bash
@@ -63,20 +63,20 @@ docker buildx build \
   --build-arg VERSION="$(git describe --tags --always)" \
   --build-arg COMMIT="$(git rev-parse HEAD)" \
   -f container/Dockerfile \
-  -t <your-registry>/backup-manager:<version> \
+  -t <your-registry>/backupd:<version> \
   --push .
 ```
 
 or side-load and set `IMAGE` in the env file to the loaded tag:
 
 ```bash
-docker save backup-manager:<version> | gzip > backup-manager.tar.gz
-scp backup-manager.tar.gz root@<omv>:/root/
-ssh root@<omv> 'gunzip -c /root/backup-manager.tar.gz | docker load'
+docker save backupd:<version> | gzip > backupd.tar.gz
+scp backupd.tar.gz root@<omv>:/root/
+ssh root@<omv> 'gunzip -c /root/backupd.tar.gz | docker load'
 ```
 
 The compose file reads the image reference from a single `IMAGE` variable in
-`apps/openmediavault/compose/backup-manager.env`, so this is a one-line change in
+`apps/openmediavault/compose/backupd.env`, so this is a one-line change in
 one file, never an edit scattered through the compose YAML.
 
 - [ ] Canonical image resolvable on the NAS, reference recorded
@@ -96,7 +96,7 @@ Find yours:
 ls -d /srv/dev-disk-by-uuid-*
 ```
 
-Set `DISK` in `backup-manager.env` and change nothing else. Every host path in
+Set `DISK` in `backupd.env` and change nothing else. Every host path in
 the compose file is written `${DISK}/...`, so the UUID appears exactly once, and
 the compose file itself needs no editing. `DISK` is referenced in the
 fail-closed `${DISK:?...}` form, so leaving it unset or misspelling it stops the
@@ -104,18 +104,18 @@ deployment instead of creating five directories in the wrong place.
 
 ```bash
 DISK=/srv/dev-disk-by-uuid-<your-uuid>
-mkdir -p "$DISK/appdata/backup-manager"/{state,config,secrets}
-mkdir -p "$DISK/backups/backup-manager"
-chmod 700 "$DISK/appdata/backup-manager/secrets"
+mkdir -p "$DISK/appdata/backupd"/{state,config,secrets}
+mkdir -p "$DISK/backups/backupd"
+chmod 700 "$DISK/appdata/backupd/secrets"
 ```
 
-The backup root is `backup-manager` **inside** `$DISK/backups`, not that
+The backup root is `backupd` **inside** `$DISK/backups`, not that
 directory itself, which is very likely one you already use. Every step below
 creates, owns and later inspects only paths this procedure created.
 
 - [ ] Real `dev-disk-by-uuid-<UUID>` path recorded
-- [ ] `appdata/backup-manager/{state,config,secrets}` and
-      `backups/backup-manager` exist
+- [ ] `appdata/backupd/{state,config,secrets}` and
+      `backups/backupd` exist
 - [ ] The UUID appears in exactly one place on the NAS, the env file's `DISK`
 - [ ] Starting the stack with `DISK` unset fails loudly rather than creating
       paths (try it once, on purpose)
@@ -129,8 +129,8 @@ OMV's conventional service account is `uid 1000` for the first admin account;
 check yours with `id <your-admin-user>`.
 
 ```bash
-chown -R 1000:100 "$DISK/appdata/backup-manager"
-chown 1000:100 "$DISK/backups/backup-manager"
+chown -R 1000:100 "$DISK/appdata/backupd"
+chown 1000:100 "$DISK/backups/backupd"
 ```
 
 Only paths this procedure created, and the backup root non-recursively. A
@@ -139,7 +139,7 @@ already in it, fights the Workbench's own shared-folder ACL management, and on a
 reinstall would rewrite the retained backup store.
 
 - [ ] `PUID`/`PGID` chosen, recorded, and set in the env file
-- [ ] appdata tree and `backups/backup-manager` owned by that uid/gid
+- [ ] appdata tree and `backups/backupd` owned by that uid/gid
 - [ ] Nothing else under `$DISK/backups` had its ownership changed
 
 ### 0.5 Create the SSH key, the pinned known_hosts, and the config
@@ -162,7 +162,7 @@ reinstall would rewrite the retained backup store.
 > confirmed on its Verify server step, and no `config.yaml` is written by hand
 > at all.
 
-`/rbm-web serve` starts without a `config.yaml` and serves the
+`/backupd-web serve` starts without a `config.yaml` and serves the
 first-run setup flow instead (#176), but a config file that EXISTS and does not
 validate is still a hard startup failure. Given the read-only mount above, create
 all three before the first start.
@@ -172,27 +172,27 @@ now a writable directory the application owns, so the container can create and r
 `config.yaml` itself, and an empty directory is a legitimate state rather than a broken
 deployment. Two things nonetheless keep this step here. The directory itself must exist
 and be owned by the app's uid/gid before the first start, because a bind mount does not
-create or chown its source. And `/rbm-web serve` still refuses to start
+create or chown its source. And `/backupd-web serve` still refuses to start
 without a valid config: removing that refusal, and serving a first-run flow instead, is
 #176's work and is not merged. Once it is, everything below except creating and owning
 the directory becomes optional.
 
 ```bash
-ssh-keygen -t ed25519 -N '' -f "$DISK/appdata/backup-manager/secrets/id_ed25519"
-ssh-keyscan -t ed25519 <your-sftp-host> > "$DISK/appdata/backup-manager/secrets/known_hosts"
-chmod 600 "$DISK/appdata/backup-manager/secrets/id_ed25519"
-chown 1000:100 "$DISK/appdata/backup-manager/secrets/"*
+ssh-keygen -t ed25519 -N '' -f "$DISK/appdata/backupd/secrets/id_ed25519"
+ssh-keyscan -t ed25519 <your-sftp-host> > "$DISK/appdata/backupd/secrets/known_hosts"
+chmod 600 "$DISK/appdata/backupd/secrets/id_ed25519"
+chown 1000:100 "$DISK/appdata/backupd/secrets/"*
 ```
 
 Verify the host key fingerprint out of band. Then write
-`$DISK/appdata/backup-manager/config/config.yaml` using the annotated example in
+`$DISK/appdata/backupd/config/config.yaml` using the annotated example in
 `apps/openmediavault/README.md`.
 
 **Never commit the private key, the config, or any transcript containing them.**
 
 - [ ] Key pair generated, mode 0600, owned by `PUID:PGID`
 - [ ] `known_hosts` pinned, fingerprint verified out of band
-- [ ] `$DISK/appdata/backup-manager/config` exists and is **writable** by `PUID:PGID`
+- [ ] `$DISK/appdata/backupd/config` exists and is **writable** by `PUID:PGID`
 - [ ] `config.yaml` written inside it and readable by `PUID:PGID`
 
 ---
@@ -200,23 +200,23 @@ Verify the host key fingerprint out of band. Then write
 ## Step 1 — Install
 
 1. **Services → Compose → Files → Add**.
-2. Name: `backup-manager`.
-3. Paste `apps/openmediavault/compose/backup-manager.yml` into the **File** field.
-4. Paste `apps/openmediavault/compose/backup-manager.env`, with your step 0
+2. Name: `backupd`.
+3. Paste `apps/openmediavault/compose/backupd.yml` into the **File** field.
+4. Paste `apps/openmediavault/compose/backupd.env`, with your step 0
    substitutions, into the **Environment** field.
 5. Save, then **Up**.
 
 - [ ] The compose file saves with no validation error
 - [ ] `Up` completes and both services reach **running**
 - [ ] The engine service reaches health **healthy** (it declares the
-      liveness probe, `/rbm-web healthcheck --url
+      liveness probe, `/backupd-web healthcheck --url
       http://127.0.0.1:8080/health/live`, and NOT the image's own
-      `HEALTHCHECK`, `/rbm status`. The Web UI will not start until
+      `HEALTHCHECK`, `/backupd status`. The Web UI will not start until
       this reports healthy, and `status` is the backup-freshness verdict, which
       is non-zero on a fresh install that has backed nothing up)
 - [ ] The Web UI service reaches health **healthy** via its own
-      `/rbm-web healthcheck` override, not the image's
-      `/rbm status` (which would fail: no config, no state database)
+      `/backupd-web healthcheck` override, not the image's
+      `/backupd status` (which would fail: no config, no state database)
 - [ ] The engine service publishes no port (`docker compose ps` shows a port
       mapping only for the Web UI service)
 
@@ -224,7 +224,7 @@ Verify the host key fingerprint out of band. Then write
 
 ## Step 2 — Verify from the Workbench
 
-- [ ] **Services → Compose → Files** lists `backup-manager` with status up
+- [ ] **Services → Compose → Files** lists `backupd` with status up
 - [ ] The plugin's **Logs** action shows both services' output
 - [ ] No error, warning or orphan-container notice appears in
       **System → Notifications**
@@ -257,7 +257,7 @@ Web host provides (§13A).
 1. Read the one-time enrollment link out of the **engine** service's log:
 
    ```bash
-   docker compose -p backup-manager logs backup-manager 2>&1 | grep -i enroll
+   docker compose -p backupd logs backupd 2>&1 | grep -i enroll
    ```
 
 2. Open it, enrol an administrator with a password you generate now, log out, log
@@ -269,9 +269,9 @@ Web host provides (§13A).
 - [ ] Enrollment succeeds, logout then login succeeds
 - [ ] The enrollment link is refused the second time
 - [ ] `GET /api/v1/system/capabilities` reports `nativeAuth: false`
-- [ ] `$DISK/appdata/backup-manager/state/local-auth.json` holds an Argon2id
+- [ ] `$DISK/appdata/backupd/state/local-auth.json` holds an Argon2id
       hash, never a plaintext password
-- [ ] Backup Manager's login is completely independent of the OMV Workbench
+- [ ] Backupd's login is completely independent of the OMV Workbench
       login, and neither can log into the other
 
 ---
@@ -281,9 +281,9 @@ Web host provides (§13A).
 Run one backup cycle to completion, then:
 
 ```bash
-ls -la "$DISK/backups/backup-manager"
-ls -la "$DISK/appdata/backup-manager/state"
-grep -rIl 'PRIVATE KEY' "$DISK/backups/backup-manager" || echo "clean"
+ls -la "$DISK/backups/backupd"
+ls -la "$DISK/appdata/backupd/state"
+grep -rIl 'PRIVATE KEY' "$DISK/backups/backupd" || echo "clean"
 ```
 
 Then record a baseline for the removal check at the end of this procedure. The
@@ -295,20 +295,20 @@ hash and a full file listing **outside** the backup root, where whatever might
 damage that tree cannot reach the evidence:
 
 ```bash
-mkdir -p /root/backup-manager-acceptance
-head -c 8M /dev/urandom > "$DISK/backups/backup-manager"/canary.bin
-sha256sum "$DISK/backups/backup-manager"/canary.bin | tee /root/backup-manager-acceptance/canary.sha256
-find "$DISK/backups/backup-manager" -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.before
+mkdir -p /root/backupd-acceptance
+head -c 8M /dev/urandom > "$DISK/backups/backupd"/canary.bin
+sha256sum "$DISK/backups/backupd"/canary.bin | tee /root/backupd-acceptance/canary.sha256
+find "$DISK/backups/backupd" -type f -printf '%p %s\n' | sort > /root/backupd-acceptance/backup-root.before
 ```
 
-Keep `/root/backup-manager-acceptance` off the repository: the listing names your own backup
+Keep `/root/backupd-acceptance` off the repository: the listing names your own backup
 sets. Record only that it was taken, and the canary's hash, in the evidence table.
 
-- [ ] At least one completed artifact is under `$DISK/backups/backup-manager`
+- [ ] At least one completed artifact is under `$DISK/backups/backupd`
 - [ ] `state.db` and `local-auth.json` are under appdata, **not** under the
       backup root
 - [ ] No private key, `known_hosts`, or auth state anywhere under
-      `$DISK/backups/backup-manager` (§19.2)
+      `$DISK/backups/backupd` (§19.2)
 - [ ] Nothing was written anywhere else under `$DISK/backups`
 - [ ] A sidecar recovery manifest sits next to the artifact and contains no
       secret material (§19.3)
@@ -322,11 +322,11 @@ sets. Record only that it was taken, and the canary's hash, in the evidence tabl
 1. Capture a baseline first, over SSH to the OMV box, so the checks below are a
    comparison rather than an impression:
    ```bash
-   sha256sum $DISK/appdata/backup-manager/state/state.db | tee /tmp/before-update.sha256
+   sha256sum $DISK/appdata/backupd/state/state.db | tee /tmp/before-update.sha256
    find $DISK/backups -type f -printf '%p %s\n' | sort > /tmp/before-update.txt
    ```
 2. Push or side-load a newer image tag and change `IMAGE` in the env file.
-3. **Services → Compose → Files → backup-manager → Pull**, then **Up**.
+3. **Services → Compose → Files → backupd → Pull**, then **Up**.
 4. Compare afterwards:
    ```bash
    find $DISK/backups -type f -printf '%p %s\n' | sort > /tmp/after-update.txt
@@ -350,8 +350,8 @@ Same image, destroyed and recreated containers. This is what an OMV reboot, a
 `Down` then `Up`, or a `docker system prune` does.
 
 ```bash
-docker compose -p backup-manager down
-docker compose -p backup-manager up -d
+docker compose -p backupd down
+docker compose -p backupd up -d
 ```
 
 - [ ] Both services come back healthy
@@ -368,7 +368,7 @@ storage step, because after the removal there is nothing left to compare
 against, and any deletion the comparison turns up is a release blocker rather
 than a finding to triage.
 
-1. **Services → Compose → Files → backup-manager → Down**.
+1. **Services → Compose → Files → backupd → Down**.
 2. Then **Delete** the file entry.
 
 - [ ] Both containers are gone
@@ -377,15 +377,15 @@ Check the backup root against the baseline recorded in the storage step, before
 looking at anything else:
 
 ```bash
-sha256sum -c /root/backup-manager-acceptance/canary.sha256
-find "$DISK/backups/backup-manager" -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.after
-diff /root/backup-manager-acceptance/backup-root.before /root/backup-manager-acceptance/backup-root.after
+sha256sum -c /root/backupd-acceptance/canary.sha256
+find "$DISK/backups/backupd" -type f -printf '%p %s\n' | sort > /root/backupd-acceptance/backup-root.after
+diff /root/backupd-acceptance/backup-root.before /root/backupd-acceptance/backup-root.after
 ```
 
 - [ ] `sha256sum -c` reports the canary `OK`
 - [ ] The `diff` against the recorded listing is empty, so the backup root is
       untouched, byte for byte, and every artifact is still readable
-- [ ] `$DISK/appdata/backup-manager` is untouched
+- [ ] `$DISK/appdata/backupd` is untouched
 - [ ] Nothing elsewhere under `$DISK/backups` changed
 - [ ] Nothing outside the declared host paths was touched, and no OMV
       configuration was modified
@@ -397,7 +397,7 @@ confirm no named volume ever held retained backup data (every persistent path in
 this profile is a bind mount to a host path you chose, precisely so that `-v`
 cannot reach it).
 
-- [ ] `down -v` removes nothing under `$DISK/backups/backup-manager`
+- [ ] `down -v` removes nothing under `$DISK/backups/backupd`
 
 ---
 

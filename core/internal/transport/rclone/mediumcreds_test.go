@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file proves FR-33's custody rules, and it is built around a canary
@@ -453,7 +453,7 @@ func TestMediumCredentialCanary(t *testing.T) {
 				ID:          "offsite_s3",
 				Type:        transport.MediumTypeS3,
 				Bucket:      "nas-backups",
-				Prefix:      "rclone-manager",
+				Prefix:      "backupd",
 				Credentials: tc.creds,
 			}
 			observed := observableOutputs(t, medium)

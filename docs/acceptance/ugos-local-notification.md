@@ -34,7 +34,7 @@ narrow, and so nobody executes it expecting it to prove more than it does.
 ## What this procedure decides
 
 One question: does a UGOS `Notifier` implementation actually put a
-backup-manager alert in front of an administrator who is not looking at
+backupd alert in front of an administrator who is not looking at
 the app, and does it survive the conditions that matter (app in the
 background, browser closed, container restarted)?
 
@@ -51,7 +51,7 @@ notification mechanism itself:
 
 - **Every condition, on the generic image.** `apps/generic`'s adapter
   declares no capability at all, so `notify.NewPlatformSink` refuses it
-  and `rbm-web serve` prints "proactive alerting is off" on
+  and `backupd-web serve` prints "proactive alerting is off" on
   every start. The §37 headless Docker distribution therefore has no
   proactive alerting for any of the four conditions, and §71's second
   option (one explicit opt-in generic mechanism) has not been built. This
@@ -151,7 +151,7 @@ notification actually appeared, where, and for whom.
 
 Repeat step 1 under each of these, one at a time:
 
-1. The backup-manager UI closed, no browser open to the NAS at all.
+1. The backupd UI closed, no browser open to the NAS at all.
 2. The administrator logged out of UGOS.
 3. Immediately after an engine container restart.
 4. On a second administrator account that never opened the app.

@@ -73,8 +73,8 @@ records no identity:
 ```
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity 'https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release' \
-  ghcr.io/spdrman/backup-manager:0.3.3
+  --certificate-identity 'https://github.com/spdrman/backupd/.github/workflows/release.yml@refs/heads/release' \
+  ghcr.io/spdrman/backupd:0.3.3
 ```
 
 That command passes against the published image, and it is the whole point of this
@@ -90,7 +90,7 @@ above would answer
 ```
 Error: no matching signatures: none of the expected identities matched what was in
 the certificate, got subjects
-[https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/heads/release]
+[https://github.com/spdrman/backupd/.github/workflows/release.yml@refs/heads/release]
 with issuer https://token.actions.githubusercontent.com
 ```
 
@@ -133,8 +133,8 @@ already hold rather than pulling an image to read it.
 release time through the environment and never written down:
 
 ```
-COSIGN_PRIVATE_KEY="$(pass show backup-manager/cosign)" \
-  cosign sign --key env://COSIGN_PRIVATE_KEY ghcr.io/spdrman/backup-manager@<digest>
+COSIGN_PRIVATE_KEY="$(pass show backupd/cosign)" \
+  cosign sign --key env://COSIGN_PRIVATE_KEY ghcr.io/spdrman/backupd@<digest>
 ```
 
 `scripts/release/publish-image.sh` enforces that. Guard 5 asks git for every path
@@ -159,7 +159,7 @@ guard was first written:
 * `id_rsa` and `id_ed25519` are matched as `*/id_rsa` and `*/id_ed25519` too. A
   git pathspec with no wildcard anchors at the repository root, so the bare forms
   only ever saw a key in the top directory, and this product mounts its SSH key
-  at `/etc/backup-manager/id_ed25519`.
+  at `/etc/backupd/id_ed25519`.
 
 `scripts/tests/publish-image-guards.test.sh` builds every fixture with this
 repository's real `.gitignore` in it, because the guard's answer depends on the
@@ -168,7 +168,7 @@ not hold where the script runs.
 
 ## Publishing
 
-`ghcr.io/spdrman/backup-manager:0.4.0` is cut and not pushed.
+`ghcr.io/spdrman/backupd:0.4.0` is cut and not pushed.
 `distribution/packaging/canonical.json` records `image.published: false`, and the release
 manifest records the same fact from the other side as a `registry_digest` of `null` per
 architecture and a null `index_digest`. The two are held together by
@@ -232,7 +232,7 @@ the manifest is a claim about what the registry holds.
 ## Version parity
 
 `container/release-manifest.json`'s `version` is the `VERSION` build argument the
-binaries were stamped with, which is what `/rbm version` answers.
+binaries were stamped with, which is what `/backupd version` answers.
 `canonical.json`'s `image.tag` is the semantic version every provider package
 advertises. Those have to be the same string in a real release, and now they are:
 both record `0.4.0`, the tag cut for this release rather than the generator's
@@ -256,7 +256,7 @@ met.
 That value went stale once and the note above it claimed it had been measured,
 which is how issue #484 found it: the repository was made public and nothing came
 back to re-read the field, so the record said private for a repository anyone
-could open. Re-run `gh repo view spdrman/rclone-manager --json visibility` rather
+could open. Re-run `gh repo view spdrman/backupd --json visibility` rather
 than trusting the note, and regenerate the bundle with
 `go run ./cmd/provenance -write` from `distribution/`.
 

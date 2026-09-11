@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/apicontract"
+	"github.com/spdrman/backupd/core/apicontract"
 )
 
 // The offline stand-in for a running engine, and why it is built out of

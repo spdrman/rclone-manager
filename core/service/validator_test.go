@@ -27,7 +27,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // validatorTestDir is the materialisation directory every test in this
@@ -300,7 +300,7 @@ func TestMaterializeValidators_WritesUnderTheGivenDirectoryNotTMPDIR(t *testing.
 	}
 
 	t.Run("the check catches a TMPDIR-rooted path", func(t *testing.T) {
-		outside := filepath.Join(os.TempDir(), "rclone-manager-validators-control", "trailer-marker.sh")
+		outside := filepath.Join(os.TempDir(), "backupd-validators-control", "trailer-marker.sh")
 		rel, err := filepath.Rel(dir, outside)
 		escaped := err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 		if !escaped {

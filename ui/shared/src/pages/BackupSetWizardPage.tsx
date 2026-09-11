@@ -26,7 +26,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import { useApi } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import type { ConnectionTestOutcome, SSHKeyListing, ValidatorCatalogEntry } from "@shared/api/contracts";
 import { describeFailure } from "@shared/api/failure";
 import { PageHeader } from "@shared/components/PageHeader";
@@ -57,7 +57,7 @@ const STEPS = [
  *  probedKnownHostsLine state, never this constant. */
 
 function errorMessage(e: unknown, fallback: string): string {
-  return e instanceof BackupManagerError ? e.api.message : fallback;
+  return e instanceof BackupdError ? e.api.message : fallback;
 }
 
 function completionStrategyFor(method: CompletionMethod): "rename" | "marker" | "stable" {
@@ -547,7 +547,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
         firstRun ? "Could not save this configuration." : "Could not save this backup set."
       );
       if (
-        e instanceof BackupManagerError &&
+        e instanceof BackupdError &&
         e.api.code === "BACKUP_SET_HISTORY_REPOINT_NOT_ACKNOWLEDGED"
       ) {
         // Not a save error under the buttons. The service is not saying
@@ -603,7 +603,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
     saveHint =
       connectionResult !== null && !connectionResult.ok
         ? "The connection test did not pass. Fix what it reports and test connection again before saving."
-        : "Test connection before saving. Trusting the host key proves which machine answers, not that this key works or that the folder can be read. To build configuration for a source that cannot be reached yet, use rbm backup-set create --no-verify.";
+        : "Test connection before saving. Trusting the host key proves which machine answers, not that this key works or that the folder can be read. To build configuration for a source that cannot be reached yet, use backupd backup-set create --no-verify.";
   } else if (saveError) {
     saveHint = saveError;
   }
@@ -660,7 +660,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
           {step === 1 ? (
             <StepBody
               title="Source"
-              lede="The remote server that produces the backup artifacts. Backup Manager pulls — it is never given write access to your data."
+              lede="The remote server that produces the backup artifacts. Backupd pulls — it is never given write access to your data."
             >
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(228px, 1fr))", gap: "15px 18px" }}>
                 <Field
@@ -706,7 +706,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                       checked={keySource === "generate"} onChange={() => setKeySource("generate")}
                     />
                     <Choice
-                      name="keysrc" title="Use managed key" detail="Reuse an existing Backup Manager key"
+                      name="keysrc" title="Use managed key" detail="Reuse an existing Backupd key"
                       checked={keySource === "managed"} onChange={() => setKeySource("managed")}
                     />
                     <Choice
@@ -963,7 +963,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
           {step === 4 ? (
             <StepBody
               title="Backup discovery"
-              lede="Where artifacts appear, and how Backup Manager knows one is finished being written."
+              lede="Where artifacts appear, and how Backupd knows one is finished being written."
             >
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(228px, 1fr))", gap: "15px 18px" }}>
                 <Field
@@ -1312,7 +1312,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
 
                   {readOnlySource ? (
                     <p style={{ margin: 0, fontSize: 13.5, maxWidth: "78ch" }}>
-                      Backup Manager will keep every backup from this source's remote
+                      Backupd will keep every backup from this source's remote
                       copy for good, however completely it passes transfer, verification
                       and commit. Releasing that storage, if it is ever wanted, is a
                       decision made outside this manager.
@@ -1321,7 +1321,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                     <>
                       <p style={{ margin: 0, fontSize: 13.5, maxWidth: "78ch" }}>
                         After a backup has been successfully transferred, verified, durably
-                        committed to this NAS, and recorded as safe, Backup Manager will
+                        committed to this NAS, and recorded as safe, Backupd will
                         delete the original backup artifact from the remote server.
                       </p>
                       <ol

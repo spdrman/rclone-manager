@@ -3,7 +3,7 @@ package webhost
 import (
 	"net/http"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The three system reads a client makes before it does anything else:

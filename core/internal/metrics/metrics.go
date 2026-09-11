@@ -21,10 +21,10 @@
 // Render takes a health.Report as a plain value and returns a string.
 // Nothing in this package calls internal/health itself, holds a journal,
 // or knows how a Report gets built. Nothing outside this package calls
-// Render yet either: cmd/backup-manager has no subcommand to serve it from
+// Render yet either: cmd/backupd has no subcommand to serve it from
 // (issues #25, #26), the same position internal/health, internal/obs and
 // internal/capacity are already in. Wiring this in later, a
-// "rbm status --prometheus" flag, an HTTP handler, or both, is
+// "backupd status --prometheus" flag, an HTTP handler, or both, is
 // meant to be a few lines calling Render, not a redesign.
 //
 // # Format
@@ -32,7 +32,7 @@
 // Output follows the Prometheus text exposition format, version 0.0.4
 // (see ContentType): a "# HELP" and "# TYPE" line per metric name,
 // followed by that metric's samples grouped together, one line each. Every
-// metric name is prefixed backup_manager_ so it cannot collide with
+// metric name is prefixed backupd_ so it cannot collide with
 // another exporter's metric on the same scrape target. A health.Report
 // field the caller never populated (any of BackupSetInputs' three
 // pointers) or one internal/health never had evidence for
@@ -48,8 +48,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spdrman/rclone-manager/core/internal/health"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/health"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
 )
 
 // ContentType is the MIME type a caller should set on an HTTP response
@@ -58,9 +58,9 @@ import (
 const ContentType = "text/plain; version=0.0.4; charset=utf-8"
 
 // namePrefix roots every metric name this package emits. It is the binary
-// name, backup-manager, with the hyphen replaced by an underscore, since a
+// name, backupd, with the hyphen replaced by an underscore, since a
 // Prometheus metric name may not contain a hyphen.
-const namePrefix = "backup_manager_"
+const namePrefix = "backupd_"
 
 // newestGoodBackupAgeHelp names, in the HELP line a scraping operator
 // reads, exactly the states internal/health counts as known-good.
@@ -254,7 +254,7 @@ func Render(report health.Report) string {
 
 func writeProcessInfo(b *strings.Builder, report health.Report) {
 	name := namePrefix + "process_info"
-	writeHelp(b, name, "Build information for the running rbm process. Constant 1; the version data is in the labels.")
+	writeHelp(b, name, "Build information for the running backupd process. Constant 1; the version data is in the labels.")
 	writeType(b, name, "gauge")
 	fmt.Fprintf(b, "%s{binary_version=%s,rclone_version=%s} 1\n",
 		name, quoteLabel(report.Process.BinaryVersion), quoteLabel(report.Process.RcloneVersion))

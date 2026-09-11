@@ -110,7 +110,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <div class="banner">
         <span class="banner__glyph">&#10005;</span>
         <div style="min-width:0">
-          <div class="banner__title">Backup Manager could not complete that request.</div>
+          <div class="banner__title">Backupd could not complete that request.</div>
           <details class="details" open>
             <summary>Advanced details</summary>
             <div class="detailbox"><span class="dead">correlation id unavailable</span></div>
@@ -120,7 +120,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       </div>
     </div>
     <p class="note"><strong>Where the sentence comes from.</strong> <code>useAsync</code> catches
-      <code>e: unknown</code> and, when it is not a <code>BackupManagerError</code>, replaces it with a
+      <code>e: unknown</code> and, when it is not a <code>BackupdError</code>, replaces it with a
       fixed sentence and the literal string <code>"unavailable"</code>. The exception is never read and
       never stored. The literal is what forces the empty disclosure open: <code>ErrorState</code> hides
       Advanced details when a failure carried no correlation id, and a literal defeats that.</p>
@@ -136,7 +136,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <div class="banner">
         <span class="banner__glyph">&#10005;</span>
         <div style="min-width:0">
-          <div class="banner__title">Backup Manager answered, and the answer could not be read.</div>
+          <div class="banner__title">Backupd answered, and the answer could not be read.</div>
           <div class="banner__rem">The request reached the service and came back, so it may well have
             been carried out; what failed was reading the reply. Copy the details below into a bug
             report, then try again.</div>

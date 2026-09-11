@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Reference: every screen, command and flag &mdash; rclone-manager</title>
-  <meta name="description" content="What every part of rclone-manager does: each screen of the web interface, every rbm command, and every flag of install_docker_host.py.">
+  <title>Reference: every screen, command and flag &mdash; backupd</title>
+  <meta name="description" content="What every part of backupd does: each screen of the web interface, every backupd command, and every flag of install_docker_host.py.">
   <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
@@ -23,7 +23,7 @@
 <header class="topbar" id="topbar">
   <div class="topbar-content">
     <a class="topbar-brand" href="index.html">
-      <img src="assets/logo-mark-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress">
+      <img src="assets/logo-mark-light.svg" alt="backupd mark: a broken ring standing for a transfer cycle in progress">
       <h1 class="brand-name">rclone<span class="brand-dash">-</span>manager</h1>
     </a>
   </div>
@@ -60,23 +60,23 @@
         <span class="nav-label nav-label-short">Ref</span>
       </a>
 
-      <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+      <a href="https://github.com/spdrman/backupd" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
         <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
           <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
         </svg>
         <span class="nav-label nav-label-full">GitHub</span>
       </a>
 
-      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/spdrman/backupd/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Deployment</span>
         <span class="nav-label nav-label-short">Deploy</span>
       </a>
 
-      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/ssh-setup.md" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/spdrman/backupd/blob/main/docs/ssh-setup.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">SSH setup</span>
       </a>
 
-      <a href="https://github.com/spdrman/rclone-manager/issues" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/spdrman/backupd/issues" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Issues</span>
       </a>
 
@@ -102,7 +102,7 @@
   <section>
     <span class="step-eyebrow">Reference</span>
     <h1>Every screen, every command, every flag</h1>
-    <p>This page is the whole surface in one place: the nine screens of the web interface, the three destination surfaces that live inside one of them, and the terminal docked under them all; the twenty commands of the <code>rbm</code> command line; and every subcommand and flag of the installer. <a href="first-run.html">The first-run tutorial</a> walks the one path a new install takes; this one does not walk anything, it enumerates.</p>
+    <p>This page is the whole surface in one place: the nine screens of the web interface, the three destination surfaces that live inside one of them, and the terminal docked under them all; the twenty commands of the <code>backupd</code> command line; and every subcommand and flag of the installer. <a href="first-run.html">The first-run tutorial</a> walks the one path a new install takes; this one does not walk anything, it enumerates.</p>
 
     <div class="toc">
       <ol>
@@ -134,11 +134,11 @@
     <h2 id="web">The web interface</h2>
     <p>Six items in the sidebar, one screen behind each, two detail screens you reach by opening a row on the list above them, a catalog-recovery screen reached from the footer, and a terminal docked to the bottom of all of them. The top bar carries the service badge (running, and which version), a light/dark toggle and Sign out. The sidebar footer says which platform the deployment thinks it is on, which is the thing to check first when a NAS-specific feature is missing.</p>
     <p>Three of the surfaces below have no route of their own: the storage destinations list and the two wizards that add and configure one all live inside <a href="#web-settings">Settings</a>. They are enumerated separately anyway, because each is a screenful of controls that write configuration, and a reader looking one up should not have to find it inside a table row about a card.</p>
-    <p>Nearly everything on these screens is reachable from <a href="#cli">the command line</a> as well, and several screens say so in place: a control that changes configuration prints the <code>rbm</code> command that does the same thing, right underneath itself. Where the command cannot carry a field the screen is about to save, the screen prints the command <em>and</em> names the fields it leaves out, rather than printing a line that quietly configures less than was asked for.</p>
+    <p>Nearly everything on these screens is reachable from <a href="#cli">the command line</a> as well, and several screens say so in place: a control that changes configuration prints the <code>backupd</code> command that does the same thing, right underneath itself. Where the command cannot carry a field the screen is about to save, the screen prints the command <em>and</em> names the fields it leaves out, rather than printing a line that quietly configures less than was asked for.</p>
 
     <h3 id="web-dashboard">Dashboard</h3>
     <figure>
-      <img src="screens/ref-01-dashboard.png" alt="The rclone-manager dashboard: a red security warning about a changed SSH host key, a BACKUPS DEGRADED summary with status pills and freshness figures, four count cards, an active-operations panel with a transfer at 59 per cent, a per-set activity list with expandable logs, and a recent-activity list" loading="lazy">
+      <img src="screens/ref-01-dashboard.png" alt="The backupd dashboard: a red security warning about a changed SSH host key, a BACKUPS DEGRADED summary with status pills and freshness figures, four count cards, an active-operations panel with a transfer at 59 per cent, a per-set activity list with expandable logs, and a recent-activity list" loading="lazy">
       <figcaption>One screen answering &ldquo;is anything wrong, and is anything happening&rdquo;. The picture is long because the page is: a real deployment scrolls this far too.</figcaption>
     </figure>
     <div class="scroll-x">
@@ -173,7 +173,7 @@
           <tr><td><strong>Retained</strong></td><td>32 &middot; 421.0 GB</td><td>How many copies this set is keeping and what they cost.</td></tr>
           <tr><td><strong>Expected every</strong></td><td>24h</td><td>What makes it stale when it is exceeded.</td></tr>
           <tr><td><strong>Open</strong></td><td>a button</td><td>Goes to <a href="#web-set-detail">the set's own screen</a>: its artifacts, its retention card, its live activity.</td></tr>
-          <tr><td><strong>Test connection</strong></td><td>a button</td><td>Resolve, connect, check the host key, offer the key, authenticate, list the folder. Six named outcomes, and the same check <code>rbm backup-set test-connection</code> runs.</td></tr>
+          <tr><td><strong>Test connection</strong></td><td>a button</td><td>Resolve, connect, check the host key, offer the key, authenticate, list the folder. Six named outcomes, and the same check <code>backupd backup-set test-connection</code> runs.</td></tr>
           <tr><td><strong>Disable</strong></td><td>a button</td><td>Stops the scheduler running it. Keeps the configuration and every retained copy.</td></tr>
           <tr><td><strong>Remove&hellip;</strong></td><td>a button</td><td>Configuration only. The backups it collected stay on storage and stay listed under Backups, and creating the set again with the same id takes them back.</td></tr>
         </tbody>
@@ -219,7 +219,7 @@
           <tr><td><strong>Retention</strong></td><td>Daily, Weekly, Protected</td><td>Which tiers keep this copy. <strong>Protected</strong> is FR-19's newest known-good, which no tier may delete.</td></tr>
           <tr><td><strong>Nothing will delete this</strong></td><td>a warning chip</td><td>The set's configuration was removed, so no policy selects the copy. It occupies space for ever until the set is recreated or the file is removed by hand.</td></tr>
           <tr><td><strong>Medium</strong></td><td><code>local, offsite_s3</code></td><td>Where the copies are. <strong>No copy yet</strong> means the tier that should hold one has not moved it.</td></tr>
-          <tr><td><strong>Needs a restore</strong></td><td>a warning chip</td><td>The copy is in an archival storage class and cannot be read until the provider is asked to make it readable. That is <code>rbm restore</code>, it is billed, and it takes hours.</td></tr>
+          <tr><td><strong>Needs a restore</strong></td><td>a warning chip</td><td>The copy is in an archival storage class and cannot be read until the provider is asked to make it readable. That is <code>backupd restore</code>, it is billed, and it takes hours.</td></tr>
           <tr><td><strong>Preview retention</strong></td><td>a button</td><td>What the current policy would delete, as a reviewed plan, before anything is deleted.</td></tr>
         </tbody>
       </table>
@@ -247,7 +247,7 @@
       <figcaption>The durable transition log, newest first, across every set. Two filters: which set, and which severity.</figcaption>
     </figure>
     <p>Each row is one recorded lifecycle transition: discovered, transferred, verified, committed, remote deleted, retention completed, host key changed, storage warning, configuration updated. The severity icon is the thing to scan: an error is a halt or a failure, a warning is a state that will become one, and information is the pipeline doing its job.</p>
-    <p>This is the same feed <code>rbm activity</code> prints, and it is durable: it survives a restart, which is what separates it from <a href="#web-terminal">the docked terminal</a> below.</p>
+    <p>This is the same feed <code>backupd activity</code> prints, and it is durable: it survives a restart, which is what separates it from <a href="#web-terminal">the docked terminal</a> below.</p>
 
     <h3 id="web-quarantine">Quarantine</h3>
     <figure>
@@ -268,7 +268,7 @@
 
     <h3 id="web-settings">Settings</h3>
     <figure>
-      <img src="screens/ref-06-settings.png" alt="The Settings screen: storage capacity thresholds, a retention policy with three tiers each naming a destination and echoing the equivalent rbm command, a storage destinations list with local marked Default, notifications, an administrator password form, and a catalog recovery card, beside platform and system information panels" loading="lazy">
+      <img src="screens/ref-06-settings.png" alt="The Settings screen: storage capacity thresholds, a retention policy with three tiers each naming a destination and echoing the equivalent backupd command, a storage destinations list with local marked Default, notifications, an administrator password form, and a catalog recovery card, beside platform and system information panels" loading="lazy">
       <figcaption>Six cards down the left, two information panels on the right. This is the longest screen in the product and the only one that writes to <code>config.yaml</code> outside the wizard.</figcaption>
     </figure>
     <div class="scroll-x">
@@ -289,12 +289,12 @@
     </div>
     <div class="note ok">
       <span class="note-label">The same thing from a terminal</span>
-      <p>Under every retention tier and every destination, this screen prints the <code>rbm</code> command that does what the control above it does: <code>rbm settings patch --tier-medium monthly=offsite_s3</code>, <code>rbm medium test-connection offsite_s3</code>, <code>rbm medium remove offsite_s3</code>. They are there to be copied, and they are the reason the two surfaces cannot drift: the button and the command are the same call.</p>
+      <p>Under every retention tier and every destination, this screen prints the <code>backupd</code> command that does what the control above it does: <code>backupd settings patch --tier-medium monthly=offsite_s3</code>, <code>backupd medium test-connection offsite_s3</code>, <code>backupd medium remove offsite_s3</code>. They are there to be copied, and they are the reason the two surfaces cannot drift: the button and the command are the same call.</p>
     </div>
 
     <h3 id="web-destinations">Storage destinations</h3>
     <figure>
-      <img src="screens/ref-11-destinations.png" alt="The Storage destinations card: four destinations in a column. local, marked Default, with Test connection live and Make default and Remove dimmed above two paragraphs explaining why. usb_shelf, described as local_volume at /mnt/usb-shelf/artifacts, with all four controls live. offsite_s3 and offsite_cold, both s3, the second carrying a reads-need-a-restore chip. Each row prints the rbm commands its live controls are equivalent to, and an Add a destination button closes the card" loading="lazy">
+      <img src="screens/ref-11-destinations.png" alt="The Storage destinations card: four destinations in a column. local, marked Default, with Test connection live and Make default and Remove dimmed above two paragraphs explaining why. usb_shelf, described as local_volume at /mnt/usb-shelf/artifacts, with all four controls live. offsite_s3 and offsite_cold, both s3, the second carrying a reads-need-a-restore chip. Each row prints the backupd commands its live controls are equivalent to, and an Add a destination button closes the card" loading="lazy">
       <figcaption>Four destinations, two backends. That is the whole of what changed: a destination is an <em>instance</em> of a registered backend rather than one of a fixed pair, so a deployment can hold two local volumes and two buckets and the list can tell them apart.</figcaption>
     </figure>
     <p>A backend is described by a manifest the build carries &mdash; data, not code &mdash; and the manifest is what decides which fields a destination has, and which steps its connection test runs. Two are registered: <code>local_volume</code>, a directory on a disk this machine can see, and <code>s3</code>, a bucket on Amazon's service or anything that speaks its API. The drive backups already land on is an instance too, called <code>local</code>, and the only thing still special about it is that its location comes from the deployment's backup root rather than from a field, so it has no <strong>Edit</strong>.</p>
@@ -321,7 +321,7 @@
       <p><strong>Edit</strong> predates the manifest and has not been moved onto it. It asks a bucket's questions whatever the destination is, it offers no directory field, and it submits the destination as an <code>s3</code> one &mdash; so on an instance of <code>local_volume</code> it is the wrong form, and saving through it would name a backend the destination is not. The manifest-driven form is reached by <a href="#web-destination-add">adding a destination</a> and by nothing else. A local volume that needs a different directory is worth declaring again under a new name rather than edited here: nothing already stored moves either way, and <strong>Remove</strong> on the old declaration deletes no copy.</p>
     </div>
     <figure>
-      <img src="screens/ref-15-default-transfer.png" alt="The confirmation dialog for handing over the default: an eyebrow reading Two things change, the question Make usb_shelf the default destination, a paragraph saying usb_shelf becomes the default and cannot be removed while it carries the mark, a paragraph saying local stops being the default and becomes removable, a paragraph saying nothing already written moves, the equivalent rbm medium default command, and Cancel beside Make usb_shelf the default" loading="lazy">
+      <img src="screens/ref-15-default-transfer.png" alt="The confirmation dialog for handing over the default: an eyebrow reading Two things change, the question Make usb_shelf the default destination, a paragraph saying usb_shelf becomes the default and cannot be removed while it carries the mark, a paragraph saying local stops being the default and becomes removable, a paragraph saying nothing already written moves, the equivalent backupd medium default command, and Cancel beside Make usb_shelf the default" loading="lazy">
       <figcaption>Not a consent gate: there is no typed phrase, because nothing is destroyed. It exists because only one of the two things it does is the thing the operator clicked.</figcaption>
     </figure>
 
@@ -367,7 +367,7 @@
       </table>
     </div>
     <figure>
-      <img src="screens/ref-14-probe-steps.png" alt="The configure wizard's test step: a paragraph saying a real object is written and read back and removed and that reachable is not the same as writable, a round trip figure of 0.7s, then nine rows. credentials skipped with the manifest's reason that a local destination reads no credential, reach passed naming the directory, deliverable passed, write passed, read_back passed, storage_class skipped with the manifest's reason that a filesystem has no storage classes, verification passed, delete passed, and space passed reporting 1.4 TB available. Below them the equivalent rbm medium test-connection command and Back, Test connection again and Next: review" loading="lazy">
+      <img src="screens/ref-14-probe-steps.png" alt="The configure wizard's test step: a paragraph saying a real object is written and read back and removed and that reachable is not the same as writable, a round trip figure of 0.7s, then nine rows. credentials skipped with the manifest's reason that a local destination reads no credential, reach passed naming the directory, deliverable passed, write passed, read_back passed, storage_class skipped with the manifest's reason that a filesystem has no storage classes, verification passed, delete passed, and space passed reporting 1.4 TB available. Below them the equivalent backupd medium test-connection command and Back, Test connection again and Next: review" loading="lazy">
       <figcaption>The probe as a step list, in the manifest's declared order. A refusal with no step named throws away the part an operator can act on, so every step is a row before the first request is sent.</figcaption>
     </figure>
     <p>Eight steps are a closed vocabulary the engine and the manifests share, and a manifest declares for each one whether this backend runs it and, when it does not, the sentence saying why. So the skipped rows and their reasons are on screen from the start: an operator learns that a local volume reads no credential rather than wondering why nothing checked their key. The drive on this machine and a declared local volume both add a ninth answer, <code>space</code>, which is the one failure a bucket cannot have.</p>
@@ -393,23 +393,23 @@
       <img src="screens/ref-07-catalog-recovery.png" alt="The Catalog recovery screen: a card headed Existing backup data detected, a green reassurance that no files will be deleted moved or modified, and a Scan backup storage button" loading="lazy">
       <figcaption>Rebuilding the catalog from the backups themselves, when the state database is lost or corrupted.</figcaption>
     </figure>
-    <p>Every backup this manager commits gets a sidecar recovery manifest written beside it, and this screen is what those are for. <strong>Scan backup storage</strong> reads file metadata and checksums, reports how many artifacts it found and how many need review, and writes nothing. Artifacts it cannot make sense of go to <a href="#web-quarantine">Quarantine</a>, not to a delete. The command line spells it <code>rbm catalog rebuild</code>, and <code>--dry-run</code> is the same read-only pass.</p>
+    <p>Every backup this manager commits gets a sidecar recovery manifest written beside it, and this screen is what those are for. <strong>Scan backup storage</strong> reads file metadata and checksums, reports how many artifacts it found and how many need review, and writes nothing. Artifacts it cannot make sense of go to <a href="#web-quarantine">Quarantine</a>, not to a delete. The command line spells it <code>backupd catalog rebuild</code>, and <code>--dry-run</code> is the same read-only pass.</p>
 
     <h3 id="web-terminal">The docked terminal</h3>
     <figure>
-      <img src="screens/ref-08-terminal.png" alt="The docked terminal expanded: filter chips for Everything, Engine, each backup set and This browser, an error and warning count, Copy and Save .txt buttons, and a log showing engine lines, an admin action, and the rbm command that action is equivalent to" loading="lazy">
+      <img src="screens/ref-08-terminal.png" alt="The docked terminal expanded: filter chips for Everything, Engine, each backup set and This browser, an error and warning count, Copy and Save .txt buttons, and a log showing engine lines, an admin action, and the backupd command that action is equivalent to" loading="lazy">
       <figcaption>Docked to the bottom of every screen. Collapsed it is one line; expanded it is the live feed and everything this browser has done.</figcaption>
     </figure>
-    <p>Two feeds in one panel, and the chips choose between them. <strong>Engine</strong> and the per-set chips are the serving process's own live output. <strong>This browser</strong> is what you have done in this tab, including the <code>rbm</code> command each action was equivalent to: the <code>$ rbm backup-set patch production/auth-config --stale-after 48h</code> line in the picture is the echo of somebody editing a set in the interface a moment earlier.</p>
+    <p>Two feeds in one panel, and the chips choose between them. <strong>Engine</strong> and the per-set chips are the serving process's own live output. <strong>This browser</strong> is what you have done in this tab, including the <code>backupd</code> command each action was equivalent to: the <code>$ backupd backup-set patch production/auth-config --stale-after 48h</code> line in the picture is the echo of somebody editing a set in the interface a moment earlier.</p>
     <p>It is live, not durable. It starts again when the serving process restarts, and it says so when that happens. For history that survives, read <a href="#web-activity">Activity</a>. <strong>Copy</strong> and <strong>Save .txt</strong> take what is on screen, filter and all.</p>
   </section>
 
   <section>
     <h2 id="cli">The command line</h2>
-    <p>The engine and the command line are two binaries in one image. <code>rbm-web</code> serves the API and the interface; <code>rbm</code> is what an operator types. Almost everything the interface does is here, and several things it does not: retention previews with per-run overrides, artifact-level validation with a full re-download, catalog rebuilds, and the storage-destination verbs. The exception runs the other way and is named under <code>medium</code> below: a destination on a local volume can be declared from the browser and not from here.</p>
+    <p>The engine and the command line are two binaries in one image. <code>backupd-web</code> serves the API and the interface; <code>backupd</code> is what an operator types. Almost everything the interface does is here, and several things it does not: retention previews with per-run overrides, artifact-level validation with a full re-download, catalog rebuilds, and the storage-destination verbs. The exception runs the other way and is named under <code>medium</code> below: a destination on a local volume can be declared from the browser and not from here.</p>
     <p>On the standard deployment it is reached through the engine container:</p>
-    <pre><code>docker compose exec rclone-manager /rbm status</code></pre>
-    <p>On a <a href="index.html#install-cli-only">CLI-only install</a> the installer writes a wrapper and you type <code>~/rclone-manager/bin/rbm status</code> instead. Every command except <code>version</code> takes <code>--config</code>, which defaults to <code>/etc/backup-manager/config/config.yaml</code> and also accepts the directory, because that is what packaging mounts.</p>
+    <pre><code>docker compose exec backupd /backupd status</code></pre>
+    <p>On a <a href="index.html#install-cli-only">CLI-only install</a> the installer writes a wrapper and you type <code>~/backupd/bin/backupd status</code> instead. Every command except <code>version</code> takes <code>--config</code>, which defaults to <code>/etc/backupd/config/config.yaml</code> and also accepts the directory, because that is what packaging mounts.</p>
 
     <h3 id="cli-commands">Every command</h3>
     <p>Twenty of them. This table is checked against the binary's own dispatch table on every run of the repository's gate, so a command that is added, removed or renamed and not reflected here fails the build rather than going quietly stale.</p>
@@ -479,7 +479,7 @@
   <section>
     <h2 id="installer">install_docker_host.py</h2>
     <p>One file, no checkout, nothing outside the Python standard library. Copy it to the machine on its own and run it: it carries the canonical Compose definition inside itself, generated from <code>container/compose.yaml</code> and held to it byte for byte by a test, so there is nothing to clone on the host.</p>
-    <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/rclone-manager/main/scripts/install/install_docker_host.py
+    <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/backupd/main/scripts/install/install_docker_host.py
 python3 install_docker_host.py install</code></pre>
     <p>Every flag below has a default that works, which is what makes that second line the whole command. <a href="index.html#install">The install section on the home page</a> is the short version of this.</p>
 
@@ -510,7 +510,7 @@ python3 install_docker_host.py install</code></pre>
         <thead><tr><th>Flag</th><th>On</th><th>What it does, and what it defaults to</th></tr></thead>
         <tbody>
           <tr><td colspan="3"><strong>layout</strong> &mdash; the five flags every subcommand takes</td></tr>
-          <tr><td><code>--prefix</code></td><td>all six</td><td>Where the deployment files and the default data directories live. Defaults to <code>rclone-manager</code> under the invoking user's home.</td></tr>
+          <tr><td><code>--prefix</code></td><td>all six</td><td>Where the deployment files and the default data directories live. Defaults to <code>backupd</code> under the invoking user's home.</td></tr>
           <tr><td><code>--backup-dir</code></td><td>all six</td><td>Host directory completed artifacts land in. Defaults to <code>&lt;prefix&gt;/backups</code>.</td></tr>
           <tr><td><code>--state-dir</code></td><td>all six</td><td>Host directory for the SQLite lifecycle journal. Defaults to <code>&lt;prefix&gt;/state</code>.</td></tr>
           <tr><td><code>--config-dir</code></td><td>all six</td><td>Host directory holding <code>config.yaml</code>. Defaults to <code>&lt;prefix&gt;/config</code>, and may be empty: a fresh install serves a first-run flow rather than refusing to start.</td></tr>
@@ -529,7 +529,7 @@ python3 install_docker_host.py install</code></pre>
           <tr><td><code>--compose-file</code></td><td>preflight, install</td><td>The canonical runtime definition to copy. Not a template: it is copied verbatim. Defaults to the copy embedded in this installer.</td></tr>
           <tr><td><code>--listen-port</code></td><td>preflight, install</td><td>Host port the Web UI is published on. The engine publishes nothing. Defaults to 8080.</td></tr>
           <tr><td><code>--public-base-url</code></td><td>preflight, install</td><td>The externally reachable base URL the one-time enrolment link is built from. Defaults to this machine's own LAN address and the listen port, because that link is opened from another machine; a host with no default route falls back to its hostname.</td></tr>
-          <tr><td><code>--cli-only</code></td><td>preflight, install</td><td>Install the command line and nothing else: the engine runs <code>rbm daemon</code> instead of <code>rbm-web serve</code>, no <code>web-ui</code> container is started, no port is published, and an <code>rbm</code> wrapper is written to <code>&lt;prefix&gt;/bin/rbm</code>. A fresh CLI-only install starts nothing and prints the command that writes the first configuration.</td></tr>
+          <tr><td><code>--cli-only</code></td><td>preflight, install</td><td>Install the command line and nothing else: the engine runs <code>backupd daemon</code> instead of <code>backupd-web serve</code>, no <code>web-ui</code> container is started, no port is published, and an <code>backupd</code> wrapper is written to <code>&lt;prefix&gt;/bin/backupd</code>. A fresh CLI-only install starts nothing and prints the command that writes the first configuration.</td></tr>
           <tr><td><code>--no-cli-only</code></td><td>preflight, install</td><td>Convert a CLI-only deployment back to the full stack.</td></tr>
           <tr><td><code>--profile</code></td><td>preflight, install</td><td>Runtime profile, from the canonical definition's own declared list. Defaults to <code>generic</code>.</td></tr>
           <tr><td><code>--timezone</code></td><td>preflight, install</td><td>TZ for both containers. Retention's calendar boundaries depend on it. Defaults to this host's <code>/etc/timezone</code>, else UTC.</td></tr>
@@ -577,7 +577,7 @@ python3 install_docker_host.py install</code></pre>
 
 
 <footer>
-  <p>rclone-manager is Apache-2.0 licensed. <a href="https://github.com/spdrman/rclone-manager">View on GitHub</a></p>
+  <p>backupd is Apache-2.0 licensed. <a href="https://github.com/spdrman/backupd">View on GitHub</a></p>
   <p>Screenshots taken against the development fixture API. No screenshot on this page is evidence about a running engine.</p>
 </footer>
 

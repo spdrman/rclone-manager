@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
 )
 
 // These tests are the contract's only executable specification: nothing

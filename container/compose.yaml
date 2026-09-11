@@ -1,4 +1,4 @@
-# Generic Docker deployment shape for backup-manager (A3.9, extended by
+# Generic Docker deployment shape for backupd (A3.9, extended by
 # issue #82/B4.1). See docs/deployment.md for the reasoning behind every
 # one of these settings and how to build and run it.
 #
@@ -12,18 +12,18 @@
 # credential material (the SSH private key) lives only at the host path
 # SSH_KEY_FILE points to, mounted read-only into the container.
 #
-# THE COMMANDS BELOW ARE `/rbm-web`, AND THEY NEED 0.3.3 OR NEWER
+# THE COMMANDS BELOW ARE `/backupd-web`, AND THEY NEED 0.3.3 OR NEWER
 #
-# 0.3.3 renamed the binaries an operator runs: `rbm` for the engine CLI and
-# `rbm-web` for the web host. This file names them, because it is the
+# 0.3.3 renamed the binaries an operator runs: `backupd` for the engine CLI and
+# `backupd-web` for the web host. This file names them, because it is the
 # definition every adapter derives from and it should say what the product
 # is called.
 #
-# That makes this file forward-only, which is worth stating plainly. `/rbm`
-# and `/rbm-web` exist in images built from 0.3.3 onwards and in no image
+# That makes this file forward-only, which is worth stating plainly. `/backupd`
+# and `/backupd-web` exist in images built from 0.3.3 onwards and in no image
 # published before it, and 0.3.0, 0.3.1 and 0.3.2 are all still on the
 # registry. So pointing `IMAGE` at one of those while using this file gives
-# you two containers that die with "exec /rbm-web: no such file or
+# you two containers that die with "exec /backupd-web: no such file or
 # directory". Use the compose file that shipped with the version you are
 # installing.
 #
@@ -32,22 +32,22 @@
 # that could have produced the broken combination on its own no longer can.
 #
 # What did NOT change is everything that names the project rather than
-# the command: `image: backup-manager:...`, the `rclone-manager` and
+# the command: `image: backupd:...`, the `backupd` and
 # `web-ui` service names, and the container config directory at
-# /etc/backup-manager. Renaming any of those would move an operator's
+# /etc/backupd. Renaming any of those would move an operator's
 # data or break their tooling for no gain.
 #
 # TWO SERVICES, ONE IMAGE (project-owner requirement, folded in before
-# this issue merged): `rclone-manager` is the engine - core service,
+# this issue merged): `backupd` is the engine - core service,
 # scheduler, local authentication, and the versioned /api/v1 API, all in
 # one process sharing one shutdown context (§9.3) - and has NO published
 # port at all; it is reachable only from `web-ui`, over the `internal`
 # network below. `web-ui` serves the shared static UI and reverse-proxies
-# API requests to `rclone-manager`, and is the ONLY service with a
+# API requests to `backupd`, and is the ONLY service with a
 # LAN-facing published port. Both run the exact same
-# `/rbm-web` binary from the exact same image - only `command:`
+# `/backupd-web` binary from the exact same image - only `command:`
 # differs - matching the "one canonical image, vary command" principle
-# already applied to `/rbm` vs. `/rbm-web`
+# already applied to `/backupd` vs. `/backupd-web`
 # themselves; no nginx or other new runtime dependency was introduced for
 # this (see apps/common/webhost/serve's own doc comment for the plain
 # net/http/httputil.ReverseProxy this uses instead).
@@ -55,7 +55,7 @@
 # Network isolation is plain compose topology, nothing more: `internal`
 # below is a private bridge network scoped to just this project (compose
 # creates one per project by default; this just names it explicitly for
-# clarity), so `rclone-manager` is reachable by `web-ui` (same network)
+# clarity), so `backupd` is reachable by `web-ui` (same network)
 # and by nothing else on the NAS - no other container, and nothing on the
 # host's own LAN interfaces, since it publishes no port and joins no
 # other network. This does NOT block `web-ui`'s own outbound internet
@@ -112,7 +112,7 @@ x-canonical-runtime:
   digest_policy:
     manifest: container/release-manifest.json
     pin: >-
-      Deploy by digest, not by tag: replace image: backup-manager:<tag>
+      Deploy by digest, not by tag: replace image: backupd:<tag>
       with the registry reference plus the @sha256:... digest recorded for
       your architecture in the manifest above, and verify the binary
       SHA-256 recorded alongside it. A tag can be moved; a digest cannot.
@@ -146,7 +146,7 @@ x-security: &security
     - no-new-privileges:true
 
 services:
-  rclone-manager:
+  backupd:
     build:
       context: ..
       dockerfile: container/Dockerfile
@@ -159,17 +159,17 @@ services:
         # local build but not what a release should ship.
         VERSION: ${VERSION:-dev}
         COMMIT: ${COMMIT:-none}
-    image: backup-manager:${VERSION:-dev}
+    image: backupd:${VERSION:-dev}
 
-    # `/rbm-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md
+    # `/backupd-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md
     # §9.2's "Generic Web App host") is the engine: local authentication,
     # the versioned /api/v1 API, and the backup scheduler, all in one
     # process sharing one shutdown context (§9.3). No static UI - that is
     # web-ui's job, over the `internal` network below, never a published
-    # port here. `/rbm` (no "-web") is still in this same image
+    # port here. `/backupd` (no "-web") is still in this same image
     # for headless-only use with no web listener at all: override
-    # `command` with `["/rbm", "daemon"]` for that, or `docker
-    # compose run --rm rclone-manager /rbm version` / `... check`
+    # `command` with `["/backupd", "daemon"]` for that, or `docker
+    # compose run --rm backupd /backupd version` / `... check`
     # for a one-shot check; see the `restart` note below, which assumes
     # the default `serve` command specifically.
     # `command` carries the runtime profile, which is one contract field
@@ -178,7 +178,7 @@ services:
     # the profile with no host integration at all, so defaulting to it can
     # only ever under-claim; RUNTIME_PROFILE in .env selects another one
     # out of x-canonical-runtime.profiles above.
-    command: ["/rbm-web", "serve", "--profile=${RUNTIME_PROFILE:-generic}"]
+    command: ["/backupd-web", "serve", "--profile=${RUNTIME_PROFILE:-generic}"]
 
     <<: *security
 
@@ -262,18 +262,18 @@ services:
       # process-level default match the host rather than the image.
       TZ: ${TZ:-UTC}
 
-      # `/rbm-web serve`'s own `--listen` flag defaults to this
+      # `/backupd-web serve`'s own `--listen` flag defaults to this
       # variable when set (falling back to :8080 otherwise), so it binds
       # this address inside the container without it needing to be an
       # explicit command-line argument above. Never published to the
       # host (see the top-of-file note): only reachable from `web-ui`,
       # over the `internal` network, at this same port via the service
-      # name `rclone-manager` (Docker's own embedded DNS).
+      # name `backupd` (Docker's own embedded DNS).
       LISTEN_ADDR: ":8080"
 
       # This container has no published port at all (see the top-of-file
       # note), so its OWN --listen address is never something an operator
-      # can actually open - `/rbm-web serve` used to print the
+      # can actually open - `/backupd-web serve` used to print the
       # one-time enrollment link against that internal address anyway,
       # which was always wrong once this two-container split shipped
       # (issue #119's review). PUBLIC_BASE_URL is what `web-ui`'s own
@@ -287,7 +287,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:${LISTEN_PORT:-8080}}
 
       # Config.TrustForwardedHeaders (apps/common/auth/local): safe here
-      # SPECIFICALLY because `rclone-manager` joins only the `internal`
+      # SPECIFICALLY because `backupd` joins only the `internal`
       # network below, which only `web-ui` also joins - nothing else can
       # ever be this container's direct peer, so trusting the
       # X-Forwarded-For/X-Forwarded-Proto headers `web-ui`'s own reverse
@@ -331,7 +331,7 @@ services:
 
     volumes:
       # Persistent SQLite lifecycle journal (FR-9). A directory, per the
-      # WAL note above, not a single file. `/rbm-web serve` also
+      # WAL note above, not a single file. `/backupd-web serve` also
       # keeps its local-authentication administrator record
       # (apps/common/auth/local) at /data/state/local-auth.json — the
       # Argon2id password hash only, never a plaintext password — so
@@ -357,30 +357,30 @@ services:
       # bind mount cannot say "not configured yet" about a file: Docker
       # creates a directory at a source path that does not exist, so the
       # state a fresh install actually starts in was not representable.
-      - ${CONFIG_DIR:?set CONFIG_DIR in .env to the directory holding config.yaml}:/etc/backup-manager/config
+      - ${CONFIG_DIR:?set CONFIG_DIR in .env to the directory holding config.yaml}:/etc/backupd/config
 
       # Credentials stay read-only single files. Nothing in this
       # container writes them, and the shapes are two different claims.
       # Nothing here is baked into the image or into this file — only
       # host paths, resolved at `docker compose up` time.
-      - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
-      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
+      - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/backupd/id_ed25519:ro
+      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/backupd/known_hosts:ro
 
     # `unless-stopped`: restart across crashes and NAS reboots, but stay
     # down if an operator deliberately stops it — the right policy now that
-    # `command` above (`/rbm-web serve`) is a real long-running
+    # `command` above (`/backupd-web serve`) is a real long-running
     # process rather than the immediately-exiting `version` this file used
     # to default to. For a one-shot check, use `docker compose run --rm
-    # rclone-manager /rbm version` (or `... check`) instead of
+    # backupd /backupd version` (or `... check`) instead of
     # `up -d`, which bypasses `restart` entirely.
     restart: unless-stopped
 
-    # Liveness, deliberately, and NOT `rbm status`.
+    # Liveness, deliberately, and NOT `backupd status`.
     #
     # This is the check web-ui waits on: it declares `depends_on:
-    # rclone-manager: condition: service_healthy` below, so whatever this
+    # backupd: condition: service_healthy` below, so whatever this
     # asks is what stands between an operator and the only LAN-facing
-    # listener in the deployment. `rbm status` answers backup
+    # listener in the deployment. `backupd status` answers backup
     # freshness (HEALTHY/DEGRADED/STALE/FAILING) and exits non-zero on a
     # DEGRADED, STALE or FAILING set, and also when it cannot open the
     # service at all - so gating on it means a stale backup set, or an
@@ -397,10 +397,10 @@ services:
     #
     # Backup freshness is not lost, it moves back to being the thing it
     # was built as: the image's own HEALTHCHECK instruction still runs
-    # `rbm status` (container/Dockerfile, so a plain `docker
+    # `backupd status` (container/Dockerfile, so a plain `docker
     # run` still reports backup health), the alerts block delivers it
     # proactively, and an operator reads it directly with
-    # `docker compose exec rclone-manager /rbm status`.
+    # `docker compose exec backupd /backupd status`.
     #
     # Declared here rather than inherited from the image (issue #167):
     # the runtime contract requires an operator to be able to read what
@@ -417,7 +417,7 @@ services:
     # freshness verdict, so inheriting it here would be inheriting the
     # wrong question.
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      test: ["CMD", "/backupd-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -440,37 +440,37 @@ services:
       - internal
 
   web-ui:
-    # SAME image as rclone-manager, no separate `build:` block: this
-    # service reuses whatever `rclone-manager`'s own build already
+    # SAME image as backupd, no separate `build:` block: this
+    # service reuses whatever `backupd`'s own build already
     # produced and tagged (docker compose resolves `image:` against
     # whatever is already built/pulled under that tag). Same digest, same
     # binary, different command - never a second image to keep in sync.
-    image: backup-manager:${VERSION:-dev}
+    image: backupd:${VERSION:-dev}
 
     # Wait for the engine to report healthy before starting: a NAS reboot
     # (or `docker compose up`) starting both containers at once would
-    # otherwise let web-ui begin proxying before rclone-manager is even
+    # otherwise let web-ui begin proxying before backupd is even
     # listening, surfacing as a confusing "bad gateway" instead of a
     # simple "please wait." What "healthy" means here is the engine's
     # liveness probe and nothing else - see its healthcheck above for why
     # backup freshness must never be the condition this waits on.
     depends_on:
-      rclone-manager:
+      backupd:
         condition: service_healthy
 
-    # `/rbm-web serve-ui`: the shared static UI plus a reverse
+    # `/backupd-web serve-ui`: the shared static UI plus a reverse
     # proxy to the engine (apps/common/webhost/serve's own doc comment has the
     # full routing shape). --upstream defaults to
-    # http://rclone-manager:8080 (the engine's own compose service name,
+    # http://backupd:8080 (the engine's own compose service name,
     # resolved through Docker's embedded DNS on the `internal` network
     # below), set explicitly here via UPSTREAM_ADDR anyway so the
     # dependency is visible in this file, not just in the binary's own
     # default.
-    command: ["/rbm-web", "serve-ui", "--profile=${RUNTIME_PROFILE:-generic}"]
+    command: ["/backupd-web", "serve-ui", "--profile=${RUNTIME_PROFILE:-generic}"]
 
     <<: *security
 
-    # Same non-root reasoning as rclone-manager above, even though this
+    # Same non-root reasoning as backupd above, even though this
     # service has no host directory of its own to write into: consistent
     # hardening costs nothing, and this process may as well run with the
     # same reduced privilege.
@@ -494,7 +494,7 @@ services:
       # container's own internal bind address, always :8080 regardless of
       # what host port LISTEN_PORT maps it to.
       LISTEN_ADDR: ":8080"
-      UPSTREAM_ADDR: "http://rclone-manager:8080"
+      UPSTREAM_ADDR: "http://backupd:8080"
 
       # THE trust boundary for a gateway runtime profile (issue #87).
       # This is the only container with a published port, so this is the
@@ -515,7 +515,7 @@ services:
       #    is the only thing that can reach this port at all, or put the
       #    gateway and this container on a network nothing else joins.
       #  - The range names the GATEWAY, never the internal network. A
-      #    range containing `rclone-manager` or this container itself is
+      #    range containing `backupd` or this container itself is
       #    the vulnerability restated as configuration. That is why the
       #    engine reads TRUSTED_UPSTREAM_CIDRS above and not this
       #    variable: the two hops trust different peers, and a single
@@ -546,14 +546,14 @@ services:
 
     restart: unless-stopped
 
-    # Overrides the image's own HEALTHCHECK (`/rbm status`,
+    # Overrides the image's own HEALTHCHECK (`/backupd status`,
     # which needs a config file and a state database neither of which
-    # this container has): `/rbm-web healthcheck` just GETs
+    # this container has): `/backupd-web healthcheck` just GETs
     # its own listener and checks for a non-error response - "is this
     # web server up," the only question that applies to a container with
     # no backup state of its own to report on.
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck"]
+      test: ["CMD", "/backupd-web", "healthcheck"]
       interval: 30s
       timeout: 5s
       start_period: 5s

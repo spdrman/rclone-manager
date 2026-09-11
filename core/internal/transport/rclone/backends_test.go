@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/rclone/rclone/fs"
-	"github.com/spdrman/rclone-manager/core/internal/backend"
+	"github.com/spdrman/backupd/core/internal/backend"
 )
 
 // This file is what makes FR-4's "each backend is an architecture

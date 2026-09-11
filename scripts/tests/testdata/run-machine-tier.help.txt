@@ -1,7 +1,7 @@
 The Go machine tier, run from inside a manager machine (issue #451).
 
 Rom's ask for #447 was two containers on a dedicated network, one of them
-the rclone-manager machine. scripts/e2e/two-machine-backup.sh makes that
+the backupd machine. scripts/e2e/two-machine-backup.sh makes that
 literally true for the installer. For the Go machine tier it was not: the
 test process runs on the host and reaches the source over a published
 loopback port, because on Docker Desktop for macOS a host process cannot

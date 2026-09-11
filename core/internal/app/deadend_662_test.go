@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // Issue #662, defect 3: the dead end. This is why #662 is a bug report and
@@ -480,7 +480,7 @@ func sortedVerbs662Set(in []string) []string {
 }
 
 // stateOf662 reads the artifact's state out of the journal, which is the
-// only thing `rbm artifacts` shows an operator.
+// only thing `backupd artifacts` shows an operator.
 func stateOf662(t *testing.T, j Journal, artifact model.ArtifactID) string {
 	t.Helper()
 	rec, err := j.Get(context.Background(), artifact)

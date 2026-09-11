@@ -33,7 +33,7 @@ import (
 	"github.com/rclone/rclone/fs/operations"
 	"github.com/rclone/rclone/fs/walk"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // Adapter implements transport.Transport over embedded rclone packages,
@@ -57,7 +57,7 @@ func New() *Adapter { return &Adapter{} }
 // Transport half of the boundary; medium.go carries the matching one for
 // MediumStore. It is worth having because nothing here forces it:
 // production wiring hands rclone.New() straight to a constructor
-// (core/service's New, core/cmd/backup-manager's setup), so a method whose
+// (core/service's New, core/cmd/backupd's setup), so a method whose
 // signature drifted would fail over there, with an error about the caller
 // rather than one about the adapter.
 var _ transport.Transport = (*Adapter)(nil)
@@ -183,7 +183,7 @@ func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bo
 // hand-waving: sftpConfig pins concurrency at 64, which is 64 requests in
 // flight inside the one connection, so a single stream is not a single
 // request. What is given up is the parallelism ACROSS connections, and for
-// a backup manager pulling one artifact at a time from a hardened host
+// a backupd pulling one artifact at a time from a hardened host
 // that parallelism was never the point.
 //
 // fs.AddConfig copies the caller's ConfigInfo rather than replacing it, so

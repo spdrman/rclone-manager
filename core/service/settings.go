@@ -33,7 +33,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // Retention granularity names, re-exported from internal/config so a
@@ -220,7 +220,7 @@ type RetentionUpdate struct {
 	// (Retention.Tiers' own doc: an operator who wrote both is asking two
 	// different questions). This is exactly the rule the CLI's own -tier
 	// override already applies in applyRetentionOverrides
-	// (core/cmd/backup-manager/retention_flags.go), so the two write
+	// (core/cmd/backupd/retention_flags.go), so the two write
 	// paths cannot resolve the same submission differently.
 	//
 	// An explicitly EMPTY chain is refused rather than applied. In the

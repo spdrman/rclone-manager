@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // The seam where configuration becomes a transport.Source, and the failure
@@ -37,7 +37,7 @@ func TestSourceForForwardsEveryKeySource(t *testing.T) {
 		name string
 		key  config.Key
 	}{
-		{"file", config.Key{File: "/etc/backup-manager/id_ed25519"}},
+		{"file", config.Key{File: "/etc/backupd/id_ed25519"}},
 		{"env", config.Key{Env: "BACKUP_SSH_KEY"}},
 		{"command", config.Key{Command: []string{"op", "read", "op://infra/backup/key"}}},
 	} {
@@ -93,14 +93,14 @@ func TestSourceForForwardsEveryPassphraseSource(t *testing.T) {
 		name       string
 		passphrase config.Passphrase
 	}{
-		{"file", config.Passphrase{File: "/etc/backup-manager/id_ed25519.passphrase"}},
+		{"file", config.Passphrase{File: "/etc/backupd/id_ed25519.passphrase"}},
 		{"env", config.Passphrase{Env: "BACKUP_SSH_KEY_PASSPHRASE"}},
 		{"command", config.Passphrase{Command: []string{"op", "read", "op://infra/backup/key-passphrase"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bs := testBackupSet(t, "/var/backups/postgres")
 			bs.Remote.Type = "sftp"
-			bs.Remote.Key = config.Key{File: "/etc/backup-manager/id_ed25519", Passphrase: tc.passphrase}
+			bs.Remote.Key = config.Key{File: "/etc/backupd/id_ed25519", Passphrase: tc.passphrase}
 
 			got := sourceFor(&config.Config{}, testSource("production", bs), bs)
 
@@ -146,14 +146,14 @@ func TestSourceForForwardsKeyEncryption(t *testing.T) {
 		ke   config.KeyEncryption
 	}{
 		{"unset", config.KeyEncryption{}},
-		{"file", config.KeyEncryption{File: "/etc/backup-manager/key.dek"}},
+		{"file", config.KeyEncryption{File: "/etc/backupd/key.dek"}},
 		{"env", config.KeyEncryption{Env: "BACKUP_KEY_DEK"}},
 		{"command", config.KeyEncryption{Command: []string{"op", "read", "op://infra/backup/dek"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bs := testBackupSet(t, "/var/backups/postgres")
 			bs.Remote.Type = "sftp"
-			bs.Remote.Key = config.Key{File: "/etc/backup-manager/id_ed25519"}
+			bs.Remote.Key = config.Key{File: "/etc/backupd/id_ed25519"}
 
 			cfg := &config.Config{KeyEncryption: tc.ke}
 			got := sourceFor(cfg, testSource("production", bs), bs)
@@ -194,7 +194,7 @@ func TestSourceForForwardsTheConnectionCeiling(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bs := testBackupSet(t, "/var/backups/postgres")
 			bs.Remote.Type = "sftp"
-			bs.Remote.Key = config.Key{File: "/etc/backup-manager/id_ed25519"}
+			bs.Remote.Key = config.Key{File: "/etc/backupd/id_ed25519"}
 			bs.Remote.MaxConnections = tc.set
 
 			got := sourceFor(&config.Config{}, testSource("production", bs), bs)

@@ -136,7 +136,7 @@ class GenericSFTPFixture:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.upload_dir.chmod(0o777)
 
-        name = f"rclone-manager-deploy-sftp-{int(time.time() * 1000)}"
+        name = f"backupd-deploy-sftp-{int(time.time() * 1000)}"
         _sh("docker", "pull", "atmoz/sftp:alpine", timeout=120)
 
         run = _sh(
@@ -291,7 +291,7 @@ def _compose_container_id(project: str, env_file: Path, timeout: float = 30) -> 
         result = _sh(
             "docker", "compose", "-p", project, "-f", str(deploy_generic.COMPOSE_FILE),
             "--env-file", str(env_file),
-            "ps", "-q", "rclone-manager",
+            "ps", "-q", "backupd",
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip().splitlines()[0]
@@ -359,10 +359,10 @@ class DeployGenericIntegrationTest(unittest.TestCase):
         return [
             "--ssh-key", str(self.fixture.client_key),
             "--known-hosts", str(self.fixture.known_hosts),
-            # The deployed backup-manager container reaches the fixture
+            # The deployed backupd container reaches the fixture
             # through the host's published port via
             # CONTAINER_VISIBLE_HOST, NOT self.fixture.host ("127.0.0.1"
-            # would mean the backup-manager container itself, not this
+            # would mean the backupd container itself, not this
             # host machine, from inside that container).
             "--host", GenericSFTPFixture.CONTAINER_VISIBLE_HOST,
             "--port", str(self.fixture.port),
@@ -409,7 +409,7 @@ class DeployGenericIntegrationTest(unittest.TestCase):
         # container): `status` reports HEALTHY for a freshly landed,
         # known-good backup, run inside the SAME container the script
         # started - not a hand-built one.
-        status = _sh("docker", "exec", container_id, "/rbm", "status")
+        status = _sh("docker", "exec", container_id, "/backupd", "status")
         self.assertEqual(status.returncode, 0, f"status: {status.stdout}\n{status.stderr}")
         self.assertIn("HEALTHY", status.stdout)
 

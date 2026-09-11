@@ -34,8 +34,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // PlatformSink delivers a core alert through one platform's native local

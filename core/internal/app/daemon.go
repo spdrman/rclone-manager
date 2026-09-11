@@ -6,12 +6,12 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/obs"
 )
 
 // FR-1's long-running mode, and why the loop is here rather than in the CLI.
 //
-// The loop is nine lines and cmd/backup-manager could hold it. It does not,
+// The loop is nine lines and cmd/backupd could hold it. It does not,
 // because two of this product's guarantees are properties of the loop's
 // shape: no two passes over a backup set ever overlap, and a shutdown stops
 // work at a boundary where nothing is half-written. Both are argued from the
@@ -32,7 +32,7 @@ import (
 // Daemon is FR-1's `daemon` execution mode: it runs RunCycle once
 // immediately, then again every interval, until ctx is done.
 //
-// cmd/backup-manager owns turning SIGTERM/SIGINT into ctx's cancellation
+// cmd/backupd owns turning SIGTERM/SIGINT into ctx's cancellation
 // (via signal.NotifyContext), exactly as FR-1 asks for "handle
 // SIGTERM/SIGINT" and "use Go context cancellation" to be read together:
 // this package only ever reacts to ctx, and never installs a signal
@@ -58,7 +58,7 @@ import (
 // Daemon returns nil whenever ctx becomes done, whether that is observed
 // right after a RunCycle call returns or while waiting out the interval
 // between cycles: either way this is FR-1's ordinary, expected shutdown
-// path, not an error condition cmd/backup-manager needs to distinguish
+// path, not an error condition cmd/backupd needs to distinguish
 // from a clean exit. It returns a non-nil error only for a genuine
 // argument problem (a non-positive interval) caught before the loop ever
 // starts.

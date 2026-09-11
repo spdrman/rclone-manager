@@ -19,7 +19,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { httpApi, newIdempotencyKey } from "./client";
-import { BackupManagerError, RequestFailure, toApiErrorCode } from "./contracts";
+import { BackupdError, RequestFailure, toApiErrorCode } from "./contracts";
 import type { ApiErrorCode } from "./contracts";
 import { progressPercent } from "@shared/types/operation";
 
@@ -424,8 +424,8 @@ describe("httpApi error envelope handling", () => {
     } catch (e) {
       caught = e;
     }
-    expect(caught).toBeInstanceOf(BackupManagerError);
-    const err = caught as BackupManagerError;
+    expect(caught).toBeInstanceOf(BackupdError);
+    const err = caught as BackupdError;
     expect(err.api.code).toBe("INVALID_REQUEST");
     expect(err.api.message).toBe("name is required");
     expect(err.api.correlationId).toBe("cid_test123");
@@ -446,8 +446,8 @@ describe("httpApi error envelope handling", () => {
     } catch (e) {
       caught = e;
     }
-    expect(caught).toBeInstanceOf(BackupManagerError);
-    const err = caught as BackupManagerError;
+    expect(caught).toBeInstanceOf(BackupdError);
+    const err = caught as BackupdError;
     expect(err.api.code).toBe("UNAUTHENTICATED");
     expect(err.api.correlationId).toBe("cid_flat456");
   });
@@ -469,8 +469,8 @@ describe("httpApi error envelope handling", () => {
     } catch (e) {
       caught = e;
     }
-    expect(caught).toBeInstanceOf(BackupManagerError);
-    expect((caught as BackupManagerError).api.correlationId).toBe("cid_nojson");
+    expect(caught).toBeInstanceOf(BackupdError);
+    expect((caught as BackupdError).api.correlationId).toBe("cid_nojson");
   });
 
   /**
@@ -1626,8 +1626,8 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
    * a record that really is broken.
    *
    * The captions and the ranks here are agreed verbatim with
-   * core/cmd/backup-manager/activity.go's table, which derives the same
-   * severity for `rbm activity --severity`. Issue #625 was the last time
+   * core/cmd/backupd/activity.go's table, which derives the same
+   * severity for `backupd activity --severity`. Issue #625 was the last time
    * those two drifted.
    */
   it("reads a successful in-place recovery as two calm rows, not as an attempt that failed and a quarantine", async () => {

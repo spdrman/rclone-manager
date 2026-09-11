@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // The live feed a caller subscribes to while a cycle is running.

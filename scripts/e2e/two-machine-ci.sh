@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The CI wrapper around the two-machine proof (#575), at the path CI names.
 #
-# The wrapper itself is scripts/rcmtools/e2e/two_machine_ci.py now (EPIC I,
+# The wrapper itself is scripts/bdtools/e2e/two_machine_ci.py now (EPIC I,
 # I1.6 / #672). This file stays because .github/workflows/ci.yml runs
 # `bash scripts/e2e/two-machine-ci.sh --case all` and
 # scripts/tests/two-machine-ci-verdict.test.sh drives this literal path with
@@ -15,4 +15,4 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-exec python3 "$repo_root/scripts/rcmtools/e2e/two_machine_ci.py" "$@"
+exec python3 "$repo_root/scripts/bdtools/e2e/two_machine_ci.py" "$@"

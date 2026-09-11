@@ -32,7 +32,7 @@ import {
 import type { DockEntry } from "@shared/components/ActivityDock";
 import { clearBrowserNoticesForTests, emitBrowserNotice } from "@shared/state/browserNotices";
 import { resetGraphForTests } from "@shared/state/graph";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import type { DeploymentActivity, LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
 
 function event(sequence: number, over: Partial<SetActivityEvent> = {}): SetActivityEvent {
@@ -213,7 +213,7 @@ describe("the text an operator takes away", () => {
             actor: "alice",
             route: "PATCH /api/v1/backup-sets/{source}/{set}",
             // Bare on the wire: the prompt is this panel's to draw.
-            command: "rbm backup-set patch api-server/var-backups --stale-after 48h"
+            command: "backupd backup-set patch api-server/var-backups --stale-after 48h"
           }
         })
       },
@@ -224,7 +224,7 @@ describe("the text an operator takes away", () => {
     const lines = text.split("\n");
     expect(lines[0]).toContain("[api-server/var-backups]");
     expect(lines[1]).toContain("[you]");
-    expect(text).toContain("\n$ rbm backup-set patch api-server/var-backups --stale-after 48h");
+    expect(text).toContain("\n$ backupd backup-set patch api-server/var-backups --stale-after 48h");
     expect(lines[lines.length - 1]).toContain("engine restarted");
   });
 
@@ -239,13 +239,13 @@ describe("the text an operator takes away", () => {
           event: event(1, {
             event: "api_action",
             scope: "deployment",
-            fields: { actor: "alice", route: "POST /api/v1/catalog/rebuild", command: "rbm catalog rebuild" }
+            fields: { actor: "alice", route: "POST /api/v1/catalog/rebuild", command: "backupd catalog rebuild" }
           })
         }
       ],
       "alice"
     );
-    expect(text).toContain("\n$ rbm catalog rebuild");
+    expect(text).toContain("\n$ backupd catalog rebuild");
     expect(text).not.toContain("$ $");
   });
 
@@ -260,7 +260,7 @@ describe("the text an operator takes away", () => {
             fields: {
               actor: "alice",
               route: "PUT /api/v1/backup-sets/{source}/{set}/retention",
-              command: "rbm backup-set retention api-server/var-backups --policy-file <a file holding these tiers as a retention: block>",
+              command: "backupd backup-set retention api-server/var-backups --policy-file <a file holding these tiers as a retention: block>",
               command_runnable: "false"
             }
           })
@@ -268,7 +268,7 @@ describe("the text an operator takes away", () => {
       ],
       "alice"
     );
-    expect(text).toContain("$ rbm backup-set retention");
+    expect(text).toContain("$ backupd backup-set retention");
     expect(text).toContain("#   not runnable as printed");
     // And the control: a runnable command does not carry the note.
     const runnable = dockText(
@@ -278,7 +278,7 @@ describe("the text an operator takes away", () => {
           event: event(2, {
             event: "api_action",
             scope: "deployment",
-            fields: { actor: "alice", route: "POST /api/v1/catalog/rebuild", command: "rbm catalog rebuild" }
+            fields: { actor: "alice", route: "POST /api/v1/catalog/rebuild", command: "backupd catalog rebuild" }
           })
         }
       ],
@@ -299,15 +299,15 @@ describe("the text an operator takes away", () => {
             fields: {
               actor: "alice",
               route: "POST /api/v1/operations",
-              command_gap: "no rbm equivalent yet",
-              command_gap_detail: "`rbm run` starts a cycle in your own shell, not in this engine"
+              command_gap: "no backupd equivalent yet",
+              command_gap_detail: "`backupd run` starts a cycle in your own shell, not in this engine"
             }
           })
         }
       ],
       "alice"
     );
-    expect(text).toContain("# no rbm equivalent yet · POST /api/v1/operations");
+    expect(text).toContain("# no backupd equivalent yet · POST /api/v1/operations");
     expect(text).toContain("not in this engine");
   });
 
@@ -329,7 +329,7 @@ describe("the text an operator takes away", () => {
     expect(environmentPreamble("http://nas.local:8080", "the admin")).toContain("BACKUP_MANAGER_API_USERNAME='the admin'");
 
     const text = dockText(
-      [{ kind: "event", event: event(1, { event: "api_action", scope: "deployment", fields: { actor: "alice", command: "rbm catalog rebuild" } }) }],
+      [{ kind: "event", event: event(1, { event: "api_action", scope: "deployment", fields: { actor: "alice", command: "backupd catalog rebuild" } }) }],
       "alice",
       preamble
     );
@@ -341,7 +341,7 @@ describe("the text an operator takes away", () => {
 
 /** An api that answers one reading and then nothing new, which is what a
  *  quiet deployment looks like. */
-function dockApi(readings: LiveActivity[]): BackupManagerApi {
+function dockApi(readings: LiveActivity[]): BackupdApi {
   let i = 0;
   return {
     getLiveActivity: () => {
@@ -349,10 +349,10 @@ function dockApi(readings: LiveActivity[]): BackupManagerApi {
       i++;
       return Promise.resolve(next);
     }
-  } as unknown as BackupManagerApi;
+  } as unknown as BackupdApi;
 }
 
-function renderDock(api: BackupManagerApi) {
+function renderDock(api: BackupdApi) {
   return render(
     <MemoryRouter>
       <PlatformProvider bridge={genericBridge}>
@@ -383,18 +383,18 @@ describe("the panel itself", () => {
       dockApi([
         reading({
           sets: [],
-          deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "rbm starting" })])
+          deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "backupd starting" })])
         })
       ])
     );
-    expect(await screen.findByText(/rbm starting/)).toBeInTheDocument();
+    expect(await screen.findByText(/backupd starting/)).toBeInTheDocument();
     expect(screen.getByText("[engine]")).toBeInTheDocument();
   });
 
   it("says the reading is not refreshing rather than drawing something that claims the process is alive", async () => {
     const api = {
       getLiveActivity: () => Promise.reject(new Error("the engine is not answering"))
-    } as unknown as BackupManagerApi;
+    } as unknown as BackupdApi;
     renderDock(api);
     expect(await screen.findByText("not refreshing")).toBeInTheDocument();
   });
@@ -405,7 +405,7 @@ describe("the panel itself", () => {
       dockApi([
         reading({
           deployment: deployment([
-            event(1, { scope: "deployment", event: "startup", message: "rbm starting" }),
+            event(1, { scope: "deployment", event: "startup", message: "backupd starting" }),
             event(2, { scope: "deployment", event: "error", level: "error", message: "error", fields: { error: "the source refused the connection" } })
           ])
         })
@@ -452,19 +452,19 @@ describe("the panel itself", () => {
               scope: "deployment",
               event: "api_action",
               message: "patch /settings",
-              fields: { actor: "alice", route: "PATCH /api/v1/settings", command: "rbm settings patch --timezone Europe/Berlin" }
+              fields: { actor: "alice", route: "PATCH /api/v1/settings", command: "backupd settings patch --timezone Europe/Berlin" }
             })
           ])
         })
       ])
     );
-    await screen.findByText(/rbm settings patch/);
+    await screen.findByText(/backupd settings patch/);
     await act(async () => {
       await user.click(screen.getByRole("button", { name: /^copy$/i }));
     });
     expect(writeText).toHaveBeenCalledTimes(1);
     const copied = writeText.mock.calls[0][0] as string;
-    expect(copied).toContain("$ rbm settings patch --timezone Europe/Berlin");
+    expect(copied).toContain("$ backupd settings patch --timezone Europe/Berlin");
     // The first line of what is copied is the environment the command
     // needs, built from this page's own origin, so what is pasted is
     // runnable under it.
@@ -473,8 +473,8 @@ describe("the panel itself", () => {
   });
 
   it("draws the environment header at the top of the scrollback, from this page's own origin", async () => {
-    renderDock(dockApi([reading({ deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "rbm starting" })]) })]));
-    await screen.findByText(/rbm starting/);
+    renderDock(dockApi([reading({ deployment: deployment([event(1, { scope: "deployment", event: "startup", message: "backupd starting" })]) })]));
+    await screen.findByText(/backupd starting/);
     const header = screen.getByText(/^export BACKUP_MANAGER_API_URL=/);
     expect(header.textContent).toContain("BACKUP_MANAGER_API_URL=" + window.location.origin);
     expect(header.textContent).toContain("BACKUP_MANAGER_API_PASSWORD=<your password>");
@@ -591,9 +591,9 @@ describe("what this browser wrote reaches the global terminal", () => {
         outcome: "refused",
         code: "DESTRUCTIVE_OPERATIONS_DISABLED",
         message: "This deployment will not start a backup run.",
-        remediation: "Run rbm run from a shell on this host instead.",
+        remediation: "Run backupd run from a shell on this host instead.",
         backupSetIds: ["api-server/var-backups", "media/weekly-archive"],
-        command: "rbm run"
+        command: "backupd run"
       });
     });
   }
@@ -610,7 +610,7 @@ describe("what this browser wrote reaches the global terminal", () => {
     // terminal drawing only the engine's feed shows nothing at all for
     // exactly the presses that need explaining.
     expect(await screen.findByText(/This deployment will not start a backup run/)).toBeInTheDocument();
-    expect(screen.getByText(/rbm run/)).toBeInTheDocument();
+    expect(screen.getByText(/backupd run/)).toBeInTheDocument();
   });
 
   it("shows it under This browser, the chip that rendered an empty log on every build that shipped", async () => {
@@ -681,10 +681,10 @@ describe("what this browser wrote reaches the global terminal", () => {
     expect(copied).toContain("[you]");
     expect(copied).toContain("This deployment will not start a backup run.");
     // With the prompt the panel draws in front of every other command,
-    // and only one of them: a log that printed `$ rbm run` for a request
-    // the engine served and `rbm run` for one it refused would be two
+    // and only one of them: a log that printed `$ backupd run` for a request
+    // the engine served and `backupd run` for one it refused would be two
     // renderings of the same thing in one export.
-    expect(copied).toContain("\n$ rbm run");
+    expect(copied).toContain("\n$ backupd run");
     expect(copied).not.toContain("$ $");
     vi.unstubAllGlobals();
   });

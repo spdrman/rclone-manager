@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/alert"
+	"github.com/spdrman/backupd/core/internal/alert"
 )
 
 // This file is the whole of proactive alerting as anything outside core/

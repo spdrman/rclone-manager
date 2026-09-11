@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { MemoryRouter } from "react-router-dom";
 import { SettingsPage } from "@shared/pages/SettingsPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import type { AppSettings, CapacitySettings, UpdateSettingsRequest } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
@@ -175,10 +175,10 @@ describe("CapacityCard", () => {
 
   it("says an operator-configured root differently from a derived one", async () => {
     await renderSettings({
-      settings: settingsFixture({ backupRoot: "/volume1/backups/rclone-manager", backupRootConfigured: true })
+      settings: settingsFixture({ backupRoot: "/volume1/backups/backupd", backupRootConfigured: true })
     });
     const card = capacityCard();
-    expect(card.getByText(/volume1\/backups\/rclone-manager/)).toBeTruthy();
+    expect(card.getByText(/volume1\/backups\/backupd/)).toBeTruthy();
     expect(card.queryByText(/derived from your configured backup sets/)).toBeNull();
   });
 
@@ -322,7 +322,7 @@ describe("CapacityCard", () => {
   it("shows the server's refusal and leaves the running policy unchanged on a failed save", async () => {
     const updateSettings = vi.fn(() =>
       Promise.reject(
-        new BackupManagerError({
+        new BackupdError({
           code: "INVALID_REQUEST",
           message: "capacity.cap_bytes must be above capacity.critical_free_bytes",
           correlationId: "cid_test_cap"

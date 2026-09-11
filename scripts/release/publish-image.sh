@@ -2,7 +2,7 @@
 # The canonical image push, sign and SBOM attestation (#88/B5.2), at the
 # path everything already names.
 #
-# The script itself is scripts/rcmtools/release/publish_image.py now (EPIC
+# The script itself is scripts/bdtools/release/publish_image.py now (EPIC
 # I, I1.6 / #672 / #697). This file stays because the path is load bearing
 # in places that are not this port's to move:
 #
@@ -11,7 +11,7 @@
 #   * docs/compliance/release-provenance.md, docs/release-branch.md and
 #     docs/install.md all name it, the last of them for its own words about
 #     a registry tag being a mutable pointer;
-#   * scripts/rcmtools/tests/publish_image_guards.py drives THIS path (from
+#   * scripts/bdtools/tests/publish_image_guards.py drives THIS path (from
 #     inside a throwaway repository per refusal, through the GUARDS_ONLY=1
 #     and DRY_RUN=1 seams) rather than the module directly, so the shim
 #     itself is exercised by every one of the suite's twenty-one controls.
@@ -29,4 +29,4 @@
 # location.
 set -euo pipefail
 
-exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/rcmtools/release/publish_image.py" "$@"
+exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/bdtools/release/publish_image.py" "$@"

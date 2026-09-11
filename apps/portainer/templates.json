@@ -15,7 +15,7 @@
     "Custom Templates, which is the offline route apps/portainer/README.md",
     "documents for a host that cannot reach the repository.",
     "",
-    "Every entry in env below is checked against compose/backup-manager.env by",
+    "Every entry in env below is checked against compose/backupd.env by",
     "distribution/packaging: same variable set, same defaults. A form field an",
     "operator fills in and a compose file that reads a different variable is the",
     "failure this adapter is most likely to have, and it is silent."
@@ -25,23 +25,23 @@
   "templates": [
     {
       "type": 3,
-      "title": "Backup Manager",
-      "name": "backup-manager",
+      "title": "Backupd",
+      "name": "backupd",
       "description": "Scheduled, verified pull-based backups with retention tiers, an /api/v1 HTTP API and a shared web UI. Two containers from one canonical image: the engine holds the state database and publishes nothing, and the web UI is the only published port.",
       "note": "This stack does NOT need the Docker socket, privileged mode or host networking, and it must never be given them. Create the four host directories in the environment values below and chown them to PUID:PGID before deploying: the runtime image is distroless, so nothing inside the container can create or chown them for you. The engine prints a one-time enrollment link on first start; read it with the container logs.",
       "categories": ["backup", "storage"],
       "platform": "linux",
-      "logo": "https://raw.githubusercontent.com/spdrman/rclone-manager/main/apps/portainer/logo.svg",
+      "logo": "https://raw.githubusercontent.com/spdrman/backupd/main/apps/portainer/logo.svg",
       "repository": {
-        "url": "https://github.com/spdrman/rclone-manager",
-        "stackfile": "apps/portainer/compose/backup-manager.yml"
+        "url": "https://github.com/spdrman/backupd",
+        "stackfile": "apps/portainer/compose/backupd.yml"
       },
       "env": [
         {
           "name": "IMAGE",
           "label": "Canonical image reference",
           "description": "The one multi-architecture image both containers run. 0.4.0 is not pushed to ghcr.io yet, so until the release lands, change this to wherever you pushed or loaded a build, or to the previous release 0.3.3.",
-          "default": "ghcr.io/spdrman/backup-manager:0.4.0"
+          "default": "ghcr.io/spdrman/backupd:0.4.0"
         },
         {
           "name": "PUID",
@@ -59,31 +59,31 @@
           "name": "STATE_DIR",
           "label": "Private state directory (host)",
           "description": "The SQLite catalogue and the local administrator record. Never inside the backup root.",
-          "default": "/opt/backup-manager/state"
+          "default": "/opt/backupd/state"
         },
         {
           "name": "BACKUP_DIR",
           "label": "Backup root (host)",
           "description": "Where retained artifacts land, and nothing else. A separate security domain from the three directories above.",
-          "default": "/opt/backup-manager/backups"
+          "default": "/opt/backupd/backups"
         },
         {
           "name": "CONFIG_DIR",
           "label": "Configuration directory (host)",
           "description": "A writable directory holding config.yaml. May be empty on a fresh install; the first-run setup writes it.",
-          "default": "/opt/backup-manager/config"
+          "default": "/opt/backupd/config"
         },
         {
           "name": "KEY_FILE",
           "label": "SFTP private key file (host)",
           "description": "Mounted read-only. Keep it at mode 0600 on the host.",
-          "default": "/opt/backup-manager/secrets/id_ed25519"
+          "default": "/opt/backupd/secrets/id_ed25519"
         },
         {
           "name": "KNOWN_HOSTS_FILE",
           "label": "Pinned known_hosts file (host)",
           "description": "Mounted read-only. Host-key pinning for the SFTP source.",
-          "default": "/opt/backup-manager/secrets/known_hosts"
+          "default": "/opt/backupd/secrets/known_hosts"
         },
         {
           "name": "WEB_PORT",

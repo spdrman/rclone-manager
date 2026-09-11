@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/apicontract"
-	"github.com/spdrman/rclone-manager/core/internal/backend"
+	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/spdrman/backupd/core/internal/backend"
 )
 
 // The mechanical form of "a command never carries a key, a password or a

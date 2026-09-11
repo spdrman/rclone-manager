@@ -29,7 +29,7 @@ import (
 //
 // So this compares the whole reduced runtime rather than seven fields.
 // What it deliberately does NOT compare is the image reference: the
-// canonical definition builds `backup-manager:${VERSION:-dev}` from
+// canonical definition builds `backupd:${VERSION:-dev}` from
 // container/Dockerfile because it is also the file that produces the
 // image, and an adapter pulls the published reference. That difference is
 // real, it is the one thing an adapter is supposed to change here, and

@@ -30,7 +30,7 @@ import (
 // binary's embedded build info.
 const rcloneModulePath = "github.com/rclone/rclone"
 
-// VersionInfo is FR-26's `version` command payload: the backup-manager
+// VersionInfo is FR-26's `version` command payload: the backupd
 // version, the embedded rclone version, the Go version and the build
 // commit.
 type VersionInfo struct {
@@ -41,7 +41,7 @@ type VersionInfo struct {
 }
 
 // BuildVersionInfo assembles a VersionInfo. binaryVersion and commit are
-// normally the values cmd/backup-manager's main.go sets via -ldflags
+// normally the values cmd/backupd's main.go sets via -ldflags
 // (default "dev" / "none" in a non-release build, exactly like the
 // `version` subcommand that already existed before this package).
 //

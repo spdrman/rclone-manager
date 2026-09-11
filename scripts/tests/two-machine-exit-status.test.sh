@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The suite itself is scripts/rcmtools/tests/two_machine_exit_status.py now
+# The suite itself is scripts/bdtools/tests/two_machine_exit_status.py now
 # (EPIC I, I1.6 / #672 / #697). This file stays because the path is load
 # bearing in three places that are not this port's to move:
 #
@@ -15,4 +15,4 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-exec python3 "$repo_root/scripts/rcmtools/tests/two_machine_exit_status.py" "$@"
+exec python3 "$repo_root/scripts/bdtools/tests/two_machine_exit_status.py" "$@"

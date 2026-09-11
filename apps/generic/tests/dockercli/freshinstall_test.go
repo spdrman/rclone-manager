@@ -4,8 +4,8 @@
 //
 // The defect it pins is a conjunction, which is why nothing in this repo
 // caught it. Every adapter gates its web UI on
-// `depends_on: rclone-manager: condition: service_healthy`, and the
-// engine's health check was `rbm status`, which is FR-24's
+// `depends_on: backupd: condition: service_healthy`, and the
+// engine's health check was `backupd status`, which is FR-24's
 // backup-freshness verdict and exits non-zero on any DEGRADED, STALE or
 // FAILING set - a fresh install included, by design, because a fresh
 // install has never backed anything up. So the one container an operator
@@ -20,7 +20,7 @@
 // EMPTY configuration directory with no config.yaml in it, an empty state
 // directory, an empty backup directory, and no backup ever run. The
 // engine serves the first-run setup flow in that state and
-// `rbm status` exits non-zero in it, which is the pair the
+// `backupd status` exits non-zero in it, which is the pair the
 // defect lived in.
 //
 // Two tests, and the second is what gives the first its meaning. The
@@ -54,7 +54,7 @@ import (
 // not exist), which is why the configuration mount is a directory at all,
 // and an empty directory is the only honest shape for an install nobody
 // has configured. The engine serves the first-run setup flow from it, and
-// `rbm status` exits non-zero, which every test below reads
+// `backupd status` exits non-zero, which every test below reads
 // back rather than assumes.
 func freshInstall(t *testing.T) (dir string) {
 	t.Helper()
@@ -103,7 +103,7 @@ func freshInstallEnvFile(t *testing.T, dir string, listenPort int) string {
 	return envPath
 }
 
-// statusExitCode runs `rbm status` inside a running container
+// statusExitCode runs `backupd status` inside a running container
 // and returns its exit code with the output it printed.
 //
 // This is the positive control the whole file turns on. Without it, a
@@ -112,14 +112,14 @@ func freshInstallEnvFile(t *testing.T, dir string, listenPort int) string {
 // the defect.
 func statusExitCode(t *testing.T, containerID string) (int, string) {
 	t.Helper()
-	cmd := exec.Command("docker", "exec", containerID, "/rbm", "status")
+	cmd := exec.Command("docker", "exec", containerID, "/backupd", "status")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return 0, string(out)
 	}
 	var exit *exec.ExitError
 	if !asExitError(err, &exit) {
-		t.Fatalf("docker exec %s /rbm status: %v\n%s", containerID, err, out)
+		t.Fatalf("docker exec %s /backupd status: %v\n%s", containerID, err, out)
 	}
 	return exit.ExitCode(), string(out)
 }
@@ -155,7 +155,7 @@ func TestComposeStack_FreshInstallBringsUpTheWebUI(t *testing.T) {
 		t.Fatalf("docker compose up on a fresh install: %v\n%s", err, out)
 	}
 
-	engineID := project.containerID(t, "rclone-manager")
+	engineID := project.containerID(t, "backupd")
 
 	// The engine's container health is a liveness answer now, so a fresh
 	// install reaches "healthy" even though it has backed nothing up.
@@ -171,9 +171,9 @@ func TestComposeStack_FreshInstallBringsUpTheWebUI(t *testing.T) {
 	// shipped.
 	code, statusOut := statusExitCode(t, engineID)
 	if code == 0 {
-		t.Fatalf("`rbm status` exited 0 inside the fresh install this test is built on, so the fixture is already healthy and proves nothing about #206; status said:\n%s", statusOut)
+		t.Fatalf("`backupd status` exited 0 inside the fresh install this test is built on, so the fixture is already healthy and proves nothing about #206; status said:\n%s", statusOut)
 	}
-	t.Logf("`rbm status` exited %d on this fresh install, as FR-24 intends:\n%s", code, statusOut)
+	t.Logf("`backupd status` exited %d on this fresh install, as FR-24 intends:\n%s", code, statusOut)
 
 	// The web UI container: it exists, it is running, and its own health
 	// check passes.
@@ -235,7 +235,7 @@ func getWithTransportRetry(t *testing.T, client *http.Client, url string, timeou
 }
 
 // statusGateOverride writes a compose override that restores the engine
-// health check this repository shipped: `rbm status`, the
+// health check this repository shipped: `backupd status`, the
 // backup-freshness verdict.
 //
 // The timings are compressed and nothing else is. What is under test is
@@ -248,9 +248,9 @@ func statusGateOverride(t *testing.T, dir string) string {
 	path := filepath.Join(dir, "status-gate-override.yaml")
 	content := "" +
 		"services:\n" +
-		"  rclone-manager:\n" +
+		"  backupd:\n" +
 		"    healthcheck:\n" +
-		"      test: [\"CMD\", \"/rbm\", \"status\"]\n" +
+		"      test: [\"CMD\", \"/backupd\", \"status\"]\n" +
 		"      interval: 2s\n" +
 		"      timeout: 5s\n" +
 		"      start_period: 1s\n" +
@@ -277,13 +277,13 @@ func TestComposeStack_TheBackupFreshnessVerdictAsAStartGateKeepsTheWebUIDown(t *
 
 	project, out, err := upComposeFiles(t, image, freshInstallEnvFile(t, dir, 0), canonicalComposeFiles(t, override))
 	if err == nil {
-		t.Fatalf("`docker compose up -d` succeeded with `rbm status` as the engine's start gate on a fresh install, so this control cannot see the defect it exists to reproduce:\n%s", out)
+		t.Fatalf("`docker compose up -d` succeeded with `backupd status` as the engine's start gate on a fresh install, so this control cannot see the defect it exists to reproduce:\n%s", out)
 	}
 
 	// Assert WHY it failed, not merely that it did. A typo in the
 	// override, an image that is not there, or a missing env file all
 	// fail `up` too, and none of them would be this defect.
-	if !strings.Contains(out, "rclone-manager") || !strings.Contains(strings.ToLower(out), "unhealthy") {
+	if !strings.Contains(out, "backupd") || !strings.Contains(strings.ToLower(out), "unhealthy") {
 		t.Fatalf("`docker compose up -d` failed, but not with the engine reporting unhealthy, so the failure is something other than the start gate:\n%s", out)
 	}
 
@@ -306,7 +306,7 @@ func TestComposeStack_TheBackupFreshnessVerdictAsAStartGateKeepsTheWebUIDown(t *
 	// And the engine itself is running and serving, which is what makes
 	// the gate's verdict wrong rather than merely unlucky: the container
 	// the UI was waiting on was up the whole time.
-	engineID := project.containerIDIfAny(t, "rclone-manager")
+	engineID := project.containerIDIfAny(t, "backupd")
 	if engineID == "" {
 		t.Fatal("the engine has no container either, so this control reproduces a stack that never started rather than a start gate that never released")
 	}
@@ -315,7 +315,7 @@ func TestComposeStack_TheBackupFreshnessVerdictAsAStartGateKeepsTheWebUIDown(t *
 	}
 	code, statusOut := statusExitCode(t, engineID)
 	if code == 0 {
-		t.Errorf("`rbm status` exited 0 inside the engine this control declared unhealthy, so the two disagree and one of them is not measuring what it claims; status said:\n%s", statusOut)
+		t.Errorf("`backupd status` exited 0 inside the engine this control declared unhealthy, so the two disagree and one of them is not measuring what it claims; status said:\n%s", statusOut)
 	}
 }
 

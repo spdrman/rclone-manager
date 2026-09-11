@@ -687,5 +687,5 @@ const (
 	// image. There is no standard annotation for that, and a recipient
 	// who is told the licence id and not where to read it has half an
 	// answer, so this is the project's own namespace.
-	LicencePathLabel = "com.iasbuilt.rclonemanager.licenses.path"
+	LicencePathLabel = "com.iasbuilt.backupd.licenses.path"
 )

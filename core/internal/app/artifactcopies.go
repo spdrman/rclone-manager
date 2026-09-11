@@ -3,9 +3,9 @@ package app
 import (
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/archive"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/archive"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // FR-34's answer to "where is my backup and can I have it", computed over no
@@ -118,7 +118,7 @@ func (c ArtifactCopy) Retrievable() bool { return c.Access.Retrievable() }
 // # It asks no medium anything, and that is the point
 //
 // FR-34's rule is that a read never initiates a restore as a side effect,
-// and this is a read: `rbm artifacts <id>` prints what the
+// and this is a read: `backupd artifacts <id>` prints what the
 // journal and the configuration say, over no network at all. So every
 // copy is derived with archive.Observation's zero value, which means "I
 // have not looked", and an archived copy therefore reads as
@@ -145,7 +145,7 @@ func (c ArtifactCopy) Retrievable() bool { return c.Access.Retrievable() }
 // whether reading it is billed. Every one of those is derived from the
 // row's own recorded hash and class, which a GONE row still carries, so
 // they all compute cleanly and all describe a file that is not there.
-// `rbm artifacts` prints them one under the other, so the
+// `backupd artifacts` prints them one under the other, so the
 // output says GONE once and contradicts itself five times.
 //
 // core/service drops GONE rows at the API boundary for exactly this

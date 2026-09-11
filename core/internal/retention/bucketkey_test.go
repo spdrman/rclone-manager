@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // This file covers issue #192: which timestamp puts an artifact in a
@@ -192,7 +192,7 @@ func TestGFSDecideKeepsTheMultiTierShapeOfABacklogIngestedInOneCycle(t *testing.
 // populated from the discovery pass's own tie map, this test would start
 // reporting pg-2025-04-18.dump as having "collided" with
 // pg-2026-08-31.dump, which would also send the pinned CLI contract case
-// retention/gfs-tiers-from-one-ingest.yaml in spdrman/rclone-manager-tests
+// retention/gfs-tiers-from-one-ingest.yaml in spdrman/backupd-tests
 // red (its `count: 8` pins exactly eight printed lines for this same
 // shape of fixture, with no room for an extra warning line under
 // pg-01-age-500d.dump). See GFSSiblingCollision's own doc for why only a

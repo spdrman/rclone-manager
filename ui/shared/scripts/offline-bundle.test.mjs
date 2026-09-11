@@ -11,7 +11,7 @@
 //
 // It is deliberately not a browser. There is no Playwright in this
 // workspace and there should not be: the browser suite left for
-// spdrman/rclone-manager-tests in #158 and re-adding it here to check one
+// spdrman/backupd-tests in #158 and re-adding it here to check one
 // property would undo that. What this loses is layout and what the user
 // sees; what it keeps is the property under test, which is whether
 // anything the page loads resolves off this host. The socket trap is what

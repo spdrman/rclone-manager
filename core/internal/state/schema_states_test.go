@@ -24,8 +24,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // The journal's CHECK constraint and the state machine's set of states are a

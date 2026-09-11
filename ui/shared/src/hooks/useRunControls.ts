@@ -74,7 +74,7 @@ export type RunScope = { kind: "all" } | { kind: "set"; id: string };
  *  form. On an install that moved it, the command still names the right
  *  work and would need the flag added by hand. */
 export function commandFor(scope: RunScope): string {
-  return scope.kind === "all" ? "rbm run" : "rbm fetch --backup-set " + scope.id;
+  return scope.kind === "all" ? "backupd run" : "backupd fetch --backup-set " + scope.id;
 }
 
 /** How a refusal reads to an operator, chosen by the service's own typed
@@ -255,7 +255,7 @@ export function useRunControls(scope: RunScope = { kind: "all" }): RunControls {
           emitBrowserNotice({
             outcome: failure === null ? "unreachable" : "refused",
             code,
-            message: failure === null ? "Backup Manager did not answer." : refusal.message,
+            message: failure === null ? "Backupd did not answer." : refusal.message,
             // Deliberately does NOT claim nothing was run when there was
             // no reply. A request that got no answer may still have been
             // carried out with only the response lost, and claiming
@@ -263,7 +263,7 @@ export function useRunControls(scope: RunScope = { kind: "all" }): RunControls {
             // it exists to fix (api/failure.ts makes the same distinction).
             remediation:
               failure === null
-                ? "The request got no reply at all, so whether the run started is unknown. Check that the Backup Manager service is still running, then ask again."
+                ? "The request got no reply at all, so whether the run started is unknown. Check that the Backupd service is still running, then ask again."
                 : refusal.remediation,
             correlationId: failure?.correlationId,
             backupSetIds,

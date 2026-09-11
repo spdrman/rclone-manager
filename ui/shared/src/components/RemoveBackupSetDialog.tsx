@@ -115,7 +115,7 @@ export function RemoveBackupSetDialog({
               return;
             }
             setError(
-              describeFailure(e, "Backup Manager could not remove this backup set's configuration.")
+              describeFailure(e, "Backupd could not remove this backup set's configuration.")
                 .message
             );
           })
@@ -126,7 +126,7 @@ export function RemoveBackupSetDialog({
       }}
     >
       <p style={{ margin: 0 }}>
-        {"Backup Manager will stop collecting backups for " + set.name + "."}
+        {"Backupd will stop collecting backups for " + set.name + "."}
       </p>
       {/* The count is named only when there is one. This sentence used to
           open "0 retained backups (0 B)" on every real deployment, because
@@ -136,7 +136,7 @@ export function RemoveBackupSetDialog({
           opposite of what the paragraph goes on to promise. */}
       <p style={{ margin: 0, color: "var(--text-2)" }}>
         {set.retainedCount === null || set.retainedBytes === null
-          ? "Retained backups stay on NAS storage and remain listed under Backups. Backup Manager cannot say how many there are for this set."
+          ? "Retained backups stay on NAS storage and remain listed under Backups. Backupd cannot say how many there are for this set."
           : set.retainedCount + " retained backups (" + bytes(set.retainedBytes) + ") stay on NAS storage and remain listed under Backups."}
       </p>
       <p style={{ margin: 0, color: "var(--text-2)" }}>

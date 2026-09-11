@@ -198,11 +198,11 @@ func TestASingleBackupSetIsItsOwnBackupRoot(t *testing.T) {
 // name the mount directly rather than have it inferred, which is the answer
 // for a deployment whose sets genuinely do sit on different volumes.
 func TestAnExplicitBackupRootWins(t *testing.T) {
-	cfg := capacityConfig(t, Capacity{BackupRoot: "/volume1/backups/rclone-manager"})
+	cfg := capacityConfig(t, Capacity{BackupRoot: "/volume1/backups/backupd"})
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() = %v", err)
 	}
-	if got := cfg.EffectiveBackupRoot(); got != "/volume1/backups/rclone-manager" {
+	if got := cfg.EffectiveBackupRoot(); got != "/volume1/backups/backupd" {
 		t.Errorf("EffectiveBackupRoot() = %q, want the configured root", got)
 	}
 }

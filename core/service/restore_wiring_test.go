@@ -25,13 +25,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/archive"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/internal/archive"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
 )
 
 // TestTheShippedTransportCanActuallyRestore is the honesty test for this
@@ -446,7 +446,7 @@ func serviceWithArchivedCopy(t *testing.T, store *recordingRestoreStore) (*Backu
 			Bucket:       "backups",
 			Prefix:       "prefix",
 			StorageClass: config.StorageClassDeepArchive,
-			Credentials:  config.MediumCredentials{File: "/var/lib/backup-manager/s3.creds"},
+			Credentials:  config.MediumCredentials{File: "/var/lib/backupd/s3.creds"},
 		},
 		{
 			ID:           "warm-store",
@@ -454,7 +454,7 @@ func serviceWithArchivedCopy(t *testing.T, store *recordingRestoreStore) (*Backu
 			Region:       "us-east-1",
 			Bucket:       "warm-backups",
 			StorageClass: config.StorageClassStandard,
-			Credentials:  config.MediumCredentials{File: "/var/lib/backup-manager/s3.creds"},
+			Credentials:  config.MediumCredentials{File: "/var/lib/backupd/s3.creds"},
 		},
 	}
 

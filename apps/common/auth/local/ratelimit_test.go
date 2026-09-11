@@ -134,7 +134,7 @@ func TestRemoteIP_DefaultsToRemoteAddrRegardlessOfHeaders(t *testing.T) {
 // TestRemoteIP_TrustsFirstForwardedForEntryWhenEnabled is issue #119's
 // review's central regression test for the rate-limit collapse: with
 // trustForwarded enabled (the only setting apps/generic's engine,
-// container/compose.yaml's `rclone-manager` service, actually uses), two
+// container/compose.yaml's `backupd` service, actually uses), two
 // requests that share the same RemoteAddr (exactly what every request the
 // engine sees looks like in the shipped two-container topology - always
 // web-ui's own container address) but carry DIFFERENT X-Forwarded-For

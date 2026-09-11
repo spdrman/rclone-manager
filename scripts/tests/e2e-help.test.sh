@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The suite itself is scripts/rcmtools/tests/e2e_help.py now (EPIC I, I1.6 /
+# The suite itself is scripts/bdtools/tests/e2e_help.py now (EPIC I, I1.6 /
 # #672 / #697, carrying the #662 fix from fix/663-e2e). This file stays
 # because the path is load bearing in two places that are not this port's
 # to move:
@@ -15,4 +15,4 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-exec python3 "$repo_root/scripts/rcmtools/tests/e2e_help.py" "$@"
+exec python3 "$repo_root/scripts/bdtools/tests/e2e_help.py" "$@"

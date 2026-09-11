@@ -63,7 +63,7 @@ Two guest shapes are documented. The first is the default:
 | **VM** (default) | Higher | Full kernel isolation | Proxmox's own guidance for running a container engine. Nothing about it is unusual or unsupported. |
 | Unprivileged LXC (variant) | Lower | Shared kernel | Needs `features: nesting=1,keyctl=1`. Proxmox does not support a container engine inside an LXC; if it misbehaves after a PVE upgrade, that is the trade you took. Keep it unprivileged. |
 
-Both run the identical `compose/backup-manager.yml`. The only difference
+Both run the identical `compose/backupd.yml`. The only difference
 is how the guest is created and how the host directory reaches it.
 
 WP4.5's other listed option, an unprivileged LXC running the app binaries
@@ -79,17 +79,17 @@ unchanged.
 ## What the PVE host contributes
 
 Exactly one thing: a directory or dataset, shared into the guest at
-`/mnt/backup-manager`.
+`/mnt/backupd`.
 
 ```bash
-zfs create -o mountpoint=/srv/backup-manager rpool/backup-manager
+zfs create -o mountpoint=/srv/backupd rpool/backupd
 ```
 
 For a VM, share it in with a virtiofs directory mapping (PVE 8.4 and
 later) or an NFS export. For the LXC variant, a bind mount point:
 
 ```bash
-pct set <ctid> --mp0 /srv/backup-manager,mp=/mnt/backup-manager
+pct set <ctid> --mp0 /srv/backupd,mp=/mnt/backupd
 ```
 
 Everything persistent lives under that one path, split into four
@@ -97,10 +97,10 @@ directories that are four different things:
 
 | Guest path | Holds | Why it is separate |
 | --- | --- | --- |
-| `/mnt/backup-manager/state` | SQLite catalog, administrator record | Private application state (§19.2) |
-| `/mnt/backup-manager/backups` | Retained artifacts | The user backup root, a separate security domain |
-| `/mnt/backup-manager/config` | `config.yaml`, mounted writable | Validated before the listener opens; the engine also creates `ssh_keys/` and `known_hosts.d/` here |
-| `/mnt/backup-manager/secrets` | SSH key, pinned `known_hosts`, read-only | Never inside the backup root, never in this repository |
+| `/mnt/backupd/state` | SQLite catalog, administrator record | Private application state (§19.2) |
+| `/mnt/backupd/backups` | Retained artifacts | The user backup root, a separate security domain |
+| `/mnt/backupd/config` | `config.yaml`, mounted writable | Validated before the listener opens; the engine also creates `ssh_keys/` and `known_hosts.d/` here |
+| `/mnt/backupd/secrets` | SSH key, pinned `known_hosts`, read-only | Never inside the backup root, never in this repository |
 
 `distribution/packaging` enforces the containment rule in the last column
 on every commit: no key material, config or authentication state may sit

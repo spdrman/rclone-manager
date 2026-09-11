@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The e2e gate's entry point. The gate itself is
-# scripts/rcmtools/e2e/run_tests_repo_gate.py, ported from the 204 lines of
+# scripts/bdtools/e2e/run_tests_repo_gate.py, ported from the 204 lines of
 # bash that used to be this file (#672, EPIC I / #662).
 #
 # This is a FILE and not a symlink, and scripts/ci-local.sh still calls THIS
@@ -20,4 +20,4 @@
 # through harness.cannot_run. Anything this shim added between the two
 # could invent that verdict.
 set -euo pipefail
-exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/rcmtools/e2e/run_tests_repo_gate.py" "$@"
+exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/bdtools/e2e/run_tests_repo_gate.py" "$@"

@@ -3,7 +3,7 @@ import type {
   ActivityQuery,
   AppSettings,
   BackendCatalog,
-  BackupManagerApi,
+  BackupdApi,
   BackupSetRetention,
   CapacitySettings,
   CatalogScanPreview,
@@ -29,7 +29,7 @@ import type {
   UpdateSettingsRequest,
   ValidatorCatalogEntry
 } from "./contracts";
-import { BackupManagerError, LOCAL_DESTINATION_ID } from "./contracts";
+import { BackupdError, LOCAL_DESTINATION_ID } from "./contracts";
 import type { BackupArtifact, BackupSet, RetentionPlan } from "@shared/types/backup";
 import type {
   ActivityEvent,
@@ -329,7 +329,7 @@ const ARTIFACTS: BackupArtifact[] = [
       },
       {
         medium: "offsite_s3", mediumType: "s3",
-        location: "rclone-manager/production/postgres-primary/postgres-prod-20260828.dump.zst",
+        location: "backupd/production/postgres-primary/postgres-prod-20260828.dump.zst",
         sizeBytes: 15246903296, storageClass: "STANDARD_IA",
         verificationClass: "existence", verifiedAt: "2026-08-28T06:00:02+02:00",
         access: "immediate", status: "ACTIVE"
@@ -355,7 +355,7 @@ const ARTIFACTS: BackupArtifact[] = [
     placements: [
       {
         medium: "offsite_cold", mediumType: "s3",
-        location: "rclone-manager/production/billing-mysql/billing-20260827.sql.gz",
+        location: "backupd/production/billing-mysql/billing-20260827.sql.gz",
         sizeBytes: 3650722201, storageClass: "DEEP_ARCHIVE",
         verificationClass: null, verifiedAt: null,
         access: "requires_restore", status: "ACTIVE"
@@ -417,7 +417,7 @@ const ARTIFACTS: BackupArtifact[] = [
     placements: [
       {
         medium: "decommissioned_s3", mediumType: "",
-        location: "rclone-manager/production/billing-mysql/billing-20260824.sql.gz",
+        location: "backupd/production/billing-mysql/billing-20260824.sql.gz",
         sizeBytes: 3543348838, storageClass: "",
         verificationClass: "existence", verifiedAt: "2026-07-14T02:20:00+02:00",
         access: "unreachable", status: "ACTIVE"
@@ -659,7 +659,7 @@ const LIVE_ACTIVITY: SetActivity[] = [
  * every set, and this fixture is where that split is visible without a
  * running engine. It carries what the global terminal is for: the cycle's
  * own brackets, an error nothing could attribute, and the actions taken
- * in the browser with the `rbm` command each one is equivalent
+ * in the browser with the `backupd` command each one is equivalent
  * to. */
 const LIVE_DEPLOYMENT: DeploymentActivity = {
   unfinishedActions: [{ action: "cycle", actionId: "c_1", startedAt: "2026-08-29T02:01:11+02:00", sequence: 1 }],
@@ -678,7 +678,7 @@ const LIVE_DEPLOYMENT: DeploymentActivity = {
         actor: "admin",
         route: "PATCH /api/v1/backup-sets/{source}/{set}",
         status: "200",
-        command: "rbm backup-set patch production/auth-config --stale-after 48h"
+        command: "backupd backup-set patch production/auth-config --stale-after 48h"
       },
       "info",
       "deployment",
@@ -692,7 +692,7 @@ const LIVE_DEPLOYMENT: DeploymentActivity = {
         actor: "admin",
         route: "POST /api/v1/backup-sets/test-connection",
         status: "200",
-        command_gap: "no rbm equivalent yet",
+        command_gap: "no backupd equivalent yet",
         command_gap_detail: "there is no verb that tests a connection before a set exists"
       },
       "info",
@@ -889,7 +889,7 @@ function mediumDisclosureRefusal(
   submitted: RetentionTierSetting[],
   inForce: RetentionTierSetting[],
   acknowledged: boolean
-): BackupManagerError | null {
+): BackupdError | null {
   const introduced = submitted.filter((t) => {
     if (!t.medium) return false;
     const was = inForce.find((b) => b.name === t.name);
@@ -897,7 +897,7 @@ function mediumDisclosureRefusal(
   });
   if (introduced.length === 0 || acknowledged) return null;
   const storage = defaultSettings().schema.storage;
-  return new BackupManagerError({
+  return new BackupdError({
     code: "MEDIUM_DISCLOSURE_REQUIRED",
     message:
       "This write sends " + introduced.map((t) => t.name + " -> " + t.medium).join(", ") + ". " +
@@ -1028,7 +1028,7 @@ const delay = <T,>(value: T, ms = 180): Promise<T> =>
  *  that branch untestable through the mock. */
 const notFound = <T,>(): Promise<T> =>
   Promise.reject(
-    new BackupManagerError({
+    new BackupdError({
       code: "BACKUP_SET_NOT_FOUND",
       message: "no such backup set",
       correlationId: "cid_mock404"
@@ -1065,7 +1065,7 @@ const MOCK_SSH_KEYS: SSHKeyListing[] = [
     id: "key_a1b2c3",
     algorithm: "ssh-ed25519",
     fingerprint: "SHA256:OXUNyuDKC3sZFPEN+h0jMyxuTR4rlrjOxaY5ttH/kZI",
-    publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImocksharedkey rclone-manager",
+    publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImocksharedkey backupd",
     importedAt: "2026-03-11T09:00:00+02:00",
     passphraseProtected: false,
     usedBy: []
@@ -1074,7 +1074,7 @@ const MOCK_SSH_KEYS: SSHKeyListing[] = [
     id: "key_d4e5f6",
     algorithm: "ssh-ed25519",
     fingerprint: "SHA256:3anIqszP1Gm9GDNcq51b5ndeWt5yAF/7t1uS6/0HQbE",
-    publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImockunusedkey rclone-manager",
+    publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImockunusedkey backupd",
     importedAt: "2026-08-02T11:30:00+02:00",
     passphraseProtected: false,
     usedBy: []
@@ -1083,7 +1083,7 @@ const MOCK_SSH_KEYS: SSHKeyListing[] = [
     id: "key_g7h8i9",
     algorithm: "ssh-rsa",
     fingerprint: "SHA256:cDBzeNvm6cSIbi8xmhwQ/SkONr9ZNoVv5NlA1hx8GmE",
-    publicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADmockprotectedkey rclone-manager",
+    publicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADmockprotectedkey backupd",
     importedAt: "2025-11-27T16:45:00+01:00",
     passphraseProtected: true,
     usedBy: []
@@ -1661,7 +1661,7 @@ function defaultSettings(): AppSettings {
  * is why nothing caught what the pages do with the refusals they really
  * get.
  */
-const SERVED_WHILE_UNCONFIGURED: ReadonlySet<keyof BackupManagerApi> = new Set([
+const SERVED_WHILE_UNCONFIGURED: ReadonlySet<keyof BackupdApi> = new Set([
   "getVersion",
   "getFirstRunStatus",
   "completeFirstRun",
@@ -1683,8 +1683,8 @@ const SERVED_WHILE_UNCONFIGURED: ReadonlySet<keyof BackupManagerApi> = new Set([
   "logout"
 ]);
 
-function notConfigured(): BackupManagerError {
-  return new BackupManagerError({
+function notConfigured(): BackupdError {
+  return new BackupdError({
     code: "NOT_CONFIGURED",
     message:
       "this instance has not been configured yet; complete the setup flow at /api/v1/system/first-run first",
@@ -1696,19 +1696,19 @@ function notConfigured(): BackupManagerError {
  *  refuses while `isConfigured()` is false, and stops refusing the moment
  *  setup writes a configuration, exactly as the real router's own
  *  configured/unconfigured split does on the next request. */
-function refusingWhileUnconfigured(api: BackupManagerApi, isConfigured: () => boolean): BackupManagerApi {
+function refusingWhileUnconfigured(api: BackupdApi, isConfigured: () => boolean): BackupdApi {
   const wrapped = { ...api } as Record<string, unknown>;
-  for (const key of Object.keys(api) as (keyof BackupManagerApi)[]) {
+  for (const key of Object.keys(api) as (keyof BackupdApi)[]) {
     if (SERVED_WHILE_UNCONFIGURED.has(key)) continue;
     const original = api[key] as (...args: unknown[]) => unknown;
     wrapped[key] = (...args: unknown[]) =>
       isConfigured() ? original(...args) : Promise.reject(notConfigured());
   }
-  return wrapped as unknown as BackupManagerApi;
+  return wrapped as unknown as BackupdApi;
 }
 
 /**
- * A whole BackupManagerApi, in memory, for one scenario.
+ * A whole BackupdApi, in memory, for one scenario.
  *
  * This is a second implementation of the contract rather than a bag of
  * canned responses, and quite a lot rests on it: the dev server, the
@@ -1723,7 +1723,7 @@ function refusingWhileUnconfigured(api: BackupManagerApi, isConfigured: () => bo
  * Each instance is independent. Tests that want to read a fixture without
  * disturbing the one under test build a second mock rather than sharing.
  */
-export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
+export function createMockApi(scenario: Scenario = "default"): BackupdApi {
   const empty = scenario === "empty";
   // Every deployment written before storage mediums existed, which is the
   // compatibility case FR-35 pins: no medium declared anywhere, so every
@@ -1798,7 +1798,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // an S3 secret sits at rest.
   let importedCredentialCount = 0;
 
-  const api: BackupManagerApi = {
+  const api: BackupdApi = {
     getVersion: () =>
       delay(
         scenario === "version-mismatch"
@@ -1811,7 +1811,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     completeFirstRun: (req: CreateBackupSetRequest): Promise<FirstRunResult> => {
       if (configured)
         return Promise.reject(
-          new BackupManagerError({
+          new BackupdError({
             code: "unknown",
             message: "This instance is already configured.",
             correlationId: "cid_mock409"
@@ -1866,7 +1866,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       // is built to show (found while wiring #97's error-state test).
       if (!found)
         return Promise.reject(
-          new BackupManagerError({
+          new BackupdError({
             code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_mock404"
           })
         );
@@ -1882,7 +1882,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       SETS.some((s) => s.id === backupSetId)
         ? delay(undefined)
         : Promise.reject(
-            new BackupManagerError({
+            new BackupdError({
               code: "BACKUP_SET_NOT_FOUND",
               message: "no such backup set",
               correlationId: "cid_mock404"
@@ -1940,7 +1940,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       const found = SETS.find((s) => s.source === source && s.set === set);
       if (!found)
         return Promise.reject(
-          new BackupManagerError({
+          new BackupdError({
             code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_mock404"
           })
         );
@@ -2034,17 +2034,17 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     listSSHKeyCandidates: (): Promise<SSHKeyDiscovery> =>
       delay({
         locations: [
-          { path: "/etc/backup-manager", kind: "mount", found: 1 },
-          { path: "/home/backup-manager/.ssh", kind: "home", found: 0, problem: "this location is not present in this deployment" }
+          { path: "/etc/backupd", kind: "mount", found: 1 },
+          { path: "/home/backupd/.ssh", kind: "home", found: 0, problem: "this location is not present in this deployment" }
         ],
         candidates: [
           {
             id: "cand_mock_installer",
-            path: "/etc/backup-manager/id_ed25519",
-            location: "/etc/backup-manager",
+            path: "/etc/backupd/id_ed25519",
+            location: "/etc/backupd",
             algorithm: "ssh-ed25519",
             fingerprint: mockCandidateFingerprint,
-            publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImockinstallerkey rclone-manager",
+            publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImockinstallerkey backupd",
             mode: "0600",
             inStore: false,
             selectable: true
@@ -2068,7 +2068,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       return found
         ? delay(found)
         : delay(null).then(() => {
-            throw new BackupManagerError({
+            throw new BackupdError({
               code: "ARTIFACT_NOT_FOUND",
               message: "no backup with id " + id,
               correlationId: "cid_mock404"
@@ -2080,7 +2080,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     listActivity: (query) =>
       activityUnreadable
         ? delay(null).then(() => {
-            // Thrown, not rejected with a BackupManagerError: the whole
+            // Thrown, not rejected with a BackupdError: the whole
             // point of #598's scenario is a failure this frontend has no
             // type for, reproduced exactly. `request()` would have
             // labelled this a RequestFailure; a mock cannot go through
@@ -2141,7 +2141,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     setBackupSetRetention: (source, set, policy) => {
       if (policy.tiers && policy.tiers.length === 0)
         return Promise.reject(
-          new BackupManagerError({
+          new BackupdError({
             code: "INVALID_REQUEST",
             message:
               'retention.tiers must name at least one tier; an empty chain is not "keep nothing", it reinstates the default daily/weekly/monthly policy.',
@@ -2178,7 +2178,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       // for a stale retention plan.
       const current = retentionPlan(retentionOverrides, source, set, retentionTick, !noMedium);
       if (planId !== current.planId)
-        return Promise.reject(new BackupManagerError({
+        return Promise.reject(new BackupdError({
           // The literal code apps/common/webhost/handlers_retention.go
           // writes for this refusal, not a fixture-only spelling: a mock
           // that invents its own vocabulary lets every test pass against
@@ -2217,7 +2217,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           c.criticalFreeBytes === undefined &&
           c.safetyMarginBytes === undefined);
       if (retentionNamesNothing && capacityNamesNothing)
-        return Promise.reject(new BackupManagerError({
+        return Promise.reject(new BackupdError({
           code: "INVALID_REQUEST",
           message: "a settings write must name at least one setting to change",
           correlationId: "cid_mocksettings400"
@@ -2227,7 +2227,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       // request is how a settings page reports success for an edit that
       // never happened.
       if ((r !== undefined && retentionNamesNothing) || (c !== undefined && capacityNamesNothing))
-        return Promise.reject(new BackupManagerError({
+        return Promise.reject(new BackupdError({
           code: "INVALID_REQUEST",
           message: "a settings section was sent with no field in it; omit the section instead of sending an empty one",
           correlationId: "cid_mocksettings400"
@@ -2252,7 +2252,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             // reinstates the default policy, so it is refused rather than
             // applied. A fixture that accepted it would let a UI ship an
             // affordance the real backend rejects.
-            return Promise.reject(new BackupManagerError({
+            return Promise.reject(new BackupdError({
               code: "INVALID_REQUEST",
               message:
                 "retention.tiers must name at least one tier; an empty chain is not \"keep nothing\", it reinstates the default daily/weekly/monthly policy.",
@@ -2276,25 +2276,25 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         const safetyMarginBytes = c.safetyMarginBytes ?? settings.capacity.safetyMarginBytes;
 
         if (capBytes < 0)
-          return Promise.reject(new BackupManagerError({
+          return Promise.reject(new BackupdError({
             code: "INVALID_REQUEST",
             message: "capacity.cap_bytes must not be negative; use 0 for no cap",
             correlationId: "cid_mocksettings400"
           }));
         if (warningFreeBytes < 0 || criticalFreeBytes < 0 || safetyMarginBytes < 0)
-          return Promise.reject(new BackupManagerError({
+          return Promise.reject(new BackupdError({
             code: "INVALID_REQUEST",
             message: "capacity thresholds must not be negative",
             correlationId: "cid_mocksettings400"
           }));
         if (warningFreeBytes < criticalFreeBytes)
-          return Promise.reject(new BackupManagerError({
+          return Promise.reject(new BackupdError({
             code: "INVALID_REQUEST",
             message: "capacity.warning_free_bytes must be at or above capacity.critical_free_bytes",
             correlationId: "cid_mocksettings400"
           }));
         if (capBytes > 0 && criticalFreeBytes > 0 && capBytes <= criticalFreeBytes)
-          return Promise.reject(new BackupManagerError({
+          return Promise.reject(new BackupdError({
             code: "INVALID_REQUEST",
             message: "capacity.cap_bytes must be above capacity.critical_free_bytes",
             correlationId: "cid_mocksettings400"
@@ -2317,7 +2317,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     preflightStorageMedium: (mediumId: string) => {
       const medium = settings.mediums.find((m) => m.id === mediumId);
       if (!medium)
-        return Promise.reject(new BackupManagerError({
+        return Promise.reject(new BackupdError({
           code: "MEDIUM_NOT_FOUND",
           message: "this configuration declares no storage medium with that id",
           correlationId: "cid_mockpreflight404"
@@ -2337,7 +2337,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     // A read-only fixture would render every one of those as a pass.
     importStorageCredentials: (accessKeyId, secretAccessKey) => {
       if (!accessKeyId || !secretAccessKey)
-        return Promise.reject(new BackupManagerError({
+        return Promise.reject(new BackupdError({
           code: "INVALID_REQUEST",
           message: "access_key_id and secret_access_key are both required",
           correlationId: "cid_mockcreds400"
@@ -2411,7 +2411,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
 
     createStorageMedium: (spec) => {
       if (settings.mediums.some((m) => m.id === spec.id))
-        return Promise.reject(new BackupManagerError({
+        return Promise.reject(new BackupdError({
           code: "MEDIUM_EXISTS",
           message: `service: storage medium already declared: ${spec.id}`,
           correlationId: "cid_mockmedium409"
@@ -2511,7 +2511,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       const at = settings.mediums.findIndex((m) => m.id === mediumId);
       if (at < 0) return Promise.reject(mediumNotFound());
       if (mediumId === "offsite_s3")
-        return Promise.reject(new BackupManagerError({
+        return Promise.reject(new BackupdError({
           code: "MEDIUM_IN_USE",
           message:
             'service: storage medium still holds copies: 148 copies on storage medium "offsite_s3", across ' +
@@ -2530,7 +2530,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       // refusing it by name would teach a rule the engine no longer has,
       // and would do it on the surface developers look at first.
       if (settings.mediums[at].isDefault)
-        return Promise.reject(new BackupManagerError({
+        return Promise.reject(new BackupdError({
           code: "MEDIUM_IS_DEFAULT",
           message:
             "service: storage medium is this deployment's default destination: " + mediumId +
@@ -2576,7 +2576,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       // rejected-rotation UI path has something to exercise against a
       // dev-fixture backend that otherwise has no real stored password.
       currentPassword === "wrong-current-password"
-        ? Promise.reject(new BackupManagerError({
+        ? Promise.reject(new BackupdError({
             code: "UNAUTHENTICATED",
             message: "Current password is incorrect.",
             correlationId: "cid_mockpw401"
@@ -2908,8 +2908,8 @@ function mediumConfigured(
   };
 }
 
-function mediumNotFound(): BackupManagerError {
-  return new BackupManagerError({
+function mediumNotFound(): BackupdError {
+  return new BackupdError({
     code: "MEDIUM_NOT_FOUND",
     message: "this configuration declares no storage medium with that id",
     correlationId: "cid_mockmedium404"

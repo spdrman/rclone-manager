@@ -90,7 +90,7 @@ func newLoggedRouter(t *testing.T) (readSurfaceRouter, *captureLogger) {
 // already wrong.
 func TestInternalError_LogsTheErrorItRefusedOver(t *testing.T) {
 	rt, log := newLoggedRouter(t)
-	rt.backend.errOnActivity = errors.New("journal is unreadable: /var/lib/backup-manager/state.db")
+	rt.backend.errOnActivity = errors.New("journal is unreadable: /var/lib/backupd/state.db")
 
 	rec := rt.get(t, "/api/v1/activity")
 	mustStatus(t, rec, http.StatusInternalServerError)

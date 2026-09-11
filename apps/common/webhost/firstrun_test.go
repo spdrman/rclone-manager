@@ -13,7 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The setup surface of an instance that has no configuration yet.
@@ -67,7 +67,7 @@ func (f *fakeFirstRun) ListSSHKeys(context.Context) ([]service.SSHKeyListing, er
 
 func (f *fakeFirstRun) DiscoverSSHKeyCandidates(context.Context) (service.SSHKeyDiscovery, error) {
 	return service.SSHKeyDiscovery{
-		Locations: []service.SSHKeyDiscoveryLocation{{Path: "/etc/backup-manager", Kind: "mount"}},
+		Locations: []service.SSHKeyDiscoveryLocation{{Path: "/etc/backupd", Kind: "mount"}},
 	}, nil
 }
 

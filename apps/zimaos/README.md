@@ -1,7 +1,7 @@
-# Backup Manager on ZimaOS
+# Backupd on ZimaOS
 
 ZimaOS is built on CasaOS and reads the same `x-casaos` block out of a
-`docker-compose.yml`, so [`compose/backup-manager.yml`](compose/backup-manager.yml)
+`docker-compose.yml`, so [`compose/backupd.yml`](compose/backupd.yml)
 is both the runtime definition and the store submission. There is nothing else
 in this directory but an icon and this page.
 
@@ -46,13 +46,13 @@ is distroless, with no shell and no root step, so nothing inside the container
 can create or chown them for you:
 
 ```
-mkdir -p /DATA/AppData/backup-manager/state /DATA/AppData/backup-manager/config \
-         /DATA/AppData/backup-manager/secrets /DATA/Backups/backup-manager
-chown 1000:1000 /DATA/AppData/backup-manager/state /DATA/AppData/backup-manager/config \
-                /DATA/AppData/backup-manager/secrets /DATA/Backups/backup-manager
+mkdir -p /DATA/AppData/backupd/state /DATA/AppData/backupd/config \
+         /DATA/AppData/backupd/secrets /DATA/Backups/backupd
+chown 1000:1000 /DATA/AppData/backupd/state /DATA/AppData/backupd/config \
+                /DATA/AppData/backupd/secrets /DATA/Backups/backupd
 ```
 
-Put the SFTP private key at `/DATA/AppData/backup-manager/secrets/id_ed25519`
+Put the SFTP private key at `/DATA/AppData/backupd/secrets/id_ed25519`
 (mode 0600) and the pinned host key next to it as `known_hosts`. Neither is ever
 baked into the image or into any file in this repository.
 
@@ -70,11 +70,11 @@ is ticked.
 
 | Host path | Container path | Holds |
 | --- | --- | --- |
-| `/DATA/AppData/backup-manager/state` | `/data/state` | the catalogue and the local administrator record. Private. |
-| `/DATA/Backups/backup-manager` | `/data/backups` | retained artifacts, and nothing else. |
-| `/DATA/AppData/backup-manager/config` | `/etc/backup-manager/config` | `config.yaml`, writable, plus `ssh_keys/` and `known_hosts.d/`. |
-| `/DATA/AppData/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | the SFTP private key, read-only. |
-| `/DATA/AppData/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | the pinned host key, read-only. |
+| `/DATA/AppData/backupd/state` | `/data/state` | the catalogue and the local administrator record. Private. |
+| `/DATA/Backups/backupd` | `/data/backups` | retained artifacts, and nothing else. |
+| `/DATA/AppData/backupd/config` | `/etc/backupd/config` | `config.yaml`, writable, plus `ssh_keys/` and `known_hosts.d/`. |
+| `/DATA/AppData/backupd/secrets/id_ed25519` | `/etc/backupd/id_ed25519` | the SFTP private key, read-only. |
+| `/DATA/AppData/backupd/secrets/known_hosts` | `/etc/backupd/known_hosts` | the pinned host key, read-only. |
 
 Private state and the backup root are separate security domains and neither is
 inside the other, which is why the backup root is under `/DATA` and not under

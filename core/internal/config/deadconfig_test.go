@@ -8,7 +8,7 @@ import (
 // A configuration this build can validate and can never execute is worse
 // than one it refuses, because the refusal an operator eventually gets
 // arrives from the move engine, in a log, at the moment a local copy was
-// about to be deleted, and `rbm check` said "config OK" on the
+// about to be deleted, and `backupd check` said "config OK" on the
 // way in.
 //
 // This file is the check for the one such configuration Validate now
@@ -36,7 +36,7 @@ func TestValidate_AttestedIsRefusedOnAMediumTypeThatCannotAttest(t *testing.T) {
 	err := c.Validate()
 	if err == nil {
 		t.Fatal("Validate accepted upload_verification: attested on an s3 medium. No s3 medium can ever achieve it, " +
-			"so this is a configuration `rbm check` calls OK and the move engine refuses on every cycle for the life of the deployment")
+			"so this is a configuration `backupd check` calls OK and the move engine refuses on every cycle for the life of the deployment")
 	}
 	for _, want := range []string{
 		"storage_mediums[0]",

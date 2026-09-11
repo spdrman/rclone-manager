@@ -78,7 +78,7 @@ import (
 
 // ModulePath is core's own module path, which is what a machine import
 // starts with.
-const ModulePath = "github.com/spdrman/rclone-manager/core"
+const ModulePath = "github.com/spdrman/backupd/core"
 
 // The two rules the scan can report.
 const (

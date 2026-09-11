@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Backup Manager /api/v1",
+    "title": "Backupd /api/v1",
     "version": "1.0.0",
     "summary": "The authoritative definition of the versioned /api/v1 boundary.",
     "description": "Issue #166 (B6.2). This document, not the Go handlers and not the TypeScript client, is the definition of /api/v1. Both sides are generated from it (scripts/api/generate.sh) and both are held to it by a drift check (scripts/api/check-contract-drift.sh plus the conformance tests named in docs/api/contract.md). Compatibility and deprecation rules are in docs/api/contract.md."
@@ -3443,7 +3443,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "The store id. This is the value POST /ssh-keys returned when the key was imported, the value BackupSetSpec.ssh_key_id takes, and the value `rbm backup-set patch --ssh-key-id` takes."
+            "description": "The store id. This is the value POST /ssh-keys returned when the key was imported, the value BackupSetSpec.ssh_key_id takes, and the value `backupd backup-set patch --ssh-key-id` takes."
           },
           "algorithm": {
             "type": "string",

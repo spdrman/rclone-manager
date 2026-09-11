@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/retention"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/retention"
 )
 
 // FR-18 and FR-19 classification: which backups are KEPT, and nothing about
@@ -109,7 +109,7 @@ type RetentionSetReport struct {
 // what actually call into it — see that file's own doc for why it exists
 // as a sibling to this method rather than a replacement for it:
 // RetentionPreview's classification-only report is still what
-// cmd/backup-manager's `retention`/`retention --dry-run` commands render
+// cmd/backupd's `retention`/`retention --dry-run` commands render
 // today (see that command's own note on the CLI still not calling
 // PruneApply for a real, non-dry-run invocation, a separate, narrower gap
 // than this doc comment's own past staleness was).
@@ -181,7 +181,7 @@ func (s *Service) RetentionPreview(ctx context.Context, set model.BackupSetID) (
 // set, in config order. A per-set error is returned immediately (unlike
 // the processing cycle's own per-backup-set error isolation): retention
 // classification has no partial-progress concept worth continuing past,
-// and an operator running `rbm retention` wants to know
+// and an operator running `backupd retention` wants to know
 // immediately if any one backup set's classification could not be
 // computed, not have it silently missing from the printed report.
 func (s *Service) RetentionPreviewAll(ctx context.Context) ([]RetentionSetReport, error) {

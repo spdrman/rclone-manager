@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import type { ApiError, AppSettings, CapacitySettings, UpdateCapacitySettings } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
 import { Banner } from "@shared/components/Banner";
@@ -291,11 +291,11 @@ function CapacityEditor({ loaded, readOnly }: { loaded: CapacitySettings; readOn
       })
       .catch((e: unknown) => {
         setSaveError(
-          e instanceof BackupManagerError
+          e instanceof BackupdError
             ? e.api
             : {
                 code: "unknown",
-                message: "Backup Manager could not save the storage capacity settings.",
+                message: "Backupd could not save the storage capacity settings.",
                 correlationId: "unavailable"
               }
         );

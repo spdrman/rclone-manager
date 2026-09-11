@@ -43,7 +43,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // Behaviour is everything this product knows about reading an object back

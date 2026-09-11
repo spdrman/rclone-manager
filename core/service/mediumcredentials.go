@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
 )
 
 // Importing S3 credentials: the same one-way door POST /ssh-keys already
@@ -166,7 +166,7 @@ func (b *BackupService) ImportStorageCredentials(_ context.Context, accessKeyID,
 }
 
 // ImportStorageCredentialsText is ImportStorageCredentials for material
-// that already IS shared-credentials text, which is what `backup-manager
+// that already IS shared-credentials text, which is what `backupd
 // medium import-credentials --stdin` reads.
 //
 // It exists as its own method rather than as a parse in the CLI for the

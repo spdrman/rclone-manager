@@ -5,7 +5,7 @@ they ask for them.
 
 ## Support
 
-- Support and bug reports: https://github.com/spdrman/rclone-manager/issues
+- Support and bug reports: https://github.com/spdrman/backupd/issues
 - Response expectation: this is a single-maintainer project. Issues are read; there is no
   service level attached to them and the listing does not imply one.
 - Before opening an issue, the recovery documentation covers the three failures that
@@ -16,7 +16,7 @@ they ask for them.
 
 ## Source
 
-- Source repository: https://github.com/spdrman/rclone-manager
+- Source repository: https://github.com/spdrman/backupd
 - The application is built from that repository. Every provider package in it wraps one
   canonical container image built from one source tree; no target rebuilds the application
   from a different set of inputs.

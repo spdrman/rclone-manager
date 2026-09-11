@@ -5,13 +5,13 @@ import (
 	"testing"
 
 	// Imported so this test binary's build info includes
-	// github.com/rclone/rclone, exactly as cmd/backup-manager's real binary
+	// github.com/rclone/rclone, exactly as cmd/backupd's real binary
 	// does (it blank-imports internal/transport/rclone for backend
-	// registration; see cmd/backup-manager/main.go). Without some test in
+	// registration; see cmd/backupd/main.go). Without some test in
 	// this package pulling rclone into the build closure,
 	// embeddedRcloneVersion would have nothing to find and this test could
 	// only ever assert "unknown", which would not prove anything.
-	_ "github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	_ "github.com/spdrman/backupd/core/internal/transport/rclone"
 )
 
 // The one test whose import list is half the test.

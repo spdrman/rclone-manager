@@ -11,7 +11,7 @@ export const synologyBridge: PlatformBridge = {
 
   deployment: {
     label: "DSM package",
-    storageMount: "/volume1/backup-manager",
+    storageMount: "/volume1/backupd",
     adapterVersion: "synology 1.2.4"
   },
 

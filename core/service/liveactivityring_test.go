@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/obs"
 )
 
 // bytesPerRun is the average heap allocated by one call to f.

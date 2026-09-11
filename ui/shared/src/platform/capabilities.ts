@@ -70,7 +70,7 @@ export function describeCapabilities(
       supported: caps.nativeAuth,
       detail: caps.nativeAuth
         ? platformName + " session"
-        : "Backup Manager local account"
+        : "Backupd local account"
     },
     {
       label: "Native notifications",
@@ -104,5 +104,5 @@ export function notificationCopy(
 ): string {
   return caps.nativeNotifications
     ? "Native " + platformName + " notifications are available and enabled for this platform integration."
-    : "Native NAS notifications are not available for this platform integration. Backup Manager webhook notifications are enabled instead.";
+    : "Native NAS notifications are not available for this platform integration. Backupd webhook notifications are enabled instead.";
 }

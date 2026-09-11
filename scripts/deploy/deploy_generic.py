@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploys the generic backup-manager Docker app end to end (issue
+"""Deploys the generic backupd Docker app end to end (issue
 #82/B4.1): validates an SSH private key and known_hosts file, renders
 config.yaml and a compose .env file, wires the mounts, and starts the
 container via `docker compose`.
@@ -42,7 +42,7 @@ Usage:
     python3 scripts/deploy/deploy_generic.py \\
         --ssh-key /path/to/id_ed25519 --known-hosts /path/to/known_hosts \\
         --host sftp.example.com --user backupuser --remote-path /uploads \\
-        --state-dir /srv/backup-manager/state --backup-dir /srv/backup-manager/backups
+        --state-dir /srv/backupd/state --backup-dir /srv/backupd/backups
 
 Run `--help` for the full flag list, and see test_deploy_generic.py /
 test_deploy_generic_integration.py for what's actually verified.
@@ -65,10 +65,10 @@ COMPOSE_FILE = REPO_ROOT / "container" / "compose.yaml"
 # The configuration mount is the DIRECTORY, not the file inside it
 # (issue #196): the engine creates and atomically replaces config.yaml and
 # keeps ssh_keys/ and known_hosts.d/ beside it.
-CONTAINER_CONFIG_DIR = "/etc/backup-manager/config"
+CONTAINER_CONFIG_DIR = "/etc/backupd/config"
 CONTAINER_CONFIG_PATH = CONTAINER_CONFIG_DIR + "/config.yaml"
-CONTAINER_KEY_PATH = "/etc/backup-manager/id_ed25519"
-CONTAINER_KNOWN_HOSTS_PATH = "/etc/backup-manager/known_hosts"
+CONTAINER_KEY_PATH = "/etc/backupd/id_ed25519"
+CONTAINER_KNOWN_HOSTS_PATH = "/etc/backupd/known_hosts"
 CONTAINER_STATE_DIR = "/data/state"
 CONTAINER_BACKUP_DIR = "/data/backups"
 
@@ -109,14 +109,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         prog="deploy_generic.py",
-        description="Deploy the generic backup-manager Docker app (issue #82/B4.1).",
+        description="Deploy the generic backupd Docker app (issue #82/B4.1).",
         formatter_class=_HelpFormatter,
         epilog=(
             "example:\n"
             "  python3 scripts/deploy/deploy_generic.py \\\n"
             "      --ssh-key /path/to/id_ed25519 --known-hosts /path/to/known_hosts \\\n"
             "      --host sftp.example.com --user backupuser --remote-path /uploads \\\n"
-            "      --state-dir /srv/backup-manager/state --backup-dir /srv/backup-manager/backups\n"
+            "      --state-dir /srv/backupd/state --backup-dir /srv/backupd/backups\n"
         ),
     )
 
@@ -179,7 +179,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                                     "(not this script's own commit - deploy_generic.py has none to report).")
     deploy_group.add_argument(
         "--project-name",
-        default="backup-manager",
+        default="backupd",
         help="docker compose project name. Re-running with the SAME name converges an "
              "existing deployment (unchanged services untouched, changed ones recreated) "
              "instead of creating a duplicate one - this is what makes the whole script "

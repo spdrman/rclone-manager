@@ -172,7 +172,7 @@ export function DashboardPage({
             </button>
           }
         >
-          Connect Backup Manager to your first server to begin collecting and
+          Connect Backupd to your first server to begin collecting and
           retaining verified backups.
         </EmptyState>
       </>

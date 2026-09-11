@@ -21,8 +21,8 @@ import { MemoryRouter } from "react-router-dom";
 import { DashboardActivity } from "@shared/pages/DashboardActivity";
 import { ApiProvider } from "@shared/api/ApiContext";
 import { createMockApi } from "@shared/api/mock";
-import { BackupManagerError } from "@shared/api/contracts";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import type { BackupSet } from "@shared/types/backup";
 import type { LiveActivity, SetActivity } from "@shared/types/activity";
 
@@ -98,7 +98,7 @@ function feed(sets: SetActivity[], pollAfterMs = 10_000): LiveActivity {
   return { observedAt: "2026-08-29T02:01:20+02:00", epoch: "one-process", pollAfterMs, sets, deployment: null };
 }
 
-function renderStrips(api: BackupManagerApi, sets: BackupSet[] | null = [BASE_SET, SECOND_SET]) {
+function renderStrips(api: BackupdApi, sets: BackupSet[] | null = [BASE_SET, SECOND_SET]) {
   return render(
     <MemoryRouter>
       <ApiProvider api={api}>
@@ -164,7 +164,7 @@ describe("the strips on the dashboard", () => {
 
   it("says what went wrong rather than showing an empty panel", async () => {
     const getLiveActivity = vi.fn().mockRejectedValue(
-      new BackupManagerError({
+      new BackupdError({
         code: "INTERNAL",
         message: "The backup service could not read live activity.",
         correlationId: "cid_test"

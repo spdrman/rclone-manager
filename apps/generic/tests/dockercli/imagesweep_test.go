@@ -75,7 +75,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
+	"github.com/spdrman/backupd/core/tests/dockerlease"
 )
 
 const (
@@ -166,7 +166,7 @@ func TestMain(m *testing.M) {
 // the daemon has to emulate, which is the bug this function exists to
 // remove, reintroduced from the other side.
 //
-// scripts/rcmtools/e2e/run_machine_tier.py already reached that conclusion on this
+// scripts/bdtools/e2e/run_machine_tier.py already reached that conclusion on this
 // same machine ("On this Mac the build picked amd64 unprompted and every
 // compile inside it ran under emulation, which turns 'measure the cost'
 // into measuring qemu") and reads it off the daemon. This takes it from

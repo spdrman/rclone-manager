@@ -1,4 +1,4 @@
-rclone-manager
+backupd
 Copyright 2026 Roman Goldmann
 
 This product includes third-party software. Every dependency, with its version,
@@ -33,10 +33,10 @@ MPL-2.0
   Licence:    https://mozilla.org/MPL/2.0/
   Components (2), and where to get each one's source:
     go github.com/hashicorp/go-cleanhttp@v0.5.2
-      linked into: backup-manager, backup-manager-web
+      linked into: backupd, backupd-web
       source:      https://proxy.golang.org/github.com/hashicorp/go-cleanhttp/@v/v0.5.2.zip
     go github.com/hashicorp/go-retryablehttp@v0.7.8
-      linked into: backup-manager, backup-manager-web
+      linked into: backupd, backupd-web
       source:      https://proxy.golang.org/github.com/hashicorp/go-retryablehttp/@v/v0.7.8.zip
 
 Third-party material this project vendors into its own source
@@ -57,7 +57,7 @@ Font Awesome Free 6.7.2
   Modification:   reproduced verbatim and unmodified
   What ships:     the SVG path data of fourteen icons, compiled into the web bundle
   Carried in:     ui/shared/src/design-system/icons.tsx
-  Linked into:    backup-manager-web
+  Linked into:    backupd-web
   Upstream:       https://registry.npmjs.org/@fortawesome/fontawesome-free/-/fontawesome-free-6.7.2.tgz
   Also stated in: docs/compliance/bundled-icon-artwork.md, ui/shared/index.html
 
@@ -70,7 +70,7 @@ IBM Plex Sans 1.1.0
   Modification:   reproduced verbatim and unmodified
   What ships:     the Latin1 woff2 subsets of the regular, medium, semibold and bold faces, served from the image
   Carried in:     ui/shared/public/fonts/IBMPlexSans-Regular-Latin1.woff2, ui/shared/public/fonts/IBMPlexSans-Medium-Latin1.woff2, ui/shared/public/fonts/IBMPlexSans-SemiBold-Latin1.woff2, ui/shared/public/fonts/IBMPlexSans-Bold-Latin1.woff2
-  Linked into:    backup-manager-web
+  Linked into:    backupd-web
   Upstream:       https://registry.npmjs.org/@ibm/plex-sans/-/plex-sans-1.1.0.tgz
   Also stated in: docs/compliance/bundled-webfonts.md, ui/shared/index.html, ui/shared/src/design-system/typography.css
 
@@ -83,7 +83,7 @@ IBM Plex Mono 2.5.0
   Modification:   reproduced verbatim and unmodified
   What ships:     the Latin1 woff2 subsets of the regular, medium and semibold faces, served from the image
   Carried in:     ui/shared/public/fonts/IBMPlexMono-Regular-Latin1.woff2, ui/shared/public/fonts/IBMPlexMono-Medium-Latin1.woff2, ui/shared/public/fonts/IBMPlexMono-SemiBold-Latin1.woff2
-  Linked into:    backup-manager-web
+  Linked into:    backupd-web
   Upstream:       https://registry.npmjs.org/@ibm/plex-mono/-/plex-mono-2.5.0.tgz
   Also stated in: docs/compliance/bundled-webfonts.md, ui/shared/index.html, ui/shared/src/design-system/typography.css
 

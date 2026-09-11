@@ -15,12 +15,12 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/internal/transport/retry"
 )
 
 // This file is issue #295's end-to-end proof: a source marked
@@ -60,7 +60,7 @@ func generateSFTPClientKey(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("ed25519.GenerateKey: %v", err)
 	}
-	block, err := ssh.MarshalPrivateKey(priv, "rclone-manager-295-test-client")
+	block, err := ssh.MarshalPrivateKey(priv, "backupd-295-test-client")
 	if err != nil {
 		t.Fatalf("ssh.MarshalPrivateKey: %v", err)
 	}

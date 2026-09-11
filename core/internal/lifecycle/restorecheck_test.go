@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // TestRunRestoreCheck_Passes is the positive control the whole file needs.

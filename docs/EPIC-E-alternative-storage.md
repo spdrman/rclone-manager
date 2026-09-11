@@ -3,11 +3,11 @@
 ## Status
 
 **Type:** EPIC / Detailed implementation specification
-**Repository:** `spdrman/rclone-manager`
+**Repository:** `spdrman/backupd`
 **Parent / predecessor EPICs:** EPIC A (#1, backup engine), EPIC B (#81, provider-neutral core and multi-NAS apps)
 **Primary implementation root:** `core/`
 **Tracker issue:** #232 (sub-issues #233 through #242)
-**FR numbering:** this specification continues the product's FR series at **FR-27**. FR-1 through FR-24 are defined in `docs/EPIC.md`; FR-26 is claimed by the `version` command in `core/cmd/backup-manager` and `core/internal/app`. Nothing here renumbers an existing FR.
+**FR numbering:** this specification continues the product's FR series at **FR-27**. FR-1 through FR-24 are defined in `docs/EPIC.md`; FR-26 is claimed by the `version` command in `core/cmd/backupd` and `core/internal/app`. Nothing here renumbers an existing FR.
 
 ---
 
@@ -174,13 +174,13 @@ storage_mediums:
     region: us-east-1
     endpoint: ""                  # empty means the AWS endpoint for region
     bucket: nas-backups
-    prefix: rclone-manager        # key namespace inside the bucket
+    prefix: backupd        # key namespace inside the bucket
     storage_class: STANDARD
     upload_verification: readback # readback (default) or attested; see FR-31
     credentials:
-      file: /var/lib/backup-manager/s3/offsite_s3.creds
+      file: /var/lib/backupd/s3/offsite_s3.creds
       # env: BACKUP_S3_OFFSITE
-      # command: ["op", "read", "op://infra/backup-manager/s3-offsite"]
+      # command: ["op", "read", "op://infra/backupd/s3-offsite"]
 ```
 
 A retention tier names the medium its artifacts live on:
@@ -312,7 +312,7 @@ Rules:
 - Where the endpoint or the embedded rclone version cannot produce a full-object checksum attestation, `attested` SHALL fail with an explicit capability result, never silently degrade to something weaker: FR-13's "explicit capability result rather than silently weakening configured verification" applies verbatim.
 - **Measured, against rclone v1.75.0: no s3 medium can reach `attested` at all.** `backend/s3`'s `Fs.Hashes()` returns exactly `hash.MD5` and `Object.Hash` refuses every other algorithm, so a full-object SHA-256 attestation is not obtainable through this build. It was proven against a real MinIO endpoint, not inferred from the source. The digest an S3 endpoint offers for free is the ETag, which stops being a whole-object MD5 the moment an upload is multipart, and comparing it to a recorded SHA-256 is the exact thing FR-32 forbids. `MediumStore.ObjectChecksum` therefore speaks SHA-256 and nothing else, so there is no way to ask this boundary for an ETag by accident, and the ladder refuses any attestation that comes back under a different algorithm rather than compare it: a digest of the wrong algorithm compared against the recorded hash produces a MISMATCH, which reads on every surface as corruption and quarantines a perfectly good backup. The consequences are binding on the move engine (FR-30, #238): a medium configured `upload_verification: attested` cannot be served on this rclone and SHALL be refused loudly at the point the move is planned, never quietly served as `existence` or as an unverified pass. Re-measure this when rclone is upgraded; the assertion lives in the MinIO integration suite so an upgrade that changes it fails the gate.
 - Periodic revalidation (`core/internal/revalidate`) becomes placement-aware. Local placements keep today's behavior. Medium placements are `existence`-checked by default on the revalidation interval; `attested` and `content` re-verification of a medium placement are operator-initiated operations, because anything that costs egress must never happen silently. A revalidation pass that could only achieve `existence` SHALL be recorded and reported as `existence`, never as the artifact having been "revalidated" in today's sense; the checked-vs-passed distinction `revalidate` already draws (a pass that verified nothing must not reset the due-ness clock as if it had) extends to classes. The restore-test hook (`config.Revalidation.Command`) opens the artifact, so running it against a medium placement is a download and falls under the same rule; it does not run automatically there, and the pass SHALL name the tier that did not run rather than report a green result for a check that silently stopped happening. An artifact that still has an ACTIVE local placement, which is where a move leaves it between the upload and the source delete, keeps today's local check unchanged and is not downgraded to `existence` for the duration of the move.
-- The operator-initiated door FR-31 keeps talking about is `rbm validate <source/backup-set/artifact>` (issue #435). Given an artifact with no ACTIVE local placement and at least one ACTIVE medium placement, it verifies the medium copies through `MediumStore` and the configured resolver: by default at the strongest class that costs nothing, which is `attested` where the endpoint can attest and `existence` where it cannot, with the step-down named in the result rather than taken quietly; and at `content` when `--content` is passed, which is the download FR-31 says must never happen on a schedule. A copy that could not be asked, because the endpoint did not answer or because the configuration no longer declares that medium, is reported as an ERROR rather than as a failed verdict, and the artifact is left exactly as it was: an unreachable bucket is not evidence that a backup is gone. A deployment with no `MediumStore` at all still gets the refusal issue #434 introduced.
+- The operator-initiated door FR-31 keeps talking about is `backupd validate <source/backup-set/artifact>` (issue #435). Given an artifact with no ACTIVE local placement and at least one ACTIVE medium placement, it verifies the medium copies through `MediumStore` and the configured resolver: by default at the strongest class that costs nothing, which is `attested` where the endpoint can attest and `existence` where it cannot, with the step-down named in the result rather than taken quietly; and at `content` when `--content` is passed, which is the download FR-31 says must never happen on a schedule. A copy that could not be asked, because the endpoint did not answer or because the configuration no longer declares that medium, is reported as an ERROR rather than as a failed verdict, and the artifact is left exactly as it was: an unreachable bucket is not evidence that a backup is gone. A deployment with no `MediumStore` at all still gets the refusal issue #434 introduced.
 - An artifact on an archive storage class (`GLACIER`, `DEEP_ARCHIVE`) is `existence`-checkable only, until an explicit restore (FR-34) makes stronger classes possible. The status surfaces say exactly that.
 - FR-19 last-known-good eligibility is unchanged in form (managed-complete, validation passed), and the protection continues to refuse deletion regardless of medium. The health surface reports the protected artifact's verification class and its age, so "protected by a copy nobody has content-verified in a year" is visible instead of implied.
 - Quarantine becomes placement-scoped: a medium placement failing verification marks that placement, and the ARTIFACT enters `QUARANTINED`/`QUARANTINED_LOST` only when no other ACTIVE verified placement remains (`QUARANTINED_LOST` when the remote source is also confirmed gone, the existing meaning of that state).
@@ -333,7 +333,7 @@ S3 credentials follow the SSH key custody model in `core/internal/config.Key` an
 - Three sources, exactly one set per medium: `credentials.file` (preferred: an AWS shared-credentials format file that rclone reads itself, so the secret never enters this process's memory), `credentials.env`, `credentials.command` (argv array, never a shell string, bounded timeout, minimal environment).
 - There is **no schema field for a literal key**. `access_key_id:` or `secret_access_key:` inline in the config is an unknown field, refused by `Load`'s `KnownFields(true)` before validation even runs, and a test pins that refusal.
 - Whatever `env` or `command` produce is validated by shape before use, wrapped in `obs.Secret`, and never echoed: a resolver failure is reported by the shape of the problem, never by the content that failed.
-- Credential files live under private state (`/var/lib/backup-manager`, EPIC B section 19.1), never under the backup root, and the API import flow mirrors SSH key import: the secret goes into private state, and the config holds a path.
+- Credential files live under private state (`/var/lib/backupd`, EPIC B section 19.1), never under the backup root, and the API import flow mirrors SSH key import: the secret goes into private state, and the config holds a path.
 - The following SHALL never contain a credential, in whole or in part: `config.yaml` values, any log line at any level, any error message, any API response (the mediums surface returns id, type, bucket, region, class, never key material), the redacted config export, recovery manifests and sidecar objects, and bucket object metadata.
 - The enforcement is a canary: an integration test resolves a known canary secret through each source and asserts its absence from every observable output above. The planted violation for this guard is a build that logs the resolved medium config verbatim; the canary gate fails it, and that failing run is recorded in the landing PR.
 
@@ -345,7 +345,7 @@ A colder storage class can take hours to restore and costs money to read. The pr
 - Restore is an explicit durable operation (`submitOperation` family): it names the artifact, the placement, and the restore window in days, records the operation before acting, and survives restarts like every other operation. Reads never initiate a restore as a side effect.
 - When S3 reports a restore's expiry date, it is shown; until then the surface says a restore is in progress and that the provider reports no progress. No ETA is invented.
 - No cost figures are served anywhere. The backend cannot compute egress or restore pricing honestly (no price list, no negotiated rates), so per the #211 rule it serves what it holds: bytes, storage class, and a plain statement that retrieval from this class is billed by the provider. If a future FR adds operator-entered price tables, that is its own decision; nothing here fakes it.
-- The CLI mirrors the same vocabulary (`rbm artifacts`, artifact detail), so a terminal operator and a UI operator read the same truth.
+- The CLI mirrors the same vocabulary (`backupd artifacts`, artifact detail), so a terminal operator and a UI operator read the same truth.
 
 ## FR-35, Compatibility
 

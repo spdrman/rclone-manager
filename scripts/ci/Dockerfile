@@ -94,7 +94,7 @@ ARG CI_GID=1000
 RUN set -eux; \
     if ! getent group "${CI_GID}" >/dev/null; then groupadd -g "${CI_GID}" ci; fi; \
     useradd -o -u "${CI_UID}" -g "${CI_GID}" -d /ci -s /bin/bash -M ci; \
-    mkdir -p /ci/.cache/go-build /ci/go/pkg/mod /ci/.npm /ci/.cache/rclone-manager-tests-gate; \
+    mkdir -p /ci/.cache/go-build /ci/go/pkg/mod /ci/.npm /ci/.cache/backupd-tests-gate; \
     chown -R "${CI_UID}:${CI_GID}" /ci; \
     chmod -R 0775 /ci; \
     getent passwd "${CI_UID}"

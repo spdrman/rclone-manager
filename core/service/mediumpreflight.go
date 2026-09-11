@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/mediumcheck"
+	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/mediumcheck"
 )
 
 // This file is issue #443's storage-medium preflight: prove a declared
@@ -168,7 +168,7 @@ func (b *BackupService) PreflightStorageMedium(ctx context.Context, id string) (
 	// "somebody pressed the button" is not the claim the mark makes.
 	//
 	// This is also why the CLI's by-id verb now goes through the same door
-	// `medium add` goes through (core/cmd/backup-manager's route.go): the
+	// `medium add` goes through (core/cmd/backupd's route.go): the
 	// process that clears the mark has to be the process whose
 	// configuration the mark is in.
 	if report.OK {

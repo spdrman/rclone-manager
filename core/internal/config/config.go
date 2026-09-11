@@ -30,7 +30,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/model"
 )
 
 // Config is the manager's whole runtime configuration (FR-5).
@@ -572,7 +572,7 @@ type BackupSet struct {
 	// a *Config has to remember: any mutation of the top-level Retention
 	// has to be followed by Validate (or ResolveBackupSetRetention), or
 	// every set goes on deciding under the policy that was in force when
-	// it was last resolved. cmd/backup-manager's retention override flags
+	// it was last resolved. cmd/backupd's retention override flags
 	// are the live instance of this, and were a silent no-op until they
 	// re-resolved.
 	Retention Retention `yaml:"-"`
@@ -1240,7 +1240,7 @@ type RetentionTier struct {
 	// used to record as inert and defer to #239 "when retention starts
 	// planning on it". #239 landed and it stopped being inert: an
 	// override replaced the file's chain with an all-local one, so
-	// `rbm retention --tier` previewed placement against local
+	// `backupd retention --tier` previewed placement against local
 	// beside a deployment sending monthly to S3, and printed it no less
 	// confidently. `--tier-medium NAME=MEDIUM_ID` answers it (issue #595,
 	// retention_flags.go): a repeatable flag rather than a fifth
@@ -1633,7 +1633,7 @@ type StorageMedium struct {
 	//
 	// A bucket name carrying a "/" is refused, because that is one
 	// specific mistake worth catching in words an operator can act on:
-	// "nas-backups/rclone-manager" is a bucket and a prefix written into
+	// "nas-backups/backupd" is a bucket and a prefix written into
 	// one field, and the refusal says so rather than letting the backend
 	// report a bucket name it cannot resolve.
 	Bucket string `yaml:"bucket"`
@@ -1812,7 +1812,7 @@ type MediumCredentials struct {
 	// holds is a secret it cannot log.
 	//
 	// The file belongs under this manager's private state directory
-	// (/var/lib/backup-manager), never under the backup root: the backup
+	// (/var/lib/backupd), never under the backup root: the backup
 	// root is what a NAS deployment exports over SMB or AFP, and #298 was
 	// filed over precisely that exposure for the SSH key. This package
 	// does not enforce that placement, the same way it does not enforce it
@@ -1848,7 +1848,7 @@ const DefaultFileName = "config.yaml"
 // DefaultFileName inside it; anything else is returned unchanged.
 //
 // It exists because #196 made the packaged mount a directory, so
-// `--config /etc/backup-manager/config` is now the natural thing for an
+// `--config /etc/backupd/config` is now the natural thing for an
 // operator to type. Without this, that spelling fails with "is a
 // directory" from deep inside the YAML reader, which says nothing about
 // what to do instead.

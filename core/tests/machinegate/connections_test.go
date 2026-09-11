@@ -49,9 +49,9 @@ import (
 	"github.com/rclone/rclone/fs/operations"
 	"github.com/rclone/rclone/fs/walk"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
-	"github.com/spdrman/rclone-manager/core/tests/machines"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/tests/machines"
 )
 
 // dockerProbeBudget bounds every docker call this file makes. #161's whole
@@ -392,7 +392,7 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 	// pulls, so the default path for the artifacts it exists to fetch is
 	// four connections, not one.
 	t.Run("ACopyAboveTheMultiThreadCutoffOpensOneConnection", func(t *testing.T) {
-		content := bytes.Repeat([]byte("rclone-manager"), (8<<20)/len("rclone-manager"))
+		content := bytes.Repeat([]byte("backupd"), (8<<20)/len("backupd"))
 		writeUploadFile(t, f, "big.dump", content)
 		src := f.TransportSource("big", "")
 
@@ -478,7 +478,7 @@ func TestSFTPConnectionsAreReleasedAndBounded(t *testing.T) {
 				t.Fatalf("seed artifact in %s: %v", dir, err)
 			}
 		}
-		payload := bytes.Repeat([]byte("rclone-manager"), (8<<20)/len("rclone-manager"))
+		payload := bytes.Repeat([]byte("backupd"), (8<<20)/len("backupd"))
 		if err := os.WriteFile(filepath.Join(f.UploadDir, "ceiling", "big.dump"), payload, 0o644); err != nil {
 			t.Fatalf("seed the payload: %v", err)
 		}

@@ -33,8 +33,8 @@ import (
 // `core/x/` to `./x/`; the web stage keeps the repository's layout. Both
 // are read by their source path, which is the half that has to match.
 var imageStageFor = map[string]string{
-	"backup-manager":     "build",
-	"backup-manager-web": "build-web",
+	"backupd":     "build",
+	"backupd-web": "build-web",
 }
 
 // copiedIntoStages reads every `COPY <dir>/ ...` in a Dockerfile, keyed
@@ -180,12 +180,12 @@ func TestEveryFirstPartyPackageTheBinariesImportIsCopiedIntoTheImage_RefusesARec
 
 	var core GoBuildTarget
 	for _, target := range ShippedGoBinaries {
-		if target.Binary == "backup-manager" {
+		if target.Binary == "backupd" {
 			core = target
 		}
 	}
 	if core.Binary == "" {
-		t.Fatal("ShippedGoBinaries no longer lists backup-manager")
+		t.Fatal("ShippedGoBinaries no longer lists backupd")
 	}
 	dirs := firstPartySourceDirs(t, core)
 	missing, problem := missingFromImage(broken, core, dirs)

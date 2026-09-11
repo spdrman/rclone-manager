@@ -14,7 +14,7 @@ export const truenasBridge: PlatformBridge = {
     // and the backup-set wizard seeds a destination from it, so it must not
     // name a directory that also holds the SSH key (§19.2). Pinned to
     // distribution/packaging/canonical.json.
-    storageMount: "/mnt/tank/backup-manager/backups",
+    storageMount: "/mnt/tank/backupd/backups",
     adapterVersion: "truenas 1.2.0"
   },
 

@@ -168,7 +168,7 @@ func containsID(ids []string, id string) bool {
 
 // TestSweepStillReapsWhenAListedContainerVanishedFromUnderIt is issue #161's
 // sweeper finding. StaleAfter is fifteen minutes, and yet #161 found
-// rclone-manager-gate-sftp-* containers still running after 4 and 11 hours.
+// backupd-gate-sftp-* containers still running after 4 and 11 hours.
 // Part of that is simply that they predate the label (it landed the same
 // morning, in #151), but there is a live defect underneath it: the batch
 // `docker inspect` used to date the candidates exits non-zero if ANY of its

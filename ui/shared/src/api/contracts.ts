@@ -1,6 +1,6 @@
 /**
  * The interface between this frontend and any backend that can serve it:
- * `BackupManagerApi` at the bottom of the file, and every request and
+ * `BackupdApi` at the bottom of the file, and every request and
  * response type its methods name.
  *
  * Two implementations satisfy it, `httpApi` in client.ts and the fixtures
@@ -112,10 +112,10 @@ export interface ApiError {
 /** The typed envelope, thrown. It extends Error so an unprepared caller
  *  still gets something with a readable message, and carries `api` so a
  *  prepared one can branch on the code and quote the correlation id. */
-export class BackupManagerError extends Error {
+export class BackupdError extends Error {
   constructor(readonly api: ApiError) {
     super(api.message);
-    this.name = "BackupManagerError";
+    this.name = "BackupdError";
   }
 }
 
@@ -411,7 +411,7 @@ export interface RestoreCopyRequest {
   configRevision: string;
   /** One key per LOGICAL restore, reused on every retry of it. POST
    *  /operations declares the header required and refuses without one;
-   *  see BackupManagerApi.runCycle for why the key belongs to the
+   *  see BackupdApi.runCycle for why the key belongs to the
    *  submission rather than to the attempt. */
   idempotencyKey: string;
 }
@@ -1541,7 +1541,7 @@ export interface FirstRunResult {
   restartRequired: boolean;
 }
 
-/** The outcome of {@link BackupManagerApi.reinstate}. */
+/** The outcome of {@link BackupdApi.reinstate}. */
 export interface ArtifactReinstatement {
   /** Whether the backup was actually returned to a trusted state. */
   reinstated: boolean;
@@ -1567,7 +1567,7 @@ export interface ActivityQuery {
   before?: string;
 }
 
-/** One page of {@link BackupManagerApi.listActivity}. */
+/** One page of {@link BackupdApi.listActivity}. */
 export interface ActivityFeedPage {
   /** The page itself, newest first. */
   events: ActivityEvent[];
@@ -1593,7 +1593,7 @@ export interface ActivityFeedPage {
  * a write rather than fresh reads. Those are the things a caller gets
  * wrong, and none of them are visible in the types.
  */
-export interface BackupManagerApi {
+export interface BackupdApi {
   getVersion(): Promise<VersionInfo>;
   getHealth(): Promise<SystemHealth>;
 
@@ -1651,7 +1651,7 @@ export interface BackupManagerApi {
    * one (issue #597, EPIC G's G1.4).
    *
    * `backupSetId` is the full "source/backup-set" id, which is the id
-   * every surface in this product prints and the one `rbm
+   * every surface in this product prints and the one `backupd
    * fetch --backup-set` has taken since #569.
    *
    * It shares runCycle's route, gate and single-flight lock, so a per-set

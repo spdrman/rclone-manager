@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/obs"
 )
 
 // realConnectionRefusedError reserves a TCP port, releases it immediately,

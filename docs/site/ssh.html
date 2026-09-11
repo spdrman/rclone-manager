@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SSH keys and proving a source: rclone-manager</title>
-  <meta name="description" content="The rclone-manager SSH authentication wizard, host key comparison, and the six-step connection check a backup set has to pass before it can be saved.">
+  <title>SSH keys and proving a source: backupd</title>
+  <meta name="description" content="The backupd SSH authentication wizard, host key comparison, and the six-step connection check a backup set has to pass before it can be saved.">
   <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
@@ -21,7 +21,7 @@
 <header class="topbar" id="topbar">
   <div class="topbar-content">
     <a class="topbar-brand" href="index.html">
-      <img src="assets/logo-mark-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress">
+      <img src="assets/logo-mark-light.svg" alt="backupd mark: a broken ring standing for a transfer cycle in progress">
       <h1 class="brand-name">rclone<span class="brand-dash">-</span>manager</h1>
     </a>
   </div>
@@ -57,21 +57,21 @@
         <span class="nav-label nav-label-short">Ref</span>
       </a>
 
-      <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+      <a href="https://github.com/spdrman/backupd" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
         <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
           <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
         </svg>
         <span class="nav-label nav-label-full">GitHub</span>
       </a>
 
-      <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/spdrman/backupd/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">README</span>
       </a>
-      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/spdrman/backupd/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Deployment</span>
         <span class="nav-label nav-label-short">Deploy</span>
       </a>
-      <a href="https://github.com/spdrman/rclone-manager/issues" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/spdrman/backupd/issues" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Issues</span>
       </a>
 
@@ -115,7 +115,7 @@
 
   <section>
     <h2 id="wizard">The key wizard</h2>
-    <p>What <a href="https://github.com/spdrman/rclone-manager/issues/592">#592</a> replaced was two text boxes, both write-only. One asked an operator to paste "the id of an imported key", and a key id is a uuid the product showed exactly once, in the response to the import that created it, so the box was a blank you filled in with something you would have had to write down months ago. The other asked for a <code>known_hosts</code> line, which is the same problem one layer down.</p>
+    <p>What <a href="https://github.com/spdrman/backupd/issues/592">#592</a> replaced was two text boxes, both write-only. One asked an operator to paste "the id of an imported key", and a key id is a uuid the product showed exactly once, in the response to the import that created it, so the box was a blank you filled in with something you would have had to write down months ago. The other asked for a <code>known_hosts</code> line, which is the same problem one layer down.</p>
     <p>The wizard's first step is the answer to both. It lists the keys this deployment holds, each with its fingerprint, when it was imported and which backup sets are using it. Under that it lists the keys it can find on the machine, with the locations it searched named and the ones that are not present said out loud rather than silently skipped. On a default install the installer generated <code>&lt;prefix&gt;/secrets/id_ed25519</code> and Compose mounted it read-only, so there is exactly one key sitting there and this is the surface that finally offers it. Pasting a key is still available and it is the last option rather than the only one.</p>
   <figure class="wide">
     <img src="screens/ssh-key-wizard.gif" alt="The SSH authentication wizard: the keys held, the keys found on the machine, picking one, probing the server identity, then a six-step verification" loading="lazy">
@@ -133,18 +133,18 @@
 
   <section>
     <h2 id="proof">Proving a source before anything relies on it</h2>
-    <p><a href="https://github.com/spdrman/rclone-manager/issues/624">#624</a> is the gap on the other side. The add-backup-set wizard gated its save on a pinned <code>known_hosts</code> line and an imported key, and both of those are host <em>identity</em>. Neither says whether the key authenticates or whether the account can read the folder, so a set could be created, enabled and scheduled on a connection nobody had ever made.</p>
+    <p><a href="https://github.com/spdrman/backupd/issues/624">#624</a> is the gap on the other side. The add-backup-set wizard gated its save on a pinned <code>known_hosts</code> line and an imported key, and both of those are host <em>identity</em>. Neither says whether the key authenticates or whether the account can read the folder, so a set could be created, enabled and scheduled on a connection nobody had ever made.</p>
     <p>The review step now says so in as many words before the check runs, and none of the three save buttons is available. After it comes back clean the same panel says the source has been proven and saving is enabled.</p>
   <figure class="wide">
     <img src="screens/ssh-source-proof.gif" alt="The add-backup-set review step: nothing proven and saving disabled, then a six-step connection report and saving enabled" loading="lazy">
     <figcaption><span class="clip-tag">clip</span>Six named steps: the key resolves and its permissions are unchanged, the hostname resolves, the socket opens, the host key matches what this set trusts, the server accepts the key, and the folder lists with a count of what is in it.</figcaption>
   </figure>
 
-    <p>The destination side has worked this way for a while and the source side is copying its shape rather than inventing a second one. <code>rbm medium add</code> verifies by default and <code>--no-verify</code> is an explicit opt-out that says nothing was proven. <code>rbm backup-set create</code> and <code>rbm backup-set patch</code> now do the same, and a set written with <code>--no-verify</code> stays marked unverified until a connection test passes.</p>
+    <p>The destination side has worked this way for a while and the source side is copying its shape rather than inventing a second one. <code>backupd medium add</code> verifies by default and <code>--no-verify</code> is an explicit opt-out that says nothing was proven. <code>backupd backup-set create</code> and <code>backupd backup-set patch</code> now do the same, and a set written with <code>--no-verify</code> stays marked unverified until a connection test passes.</p>
 
     <div class="note">
       <span class="note-label">From a terminal</span>
-      <pre style="margin-bottom:0"><code>rbm backup-set test-connection production/postgres-primary</code></pre>
+      <pre style="margin-bottom:0"><code>backupd backup-set test-connection production/postgres-primary</code></pre>
       <p style="margin-top:0.6rem">Six named outcomes and a non-zero exit when any of them fails. Beside a serving engine the check is made <em>by</em> that engine, so its steps reach the live feed rather than only your terminal; with nothing serving, it is made where you typed it.</p>
     </div>
   </section>
@@ -159,7 +159,7 @@
 </main>
 
 <footer>
-  <p>rclone-manager is Apache-2.0 licensed. <a href="https://github.com/spdrman/rclone-manager">View on GitHub</a></p>
+  <p>backupd is Apache-2.0 licensed. <a href="https://github.com/spdrman/backupd">View on GitHub</a></p>
   <p>Pictures taken against the development fixture API. No picture or clip on this page is evidence about a running engine.</p>
 </footer>
 

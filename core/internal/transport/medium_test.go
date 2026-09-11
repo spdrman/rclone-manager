@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file tests a SHAPE rather than a behaviour, which is why almost
@@ -290,8 +290,8 @@ func TestMediumRendersUnderEveryVerb(t *testing.T) {
 	m := transport.Medium{
 		ID: "cold", Type: transport.MediumTypeS3, Region: "us-east-1",
 		Endpoint: "https://minio.example:9000", Bucket: "nas-backups",
-		Prefix: "rclone-manager", StorageClass: "STANDARD",
-		Credentials: transport.MediumCredentials{File: "/var/lib/backup-manager/s3.creds"},
+		Prefix: "backupd", StorageClass: "STANDARD",
+		Credentials: transport.MediumCredentials{File: "/var/lib/backupd/s3.creds"},
 	}
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
 		if out := fmt.Sprintf(verb, m); out == "" {

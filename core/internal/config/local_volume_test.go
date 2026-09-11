@@ -75,7 +75,7 @@ func TestValidate_LocalVolumeFieldRules(t *testing.T) {
 		{"region set on a local_volume medium", func(m *StorageMedium) { m.Region = "us-east-1" }, []string{"storage_mediums[0]", "region", "local_volume"}},
 		{"endpoint set on a local_volume medium", func(m *StorageMedium) { m.Endpoint = "https://example.com" }, []string{"storage_mediums[0]", "endpoint", "local_volume"}},
 		{"storage class set on a local_volume medium", func(m *StorageMedium) { m.StorageClass = StorageClassStandard }, []string{"storage_mediums[0]", "storage_class", "local_volume"}},
-		{"credentials.file set on a local_volume medium", func(m *StorageMedium) { m.Credentials = MediumCredentials{File: "/var/lib/backup-manager/creds"} }, []string{"storage_mediums[0]", "credentials", "local_volume"}},
+		{"credentials.file set on a local_volume medium", func(m *StorageMedium) { m.Credentials = MediumCredentials{File: "/var/lib/backupd/creds"} }, []string{"storage_mediums[0]", "credentials", "local_volume"}},
 		{"credentials.env set on a local_volume medium", func(m *StorageMedium) { m.Credentials = MediumCredentials{Env: "BACKUP_KEY"} }, []string{"storage_mediums[0]", "credentials", "local_volume"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

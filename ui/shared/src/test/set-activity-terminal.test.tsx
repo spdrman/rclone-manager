@@ -24,15 +24,15 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import { resetGraphForTests } from "@shared/state/graph";
 import { clearBrowserNoticesForTests } from "@shared/state/browserNotices";
 import { backupSetPath } from "@shared/utilities/routes";
 import type { LiveActivity, SetActivity, SetActivityEvent } from "@shared/types/activity";
 
-function renderDetail(source: string, set: string, api: BackupManagerApi) {
+function renderDetail(source: string, set: string, api: BackupdApi) {
   return render(
     <MemoryRouter initialEntries={[backupSetPath(source, set)]}>
       <ApiProvider api={api}>
@@ -309,7 +309,7 @@ describe("Test connection says what it actually did", () => {
     // handler runs, so the engine's own event stream knows nothing about
     // it. There is nothing on the server that could have logged this.
     vi.spyOn(api, "testConnection").mockRejectedValue(
-      new BackupManagerError({
+      new BackupdError({
         code: "CSRF_TOKEN_MISMATCH",
         message: "This request could not be verified.",
         correlationId: "cid_596"

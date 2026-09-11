@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // ungovernedArtifactFixture is a backup whose set was removed: still on

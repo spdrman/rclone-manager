@@ -17,9 +17,9 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/state"
 
-	"github.com/spdrman/rclone-manager/core/internal/testenv"
+	"github.com/spdrman/backupd/core/internal/testenv"
 )
 
 // TestOpenConfigAndJournal_UnreadableDatabaseFile_NeverReturnsAJournal is
@@ -28,7 +28,7 @@ import (
 // write to makes internal/state.Open fail during its own PRAGMA/migrate
 // setup, and OpenConfigAndJournal must propagate that as a fatal error
 // with a nil *state.Journal — the one thing Open (and every
-// cmd/backup-manager subcommand via openService) already treats as "do
+// cmd/backupd subcommand via openService) already treats as "do
 // not construct a BackupService", which is exactly "BackupService...
 // never start" from the issue's own Given/When/Then.
 func TestOpenConfigAndJournal_UnreadableDatabaseFile_NeverReturnsAJournal(t *testing.T) {
@@ -231,7 +231,7 @@ func seedFutureSchemaVersion(t *testing.T, dbPath string) {
 // states it: not merely "OpenConfigAndJournal returns an error", but
 // "BackupService and the daemon/API never start". Open is the one
 // production constructor a web host has (apps/generic/cmd/
-// backup-manager-web/main.go calls it, and returns a non-zero exit
+// backupd-web/main.go calls it, and returns a non-zero exit
 // without ever reaching serve.RunEngine if it fails), so a nil
 // *BackupService out of Open is exactly "no scheduler tick, no cycle, no
 // transfer, no delete" — there is no object left for any of those to be

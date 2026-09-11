@@ -21,12 +21,12 @@
     "every component list from the tree on each run."
   ],
   "project": {
-    "displayName": "rclone-manager",
-    "appId": "com.iasbuilt.rclonemanager",
+    "displayName": "backupd",
+    "appId": "com.iasbuilt.backupd",
     "copyright": "Copyright 2026 Roman Goldmann",
     "copyrightNote": [
       "Roman Goldmann is the author and the copyright holder. This used to read",
-      "\"The Backup Manager Authors\", a collective line chosen because naming a legal",
+      "\"The Backupd Authors\", a collective line chosen because naming a legal",
       "entity was not that issue's call to make. It is this one's: the holder is a",
       "named person, and NOTICE and the LICENSE appendix both render from here so they",
       "cannot disagree with each other.",
@@ -63,7 +63,7 @@
       "",
       "They are in the binaries and not merely in go.mod, which is a difference",
       "worth measuring rather than asserting: `go tool nm` on a linux/amd64",
-      "backup-manager finds 17 go-retryablehttp symbols and 1 go-cleanhttp symbol",
+      "backupd finds 17 go-retryablehttp symbols and 1 go-cleanhttp symbol",
       "surviving dead-code elimination, among them the code symbols NewClient,",
       "DefaultRetryPolicy, DefaultBackoff and DefaultPooledTransport. The MPL",
       "code ships and runs, and nothing below should be read as suggesting it",
@@ -260,7 +260,7 @@
         ],
         "marker": "Font Awesome Free 6.7.2",
         "linkedInto": [
-          "backup-manager-web"
+          "backupd-web"
         ],
         "sourceUrl": "https://registry.npmjs.org/@fortawesome/fontawesome-free/-/fontawesome-free-6.7.2.tgz",
         "recordedIn": [
@@ -323,7 +323,7 @@
         },
         "licenceFile": "ui/shared/public/fonts/LICENSE.txt",
         "linkedInto": [
-          "backup-manager-web"
+          "backupd-web"
         ],
         "sourceUrl": "https://registry.npmjs.org/@ibm/plex-sans/-/plex-sans-1.1.0.tgz",
         "recordedIn": [
@@ -350,7 +350,7 @@
           "one of them carries a digest this package re-derives on each run.",
           "",
           "The Latin1 subsets rather than the complete faces. The image carries the",
-          "web bundle six times over, once compiled into backup-manager-web and once",
+          "web bundle six times over, once compiled into backupd-web and once",
           "per adapter bundle under /ui/bundles, so a face costs six times its own",
           "size against a gated image ceiling, and the complete faces would have been",
           "roughly three times what these cost. docs/compliance/bundled-webfonts.md",
@@ -382,7 +382,7 @@
         },
         "licenceFile": "ui/shared/public/fonts/LICENSE.txt",
         "linkedInto": [
-          "backup-manager-web"
+          "backupd-web"
         ],
         "sourceUrl": "https://registry.npmjs.org/@ibm/plex-mono/-/plex-mono-2.5.0.tgz",
         "recordedIn": [
@@ -409,7 +409,7 @@
           "one of them carries a digest this package re-derives on each run.",
           "",
           "The Latin1 subsets rather than the complete faces. The image carries the",
-          "web bundle six times over, once compiled into backup-manager-web and once",
+          "web bundle six times over, once compiled into backupd-web and once",
           "per adapter bundle under /ui/bundles, so a face costs six times its own",
           "size against a gated image ceiling, and the complete faces would have been",
           "roughly three times what these cost. docs/compliance/bundled-webfonts.md",
@@ -419,10 +419,10 @@
     ]
   },
   "sourceRepository": {
-    "url": "https://github.com/spdrman/rclone-manager",
+    "url": "https://github.com/spdrman/backupd",
     "visibility": "public",
     "visibilityNote": [
-      "Measured, not assumed: `gh repo view spdrman/rclone-manager --json visibility`",
+      "Measured, not assumed: `gh repo view spdrman/backupd --json visibility`",
       "answers PUBLIC. §73 WP5.2 wants the source, privacy, licence and support links",
       "to resolve to real, current content for a store reviewer, and they now do:",
       "every link whose target is this repository resolves for anyone, which is why",
@@ -448,7 +448,7 @@
       "id": "source",
       "title": "Source code",
       "spec": "73 WP5.2",
-      "url": "https://github.com/spdrman/rclone-manager",
+      "url": "https://github.com/spdrman/backupd",
       "repoPath": "",
       "targetsThisRepository": true,
       "mustMention": []
@@ -559,7 +559,7 @@
       },
       "labels": {
         "org.opencontainers.image.licenses": "Apache-2.0",
-        "com.iasbuilt.rclonemanager.licenses.path": "/licenses"
+        "com.iasbuilt.backupd.licenses.path": "/licenses"
       }
     },
     "targets": {
@@ -578,39 +578,39 @@
           "apps/truenas/catalog/ix_values.yaml",
           "apps/truenas/catalog/questions.yaml",
           "apps/truenas/catalog/templates/docker-compose.yaml",
-          "apps/truenas/compose/backup-manager.yaml"
+          "apps/truenas/compose/backupd.yaml"
         ],
         "unbuiltReason": "",
         "licenceDelivery": "image"
       },
       "unraid": {
         "artifacts": [
-          "apps/unraid/template/backup-manager-ui.xml",
-          "apps/unraid/template/backup-manager.xml"
+          "apps/unraid/template/backupd-ui.xml",
+          "apps/unraid/template/backupd.xml"
         ],
         "unbuiltReason": "",
         "licenceDelivery": "image"
       },
       "openmediavault": {
         "artifacts": [
-          "apps/openmediavault/compose/backup-manager.env",
-          "apps/openmediavault/compose/backup-manager.yml"
+          "apps/openmediavault/compose/backupd.env",
+          "apps/openmediavault/compose/backupd.yml"
         ],
         "unbuiltReason": "",
         "licenceDelivery": "image"
       },
       "proxmox": {
         "artifacts": [
-          "apps/proxmox/compose/backup-manager.env",
-          "apps/proxmox/compose/backup-manager.yml"
+          "apps/proxmox/compose/backupd.env",
+          "apps/proxmox/compose/backupd.yml"
         ],
         "unbuiltReason": "",
         "licenceDelivery": "image"
       },
       "portainer": {
         "artifacts": [
-          "apps/portainer/compose/backup-manager.env",
-          "apps/portainer/compose/backup-manager.yml",
+          "apps/portainer/compose/backupd.env",
+          "apps/portainer/compose/backupd.yml",
           "apps/portainer/templates.json",
           "apps/portainer/logo.svg"
         ],
@@ -624,7 +624,7 @@
       },
       "casaos": {
         "artifacts": [
-          "apps/casaos/compose/backup-manager.yml",
+          "apps/casaos/compose/backupd.yml",
           "apps/casaos/icon.svg"
         ],
         "unbuiltReason": "",
@@ -632,7 +632,7 @@
       },
       "zimaos": {
         "artifacts": [
-          "apps/zimaos/compose/backup-manager.yml",
+          "apps/zimaos/compose/backupd.yml",
           "apps/zimaos/icon.svg"
         ],
         "unbuiltReason": "",

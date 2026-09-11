@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/testenv"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/testenv"
 )
 
 // This file is issue #196's missing test, and the reason it was missing is
@@ -54,14 +54,14 @@ type configMountShape struct {
 var configMountShapes = []configMountShape{
 	{
 		// What canonical.json declared before #196:
-		//   <host>/config/config.yaml:/etc/backup-manager/config.yaml:ro
+		//   <host>/config/config.yaml:/etc/backupd/config.yaml:ro
 		name:             "read-only single-file mount (pre-#196 packaging)",
 		readOnly:         true,
 		wantWritesToFail: true,
 	},
 	{
 		// What canonical.json declares now:
-		//   <host>/config:/etc/backup-manager/config
+		//   <host>/config:/etc/backupd/config
 		name:             "writable directory mount (#196)",
 		readOnly:         false,
 		wantWritesToFail: false,

@@ -6,7 +6,7 @@ import "testing"
 // on a host finds the engine serving it rests on the CLI and the web host
 // naming the SAME journal. These two hold the definition itself; the check
 // that both surfaces actually take their default from it reads a file in
-// each module, so it lives in apps/generic/cmd/backup-manager-web, which is
+// each module, so it lives in apps/generic/cmd/backupd-web, which is
 // allowed to look down into core. It cannot live here: the dependency rule
 // is proved by deleting apps/ and running core's tests, so a core test that
 // reads apps/ fails the whole gate rather than the thing it is checking.

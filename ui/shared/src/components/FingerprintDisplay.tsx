@@ -51,7 +51,7 @@ import type { TrustedHostKey } from "@shared/types/backup";
 export function FingerprintDisplay({
   host,
   keys,
-  emptyNote = "Backup Manager could not read a host key for this set, so none is shown here.",
+  emptyNote = "Backupd could not read a host key for this set, so none is shown here.",
   trustedAt
 }: {
   host: string;

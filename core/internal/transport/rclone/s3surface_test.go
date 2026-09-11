@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file guards the S3 surface at its two edges: what configuration can
@@ -71,7 +71,7 @@ func TestS3OptionsAreExactlyThisAllowlist(t *testing.T) {
 		Region:       "us-west-2",
 		Endpoint:     "https://s3.example.invalid",
 		Bucket:       "backups",
-		Prefix:       "rclone-manager",
+		Prefix:       "backupd",
 		StorageClass: "STANDARD_IA",
 		Credentials:  transport.MediumCredentials{Env: "MEDIUM_CREDS"},
 	}

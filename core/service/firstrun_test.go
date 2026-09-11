@@ -36,7 +36,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/config"
 )
 
 // emptyInstall is the state a real operator actually starts in and that
@@ -437,10 +437,10 @@ func TestNewFirstRun_RefusesADeploymentItCannotProduceAValidConfigFor(t *testing
 		want     string
 	}{
 		{"no config path", FirstRunDefaults{StateDatabase: "/data/state/state.db"}, "config path"},
-		{"no state database", FirstRunDefaults{ConfigPath: "/etc/backup-manager/config.yaml"}, "state database"},
+		{"no state database", FirstRunDefaults{ConfigPath: "/etc/backupd/config.yaml"}, "state database"},
 		{
 			"relative state database",
-			FirstRunDefaults{ConfigPath: "/etc/backup-manager/config.yaml", StateDatabase: "state/state.db"},
+			FirstRunDefaults{ConfigPath: "/etc/backupd/config.yaml", StateDatabase: "state/state.db"},
 			"state database",
 		},
 	}

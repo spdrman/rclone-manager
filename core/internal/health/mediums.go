@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
 )
 
 // This file is FR-24's placement half (issue #444): not "are this backup
@@ -19,7 +19,7 @@ import (
 // made a move's outcome visible on the exit status, in the activity feed,
 // in the FR-23 event stream and on the dashboard's last-run-cycle panel.
 // All four of those are statements about ONE PASS. An operator opening a
-// status page on a deployment nobody has run `rbm run` in
+// status page on a deployment nobody has run `backupd run` in
 // front of sees none of them, so a deployment whose moves had been
 // failing for a week reported itself healthy, on every surface, forever.
 //

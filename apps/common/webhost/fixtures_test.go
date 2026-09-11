@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/apps/common/platform/capabilities"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The doubles every handler test in this package is built on.
@@ -1692,13 +1692,13 @@ func (f *backupSetFakeBackend) DiscoverSSHKeyCandidates(context.Context) (servic
 	}
 	return service.SSHKeyDiscovery{
 		Locations: []service.SSHKeyDiscoveryLocation{
-			{Path: "/etc/backup-manager", Kind: "mount", Found: 1},
+			{Path: "/etc/backupd", Kind: "mount", Found: 1},
 			{Path: "/home/fake/.ssh", Kind: "home", Problem: "this location is not present in this deployment"},
 		},
 		Candidates: []service.SSHKeyCandidate{{
 			ID:          "cand_test_1",
-			Path:        "/etc/backup-manager/id_ed25519",
-			Location:    "/etc/backup-manager",
+			Path:        "/etc/backupd/id_ed25519",
+			Location:    "/etc/backupd",
 			Algorithm:   "ssh-ed25519",
 			Fingerprint: "SHA256:fakecandidatefingerprint",
 			PublicKey:   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeCandidate fake-test-fixture",

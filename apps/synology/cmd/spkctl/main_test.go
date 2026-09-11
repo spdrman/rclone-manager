@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/apps/synology/spk"
+	"github.com/spdrman/backupd/apps/synology/spk"
 )
 
 // The library under this CLI is thoroughly tested, which makes this seam
@@ -68,8 +68,8 @@ func stagedUIBundle(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{
-		spk.UIBundleMarkerName: `{"schema":"rclone-manager/ui-bundle/1","platform":"` + spk.UIBundlePlatform + `"}`,
-		"index.html":           "<!doctype html><title>Backup Manager</title>",
+		spk.UIBundleMarkerName: `{"schema":"backupd/ui-bundle/1","platform":"` + spk.UIBundlePlatform + `"}`,
+		"index.html":           "<!doctype html><title>Backupd</title>",
 	}
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {

@@ -45,8 +45,8 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/tests/dockerlease"
 )
 
 // User is the fixed username created inside the container.
@@ -408,7 +408,7 @@ func startSourceOn(t *testing.T, f *Source, opts sourceOptions) *Source {
 	f.network = opts.Network
 	f.inNetwork = opts.InNetwork
 
-	name := fmt.Sprintf("rclone-manager-gate-sftp-%d", time.Now().UnixNano())
+	name := fmt.Sprintf("backupd-gate-sftp-%d", time.Now().UnixNano())
 	f.mu.Lock()
 	f.containerName = name
 	f.mu.Unlock()
@@ -572,7 +572,7 @@ func (f *Source) ensureSourceImage(t *testing.T) string {
 	imageOnce.Do(func() {
 		text := sourceDockerfile(t)
 		sum := sha256.Sum256([]byte(text))
-		tag := "rclone-manager-machines-source:" + hex.EncodeToString(sum[:6])
+		tag := "backupd-machines-source:" + hex.EncodeToString(sum[:6])
 		f.setStage("docker image inspect " + tag)
 		if _, _, err := dockerRun(imageInspectTimeout, "image", "inspect", tag); err == nil {
 			imageRef = tag

@@ -104,7 +104,7 @@ Like the two rules above it, that is a repository setting rather than a file, so
 is applied by hand and this is the whole of it:
 
 ```
-gh api -X PUT repos/spdrman/rclone-manager/rulesets/21971099 \
+gh api -X PUT repos/spdrman/backupd/rulesets/21971099 \
   --input ruleset.json   # the existing rules, plus:
                          # {"type": "required_status_checks",
                          #  "parameters": {

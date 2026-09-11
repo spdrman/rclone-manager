@@ -56,7 +56,7 @@ func throwawayKeyPair(t *testing.T) (privatePEM []byte, publicLine string, finge
 	if err != nil {
 		t.Fatalf("generating a throwaway ed25519 key: %v", err)
 	}
-	block, err := ssh.MarshalPrivateKey(priv, "rclone-manager test fixture")
+	block, err := ssh.MarshalPrivateKey(priv, "backupd test fixture")
 	if err != nil {
 		t.Fatalf("marshalling the throwaway private key: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestListSSHKeys_MarksAPassphraseProtectedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generating a throwaway ed25519 key: %v", err)
 	}
-	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "rclone-manager test fixture", []byte("not-a-real-passphrase"))
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "backupd test fixture", []byte("not-a-real-passphrase"))
 	if err != nil {
 		t.Fatalf("marshalling an encrypted throwaway key: %v", err)
 	}

@@ -151,7 +151,7 @@
       "workPackage": "4.4",
       "metadata": {
         "kind": "spk", "root": "apps/synology",
-        "files": ["README.md", "spk/assets/conf/privilege", "spk/assets/conf/resource", "spk/assets/ui/config", "cmd/spkctl/main.go", "compose/backup-manager.yml", "compose/backup-manager.env"],
+        "files": ["README.md", "spk/assets/conf/privilege", "spk/assets/conf/resource", "spk/assets/ui/config", "cmd/spkctl/main.go", "compose/backupd.yml", "compose/backupd.env"],
         "storeArtifacts": ["spk/assets/conf/privilege", "spk/assets/conf/resource", "spk/assets/ui/config"],
         "packageUIBundle": { "layout": "apps/synology/spk/layout.go", "startScript": "apps/synology/spk/assets/scripts/start-stop-status" },
         "architectureClaim": { "source": "apps/synology/spk/arch.go", "architectures": ["amd64", "arm64"] }
@@ -226,7 +226,7 @@
       "tier": "B",
       "epic": "B",
       "workPackage": "4.3",
-      "metadata": { "kind": "compose", "root": "apps/truenas", "compose": "compose/backup-manager.yaml", "files": ["README.md", "catalog/app.yaml", "catalog/questions.yaml", "catalog/ix_values.yaml", "catalog/templates/docker-compose.yaml"], "storeArtifacts": ["catalog/app.yaml", "catalog/questions.yaml", "catalog/ix_values.yaml", "catalog/templates/docker-compose.yaml"] },
+      "metadata": { "kind": "compose", "root": "apps/truenas", "compose": "compose/backupd.yaml", "files": ["README.md", "catalog/app.yaml", "catalog/questions.yaml", "catalog/ix_values.yaml", "catalog/templates/docker-compose.yaml"], "storeArtifacts": ["catalog/app.yaml", "catalog/questions.yaml", "catalog/ix_values.yaml", "catalog/templates/docker-compose.yaml"] },
       "scanRoots": ["apps/truenas"],
       "acceptance": "docs/acceptance/truenas-provider-acceptance.md",
       "cells": {
@@ -262,7 +262,7 @@
       "tier": "B",
       "epic": "B",
       "workPackage": "4.3",
-      "metadata": { "kind": "unraid-template", "root": "apps/unraid", "templates": ["template/backup-manager.xml", "template/backup-manager-ui.xml"], "files": ["README.md", "frontend/webui.json"], "storeArtifacts": ["template/backup-manager.xml", "template/backup-manager-ui.xml"] },
+      "metadata": { "kind": "unraid-template", "root": "apps/unraid", "templates": ["template/backupd.xml", "template/backupd-ui.xml"], "files": ["README.md", "frontend/webui.json"], "storeArtifacts": ["template/backupd.xml", "template/backupd-ui.xml"] },
       "scanRoots": ["apps/unraid"],
       "acceptance": "docs/acceptance/unraid-provider-acceptance.md",
       "cells": {
@@ -298,7 +298,7 @@
       "tier": "C",
       "epic": "B",
       "workPackage": "4.3",
-      "metadata": { "kind": "compose", "root": "apps/openmediavault", "compose": "compose/backup-manager.yml", "env": "compose/backup-manager.env", "files": ["README.md"], "storeArtifacts": [] },
+      "metadata": { "kind": "compose", "root": "apps/openmediavault", "compose": "compose/backupd.yml", "env": "compose/backupd.env", "files": ["README.md"], "storeArtifacts": [] },
       "scanRoots": ["apps/openmediavault"],
       "acceptance": "docs/acceptance/openmediavault-provider-acceptance.md",
       "cells": {
@@ -334,7 +334,7 @@
       "tier": "C",
       "epic": "B",
       "workPackage": "4.5",
-      "metadata": { "kind": "compose", "root": "apps/proxmox", "compose": "compose/backup-manager.yml", "env": "compose/backup-manager.env", "files": ["README.md"], "storeArtifacts": [] },
+      "metadata": { "kind": "compose", "root": "apps/proxmox", "compose": "compose/backupd.yml", "env": "compose/backupd.env", "files": ["README.md"], "storeArtifacts": [] },
       "scanRoots": ["apps/proxmox"],
       "acceptance": "docs/acceptance/proxmox-ve-deployment.md",
       "cells": {
@@ -373,8 +373,8 @@
       "metadata": {
         "kind": "compose",
         "root": "apps/portainer",
-        "compose": "compose/backup-manager.yml",
-        "env": "compose/backup-manager.env",
+        "compose": "compose/backupd.yml",
+        "env": "compose/backupd.env",
         "files": [
           "README.md",
           "templates.json",
@@ -586,16 +586,16 @@
       "metadata": {
         "kind": "compose",
         "root": "apps/casaos",
-        "compose": "compose/backup-manager.yml",
+        "compose": "compose/backupd.yml",
         "files": [
           "README.md",
           "icon.svg"
         ],
         "storeArtifacts": [
-          "compose/backup-manager.yml"
+          "compose/backupd.yml"
         ],
         "architectureClaim": {
-          "source": "apps/casaos/compose/backup-manager.yml",
+          "source": "apps/casaos/compose/backupd.yml",
           "architectures": [
             "amd64",
             "arm64"
@@ -698,16 +698,16 @@
       "metadata": {
         "kind": "compose",
         "root": "apps/zimaos",
-        "compose": "compose/backup-manager.yml",
+        "compose": "compose/backupd.yml",
         "files": [
           "README.md",
           "icon.svg"
         ],
         "storeArtifacts": [
-          "compose/backup-manager.yml"
+          "compose/backupd.yml"
         ],
         "architectureClaim": {
-          "source": "apps/zimaos/compose/backup-manager.yml",
+          "source": "apps/zimaos/compose/backupd.yml",
           "architectures": [
             "amd64",
             "arm64"

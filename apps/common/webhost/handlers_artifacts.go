@@ -4,7 +4,7 @@
 //
 // Nothing here computes anything. Every value comes from
 // core/service.BackupService's own read models, which in turn read the
-// FR-9 journal `rbm artifacts` and `status` already print: the
+// FR-9 journal `backupd artifacts` and `status` already print: the
 // data has existed since the first migration, and what was missing was a
 // boundary. That is why these routes could be built at all without
 // inventing a second source of truth for what a backup is.
@@ -20,7 +20,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // artifactResponse is one backup's wire shape, a field-for-field mirror of

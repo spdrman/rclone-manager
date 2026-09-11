@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/retention"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/retention"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // The acceptance line #238 handed to #239, recorded on both issues: the
@@ -156,7 +156,7 @@ func moveTestMediums() []config.StorageMedium {
 		Type:   config.StorageMediumTypeS3,
 		Region: "us-east-1",
 		Bucket: "nas-backups",
-		Prefix: "rclone-manager",
+		Prefix: "backupd",
 	}}
 }
 
@@ -256,7 +256,7 @@ func TestRunCycle_MovesTheArtifactTheChainSaysBelongsElsewhere(t *testing.T) {
 		t.Fatalf("Moves = %+v, want the planned move to have completed", report.Moves)
 	}
 
-	key, err := transport.MediumKey("rclone-manager", artifact)
+	key, err := transport.MediumKey("backupd", artifact)
 	if err != nil {
 		t.Fatalf("MediumKey: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestRunCycle_LeavesAMovedArtifactCompleteOnTheNextCycle(t *testing.T) {
 			artifact, rec.State, moveTestMedium, strings.Join(findings, "\n\t"))
 	}
 
-	key, err := transport.MediumKey("rclone-manager", artifact)
+	key, err := transport.MediumKey("backupd", artifact)
 	if err != nil {
 		t.Fatalf("MediumKey: %v", err)
 	}

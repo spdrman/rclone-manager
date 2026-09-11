@@ -2,7 +2,7 @@
 *.exe
 *.test
 *.out
-/backup-manager
+/backupd
 /dist/
 /bin/
 
@@ -91,7 +91,7 @@ __pycache__/
 # committed by an absent-minded `git add -A`.
 /docs/perf/baselines/selftest-tmp.json
 
-# Where scripts/rcmtools/e2e/run_tests_repo_gate.py builds the backup-manager it
+# Where scripts/bdtools/e2e/run_tests_repo_gate.py builds the backupd it
 # hands to the pinned CLI smoke slice. Inside the working tree on purpose:
 # the alternative is a scratch directory under /tmp that the gate would then
 # have to delete, and nothing this repository's tooling creates should need

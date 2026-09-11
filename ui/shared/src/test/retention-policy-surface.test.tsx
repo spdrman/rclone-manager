@@ -6,7 +6,7 @@ import { createMockApi } from "@shared/api/mock";
 import { httpApi } from "@shared/api/client";
 import { BackupDetailPage } from "@shared/pages/BackupDetailPage";
 import { BackupsPage } from "@shared/pages/BackupsPage";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import type { BackupArtifact } from "@shared/types/backup";
 import type { WireArtifact } from "@shared/api/generated/contract";
 
@@ -66,7 +66,7 @@ const UNGOVERNED = artifact({
 });
 
 function renderList(list: BackupArtifact[]) {
-  const api: BackupManagerApi = createMockApi();
+  const api: BackupdApi = createMockApi();
   vi.spyOn(api, "listArtifacts").mockResolvedValue(list);
   render(
     <MemoryRouter initialEntries={["/backups"]}>
@@ -108,7 +108,7 @@ describe("the Backups list says which backups nothing will ever delete", () => {
     // "Unconfigured" and "No retention policy" are both true and both
     // leave the operator to work out what follows. What follows is that
     // this file is never going away on its own, which is the sentence
-    // `rbm artifacts` prints and the one that gets read on a
+    // `backupd artifacts` prints and the one that gets read on a
     // page of four hundred rows.
     expect(within(row).queryByText(/unconfigured/i)).toBeNull();
     expect(within(row).getByText(/nothing will delete/i)).toBeTruthy();
@@ -170,7 +170,7 @@ describe("a response that does not say is not read as a response that said yes",
 });
 
 function renderDetail(a: BackupArtifact) {
-  const api: BackupManagerApi = createMockApi();
+  const api: BackupdApi = createMockApi();
   vi.spyOn(api, "getArtifact").mockResolvedValue(a);
   render(
     <MemoryRouter initialEntries={["/backups/" + a.id]}>

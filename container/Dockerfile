@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-# backup-manager container image (A3.9, extended by issue #82/B4.1).
+# backupd container image (A3.9, extended by issue #82/B4.1).
 #
 # Five stages:
 #   1. `build`          - the provider-neutral core binary (manager logic
@@ -18,39 +18,39 @@
 #
 # There is no `rclone` executable anywhere in this image: rclone is
 # consumed as a Go module (core/go.mod pins github.com/rclone/rclone),
-# imported as packages, and compiled straight into /rbm. See
+# imported as packages, and compiled straight into /backupd. See
 # docs/deployment.md for how that claim is verified against the built
 # image, rather than just asserted here.
 #
-# `/rbm` (stage 1) implements every execution mode FR-1/FR-24
+# `/backupd` (stage 1) implements every execution mode FR-1/FR-24
 # call for: `run`, `daemon`, `check`, `status`, `sources`, `artifacts`,
 # `fetch`, `retention`, `reconcile`, `validate` and `version`.
-# `/rbm-web` (stage 3) adds exactly one more: `serve`, the
+# `/backupd-web` (stage 3) adds exactly one more: `serve`, the
 # generic Web host (docs/EPIC-B-multi-nas.md §9.2) - the shared UI, the
 # versioned API, local authentication and the backup scheduler in one
 # process. Two binaries, not one with two names, because apps/generic
 # needs to import apps/common/webhost and apps/common/auth/local, and
 # core/'s own module cannot depend on apps/ in either direction (§7.1) -
-# see apps/generic/cmd/backup-manager-web/main.go's own doc for the module
+# see apps/generic/cmd/backupd-web/main.go's own doc for the module
 # boundary reasoning (that half is unaffected by the rename; the name it
 # gives itself is a separate matter tracked on #651).
 #
 # THE BINARY NAMES (the 0.3.3 CLI rename)
 #
-# The command an operator types is `rbm`, and the web host is `rbm-web`.
+# The command an operator types is `backupd`, and the web host is `backupd-web`.
 # Those are the two files in the runtime stage and the only names anything
 # in this repository uses.
 #
 # 0.3.3 is a clean cut. Images published before it carry the old names and
 # these carry the new ones, with nothing bridging the two, so an operator
 # upgrading has to move any `docker exec`, cron entry or hand-written
-# compose onto `rbm`. container/compose.yaml says the same from the other
+# compose onto `backupd`. container/compose.yaml says the same from the other
 # side, and scripts/install/install_docker_host.py refuses `--release`
 # below 0.3.3 rather than write a deployment an older image cannot start.
 #
 # What did NOT change is everything that is not the CLI: the image
-# reference (ghcr.io/spdrman/backup-manager), the compose service names,
-# the config directory at /etc/backup-manager, the Go package paths under
+# reference (ghcr.io/spdrman/backupd), the compose service names,
+# the config directory at /etc/backupd, the Go package paths under
 # cmd/, and the product's own name.
 
 # ---- core builder ---------------------------------------------------------
@@ -123,7 +123,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # apicontract is on this list because the CLI now speaks to a running
 # engine (#543): core/internal/apiclient resolves every path, status and
 # error code out of core/apicontract, so leaving it out builds a tree in
-# which `go build ./cmd/backup-manager` fails with "cannot find module
+# which `go build ./cmd/backupd` fails with "cannot find module
 # providing package .../core/apicontract" and nothing in the Go suite says
 # so, because a `go test` from a checkout has the whole module. It is
 # listed in the build-web stage too, for the same reason one step ahead:
@@ -171,12 +171,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -trimpath \
         -buildvcs=false \
         -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
-        -o /out/rbm \
-        ./cmd/backup-manager
+        -o /out/backupd \
+        ./cmd/backupd
 
 # ---- frontend builder -------------------------------------------------
 # ui/shared's static bundle (docs/EPIC-B-multi-nas.md §9.2/§11): built
-# once here, embedded into /rbm-web below via go:embed
+# once here, embedded into /backupd-web below via go:embed
 # (apps/generic/webui). Node/npm are build-time dependencies only -
 # neither ships in the runtime stage.
 #
@@ -303,8 +303,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -trimpath \
         -buildvcs=false \
         -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
-        -o /out/rbm-web \
-        ./cmd/backup-manager-web
+        -o /out/backupd-web \
+        ./cmd/backupd-web
 
 # ---- runtime ------------------------------------------------------------
 # distroless static, nonroot variant: no shell, no package manager, no libc
@@ -318,14 +318,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # rather than a value baked in here).
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
-COPY --from=build /out/rbm /rbm
-COPY --from=build-web /out/rbm-web /rbm-web
+COPY --from=build /out/backupd /backupd
+COPY --from=build-web /out/backupd-web /backupd-web
 
 # Those two lines are the whole of what this image carries as commands.
-# 0.3.3 retired `backup-manager` rather than aliasing it, so there is no
+# 0.3.3 retired `backupd` rather than aliasing it, so there is no
 # link under the old name beside either binary and nothing here creates
 # one: a compose file, cron entry or healthcheck written against the old
-# spelling has to be moved across to `/rbm`.
+# spelling has to be moved across to `/backupd`.
 
 # The licence, the notices and the machine-readable inventory the other
 # two point at, at a fixed path a recipient can find without a shell
@@ -361,7 +361,7 @@ COPY provenance/third-party-licenses.json /licenses/third-party-licenses.json
 # distribution/packaging/compliance.json under distribution.licenceDelivery
 # and checked against these lines.
 LABEL org.opencontainers.image.licenses="Apache-2.0" \
-      com.iasbuilt.rclonemanager.licenses.path="/licenses"
+      com.iasbuilt.backupd.licenses.path="/licenses"
 
 # The per-provider UI bundles (issue #180). Read-only content, served by
 # `serve-ui --ui-root /ui/bundles`, which resolves <root>/<profile>. Each
@@ -374,7 +374,7 @@ COPY --from=frontend-build /src/ui/shared/dist-bundles/ /ui/bundles/
 
 # Documentary only - EXPOSE does not itself publish anything (see
 # container/compose.yaml's own `ports:` for what actually does): this is
-# `/rbm-web serve`'s own default --listen port, self-documented
+# `/backupd-web serve`'s own default --listen port, self-documented
 # on the image for `docker inspect`/`docker port`/tooling. A headless-only
 # deployment that never runs `serve` simply never binds it.
 EXPOSE 8080
@@ -383,36 +383,36 @@ EXPOSE 8080
 # ENTRYPOINT is a fixed prefix Docker prepends to whatever `command:` (or
 # `docker run <image> ...`) supplies, so a single ENTRYPOINT could only
 # ever name one of the two - exactly the trap an earlier version of this
-# file fell into (`ENTRYPOINT ["/rbm"]` plus `command:
-# ["/rbm-web", "serve"]` resolves to running
-# "/rbm /rbm-web serve", not what anyone intended).
+# file fell into (`ENTRYPOINT ["/backupd"]` plus `command:
+# ["/backupd-web", "serve"]` resolves to running
+# "/backupd /backupd-web serve", not what anyone intended).
 # Every `command:` in container/compose.yaml and every `docker run`
 # example in docs/deployment.md therefore names its binary explicitly by
-# full path (`/rbm-web serve`, `/rbm daemon`,
-# `/rbm version`, ...). This image's own default CMD stays
+# full path (`/backupd-web serve`, `/backupd daemon`,
+# `/backupd version`, ...). This image's own default CMD stays
 # unset for the same reason: there is no single default that would be
 # right for both binaries, so a bare `docker run <image>` with no command
 # fails immediately with "no command specified" - a loud, safe failure,
 # not a silent no-op or an ambiguous guess.
 
-# `rbm status` (issue #26, FR-24) exits 0 only when every
+# `backupd status` (issue #26, FR-24) exits 0 only when every
 # configured backup set reports HEALTHY, and non-zero on DEGRADED, STALE or
-# FAILING (see core/cmd/backup-manager/status.go's own doc for the exact
+# FAILING (see core/cmd/backupd/status.go's own doc for the exact
 # contract). This is the real backup-freshness signal FR-24's health states
 # are meant to be read through - not process liveness, which is what the
 # previous `version`-based HEALTHCHECK could only ever answer. Verified
 # directly (see docs/deployment.md and apps/generic/tests/dockercli): a container
 # whose one backup set is DEGRADED now reports Docker health "unhealthy",
-# not "healthy". This runs against the plain `/rbm` binary
+# not "healthy". This runs against the plain `/backupd` binary
 # regardless of which command the container's own main process
-# (`/rbm-web serve`, or a headless `/rbm daemon`) is
+# (`/backupd-web serve`, or a headless `/backupd daemon`) is
 # running: `status` is a fresh, read-only check against the same shared
 # state database file either way.
 #
-# It names `/rbm` by absolute path rather than relying on anything on a
+# It names `/backupd` by absolute path rather than relying on anything on a
 # PATH, and that is a choice rather than a detail. A HEALTHCHECK is baked
 # into the image and re-read by the daemon on every interval for the life
 # of every container anyone ever starts from it, and this base image has
 # no shell to resolve a name through in the first place.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD ["/rbm", "status"]
+    CMD ["/backupd", "status"]

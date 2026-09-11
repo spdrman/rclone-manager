@@ -18,13 +18,13 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { BackupsPage } from "@shared/pages/BackupsPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import type { BackupManagerApi } from "@shared/api/contracts";
+import type { BackupdApi } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import { graph, resetGraphForTests } from "@shared/state/graph";
 import { setsNode } from "@shared/state/appNodes";
 import type { BackupArtifact, BackupSet } from "@shared/types/backup";
 
-function renderBackups(api: BackupManagerApi) {
+function renderBackups(api: BackupdApi) {
   return render(
     <MemoryRouter>
       <ApiProvider api={api}>

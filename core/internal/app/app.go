@@ -20,7 +20,7 @@
 // lifecycle, discovery, reconciliation, retention, capacity and health
 // exactly as the EPIC's cycle order requires (reconcile, then discover,
 // then per-artifact transfer/verify/commit/delete, then a retention
-// preview), and it does so in one place so that cmd/backup-manager's `run`
+// preview), and it does so in one place so that cmd/backupd's `run`
 // and `daemon` subcommands, and every other CLI command that needs a
 // use case (`status`, `fetch`, `retention`, `reconcile`, `validate`, ...),
 // call the exact same Service methods. A future HTTP API is meant to be
@@ -47,15 +47,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/alert"
-	"github.com/spdrman/rclone-manager/core/internal/capacity"
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/obs"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
+	"github.com/spdrman/backupd/core/internal/alert"
+	"github.com/spdrman/backupd/core/internal/capacity"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/retry"
 )
 
 // Journal is the slice of internal/state.Journal every use case in this
@@ -295,7 +295,7 @@ type Service struct {
 // Logger may be left nil by the caller afterward for read-only use cases
 // that do not need them; New itself never rejects a nil value here, since
 // which fields a given CLI command actually needs is that command's own
-// business (see cmd/backup-manager).
+// business (see cmd/backupd).
 //
 // # Issue #295's redaction wiring
 //

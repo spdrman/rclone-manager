@@ -1,4 +1,4 @@
-# Backup Manager on Dockge
+# Backupd on Dockge
 
 Dockge manages **the canonical Compose stack**. There is no Dockge packaging in
 this directory and there is deliberately no compose file here either, because
@@ -41,26 +41,26 @@ default.
 1. Create the stack directory and copy the canonical stack into it:
 
    ```
-   mkdir -p /opt/stacks/backup-manager
-   cp container/compose.yaml /opt/stacks/backup-manager/compose.yaml
-   cp container/.env.example /opt/stacks/backup-manager/.env
+   mkdir -p /opt/stacks/backupd
+   cp container/compose.yaml /opt/stacks/backupd/compose.yaml
+   cp container/.env.example /opt/stacks/backupd/.env
    ```
 
-2. Edit `/opt/stacks/backup-manager/.env`. Every host path in it must exist and
+2. Edit `/opt/stacks/backupd/.env`. Every host path in it must exist and
    be owned by `PUID:PGID` before the first start, because the runtime image is
    distroless and cannot create or chown anything for you:
 
    ```
-   mkdir -p /volume1/backup-manager/state /volume1/backups \
-            /volume1/backup-manager/config /volume1/backup-manager/secrets
-   chown 1000:1000 /volume1/backup-manager/state /volume1/backups \
-                   /volume1/backup-manager/config /volume1/backup-manager/secrets
+   mkdir -p /volume1/backupd/state /volume1/backups \
+            /volume1/backupd/config /volume1/backupd/secrets
+   chown 1000:1000 /volume1/backupd/state /volume1/backups \
+                   /volume1/backupd/config /volume1/backupd/secrets
    ```
 
 3. In Dockge, the stack appears on its own. Press **Start**, watch the two
    containers come up in the interactive log pane, and open the published port.
    The engine prints a one-time enrollment link on first start; it is in the
-   `rclone-manager` container's log.
+   `backupd` container's log.
 
 Dockge's editor writes back to the same `compose.yaml`, so anything changed in
 its UI is a change to your copy of the canonical stack, not to this repository.
@@ -104,9 +104,9 @@ The mounts are the canonical stack's, with `container/.env.example`'s defaults:
 | --- | --- | --- |
 | `STATE_DIR` | `/data/state` | the catalogue and the local administrator record. Private. |
 | `BACKUP_DIR` | `/data/backups` | retained artifacts, and nothing else. |
-| `CONFIG_DIR` | `/etc/backup-manager/config` | `config.yaml`, writable, plus `ssh_keys/` and `known_hosts.d/`. |
-| `SSH_KEY_FILE` | `/etc/backup-manager/id_ed25519` | the SFTP private key, read-only. |
-| `KNOWN_HOSTS_FILE` | `/etc/backup-manager/known_hosts` | the pinned host key, read-only. |
+| `CONFIG_DIR` | `/etc/backupd/config` | `config.yaml`, writable, plus `ssh_keys/` and `known_hosts.d/`. |
+| `SSH_KEY_FILE` | `/etc/backupd/id_ed25519` | the SFTP private key, read-only. |
+| `KNOWN_HOSTS_FILE` | `/etc/backupd/known_hosts` | the pinned host key, read-only. |
 
 The full operator procedure, including update, removal and the evidence that
 retained backups survived, is

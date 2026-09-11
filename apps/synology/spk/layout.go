@@ -13,10 +13,10 @@ package spk
 const (
 	// PackageName is INFO's `package` key: the package identity DSM keys
 	// everything else off, including /var/packages/<name>.
-	PackageName = "BackupManager"
+	PackageName = "Backupd"
 
 	// DisplayName is what Package Center and the DSM desktop show.
-	DisplayName = "Backup Manager"
+	DisplayName = "Backupd"
 
 	// Maintainer is INFO's `maintainer` key.
 	Maintainer = "spdrman"
@@ -28,7 +28,7 @@ const (
 	OSMinVer = "7.0-40314"
 
 	// Description is INFO's `description`, shown in Package Center.
-	Description = "Pull-based backup manager for SFTP sources, with retention, verification and a local web UI."
+	Description = "Pull-based backupd for SFTP sources, with retention, verification and a local web UI."
 
 	// UIPort is the LAN-facing port the shared Web UI is served on, and
 	// INFO's `adminport`. The engine is NOT published: it binds
@@ -53,8 +53,8 @@ const (
 
 	// PayloadBinDir is where the two release binaries live inside
 	// package.tgz. DSM extracts that archive to
-	// /var/packages/<pkg>/target, so "bin/rbm" lands at
-	// /var/packages/BackupManager/target/bin/rbm.
+	// /var/packages/<pkg>/target, so "bin/backupd" lands at
+	// /var/packages/Backupd/target/bin/backupd.
 	//
 	// Member names carry no "./" prefix, matching what the toolkit's own
 	// pkg_make_inner_tarball produces: it pipes `ls <dir>` into `tar -C
@@ -124,13 +124,13 @@ const (
 	// a share "will not be removed after package uninstallation, since it
 	// might delete the user's personal data as well" — which is the
 	// mechanism issue #85's retained-backup-safety criterion rests on.
-	DataShareName = "backup-manager"
+	DataShareName = "backupd"
 )
 
 // CoreBinaries are the two provider-neutral executables the canonical
 // release produces and this package wraps unchanged. They are also the
 // keys container/release-manifest.json records a SHA-256 under.
-var CoreBinaries = []string{"rbm", "rbm-web"}
+var CoreBinaries = []string{"backupd", "backupd-web"}
 
 // LifecycleScriptNames is the full set of lifecycle scripts the documented
 // structure allows. This package ships all of them, including the ones

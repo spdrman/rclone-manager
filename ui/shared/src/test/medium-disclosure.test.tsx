@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { MemoryRouter } from "react-router-dom";
 import { SettingsPage } from "@shared/pages/SettingsPage";
 import { ApiProvider } from "@shared/api/ApiContext";
-import { BackupManagerError } from "@shared/api/contracts";
+import { BackupdError } from "@shared/api/contracts";
 import type { AppSettings, StorageMedium, UpdateSettingsRequest } from "@shared/api/contracts";
 import { createMockApi } from "@shared/api/mock";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
@@ -371,7 +371,7 @@ describe("mapping a retention tier to a storage medium", () => {
       }),
       updateSettings: () =>
         Promise.reject(
-          new BackupManagerError({
+          new BackupdError({
             code: "MEDIUM_DISCLOSURE_REQUIRED",
             message:
               "This write sends monthly to offsite_s3. After a backup uploads and I verify it, I delete the copy on this machine.",

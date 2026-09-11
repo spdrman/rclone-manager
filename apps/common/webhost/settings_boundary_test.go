@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // This file is issue #140's INTEGRATION requirement: config file, CLI and
@@ -21,7 +21,7 @@ import (
 // endpoint.
 //
 // It is a genuine boundary test, not a mock handshake: it builds the real
-// `backup-manager` binary, runs a real cycle so there is a real artifact
+// `backupd` binary, runs a real cycle so there is a real artifact
 // to decide about, drives the real chi router over a real
 // service.BackupService opened from a real config file, and then reads
 // the policy back by executing the real CLI and parsing what an operator
@@ -29,7 +29,7 @@ import (
 // which is what makes a disagreement between the three surfaces something
 // this test can actually catch.
 //
-// `rbm retention` is the CLI read used because it is the only
+// `backupd retention` is the CLI read used because it is the only
 // command that renders the whole FR-18/FR-19 policy observably: each
 // verdict lists the tier names that claimed an artifact (upper-cased by
 // internal/retention), and the trailing last-known-good line states
@@ -43,7 +43,7 @@ var (
 	cliBuildErr  error
 )
 
-// backupManagerCLI builds core/cmd/backup-manager once per test binary
+// backupManagerCLI builds core/cmd/backupd once per test binary
 // and returns the path to it. The build is shared because it is the
 // expensive part and the binary is immutable; each test still gets its
 // own config, journal and directories.
@@ -60,8 +60,8 @@ func backupManagerCLI(t *testing.T) string {
 			cliBuildErr = err
 			return
 		}
-		bin := filepath.Join(dir, "backup-manager")
-		cmd := exec.Command("go", "build", "-o", bin, "github.com/spdrman/rclone-manager/core/cmd/backup-manager")
+		bin := filepath.Join(dir, "backupd")
+		cmd := exec.Command("go", "build", "-o", bin, "github.com/spdrman/backupd/core/cmd/backupd")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			cliBuildErr = fmtBuildError(err, out)
 			return
@@ -69,7 +69,7 @@ func backupManagerCLI(t *testing.T) string {
 		cliBinary = bin
 	})
 	if cliBuildErr != nil {
-		t.Fatalf("building the backup-manager CLI: %v", cliBuildErr)
+		t.Fatalf("building the backupd CLI: %v", cliBuildErr)
 	}
 	return cliBinary
 }
@@ -95,7 +95,7 @@ func runCLI(t *testing.T, args ...string) string {
 	cmd := exec.Command(backupManagerCLI(t), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("backup-manager %s: %v\n%s", strings.Join(args, " "), err, out)
+		t.Fatalf("backupd %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return string(out)
 }
@@ -103,7 +103,7 @@ func runCLI(t *testing.T, args ...string) string {
 // writeBoundaryConfig builds a minimal, valid config against real temp
 // directories, wired through the "local" transport so a real cycle needs
 // no network and no Docker — the same fixture shape
-// core/cmd/backup-manager's own main_test.go uses.
+// core/cmd/backupd's own main_test.go uses.
 func writeBoundaryConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -238,7 +238,7 @@ func TestSettingsWriteIsVisibleToASubsequentCLIRead(t *testing.T) {
 // A hand edit is one way that happens and is the one this test drives,
 // because it is the only one that needs a restart to be seen, which is
 // FR-5's documented model and is what service.Open here stands in for.
-// It is no longer the only way. `rbm retention`'s override
+// It is no longer the only way. `backupd retention`'s override
 // flags are still preview-only and never persisted (that command's own
 // doc), but `settings patch --policy-file` writes the deployment's whole
 // chain and `backup-set retention` writes one set's, both through the

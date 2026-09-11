@@ -1,5 +1,5 @@
 /**
- * The one BackupManagerApi implementation that talks to a running
+ * The one BackupdApi implementation that talks to a running
  * service, and the wire-to-domain translation that lets everything above
  * it forget a wire exists.
  *
@@ -30,7 +30,7 @@
  * service saying something this build has never heard of should draw
  * nothing, not draw the wrong thing confidently.
  */
-import { BackupManagerError, RequestFailure, toApiErrorCode } from "./contracts";
+import { BackupdError, RequestFailure, toApiErrorCode } from "./contracts";
 // Issue #730's diagnostics, opt-in and silent unless an operator turns
 // them on. Imported rather than inlined because the gate, the console
 // format and the non-browser guards belong to one module, not to the
@@ -100,7 +100,7 @@ import type {
   ApiError,
   AppSettings,
   BackendManifest,
-  BackupManagerApi,
+  BackupdApi,
   BackupSetRetention,
   BackupSetPatch,
   CapacitySettings,
@@ -168,9 +168,9 @@ const CSRF_HEADER_NAME = "X-CSRF-Token";
  * apps/common/auth/local/handler.go's BootstrapTokenHeader), printed to
  * the container's own log as a link (".../enroll?token=..."). There is
  * no form field for it in EnrollmentPage.tsx — the design canvas
- * (docs/design/Backup Manager.dc.html) doesn't show one either — so it
+ * (docs/design/Backupd.dc.html) doesn't show one either — so it
  * travels as a URL query parameter instead, read here rather than
- * plumbed through BackupManagerApi.enrollAdministrator's own signature.
+ * plumbed through BackupdApi.enrollAdministrator's own signature.
  */
 const BOOTSTRAP_TOKEN_HEADER = "X-Bootstrap-Token";
 
@@ -365,7 +365,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       () => ({ path, status: res.status, code: api.code, correlationId: api.correlationId, attemptId }),
       "error"
     );
-    throw new BackupManagerError(api);
+    throw new BackupdError(api);
   }
 
   if (res.status === 204) return undefined as T;
@@ -1549,8 +1549,8 @@ type ActivityCaption = { type: ActivityEventType; severity: Severity; text: stri
  * is a true statement about a record that really is broken.
  *
  * The captions and severities are agreed verbatim with
- * core/cmd/backup-manager/activity.go's own table, which derives the
- * same severity for `rbm activity --severity`; "ok" and "info" are the
+ * core/cmd/backupd/activity.go's own table, which derives the
+ * same severity for `backupd activity --severity`; "ok" and "info" are the
  * one rank there, as they are to anyone filtering here. Issue #625 was
  * the last time those two drifted apart.
  *
@@ -1964,7 +1964,7 @@ const retentionPath = (source: string, set: string) => backupSetPath(source, set
  * that has a reason carries it at the method rather than in a shared
  * helper that would hide the differences.
  */
-export const httpApi: BackupManagerApi = {
+export const httpApi: BackupdApi = {
   getVersion: () => request<WireVersionResponse>("/system/version").then(fromWireVersion),
   // GET /system/health, NOT /health/ready. The two answer different
   // questions and only one of them is this one: /health/live and
@@ -2022,7 +2022,7 @@ export const httpApi: BackupManagerApi = {
   // revision-checked long work is started, and the durable row has always
   // had a backup set id column that run_cycle correctly leaves empty.
   //
-  // The engine half is not new either. `rbm fetch
+  // The engine half is not new either. `backupd fetch
   // --backup-set` has called internal/app.Service.Fetch since FR-1; what
   // was missing was a way to reach it in the SERVING process, so the work
   // takes the engine's single-flight lock and shows up in its feeds

@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/cliecho"
-	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/spdrman/backupd/core/service"
 )
 
-// FR-35 clause 4, the CLI: build backup-manager from this working tree,
+// FR-35 clause 4, the CLI: build backupd from this working tree,
 // run a fixed table of invocations against the seeded medium-free
 // deployment, and write down exactly what an operator would have seen.
 //
@@ -26,7 +26,7 @@ import (
 // so the usage block, the column padding, the error sentences and the exit
 // statuses of the commands listed below are pinned byte for byte from
 // here. Anything reworded on the other side of that boundary, in
-// core/cmd/backup-manager, arrives as a red cell in this package, which is
+// core/cmd/backupd, arrives as a red cell in this package, which is
 // the intended and only route.
 //
 // Three things are normalized before anything is compared and no more: the
@@ -41,7 +41,7 @@ import (
 // which surfaces it leaves out and why, because a surface nobody mentions
 // cannot be told apart from one nobody thought of.
 
-// buildCLI builds backup-manager from this working tree.
+// buildCLI builds backupd from this working tree.
 //
 // The binary, not run() called in-process: FR-35's CLI clause is about
 // what an operator sees in a terminal after an upgrade, and the only way
@@ -56,7 +56,7 @@ import (
 // every run, which is a bad trade.
 func buildCLI(coreRoot, outDir string) (string, error) {
 	bin := filepath.Join(outDir, cliecho.Binary)
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backupd")
 	cmd.Dir = coreRoot
 	cmd.Env = append(os.Environ(), "GOWORK=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -179,7 +179,7 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, err
 	// about. `unconfigured` and `medium preflight` both shipped that way
 	// and this cell stayed green throughout. That hole is closed from the
 	// other end, by TestUsage_EveryRegisteredCommandIsPinned in
-	// core/cmd/backup-manager, which is where the list of registered
+	// core/cmd/backupd, which is where the list of registered
 	// commands can be read rather than guessed at (#549).
 	var usage []string
 	for _, c := range []cliCase{
@@ -312,7 +312,7 @@ func captureBesideAServingProcess(ctx context.Context, bin, cfgPath, root string
 // daily-only chain.
 //
 // The reason this is not folded into the table above is in the package
-// doc: backup-manager exposes no way to pin its clock, so a multi-tier
+// doc: backupd exposes no way to pin its clock, so a multi-tier
 // chain's attribution genuinely depends on the calendar date the gate
 // runs on. Rather than normalize the verdicts away and keep a cell that
 // certifies nothing, this narrows the chain until the verdicts are the
@@ -455,7 +455,7 @@ func runCLI(ctx context.Context, bin string, args []string, root string, extra .
 // normalizeGoVersion is the second normalization this package does, and
 // unlike the first it is not about tidiness.
 //
-// `rbm version` prints the Go runtime it was built with, and
+// `backupd version` prints the Go runtime it was built with, and
 // that is the machine's fact, not the product's. Pinning it into a
 // checked-in corpus would make this gate red for every developer on a
 // different patch release of Go and green only for whoever captured it,

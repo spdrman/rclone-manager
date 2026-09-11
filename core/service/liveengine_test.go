@@ -12,7 +12,7 @@
 // in the same process (lock_unix_test.go's startup-lock tests are written
 // the same way, for the same reason). The genuinely-two-processes shape,
 // which is the one #535 actually reported, is proved from the CLI's side
-// in core/cmd/backup-manager/liveengine_test.go, against a real child.
+// in core/cmd/backupd/liveengine_test.go, against a real child.
 package service
 
 import (
@@ -60,12 +60,12 @@ func TestDetectRunningEngine_FindsTheProcessServingTheDeployment(t *testing.T) {
 // nothing running, which is the case the direct path exists for.
 //
 // The holder below is what an ordinary host is doing most of the time. A
-// `rbm status`, a `sources`, a cron `run` in the middle of a
+// `backupd status`, a `sources`, a cron `run` in the middle of a
 // backup cycle: every one of them has the journal open for as long as it
 // runs, and lock_unix.go's own doc calls that ordinary use of this CLI.
 // The first version of this detector read exactly that lock and refused
 // every configuration write on those hosts, while telling the operator to
-// use a Web UI that a `rbm run` does not serve.
+// use a Web UI that a `backupd run` does not serve.
 func TestDetectRunningEngine_DoesNotCallAPlainJournalReaderAnEngine(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")

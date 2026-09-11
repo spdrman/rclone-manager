@@ -1,4 +1,4 @@
-# Installing rclone-manager on a Docker host
+# Installing backupd on a Docker host
 
 Issue #262. `scripts/install/install_docker_host.py` brings the engine and the Web UI
 up on a machine you have SSH on, or refuses and tells you exactly which prerequisite
@@ -9,7 +9,7 @@ python3 scripts/install/install_docker_host.py install
 ```
 
 That is the whole command on a bare host (issue #347). It installs under
-`~/rclone-manager`, generates an SSH keypair and an empty `known_hosts` under
+`~/backupd`, generates an SSH keypair and an empty `known_hosts` under
 `<prefix>/secrets` if they are not there, and prints the public half with a note that
 it belongs in the `authorized_keys` of whichever host you are backing up.
 
@@ -17,10 +17,10 @@ Every flag is still there when you want it, and naming one changes only that one
 
 ```
 python3 scripts/install/install_docker_host.py install \
-    --prefix /volume1/backup-manager \
-    --ssh-key /volume1/backup-manager/secrets/id_ed25519 \
-    --known-hosts /volume1/backup-manager/secrets/known_hosts \
-    --image ghcr.io/spdrman/backup-manager:0.4.0
+    --prefix /volume1/backupd \
+    --ssh-key /volume1/backupd/secrets/id_ed25519 \
+    --known-hosts /volume1/backupd/secrets/known_hosts \
+    --image ghcr.io/spdrman/backupd:0.4.0
 ```
 
 **One file, and no checkout.** Copy
@@ -72,17 +72,17 @@ python3 scripts/install/install_docker_host.py install --cli-only
 
 Everything above still happens (the directories, the keypair, the pinned image, every
 refusal), and then the deployment comes up a different shape. The engine container runs
-`/rbm daemon` instead of `/rbm-web serve`, the `web-ui` container is never started, and
+`/backupd daemon` instead of `/backupd-web serve`, the `web-ui` container is never started, and
 nothing publishes a port on the host, so no process in the deployment serves HTTP and
-the `rbm-web` binary is not executed anywhere. The installer writes a wrapper to
-`<prefix>/bin/rbm` and that is the interface:
+the `backupd-web` binary is not executed anywhere. The installer writes a wrapper to
+`<prefix>/bin/backupd` and that is the interface:
 
 ```
-~/rclone-manager/bin/rbm status
-~/rclone-manager/bin/rbm sources
+~/backupd/bin/backupd status
+~/backupd/bin/backupd sources
 ```
 
-It is `docker compose run --rm --no-deps --entrypoint /rbm rclone-manager`, not
+It is `docker compose run --rm --no-deps --entrypoint /backupd backupd`, not
 `exec`, deliberately. `exec` needs a running container, and the first command anybody
 needs on a fresh CLI-only host runs before anything has been started. A one-off
 container gets the same image, mounts, uid and network as the engine, so a command that
@@ -91,7 +91,7 @@ starting the engine as a side effect of being run.
 
 **A fresh `--cli-only` install starts nothing, and that is the design.** A full install
 has a first-run wizard, so it can come up with no configuration at all and hand you a
-link. `rbm daemon` has no such thing: it is refused rather than started when there is no
+link. `backupd daemon` has no such thing: it is refused rather than started when there is no
 `config.yaml`, so starting it on a fresh host would produce a container that exits, gets
 restarted, exits again, and an installer that either claims success over a crash loop or
 waits out its timeout for a state that can never arrive. So it stages everything, starts
@@ -101,7 +101,7 @@ there is no file to hand-author first.
 
 Since there is nothing serving, there is no health endpoint to ask either. What the
 installer checks instead is that the container stays running for a settle window rather
-than for one sample: `rbm daemon` is running for part of every restart cycle, so a
+than for one sample: `backupd daemon` is running for part of every restart cycle, so a
 single `docker compose ps` would report a crash loop as an install about half the time.
 
 The shape is recorded as `CLI_ONLY` in the staged `.env` and adopted on a later run the
@@ -111,10 +111,10 @@ of a CLI-only deployment stays CLI-only, because an upgrade is not the place to 
 publishing a Web UI on the LAN of a host somebody deliberately installed without one.
 `--no-cli-only` converts it back, and says so.
 
-### Compatibility: `--prefix` no longer defaults to `/volume1/backup-manager`
+### Compatibility: `--prefix` no longer defaults to `/volume1/backupd`
 
-It defaults to `~/rclone-manager`. If you have a script that relied on the old default
-being applied for you, pass `--prefix /volume1/backup-manager` explicitly. The old
+It defaults to `~/backupd`. If you have a script that relied on the old default
+being applied for you, pass `--prefix /volume1/backupd` explicitly. The old
 default was a guess at one NAS vendor's share layout that was wrong by a directory name
 on the actual UGREEN this was proven on, and wrong entirely on anything not
 Synology-shaped, so it never once saved anybody a flag.
@@ -241,8 +241,8 @@ Preflight prints the reference it is about to install before anything is created
 and then proves it:
 
 ```
-  ok   installing ghcr.io/spdrman/backup-manager:0.4.0
-  ok   ghcr.io/spdrman/backup-manager:0.4.0 is sha256:..., the identity the release
+  ok   installing ghcr.io/spdrman/backupd:0.4.0
+  ok   ghcr.io/spdrman/backupd:0.4.0 is sha256:..., the identity the release
        manifest records for 0.4.0
 ```
 
@@ -260,10 +260,10 @@ is pushed, and in that window the manifest records `index_digest: null`, the ins
 carries no digest, and what preflight prints is this instead:
 
 ```
-  ok   installing ghcr.io/spdrman/backup-manager:0.4.0
+  ok   installing ghcr.io/spdrman/backupd:0.4.0
   !!   0.4.0 is cut and not pushed, so container/release-manifest.json records no
        identity for it and there is nothing here to hold
-       ghcr.io/spdrman/backup-manager:0.4.0 to.
+       ghcr.io/spdrman/backupd:0.4.0 to.
 ```
 
 That is 0.4.0 today. It is a warning and never a refusal, and the difference is the
@@ -464,7 +464,7 @@ Not "the container started". Three conditions, and the third exists because a re
 install taught me it was a separate claim:
 
 1. Docker reports the engine healthy **by its own liveness probe**. Not
-   `rbm status`, which is a backup freshness verdict a fresh install
+   `backupd status`, which is a backup freshness verdict a fresh install
    legitimately fails; gating on that means the Web UI never starts, which is issue
    #206.
 2. The Web UI serves its bundle. A fresh install with no config serves a first-run
@@ -571,10 +571,10 @@ rather than tried out of ritual.
 Otherwise, four scoped rules:
 
 ```
-iptables -I DOCKER-USER 1 -i docker0 -m comment --comment rclone-manager-bridge -j RETURN
-iptables -I DOCKER-USER 1 -i br-+    -m comment --comment rclone-manager-bridge -j RETURN
-iptables -I INPUT       1 -i docker0 -m comment --comment rclone-manager-bridge -j ACCEPT
-iptables -I INPUT       1 -i br-+    -m comment --comment rclone-manager-bridge -j ACCEPT
+iptables -I DOCKER-USER 1 -i docker0 -m comment --comment backupd-bridge -j RETURN
+iptables -I DOCKER-USER 1 -i br-+    -m comment --comment backupd-bridge -j RETURN
+iptables -I INPUT       1 -i docker0 -m comment --comment backupd-bridge -j ACCEPT
+iptables -I INPUT       1 -i br-+    -m comment --comment backupd-bridge -j ACCEPT
 ```
 
 `RETURN` in `DOCKER-USER`, not `ACCEPT`, and the difference matters. An `ACCEPT` there
@@ -595,7 +595,7 @@ This edits a firewall on a machine reachable only over SSH.
   test asserting each of those strings is absent from every generated script.
 - Every rule is scoped to a Docker bridge interface. Never a blanket ACCEPT.
 - Idempotent by construction: each line is `iptables -C … || iptables -I …`.
-- Reversible: every rule carries the `rclone-manager-bridge` comment, and
+- Reversible: every rule carries the `backupd-bridge` comment, and
   `network-undo` removes exactly those and nothing else.
 - The host's own rules are never touched, replaced or reordered.
 - A healthy host is a no-op and is never asked for a password.
@@ -654,8 +654,8 @@ A test asserts no generated script ever invokes it, or `iptables-save`.
 #### What is installed instead
 
 ```
-/etc/systemd/system/rclone-manager-bridge.service
-/etc/systemd/system/rclone-manager-bridge.timer
+/etc/systemd/system/backupd-bridge.service
+/etc/systemd/system/backupd-bridge.timer
 ```
 
 The service owns exactly the four tagged rules and nothing else. Each is one `ExecStart`
@@ -698,7 +698,7 @@ the safety net for a host where that ordering turns out not to be enough.
 
 `iptables -C` prints nothing when the rule is already there, and `LogLevelMax=warning`
 keeps systemd's own start and finish lines out of the journal too. Measured on the target
-host: `journalctl -u rclone-manager-bridge.service --since -12min` is empty across
+host: `journalctl -u backupd-bridge.service --since -12min` is empty across
 several fires.
 
 #### What it still does not guarantee
@@ -731,7 +731,7 @@ machine too.
 
 ```
 bridge networking: ok (gateway yes, egress yes)
-  persistence: rclone-manager-bridge.timer enabled, next fire Mon 2026-08-31 22:26:26
+  persistence: backupd-bridge.timer enabled, next fire Mon 2026-08-31 22:26:26
 ```
 
 ### Verified, not assumed

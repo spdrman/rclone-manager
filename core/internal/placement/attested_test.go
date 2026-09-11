@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/rclone"
 )
 
 // TestTheAttestedRungPassesWhereTheBackendCanAttest is the positive control
@@ -40,7 +40,7 @@ func TestTheAttestedRungPassesWhereTheBackendCanAttest(t *testing.T) {
 	if err := os.WriteFile(local, content, 0o600); err != nil {
 		t.Fatalf("writing the source file: %v", err)
 	}
-	const key = "rclone-manager/production/postgres-primary/backup.dump"
+	const key = "backupd/production/postgres-primary/backup.dump"
 	if _, err := adapter.UploadFromLocal(ctx, medium, local, key, transport.UploadOptions{}); err != nil {
 		t.Fatalf("UploadFromLocal: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestTheAttestedRungCatchesAWrongObjectWhereItCanAttest(t *testing.T) {
 	if err := os.WriteFile(local, stored, 0o600); err != nil {
 		t.Fatalf("writing the source file: %v", err)
 	}
-	const key = "rclone-manager/production/postgres-primary/backup.dump"
+	const key = "backupd/production/postgres-primary/backup.dump"
 	if _, err := adapter.UploadFromLocal(ctx, medium, local, key, transport.UploadOptions{}); err != nil {
 		t.Fatalf("UploadFromLocal: %v", err)
 	}

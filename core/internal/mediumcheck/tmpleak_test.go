@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/placement"
 )
 
 // TestPreflight_LeavesNothingBehindOnThisMachineEither is the local half
@@ -30,7 +30,7 @@ func TestPreflight_LeavesNothingBehindOnThisMachineEither(t *testing.T) {
 		t.Fatalf("ReadDir: %v", err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "rclone-manager-preflight-") {
+		if strings.HasPrefix(e.Name(), "backupd-preflight-") {
 			t.Fatalf("the preflight left %s behind under %s", filepath.Join(tmp, e.Name()), tmp)
 		}
 	}

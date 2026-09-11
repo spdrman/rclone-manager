@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
+	"github.com/spdrman/backupd/core/internal/artifactstore"
 )
 
 // Tests for issue #234 (EPIC E, E1.2): the storage-medium config schema,
@@ -39,8 +39,8 @@ func mediumsConfig() Config {
 		Type:        StorageMediumTypeS3,
 		Region:      "us-east-1",
 		Bucket:      "nas-backups",
-		Prefix:      "rclone-manager",
-		Credentials: MediumCredentials{File: "/var/lib/backup-manager/s3/offsite_s3.creds"},
+		Prefix:      "backupd",
+		Credentials: MediumCredentials{File: "/var/lib/backupd/s3/offsite_s3.creds"},
 	}}
 	return c
 }
@@ -92,12 +92,12 @@ func TestValidate_StorageMediumFieldRules(t *testing.T) {
 		{"unknown storage class", func(m *StorageMedium) { m.StorageClass = "COLD" }, []string{"storage_mediums[0]", "storage_class", StorageClassDeepArchive}},
 		{"lower-case storage class", func(m *StorageMedium) { m.StorageClass = "standard" }, []string{"storage_mediums[0]", "storage_class"}},
 		{"unknown upload verification", func(m *StorageMedium) { m.UploadVerification = "trust" }, []string{"storage_mediums[0]", "upload_verification", UploadVerificationReadback}},
-		{"prefix with a leading slash", func(m *StorageMedium) { m.Prefix = "/rclone-manager" }, []string{"storage_mediums[0]", "prefix"}},
-		{"prefix with a trailing slash", func(m *StorageMedium) { m.Prefix = "rclone-manager/" }, []string{"storage_mediums[0]", "prefix"}},
+		{"prefix with a leading slash", func(m *StorageMedium) { m.Prefix = "/backupd" }, []string{"storage_mediums[0]", "prefix"}},
+		{"prefix with a trailing slash", func(m *StorageMedium) { m.Prefix = "backupd/" }, []string{"storage_mediums[0]", "prefix"}},
 		{"prefix with an empty segment", func(m *StorageMedium) { m.Prefix = "rclone//manager" }, []string{"storage_mediums[0]", "prefix"}},
 		{"prefix with a traversal segment", func(m *StorageMedium) { m.Prefix = "rclone/../manager" }, []string{"storage_mediums[0]", "prefix", ".."}},
 		{"prefix with a dot segment", func(m *StorageMedium) { m.Prefix = "rclone/./manager" }, []string{"storage_mediums[0]", "prefix"}},
-		{"bucket carrying a prefix", func(m *StorageMedium) { m.Bucket = "nas-backups/rclone-manager" }, []string{"storage_mediums[0]", "bucket", "prefix"}},
+		{"bucket carrying a prefix", func(m *StorageMedium) { m.Bucket = "nas-backups/backupd" }, []string{"storage_mediums[0]", "bucket", "prefix"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := mediumsConfig()
@@ -206,7 +206,7 @@ func TestValidate_AcceptsEveryStorageClassAndVerificationMode(t *testing.T) {
 	// The accepting half of the prefix rules. Without these a validator
 	// that refused every prefix, or every non-empty one, would still pass
 	// the refusal table above.
-	for _, prefix := range []string{"", "rclone-manager", "team/rclone-manager", "a/b/c", "rclone_manager.v2"} {
+	for _, prefix := range []string{"", "backupd", "team/backupd", "a/b/c", "rclone_manager.v2"} {
 		t.Run("prefix "+prefix, func(t *testing.T) {
 			c := mediumsConfig()
 			c.StorageMediums[0].Prefix = prefix
@@ -428,7 +428,7 @@ func TestValidate_PerSetRetentionMediumReferences(t *testing.T) {
 func TestValidate_MediumCredentialSources(t *testing.T) {
 	t.Run("each source alone is accepted", func(t *testing.T) {
 		for name, creds := range map[string]MediumCredentials{
-			"file":    {File: "/var/lib/backup-manager/s3/offsite.creds"},
+			"file":    {File: "/var/lib/backupd/s3/offsite.creds"},
 			"env":     {Env: "BACKUP_S3_OFFSITE"},
 			"command": {Command: []string{"/usr/bin/op", "read", "op://infra/s3"}},
 		} {
@@ -566,10 +566,10 @@ func TestLoad_StorageMediumsRoundTripFromYAML(t *testing.T) {
 			Region:             "us-east-1",
 			Endpoint:           "",
 			Bucket:             "nas-backups",
-			Prefix:             "rclone-manager",
+			Prefix:             "backupd",
 			StorageClass:       StorageClassStandard,
 			UploadVerification: UploadVerificationReadback,
-			Credentials:        MediumCredentials{File: "/var/lib/backup-manager/s3/offsite_s3.creds"},
+			Credentials:        MediumCredentials{File: "/var/lib/backupd/s3/offsite_s3.creds"},
 		},
 		{
 			ID:           "offsite_annual",
@@ -577,7 +577,7 @@ func TestLoad_StorageMediumsRoundTripFromYAML(t *testing.T) {
 			Region:       "us-east-1",
 			Bucket:       "nas-backups-annual",
 			StorageClass: StorageClassStandardIA,
-			Credentials:  MediumCredentials{Command: []string{"/usr/bin/op", "read", "op://infra/backup-manager/s3-annual"}},
+			Credentials:  MediumCredentials{Command: []string{"/usr/bin/op", "read", "op://infra/backupd/s3-annual"}},
 		},
 		{
 			ID:           "offsite_cold",
@@ -585,7 +585,7 @@ func TestLoad_StorageMediumsRoundTripFromYAML(t *testing.T) {
 			Region:       "us-east-1",
 			Bucket:       "nas-backups-cold",
 			StorageClass: StorageClassDeepArchive,
-			Credentials:  MediumCredentials{Command: []string{"/usr/bin/op", "read", "op://infra/backup-manager/s3-cold"}},
+			Credentials:  MediumCredentials{Command: []string{"/usr/bin/op", "read", "op://infra/backupd/s3-cold"}},
 		},
 		{
 			ID:          "staging_only",
@@ -955,7 +955,7 @@ func TestValidate_DefaultStorageMedium(t *testing.T) {
 			Region:       "us-east-1",
 			Bucket:       "nas-archive",
 			StorageClass: StorageClassDeepArchive,
-			Credentials:  MediumCredentials{File: "/var/lib/backup-manager/s3/cold.creds"},
+			Credentials:  MediumCredentials{File: "/var/lib/backupd/s3/cold.creds"},
 		})
 		// The control: declaring it is legal, and stays legal. It is
 		// pointing something at it that is refused.

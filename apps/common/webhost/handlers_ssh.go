@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The wizard's SSH steps: import a key, probe a host key, test a

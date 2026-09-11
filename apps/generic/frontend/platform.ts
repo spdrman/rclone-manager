@@ -2,7 +2,7 @@ import { capabilities } from "@shared/platform/capabilities";
 import type { AuthContext, PlatformBridge } from "@shared/types/platform";
 
 /** The visual baseline (§23). No NAS-provider branding, no host chrome,
- *  Backup Manager local authentication. Every other provider is a delta on this. */
+ *  Backupd local authentication. Every other provider is a delta on this. */
 export const genericBridge: PlatformBridge = {
   id: "generic",
   name: "Generic Docker / Linux",

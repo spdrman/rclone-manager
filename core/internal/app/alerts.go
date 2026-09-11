@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/alert"
-	"github.com/spdrman/rclone-manager/core/internal/capacity"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/alert"
+	"github.com/spdrman/backupd/core/internal/capacity"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // Work Package 3.5: turning verdicts this product already reached into
@@ -142,7 +142,7 @@ func (s *Service) runAlertTicks(ctx context.Context, interval time.Duration) {
 //
 // Three sources, all of them existing:
 //
-//   - BuildHealthReport, exactly as `rbm status` calls it, for
+//   - BuildHealthReport, exactly as `backupd status` calls it, for
 //     the FR-24 state and failure count of every configured backup set.
 //     Reusing it is the point: there is no second freshness rule here to
 //     drift away from internal/health's decideState, and the report is
@@ -280,7 +280,7 @@ func (s *Service) evaluateAlerts(ctx context.Context, report CycleReport) {
 // A backup set saved disabled (config.BackupSet.Disabled, issue #146's
 // "Save disabled" tier) is excluded, and that exclusion is the whole
 // reason this exists. BuildHealthReport reports a disabled set like any
-// other, correctly: `rbm status` should still show it, and
+// other, correctly: `backupd status` should still show it, and
 // FR-24 has no notion of a set being switched off. Alerting is a
 // different question. A disabled set is never polled, so its newest
 // known-good backup ages past stale_after and stays there forever, and

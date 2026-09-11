@@ -496,7 +496,7 @@ func TestAnUnrecordedMPLModuleIsStillRefused(t *testing.T) {
 		Ecosystem:   EcosystemGo,
 		LicenseID:   "MPL-2.0",
 		LicenseFile: "LICENSE",
-		LinkedInto:  []string{"backup-manager"},
+		LinkedInto:  []string{"backupd"},
 	})
 	got := LicenceComplaints(c, inv, RepoReader())
 	if len(got) == 0 {
@@ -1079,7 +1079,7 @@ func TestAGenuineCopyleftLicenceIsRefusedAgainstTheRealFile(t *testing.T) {
 					Version:    "v1.0.0",
 					Ecosystem:  EcosystemGo,
 					LicenseID:  id,
-					LinkedInto: []string{"backup-manager"},
+					LinkedInto: []string{"backupd"},
 				}),
 			}
 			got := LicensePolicyComplaints(c, planted)
@@ -1100,7 +1100,7 @@ func TestAGenuineCopyleftLicenceIsRefusedAgainstTheRealFile(t *testing.T) {
 			ProjectLicense: live.ProjectLicense,
 			Components: append(append([]Component{}, live.Components...), Component{
 				Name: "github.com/planted/unknown", Version: "v1.0.0", Ecosystem: EcosystemGo,
-				LicenseID: "Parity-7.0.0", LinkedInto: []string{"backup-manager"},
+				LicenseID: "Parity-7.0.0", LinkedInto: []string{"backupd"},
 			}),
 		}
 		got := LicensePolicyComplaints(c, planted)
@@ -1118,7 +1118,7 @@ func TestAGenuineCopyleftLicenceIsRefusedAgainstTheRealFile(t *testing.T) {
 			ProjectLicense: live.ProjectLicense,
 			Components: append(append([]Component{}, live.Components...), Component{
 				Name: "github.com/planted/alsompl", Version: "v1.0.0", Ecosystem: EcosystemGo,
-				LicenseID: "MPL-2.0", LinkedInto: []string{"backup-manager"},
+				LicenseID: "MPL-2.0", LinkedInto: []string{"backupd"},
 			}),
 		}
 		got := LicenceObligationComplaints(c, planted, RepoReader())
@@ -1412,8 +1412,8 @@ func TestTheProseCarriesNoCountNobodyChecks(t *testing.T) {
 }
 
 // TestTheComplianceDocsNameTheCurrentAppID is the check issue #687 asks
-// for. The rename moved project.appId from com.iasbuilt.backupmanager to
-// com.iasbuilt.rclonemanager (#685), and source-offer.md and
+// for. The rename moved project.appId from com.iasbuilt.backupd to
+// com.iasbuilt.backupd (#685), and source-offer.md and
 // privacy-policy.md are store-submitted prose repeating the old id: the
 // blanket rewrite reached compliance.json's own field and its
 // mustMention lists but never touched the doc bodies, because nothing

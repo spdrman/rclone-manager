@@ -2,7 +2,7 @@
 # Every anchored selftest's `--check-anchors`, in one run, at the path
 # everything already names.
 #
-# The aggregation itself is scripts/rcmtools/selftest/check_anchors.py
+# The aggregation itself is scripts/bdtools/selftest/check_anchors.py
 # now (EPIC I, I1.6 / #672 / #458). This file stays because the path is
 # load bearing:
 #
@@ -14,4 +14,4 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
-exec python3 "$repo_root/scripts/rcmtools/selftest/check_anchors.py" "$@"
+exec python3 "$repo_root/scripts/bdtools/selftest/check_anchors.py" "$@"

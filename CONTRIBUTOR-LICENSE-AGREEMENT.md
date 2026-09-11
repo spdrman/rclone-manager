@@ -1,4 +1,4 @@
-# rclone-manager Individual Contributor License Agreement
+# backupd Individual Contributor License Agreement
 
 This agreement is adapted from the Apache Software Foundation's Individual
 Contributor License Agreement v2.0, which is the most widely used document of
@@ -13,7 +13,7 @@ agreement instead. Ask, and one will be produced.
 
 ---
 
-Thank you for your interest in rclone-manager, owned by Roman Goldmann ("the
+Thank you for your interest in backupd, owned by Roman Goldmann ("the
 Project Owner"). In order to clarify the intellectual property licence granted
 with Contributions from any person, the Project Owner must have this agreement
 on file, signed by each Contributor, indicating agreement to the terms below.
@@ -112,7 +112,7 @@ GitHub username:
 Email:
 Date:
 
-I have read the rclone-manager Individual Contributor License Agreement and I
+I have read the backupd Individual Contributor License Agreement and I
 agree to it for this and all my future Contributions to this project.
 
 Signed:

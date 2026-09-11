@@ -11,11 +11,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/placement"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
 )
 
 // This file is issue #429: a chain with two medium tiers produces a move
@@ -150,7 +150,7 @@ func newTwoMediumFixture(t *testing.T, opts fixtureOpts) *twoMediumFixture {
 
 	a := &transport.Medium{
 		ID: testMedium, Type: transport.MediumTypeS3, Bucket: "nas-backups",
-		Prefix: "rclone-manager", StorageClass: opts.storageClass,
+		Prefix: "backupd", StorageClass: opts.storageClass,
 	}
 	b := &transport.Medium{
 		ID: mediumB, Type: transport.MediumTypeS3, Bucket: "nas-annual",

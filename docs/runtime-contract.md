@@ -36,8 +36,8 @@ prove the check can actually see it go.
 | `timezone` | engine | `TZ`, because retention is evaluated against calendar boundaries |
 | `private-state-mount` | engine | `/data/state` |
 | `backup-data-mount` | engine | `/data/backups` |
-| `configuration-mount` | engine | `/etc/backup-manager/config`, a writable directory holding `config.yaml` (issue #196) |
-| `secret-file-mount` | engine | `/etc/backup-manager/id_ed25519`, read-only |
+| `configuration-mount` | engine | `/etc/backupd/config`, a writable directory holding `config.yaml` (issue #196) |
+| `secret-file-mount` | engine | `/etc/backupd/id_ed25519`, read-only |
 | `resource-expectations` | document | `x-canonical-runtime.resources` |
 | `supported-architectures` | document | `x-canonical-runtime.architectures` |
 | `digest-policy` | document | `x-canonical-runtime.digest_policy` |
@@ -93,10 +93,10 @@ A runtime profile is how one executable changes host-dependent behaviour
 without becoming a second build.
 
 ```
-rbm-web serve    --profile=generic
-rbm-web serve    --profile=ugos --trusted-upstream=172.19.0.2/32
-rbm-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 \
-                            --ui-root=/usr/share/backup-manager/ui
+backupd-web serve    --profile=generic
+backupd-web serve    --profile=ugos --trusted-upstream=172.19.0.2/32
+backupd-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 \
+                            --ui-root=/usr/share/backupd/ui
 ```
 
 Seven profiles exist: `generic`, `ugos`, and the five issue #169 added when it
@@ -373,7 +373,7 @@ had changed, for three work packages, with every suite green.
 The engine's check is a liveness question. Every adapter's web UI declares
 `depends_on: <engine>: condition: service_healthy`, so whatever it asks stands
 between an operator and the only LAN-facing container in the deployment.
-`rbm status` is FR-24's verdict and exits non-zero on a fresh
+`backupd status` is FR-24's verdict and exits non-zero on a fresh
 install by design, which made "install the app" and "reach the app" mutually
 exclusive on all nine adapters.
 
@@ -408,7 +408,7 @@ One mount is redeclared, and the host side of it does not move either:
 | | Phase 4 | Converted adapter |
 |---|---|---|
 | host path | `<appdata>/config/config.yaml` | `<appdata>/config` |
-| container path | `/etc/backup-manager/config.yaml` | `/etc/backup-manager/config` |
+| container path | `/etc/backupd/config.yaml` | `/etc/backupd/config` |
 | mode | `ro` | writable |
 
 The file an operator already has stays exactly where it is; what the adapter
@@ -423,7 +423,7 @@ saying per platform rather than once:
 | platform | what carries the old answer | what stops it |
 |---|---|---|
 | generic, OpenMediaVault, Proxmox | an env file the operator edits | `CONFIG_FILE` became `CONFIG_DIR`, a fail-closed `${VAR:?}` reference, so an unconverted file stops the deployment with a message |
-| Synology (Container Manager) | `backup-manager.env` | the same, `${APPDATA:?...}/config` |
+| Synology (Container Manager) | `backupd.env` | the same, `${APPDATA:?...}/config` |
 | TrueNAS (catalog) | the platform, not a file | the question was renamed `config` to `configDir`, so an upgrade has no stored answer to carry forward and the wizard asks again |
 | Unraid | the operator's own template copy | nothing automatic: a changed `<Config>` Target does not retire a mapping already in the user template, so the old read-only file mapping has to be deleted by hand |
 | Synology (`.spk`) | the package's own layout | the package installs the directory itself |
@@ -432,9 +432,9 @@ The `${VAR:?}` claim only ever covered the first three rows. There is no
 `${VAR:?}` anywhere in a TrueNAS catalog answer or an Unraid template, and
 saying otherwise made a fail-closed guarantee out of a property those two
 platforms do not have. On TrueNAS the failure it hid was concrete: an upgrade
-that kept a Phase 4 answer of `<pool>/backup-manager/config/config.yaml` bind
-mounts that FILE at `/etc/backup-manager/config`, `--config` resolves to
-`/etc/backup-manager/config/config.yaml` inside it, and the engine crash-loops
+that kept a Phase 4 answer of `<pool>/backupd/config/config.yaml` bind
+mounts that FILE at `/etc/backupd/config`, `--config` resolves to
+`/etc/backupd/config/config.yaml` inside it, and the engine crash-loops
 on ENOTDIR with a message naming neither the mount nor the migration.
 
 Two things close that. The TrueNAS question carries a new identifier, so there
@@ -515,7 +515,7 @@ second proxy would double a cost that is already about half the read.
 ## Performance evidence for this change
 
 All seven metrics EPIC B #81's performance contract names, measured with
-`python3 scripts/rcmtools/perf/capture_baseline.py --repeat 5` on the designated benchmark host
+`python3 scripts/bdtools/perf/capture_baseline.py --repeat 5` on the designated benchmark host
 `darwin-arm64-mac17-2`, workload `phase6-baseline-v1`, and compared against
 #165's committed baseline with `scripts/perf/check-baseline.sh --compare`.
 Nothing was re-baselined.
@@ -549,7 +549,7 @@ the two-service topology leaking into the direct path.
 
 **`image_size_bytes` grew by 65,536 bytes.** That is the profile table, the
 gateway authenticator and the bundle resolver compiled into
-`/rbm-web`. It is 0.15% of the image against a 5% budget, and it is
+`/backupd-web`. It is 0.15% of the image against a 5% budget, and it is
 real growth rather than noise: #165 recorded that two independent builds of the
 same commit produced byte-identical image sizes, so there is no noise here to
 hide in and no reason to describe 64 KiB as anything but 64 KiB.
@@ -570,7 +570,7 @@ working with no change. What is new is additive:
 | `--profile=${RUNTIME_PROFILE:-generic}` on both commands | none; `generic` is what the previous build did |
 | `TZ: ${TZ:-UTC}` | none; UTC is what the image defaulted to |
 | `stop_grace_period` | the engine now gets 30s instead of Docker's 10s default, so a shutdown during a journal write is less likely to be killed mid-write |
-| explicit `healthcheck` on the engine | the engine's compose healthcheck is now `/health/live` rather than the image's `rbm status`, so a DEGRADED or unconfigured instance no longer keeps `web-ui` from starting. Backup freshness stays the image's own HEALTHCHECK, the alerts block, and `docker compose exec rclone-manager /rbm status` |
+| explicit `healthcheck` on the engine | the engine's compose healthcheck is now `/health/live` rather than the image's `backupd status`, so a DEGRADED or unconfigured instance no longer keeps `web-ui` from starting. Backup freshness stays the image's own HEALTHCHECK, the alerts block, and `docker compose exec backupd /backupd status` |
 | `UI_DIR` / `UI_ROOT` on `web-ui` | none when unset, which is the default |
 | `x-canonical-runtime` | none at runtime; compose ignores unknown `x-` keys |
 

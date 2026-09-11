@@ -34,7 +34,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/model"
 )
 
 // validConfig returns a Config that Validate accepts as-is. Individual
@@ -44,7 +44,7 @@ func validConfig() Config {
 	return Config{
 		PollInterval: Duration(15 * time.Minute),
 		State: State{
-			Database: "/var/lib/backup-manager/state.db",
+			Database: "/var/lib/backupd/state.db",
 		},
 		Sources: []Source{
 			{
@@ -58,7 +58,7 @@ func validConfig() Config {
 							Port:       22,
 							User:       "backup",
 							KeyFile:    "/run/secrets/backup_ssh_key",
-							KnownHosts: "/etc/backup-manager/known_hosts",
+							KnownHosts: "/etc/backupd/known_hosts",
 						},
 						RemotePath: "/backups/postgres",
 						LocalPath:  "/backups/production/postgres",
@@ -489,11 +489,11 @@ func TestKeyExactlyOneSourceRequired(t *testing.T) {
 		cfg := validConfig()
 		r := &cfg.Sources[0].BackupSets[0].Remote
 		r.KeyFile = ""
-		r.Key = Key{File: "/etc/backup-manager/id_ed25519"}
+		r.Key = Key{File: "/etc/backupd/id_ed25519"}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate: %v", err)
 		}
-		if r.KeyFile != "/etc/backup-manager/id_ed25519" {
+		if r.KeyFile != "/etc/backupd/id_ed25519" {
 			t.Fatalf("KeyFile = %q, want it normalized to match Key.File", r.KeyFile)
 		}
 	})
@@ -512,7 +512,7 @@ func TestKeyExactlyOneSourceRequired(t *testing.T) {
 		cfg := validConfig()
 		r := &cfg.Sources[0].BackupSets[0].Remote
 		r.KeyFile = ""
-		r.Key = Key{Command: []string{"/usr/local/bin/op", "read", "op://infra/backup-manager/private-key"}}
+		r.Key = Key{Command: []string{"/usr/local/bin/op", "read", "op://infra/backupd/private-key"}}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate: %v", err)
 		}
@@ -568,7 +568,7 @@ func TestKeyCommandExecutableMustBeAbsolute(t *testing.T) {
 	cfg := validConfig()
 	r := &cfg.Sources[0].BackupSets[0].Remote
 	r.KeyFile = ""
-	r.Key = Key{Command: []string{"op", "read", "op://infra/backup-manager/private-key"}}
+	r.Key = Key{Command: []string{"op", "read", "op://infra/backupd/private-key"}}
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("a relative key.command executable was accepted")
@@ -619,7 +619,7 @@ func TestKeyPassphraseExactlyOneSourceAllowed(t *testing.T) {
 
 	t.Run("command alone is accepted", func(t *testing.T) {
 		cfg := validConfig()
-		cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Command: []string{"/usr/local/bin/op", "read", "op://infra/backup-manager/private-key-passphrase"}}
+		cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Command: []string{"/usr/local/bin/op", "read", "op://infra/backupd/private-key-passphrase"}}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate: %v", err)
 		}
@@ -645,7 +645,7 @@ func TestKeyPassphraseExactlyOneSourceAllowed(t *testing.T) {
 
 func TestKeyPassphraseCommandExecutableMustBeAbsolute(t *testing.T) {
 	cfg := validConfig()
-	cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Command: []string{"op", "read", "op://infra/backup-manager/private-key-passphrase"}}
+	cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Command: []string{"op", "read", "op://infra/backupd/private-key-passphrase"}}
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("a relative key.passphrase.command executable was accepted")
@@ -685,7 +685,7 @@ func TestKeyEncryptionOptional(t *testing.T) {
 func TestKeyEncryptionExactlyOneSourceEnforced(t *testing.T) {
 	t.Run("file alone is accepted", func(t *testing.T) {
 		cfg := validConfig()
-		cfg.KeyEncryption = KeyEncryption{File: "/etc/backup-manager/key.dek"}
+		cfg.KeyEncryption = KeyEncryption{File: "/etc/backupd/key.dek"}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate: %v", err)
 		}
@@ -701,7 +701,7 @@ func TestKeyEncryptionExactlyOneSourceEnforced(t *testing.T) {
 
 	t.Run("command alone is accepted", func(t *testing.T) {
 		cfg := validConfig()
-		cfg.KeyEncryption = KeyEncryption{Command: []string{"/usr/local/bin/op", "read", "op://infra/backup-manager/dek"}}
+		cfg.KeyEncryption = KeyEncryption{Command: []string{"/usr/local/bin/op", "read", "op://infra/backupd/dek"}}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("Validate: %v", err)
 		}
@@ -711,8 +711,8 @@ func TestKeyEncryptionExactlyOneSourceEnforced(t *testing.T) {
 		name string
 		ke   KeyEncryption
 	}{
-		{"file and env", KeyEncryption{File: "/etc/backup-manager/key.dek", Env: "BACKUP_KEY_DEK"}},
-		{"file and command", KeyEncryption{File: "/etc/backup-manager/key.dek", Command: []string{"/usr/local/bin/op", "read", "x"}}},
+		{"file and env", KeyEncryption{File: "/etc/backupd/key.dek", Env: "BACKUP_KEY_DEK"}},
+		{"file and command", KeyEncryption{File: "/etc/backupd/key.dek", Command: []string{"/usr/local/bin/op", "read", "x"}}},
 		{"env and command", KeyEncryption{Env: "BACKUP_KEY_DEK", Command: []string{"/usr/local/bin/op", "read", "x"}}},
 	} {
 		t.Run(tc.name+" together rejected", func(t *testing.T) {
@@ -727,7 +727,7 @@ func TestKeyEncryptionExactlyOneSourceEnforced(t *testing.T) {
 
 func TestKeyEncryptionCommandExecutableMustBeAbsolute(t *testing.T) {
 	cfg := validConfig()
-	cfg.KeyEncryption = KeyEncryption{Command: []string{"op", "read", "op://infra/backup-manager/dek"}}
+	cfg.KeyEncryption = KeyEncryption{Command: []string{"op", "read", "op://infra/backupd/dek"}}
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("a relative key_encryption.command executable was accepted")
@@ -756,7 +756,7 @@ func TestKeyValidateIsIdempotent(t *testing.T) {
 		key  Key
 	}{
 		{"deprecated key_file alone", Key{}},
-		{"key.file", Key{File: "/etc/backup-manager/id_ed25519"}},
+		{"key.file", Key{File: "/etc/backupd/id_ed25519"}},
 		{"key.env", Key{Env: "BACKUP_SSH_KEY"}},
 		{"key.command", Key{Command: []string{"/usr/local/bin/op", "read", "x"}}},
 	} {

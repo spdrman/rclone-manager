@@ -38,15 +38,15 @@ No state or backup data moves.
 ## Two templates, and why
 
 An Unraid Docker template describes exactly one container. The canonical image
-needs two: `/rbm-web serve` (the engine: API, scheduler, local
-authentication, no published port) and `/rbm-web serve-ui` (the static
+needs two: `/backupd-web serve` (the engine: API, scheduler, local
+authentication, no published port) and `/backupd-web serve-ui` (the static
 UI plus a reverse proxy, the only published port). There is no single command that
 does both, by design, so this package ships two templates.
 
 | Path | What it is |
 | --- | --- |
-| `template/backup-manager.xml` | The engine. Install first. |
-| `template/backup-manager-ui.xml` | The web interface. Install second. |
+| `template/backupd.xml` | The engine. Install first. |
+| `template/backupd-ui.xml` | The web interface. Install second. |
 | `frontend/platform.ts` | The shared platform bridge (§3.5). Provider identity and storage expectations only. |
 | `frontend/webui.json` | WebUI and storage facts, pinned to the templates by `distribution/packaging` so the two cannot drift. |
 
@@ -56,7 +56,7 @@ the build if any appears.
 ## The one prerequisite
 
 ```bash
-docker network create backup-manager
+docker network create backupd
 ```
 
 Both templates target that user-defined network. The Web UI container reaches the
@@ -75,11 +75,11 @@ Docker, Add Container.
 
 | Role | Host default | In the container | Mode |
 | --- | --- | --- | --- |
-| State | `/mnt/user/appdata/backup-manager/state` | `/data/state` | rw |
-| Backups | `/mnt/user/backups/backup-manager` | `/data/backups` | rw |
-| Config | `/mnt/user/appdata/backup-manager/config` | `/etc/backup-manager/config` | rw |
-| SSH key | `/mnt/user/appdata/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | ro |
-| Known hosts | `/mnt/user/appdata/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | ro |
+| State | `/mnt/user/appdata/backupd/state` | `/data/state` | rw |
+| Backups | `/mnt/user/backups/backupd` | `/data/backups` | rw |
+| Config | `/mnt/user/appdata/backupd/config` | `/etc/backupd/config` | rw |
+| SSH key | `/mnt/user/appdata/backupd/secrets/id_ed25519` | `/etc/backupd/id_ed25519` | ro |
+| Known hosts | `/mnt/user/appdata/backupd/secrets/known_hosts` | `/etc/backupd/known_hosts` | ro |
 
 `config` is a writable **directory** holding `config.yaml`, not a read-only single
 file (issue #196). Adding a backup set, saving settings and first-run setup all
@@ -134,10 +134,10 @@ and nothing that would need a shell the distroless image does not have.
 
 ## The Web UI container has no healthcheck
 
-Deliberately. The image bakes in `HEALTHCHECK /rbm status`, which needs
+Deliberately. The image bakes in `HEALTHCHECK /backupd status`, which needs
 a config file and a state database that container does not have, so left inherited
 it would report unhealthy forever while working perfectly. The compose profiles
-override the test with `/rbm-web healthcheck`. Unraid's only seam is
+override the test with `/backupd-web healthcheck`. Unraid's only seam is
 `docker run`'s health-cmd flag, which is shell form, and the runtime image is
 distroless with no shell, so an override there would be a healthcheck that can
 never pass. Turning it off is honest; a permanently failing one is not.
@@ -145,7 +145,7 @@ never pass. Turning it off is honest; a permanently failing one is not.
 The engine container keeps the image's baked-in healthcheck, and here that is the
 right answer rather than the same limitation twice. On the compose profiles the
 engine has to override it, because their Web UI will not start until the engine
-reports healthy and `rbm status` is non-zero on a fresh install by
+reports healthy and `backupd status` is non-zero on a fresh install by
 design. An Unraid template declares no start-ordering dependency at all, so
 nothing here waits on that verdict and the badge Unraid shows for the engine is
 exactly the backup-freshness report FR-24 means it to be: red until the first
@@ -160,7 +160,7 @@ host provides: first-run administrator enrollment through a single-use token the
 engine prints to its own log, Argon2id password hashing, an HTTP-only session
 cookie, CSRF protection and per-IP rate limiting.
 
-Unraid's root password cannot log into Backup Manager and Backup Manager's
+Unraid's root password cannot log into Backupd and Backupd's
 administrator cannot log into Unraid. Nothing in this directory ships a credential,
 and `distribution/packaging` scans for one on every commit.
 
@@ -173,7 +173,7 @@ The flag decides whether the engine believes `X-Forwarded-For` and
 `X-Forwarded-Proto`. `apps/common/auth/local` allows it only where the Web UI
 container is the engine's sole possible direct TCP peer "by network topology, not
 merely by convention". A compose project network is created, named and destroyed
-with the deployment, and nothing else joins it. The `backup-manager` network
+with the deployment, and nothing else joins it. The `backupd` network
 these two templates share is not that: you create it by hand, it outlives both
 containers, it has a very reusable name, and every container on a user-defined
 bridge reaches every port of every other container on it regardless of what is
@@ -214,14 +214,14 @@ package and must not be changed.
 
 ## The image reference
 
-`ghcr.io/spdrman/backup-manager:0.4.0` is the reference every package here
+`ghcr.io/spdrman/backupd:0.4.0` is the reference every package here
 carries, and it is not pushed yet. `distribution/packaging/canonical.json`
 records `image.published: false`, and `container/release-manifest.json` carries
 a `registry_digest` of `null` per architecture; those two move together, so
 either both describe a real push or neither does. Until the release workflow
 pushes 0.4.0 and the digests are recorded back, reach it the way the acceptance
 procedure's step 0 describes, by pushing to your own registry or side-loading a
-build. The previous release, `ghcr.io/spdrman/backup-manager:0.3.3`, stays
+build. The previous release, `ghcr.io/spdrman/backupd:0.3.3`, stays
 published and signed if you would rather run that. It is one `<Repository>` element per template, editable in Unraid's
 own template editor.
 

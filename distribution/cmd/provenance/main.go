@@ -24,7 +24,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spdrman/rclone-manager/distribution/packaging"
+	"github.com/spdrman/backupd/distribution/packaging"
 )
 
 // The default is CHECK and -write is the opt-in, which is the wrong way

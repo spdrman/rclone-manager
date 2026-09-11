@@ -2,12 +2,12 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "rclone-manager 0.4.0",
-  "documentNamespace": "https://github.com/spdrman/rclone-manager/spdx/77427012c8f6b23faa01713d59c0df8ba3bf1657",
+  "name": "backupd 0.4.0",
+  "documentNamespace": "https://github.com/spdrman/backupd/spdx/77427012c8f6b23faa01713d59c0df8ba3bf1657",
   "creationInfo": {
     "created": "2026-09-10T07:54:41Z",
     "creators": [
-      "Tool: rclone-manager-provenance",
+      "Tool: backupd-provenance",
       "Organization: Roman Goldmann"
     ]
   },

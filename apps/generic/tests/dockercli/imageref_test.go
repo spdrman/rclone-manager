@@ -2,7 +2,7 @@
 //
 // `dockercli` used to build, retag and test one image reference that is
 // the same string in every checkout on the machine:
-// `backup-manager:dockercli-test`. An image tag belongs to the Docker
+// `backupd:dockercli-test`. An image tag belongs to the Docker
 // daemon, not to the worktree that created it, and this machine carries
 // around forty worktrees of this repository sharing one daemon. Two
 // `dockercli` runs therefore raced over one name: whichever built last
@@ -37,14 +37,14 @@ import (
 const (
 	// composeImageRepo is the repository half of the reference
 	// container/compose.yaml hard-codes for both of its services
-	// (`image: backup-manager:${VERSION:-dev}`). The uniqueness this file
+	// (`image: backupd:${VERSION:-dev}`). The uniqueness this file
 	// introduces therefore has to live entirely in the tag half: compose
 	// resolves the repository from the file itself and only the tag from
 	// the environment, so a per-run repository would need compose.yaml
 	// edited per run, while a per-run tag needs one VERSION value.
 	// TestComposeImageResolvesToTheReferenceThisRunBuilt keeps that claim
 	// honest against the real file.
-	composeImageRepo = "backup-manager"
+	composeImageRepo = "backupd"
 
 	// sharedTagBeforeThisFix is the exact reference every run used to
 	// build and retag, kept here as a value the current one must never
@@ -54,7 +54,7 @@ const (
 	// imageLabelKey marks an image as this suite's to remove, and is the
 	// whole safety boundary for sweepImages: an image without it is never
 	// touched, exactly as dockerlease.LabelKey works for containers.
-	imageLabelKey = "rclone-manager-test-image"
+	imageLabelKey = "backupd-test-image"
 	// imageLabelValue is fixed for images built for real. The sweeper
 	// takes the value as an argument so its own test can put its fixtures
 	// in a private namespace that no other run's sweep can see, which is
@@ -66,7 +66,7 @@ const (
 	// what makes "am I testing my own build?" a question the suite can
 	// actually ask the daemon, rather than something it assumes because
 	// it typed a tag a moment ago.
-	runLabelKey = "rclone-manager-test-run"
+	runLabelKey = "backupd-test-run"
 
 	// bornLabelKey carries the build's own wall-clock stamp, in Unix
 	// nanoseconds, for sweepImages to age images by.
@@ -78,7 +78,7 @@ const (
 	// a template reading it fails outright. A label this suite writes
 	// itself is defined for every image it builds, needs no fallback, and
 	// can be backdated in a test, which `.Created` cannot be.
-	bornLabelKey = "rclone-manager-test-born"
+	bornLabelKey = "backupd-test-born"
 )
 
 // runID identifies this test process, and through it every image the
@@ -120,7 +120,7 @@ func imageReference() string {
 }
 
 // composeVersion returns the VERSION value that makes
-// container/compose.yaml's `image: backup-manager:${VERSION:-dev}`
+// container/compose.yaml's `image: backupd:${VERSION:-dev}`
 // resolve to exactly ref, and refuses anything it cannot resolve.
 //
 // This is the coupling `startComposeStack` used to assert with
@@ -215,7 +215,7 @@ func TestComposeImageResolvesToTheReferenceThisRunBuilt(t *testing.T) {
 	}
 
 	const template = composeImageRepo + ":${VERSION:-dev}"
-	for _, service := range []string{"rclone-manager", "web-ui"} {
+	for _, service := range []string{"backupd", "web-ui"} {
 		svc, ok := cf.Services[service]
 		if !ok {
 			t.Fatalf("compose.yaml has no %q service", service)
@@ -235,7 +235,7 @@ func TestComposeImageResolvesToTheReferenceThisRunBuilt(t *testing.T) {
 // this run's reference must carry this run's id.
 //
 // Under the shared tag this is precisely the question that had no good
-// answer. Two runs both built `backup-manager:dockercli-test`, the
+// answer. Two runs both built `backupd:dockercli-test`, the
 // second build moved the name, and the first run went on inspecting,
 // running and compose-ing an image it had not built, with nothing
 // anywhere able to notice.
@@ -295,8 +295,8 @@ func TestARaceOverOneTagIsWhatThePerRunReferenceRemoves(t *testing.T) {
 	alpha := buildMarkerImage(t, "worktree-alpha", imageLabelValue, time.Now())
 	beta := buildMarkerImage(t, "worktree-beta", imageLabelValue, time.Now())
 
-	// One name, standing in for `backup-manager:dockercli-test`.
-	shared := "rclone-manager-dockercli-race-" + runID + ":shared"
+	// One name, standing in for `backupd:dockercli-test`.
+	shared := "backupd-dockercli-race-" + runID + ":shared"
 	t.Cleanup(func() { _ = exec.Command("docker", "rmi", "-f", shared).Run() })
 
 	retag(t, alpha, shared)
@@ -339,7 +339,7 @@ func runLabelOf(t *testing.T, ref string) string {
 }
 
 // retag points name at the image ref currently resolves to, the way the
-// suite used to point `backup-manager:dockercli-test` at its own build.
+// suite used to point `backupd:dockercli-test` at its own build.
 func retag(t *testing.T, ref, name string) {
 	t.Helper()
 	if out, err := exec.Command("docker", "tag", ref, name).CombinedOutput(); err != nil {

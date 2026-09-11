@@ -1,4 +1,4 @@
-import { BackupManagerError, RequestFailure, describeException } from "./contracts";
+import { BackupdError, RequestFailure, describeException } from "./contracts";
 import type { ApiError } from "./contracts";
 import { API_BASE_PATH, API_VERSION } from "./generated/contract";
 
@@ -34,7 +34,7 @@ export function isNotConfigured(error: ApiError | null | undefined): boolean {
  *  never reached the service at all (a stopped container, a dropped
  *  connection) and so carries no code and no correlation id. */
 export function apiErrorOf(e: unknown): ApiError | null {
-  return e instanceof BackupManagerError ? e.api : null;
+  return e instanceof BackupdError ? e.api : null;
 }
 
 /**
@@ -118,7 +118,7 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
     // exists to stop.
     if (e instanceof SyntaxError) {
       return {
-        message: "Backup Manager answered, and this page could not read the answer.",
+        message: "Backupd answered, and this page could not read the answer.",
         remediation:
           "The service replied, so it is running, but what came back was not what this page expected. That is usually something between the browser and the service rewriting the response, or a version of the app older than the service it is talking to.",
         detail: detailOf(describeException(e), buildLine())
@@ -133,7 +133,7 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
     // is not a function" names the defect exactly, and the sentence that
     // used to be printed in its place named nothing.
     return {
-      message: "Backup Manager did not answer, or answered with something this page could not read.",
+      message: "Backupd did not answer, or answered with something this page could not read.",
       // Deliberately does NOT say nothing was changed. A request that got
       // no reply may still have been carried out, with only the response
       // lost, and claiming otherwise would be this module's own version of
@@ -145,7 +145,7 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
       // of: an operator scanning a banner for an id finds the words either
       // way.
       remediation:
-        "This failure did not come out of the service, so it has no id in any log. Check that the Backup Manager service is still running, then try again.",
+        "This failure did not come out of the service, so it has no id in any log. Check that the Backupd service is still running, then try again.",
       detail: detailOf(describeException(e), buildLine())
     };
   }
@@ -155,7 +155,7 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
     case "RATE_LIMITED":
       return {
         message: "Too many attempts from this address.",
-        remediation: "Backup Manager is refusing further attempts for the moment. Wait a minute, then try again.",
+        remediation: "Backupd is refusing further attempts for the moment. Wait a minute, then try again.",
         correlationId
       };
     case "CSRF_TOKEN_MISSING":
@@ -170,7 +170,7 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
       return {
         message: fallbackMessage,
         remediation:
-          "Backup Manager reported an internal error rather than a reason it could name. Its own log holds the detail, under this correlation id.",
+          "Backupd reported an internal error rather than a reason it could name. Its own log holds the detail, under this correlation id.",
         correlationId
       };
     default:
@@ -190,16 +190,16 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
 function describeRequestFailure(e: RequestFailure): OperatorFailure {
   if (e.kind === "no-response") {
     return {
-      message: "Backup Manager did not answer.",
+      message: "Backupd did not answer.",
       remediation:
-        "The request got no reply at all, so whether it was carried out is unknown. Check that the Backup Manager service is still running, then try again.",
+        "The request got no reply at all, so whether it was carried out is unknown. Check that the Backupd service is still running, then try again.",
       // No response, so no id. apiErrorOf's own rule, one failure over: an
       // id that matches nothing in any log is a false lead.
       detail: detailOf(requestedPath(e.path), describeException(e.cause), buildLine())
     };
   }
   return {
-    message: "Backup Manager answered, and this page could not read the answer.",
+    message: "Backupd answered, and this page could not read the answer.",
     remediation:
       "The service replied, so it is running, but what came back was not what this page expected. That is usually something between the browser and the service rewriting the response, or a version of the app older than the service it is talking to.",
     correlationId: e.correlationId,
@@ -229,7 +229,7 @@ function describeRequestFailure(e: RequestFailure): OperatorFailure {
  */
 export function asApiError(e: unknown): ApiError {
   const api = apiErrorOf(e);
-  const failure = describeFailure(e, api?.message || "Backup Manager could not complete that request.");
+  const failure = describeFailure(e, api?.message || "Backupd could not complete that request.");
   return {
     code: api?.code ?? "unknown",
     message: failure.message,

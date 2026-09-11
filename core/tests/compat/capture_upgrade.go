@@ -14,8 +14,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/migrations"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/migrations"
 )
 
 // The cell that upgrades a populated database in place, rather than

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // The preview and the apply, tested as the pair they are.
@@ -330,7 +330,7 @@ func TestPreviewRetention_VerdictsSayWhichPlacementSelectedEachTier(t *testing.T
 // ------------------------------------------------- EPIC E, issue #430 ---
 //
 // #239 put FR-27's moves and FR-30's per-deletion medium on the
-// preview/apply envelope in core/service and on `backup-manager
+// preview/apply envelope in core/service and on `backupd
 // retention`, and stopped at this boundary. Until these pass, an operator
 // can see a planned move and the medium a deletion happens on from the
 // CLI and not from the API, so the web surface silently under-reports what
@@ -434,8 +434,8 @@ func TestPreviewRetention_CarriesThePlacementsItCouldNotConfirm(t *testing.T) {
 // A deletion on the implicit local medium carries no `medium` key, and
 // that absence is the answer rather than a gap: it is what keeps a
 // deployment that declares no storage medium reading exactly as it did
-// before this field existed, and `rbm retention` spells the
-// same asymmetry the same way (mediumSuffix, core/cmd/backup-manager/
+// before this field existed, and `backupd retention` spells the
+// same asymmetry the same way (mediumSuffix, core/cmd/backupd/
 // retention.go).
 func TestPreviewRetention_EveryDeletionNamesTheMediumItHappensOn(t *testing.T) {
 	tr := newOperationsTestRouter(t, alwaysPassGate{})

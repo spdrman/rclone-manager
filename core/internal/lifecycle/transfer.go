@@ -88,11 +88,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
-	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
-	"github.com/spdrman/rclone-manager/core/internal/transport"
-	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
+	"github.com/spdrman/backupd/core/internal/artifactstore"
+	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/spdrman/backupd/core/internal/transport/retry"
 )
 
 // partialSuffix is FR-12's non-restorable temporary-name marker. Appended
@@ -387,7 +387,7 @@ func Transfer(ctx context.Context, d Deps, p TransferParams) (state.Outcome, err
 	// Two attempts sharing a key is not exotic. internal/app's attemptKey
 	// is the artifact plus its retry count and nothing in it distinguishes
 	// two live attempts, and nothing stops two of them existing: service's
-	// runOnce is an in-process lock, and `rbm fetch` and `run`
+	// runOnce is an in-process lock, and `backupd fetch` and `run`
 	// open the same journal from another process behind a SHARED one.
 	//
 	// Without this check the copy below would start anyway and write into

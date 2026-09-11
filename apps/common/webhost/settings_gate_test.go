@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/rclone-manager/apps/common/csrf"
-	"github.com/spdrman/rclone-manager/core/service"
+	"github.com/spdrman/backupd/apps/common/csrf"
+	"github.com/spdrman/backupd/core/service"
 )
 
 // settings_gate_test.go is issue #87 (B5.1)'s adversarial reading of
