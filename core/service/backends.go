@@ -96,6 +96,15 @@ type Backend struct {
 	// to read both.
 	RcloneBackend string
 
+	// Configurable is whether an instance of this backend can be
+	// authored today, resolved from the manifest's optional flag so a
+	// caller never has to know that absent means true. A false one is
+	// registered and served - its shape is real and an operator looking
+	// for it deserves to find it - and every layer that would store or
+	// dial an instance of it refuses it by name, which is why a surface
+	// that offered it anyway would offer nothing but a refusal.
+	Configurable bool
+
 	Fields []BackendField
 	Probe  []BackendProbeStep
 }
@@ -188,6 +197,7 @@ func projectManifest(m backend.Manifest) Backend {
 		Summary:       m.Summary,
 		Role:          string(m.Role),
 		RcloneBackend: m.RcloneBackend,
+		Configurable:  m.IsConfigurable(),
 		Fields:        make([]BackendField, 0, len(m.Fields)),
 		Probe:         make([]BackendProbeStep, 0, len(m.Probe.Steps)),
 	}

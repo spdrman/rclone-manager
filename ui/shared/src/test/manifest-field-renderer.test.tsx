@@ -90,6 +90,7 @@ function syntheticManifest(): BackendManifest {
     label: "Widget locker",
     summary: "A backend that does not exist, so nothing can know about it.",
     role: "object_store",
+    configurable: true,
     fields: SYNTHETIC_FIELDS,
     probe: {
       steps: [

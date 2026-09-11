@@ -36,7 +36,7 @@ func TestTheBundledSetIsExactly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bundled(): %v", err)
 	}
-	want := []string{"local_volume", "s3"}
+	want := []string{"local_volume", "s3", "sftp"}
 	if got := reg.IDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("bundled backend ids = %v, want %v", got, want)
 	}
@@ -110,6 +110,41 @@ func mustLoadOne(t *testing.T, name, content string) *Registry {
 		t.Fatalf("Load(%s) unexpectedly refused a manifest meant to be valid: %v", name, err)
 	}
 	return reg
+}
+
+// TestAManifestIsConfigurableUnlessItSaysOtherwise pins the one default
+// in this format, and the reason it is a default rather than a required
+// field: a manifest is written for a backend somebody is shipping, so
+// the answer that costs nothing to say has to be the ordinary one. What
+// a false answer means - a backend registered, served and searchable
+// that no operator can author an instance of yet - is deliberate and is
+// declared, never inferred from a manifest that stayed silent.
+func TestAManifestIsConfigurableUnlessItSaysOtherwise(t *testing.T) {
+	silent := mustLoadOne(t, "a.json", validLocalVolumeManifest).mustBackend(t, "local_volume")
+	if !silent.IsConfigurable() {
+		t.Error("a manifest that says nothing about configurable is not configurable; the default has to be the ordinary case, or every existing manifest silently became a preview")
+	}
+
+	declaredTrue := strings.Replace(validS3Manifest, `"rclone_backend": "s3",`, `"rclone_backend": "s3", "configurable": true,`, 1)
+	if m := mustLoadOne(t, "b.json", declaredTrue).mustBackend(t, "s3"); !m.IsConfigurable() {
+		t.Error("a manifest declaring configurable: true is not configurable")
+	}
+
+	declaredFalse := strings.Replace(validS3Manifest, `"rclone_backend": "s3",`, `"rclone_backend": "s3", "configurable": false,`, 1)
+	if m := mustLoadOne(t, "c.json", declaredFalse).mustBackend(t, "s3"); m.IsConfigurable() {
+		t.Error("a manifest declaring configurable: false is configurable; a picker would offer a row whose every path ends in a refusal")
+	}
+}
+
+// mustBackend is Backend(id) for a test that has just loaded the
+// manifest it is asking for.
+func (r *Registry) mustBackend(t *testing.T, id string) Manifest {
+	t.Helper()
+	m, err := r.Backend(id)
+	if err != nil {
+		t.Fatalf("Backend(%q): %v", id, err)
+	}
+	return m
 }
 
 // TestAnUnknownFieldInAManifestIsAParseError mirrors config.Load's
@@ -487,6 +522,32 @@ func TestFieldKindsAreExactly(t *testing.T) {
 	}
 	if !reflect.DeepEqual(validFieldKinds, want) {
 		t.Fatalf("the closed field-kind set changed: got %v, want %v", validFieldKinds, want)
+	}
+}
+
+// TestRolesAreExactly pins the closed ROLE set, the way the test above
+// pins the closed kind set and for the same reason: doc.go's "a manifest
+// can declare a new BACKEND, it cannot declare a new ROLE" is only true
+// while adding one is a Go change somebody reviews, and #731's
+// remote_filesystem is the first one added since #665 wrote that
+// sentence.
+//
+// It also pins rolesList against validRoles. That string is written out
+// by hand (it is what every role refusal prints), so a role added to the
+// map and not to the sentence would tell an operator their legal role is
+// not one of the accepted ones - a message that is wrong in the one
+// place somebody reads it.
+func TestRolesAreExactly(t *testing.T) {
+	want := map[Role]bool{
+		RoleObjectStore: true, RoleLocalVolume: true, RoleRemoteFilesystem: true,
+	}
+	if !reflect.DeepEqual(validRoles, want) {
+		t.Fatalf("the closed role set changed: got %v, want %v", validRoles, want)
+	}
+	for role := range validRoles {
+		if quoted := fmt.Sprintf("%q", string(role)); !strings.Contains(rolesList(), quoted) {
+			t.Errorf("rolesList() = %s, and it does not name the accepted role %s", rolesList(), quoted)
+		}
 	}
 }
 

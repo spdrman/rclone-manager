@@ -83,11 +83,14 @@ func TestRequiredBackendsResolve(t *testing.T) {
 // not against a list either package could drift from independently.
 //
 // This is deliberately a SUBSET check, not the exact-set comparison
-// above: backend.SupportedRcloneBackends is narrower than
-// RequiredBackends on purpose (sftp is required as a SOURCE backend,
-// not yet offered as a destination - see backend/doc.go, "What is
-// genuinely weakened"), so it must resolve against what the binary
-// registers without needing to equal it.
+// above: backend.SupportedRcloneBackends names the backends a
+// DESTINATION may be declared on, and the binary also registers
+// backends nothing may be declared on at all (the transitive ones
+// AcceptedTransitiveBackends records, crypt among them), so it must
+// resolve against what the binary registers without needing to equal
+// it. Since #731 it names the same three as RequiredBackends, which is
+// TestSupportedRcloneBackendsIsItsOwnReviewedList's business rather
+// than this test's.
 func TestEveryBundledManifestNamesABackendThisBinaryRegisters(t *testing.T) {
 	registered := map[string]bool{}
 	for _, name := range RegisteredBackendNames() {
@@ -126,12 +129,26 @@ func TestEveryBundledManifestNamesABackendThisBinaryRegisters(t *testing.T) {
 	}
 }
 
-// TestSupportedRcloneBackendsIsNarrowerThanRequiredBackends pins section
-// 4.2's own claim structurally: backend.SupportedRcloneBackends must
-// never simply BE RequiredBackends (reusing that list directly would
-// make shipping SFTP as a destination a zero-review change - see
-// backend/doc.go), and it must always resolve as a SUBSET of it.
-func TestSupportedRcloneBackendsIsNarrowerThanRequiredBackends(t *testing.T) {
+// TestSupportedRcloneBackendsIsItsOwnReviewedList pins section 4.2's own
+// claim: backend.SupportedRcloneBackends is the list of backends a
+// DESTINATION may be declared on, it must resolve as a subset of
+// RequiredBackends, and every member of it is a reviewed decision rather
+// than something that arrived because the backend was already linked for
+// another reason.
+//
+// Until #731 that second half was checked by refusing a
+// SupportedRcloneBackends that had become equal to RequiredBackends,
+// which was a proxy for "somebody reused that list instead of writing
+// this one". #731 is the reviewed diff section 4.2 asked for - sftp,
+// required as a SOURCE backend since FR-4 and now offered as a
+// destination too - so the two lists hold the same three names and the
+// proxy expired. What replaces it is the pin itself: the set is written
+// out here, a fourth destination backend fails this test by name, and
+// "reuse RequiredBackends" is not even reachable, since
+// core/internal/backend may import nothing from this package (backend/
+// doc.go's import rule, enforced by the cycle this file's own import
+// would create).
+func TestSupportedRcloneBackendsIsItsOwnReviewedList(t *testing.T) {
 	required := map[string]bool{}
 	for _, name := range RequiredBackends {
 		required[name] = true
@@ -141,8 +158,13 @@ func TestSupportedRcloneBackendsIsNarrowerThanRequiredBackends(t *testing.T) {
 			t.Errorf("backend.SupportedRcloneBackends names %q, which is not even in RequiredBackends", name)
 		}
 	}
-	if reflect.DeepEqual(sortedKeys(backend.SupportedRcloneBackends), append([]string(nil), RequiredBackends...)) {
-		t.Error("backend.SupportedRcloneBackends now equals RequiredBackends: it must stay the narrower, reviewed list (issue #665 section 4.2), or sftp-as-destination silently stops being a reviewed decision")
+
+	want := []string{"local", "s3", "sftp"}
+	if got := sortedKeys(backend.SupportedRcloneBackends); !reflect.DeepEqual(got, want) {
+		t.Errorf("backend.SupportedRcloneBackends = %v, want %v.\n"+
+			"A destination backend is its own decision: a name added here is a place this product will write "+
+			"backups to, and it stays a reviewed diff (issue #665 section 4.2) even when the rclone backend "+
+			"behind it is already registered for a source.", got, want)
 	}
 }
 

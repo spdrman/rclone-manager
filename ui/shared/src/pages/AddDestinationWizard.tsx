@@ -33,15 +33,25 @@
  * for. See destinationInstanceName.ts, which is also where the argument
  * about never echoing what was typed lives.
  *
- * # The wider catalogue is shown, dimmed
+ * # The wider catalogue is shown, dimmed, and there are two kinds of it
  *
  * Backends the engine understands and no manifest declares are rendered
  * and cannot be chosen. Hiding them answers an operator worse: somebody
  * who came here for SFTP learns nothing from a menu that never mentions
  * it and asks again next month, whereas a row saying the shape is
- * understood and is not registered is a real answer. They carry no radio,
- * so there is nothing to submit, and the server would refuse an id no
- * manifest declares in any case.
+ * understood and is not registered is a real answer. They carry no
+ * radio, so there is nothing to submit, and the server would refuse an
+ * id no manifest declares in any case.
+ *
+ * A REGISTERED backend can be dimmed too, and that is #731's row: a
+ * manifest reporting `configurable: false` is a backend this build
+ * describes in full and cannot yet store or dial. It is rendered with
+ * its label, its summary and the reason, and its radio is disabled, so
+ * it is findable and unchoosable. Offering it instead would be worse
+ * than either: the wizard would collect a name, the configure step
+ * would collect eight values and a credential, and the save would be
+ * refused by the schema — a dead end an operator walks the whole length
+ * of before finding out. Tracked in #235.
  *
  * # Nothing is written here, and why that is not what the issue says
  *
@@ -112,7 +122,12 @@ export function AddDestinationWizard({
   // did something wrong before they did anything at all.
   const [touched, setTouched] = useState(false);
 
-  const chosen = catalog.data?.registered.find((b) => b.id === backendId);
+  // Only a CONFIGURABLE backend can be the chosen one. Steps 2 and 3
+  // render nothing without it and onConfirmed is unreachable, so a
+  // preview backend cannot be submitted even if something set the id
+  // behind the disabled row's back: the check is here, once, rather
+  // than repeated as a guard on every button that leads onward.
+  const chosen = catalog.data?.registered.find((b) => b.id === backendId && b.configurable);
 
   const existingIds = useMemo(() => existing.map((m) => m.id), [existing]);
 
@@ -245,6 +260,11 @@ function ChooseBackendPane({
   const unregistered = catalog.unregistered.filter(
     (u) => needle === "" || u.transport.toLowerCase().includes(needle)
   );
+  // What "chosen" is allowed to mean here. A row that cannot be
+  // configured cannot be the answer, so the button that leads onward
+  // reads this rather than "something is selected": disabling the radio
+  // is what an operator SEES, and this is what the wizard obeys.
+  const chosenIsConfigurable = catalog.registered.some((b) => b.id === chosenId && b.configurable);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -272,14 +292,22 @@ function ChooseBackendPane({
         {registered.map((b) => (
           <li key={b.id}>
             <label
+              // A registered backend this build cannot yet save is
+              // shown and refused, exactly like the unregistered rows
+              // below and for the same reason: the row is the answer
+              // somebody came looking for. What it may not do is lead
+              // anywhere — the radio is disabled, so there is nothing
+              // to choose and nothing to submit.
+              aria-disabled={b.configurable ? undefined : "true"}
               style={{
                 display: "flex",
                 gap: 10,
                 alignItems: "flex-start",
-                border: "1px solid var(--border)",
+                border: b.configurable ? "1px solid var(--border)" : "1px dashed var(--border)",
                 borderRadius: "var(--radius-lg)",
                 padding: 10,
-                cursor: "pointer"
+                cursor: b.configurable ? "pointer" : "not-allowed",
+                color: b.configurable ? undefined : "var(--text-3)"
               }}
             >
               <input
@@ -287,12 +315,29 @@ function ChooseBackendPane({
                 name="backend"
                 value={b.id}
                 checked={chosenId === b.id}
-                onChange={() => onChoose(b.id)}
+                disabled={!b.configurable}
+                onChange={() => {
+                  // Guarded rather than trusted to the disabled
+                  // attribute: a change event that reaches a row this
+                  // build cannot save must choose nothing, however it
+                  // was produced.
+                  if (b.configurable) {
+                    onChoose(b.id);
+                  }
+                }}
                 style={{ marginTop: 3 }}
               />
               <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <strong style={{ fontSize: 13 }}>{b.label}</strong>
-                <span style={{ fontSize: 12, color: "var(--text-2)" }}>{b.summary}</span>
+                <span style={{ fontSize: 12, color: b.configurable ? "var(--text-2)" : "inherit" }}>
+                  {b.summary}
+                </span>
+                {b.configurable ? null : (
+                  <span style={{ fontSize: 12 }}>
+                    Not yet configurable — tracked in #235. This build describes the shape and cannot save
+                    one, so there is nothing here to fill in yet.
+                  </span>
+                )}
                 <span style={{ fontSize: "var(--text-xs)", color: "var(--text-3)" }}>
                   {/* The manifest id, because it is what the command line
                       and the configuration file both spell, and an
@@ -351,7 +396,7 @@ function ChooseBackendPane({
         <button className="btn" type="button" onClick={onCancel}>
           Cancel
         </button>
-        <button className="btn btn--primary" type="button" disabled={chosenId === ""} onClick={onNext}>
+        <button className="btn btn--primary" type="button" disabled={!chosenIsConfigurable} onClick={onNext}>
           Next: name this instance
         </button>
       </div>

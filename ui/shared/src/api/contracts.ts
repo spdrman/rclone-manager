@@ -991,7 +991,7 @@ export const BACKEND_FIELD_KINDS: readonly BackendFieldKind[] = [
  * What a backend IS to this engine, as opposed to which rclone backend it
  * dials. Closed in the engine, for BackendFieldKind's reason.
  */
-export type BackendRole = "object_store" | "local_volume";
+export type BackendRole = "object_store" | "local_volume" | "remote_filesystem";
 
 /** One choice an `enum`-kind field offers: the value that is stored, and
  *  the words to render for it. */
@@ -1059,6 +1059,16 @@ export interface BackendManifest {
   label: string;
   summary: string;
   role: BackendRole;
+  /** Whether an instance of this backend can be authored today.
+   *
+   *  False is a backend this build registers, describes and serves, and
+   *  cannot yet store or dial: `sftp` (#731) is the first one. Render it
+   *  and refuse it — somebody who came looking for it deserves the real
+   *  shape and the reason rather than silence — and never submit it: the
+   *  configure step has nowhere to save what it would collect, so
+   *  offering it collects eight values and fails on the last screen.
+   *  Tracked in #235. */
+  configurable: boolean;
   fields: BackendManifestField[];
   probe: { steps: BackendProbeStep[] };
 }

@@ -957,6 +957,11 @@ function fromWireBackendManifest(m: WireBackendManifest): BackendManifest {
     label: m.label,
     summary: m.summary,
     role: m.role,
+    // `?? true` for the compatibility rule the contract states: a build
+    // too old to send this field has no unconfigurable backend to warn
+    // about, so silence means the ordinary answer rather than a
+    // catalogue this client refuses to offer anything from.
+    configurable: m.configurable ?? true,
     fields: (m.fields ?? []).map((f) => ({
       id: f.id,
       label: f.label,

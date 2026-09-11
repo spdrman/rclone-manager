@@ -53,11 +53,16 @@ const PASTED_BY_MISTAKE = "CANARY-668-pasted-into-the-name-field-9f2ab41c";
 /**
  * The catalogue the fixture serves.
  *
- * `object_lake` is deliberately NOT one of the two manifests this build
+ * `object_lake` is deliberately NOT one of the manifests this build
  * bundles. It is here so "the list came from the registry" is a claim a
  * test can fail: a component holding its own array of backend names
  * cannot render this row, and a component reading the response can render
  * nothing else.
+ *
+ * `sftp` is registered and reports `configurable: false`, which is
+ * #731's shape: a backend this build describes in full and cannot yet
+ * save one of. It is here so the picker's third state is a claim a test
+ * can fail too — shown, searchable, and unchoosable.
  */
 const CATALOG: BackendCatalog = {
   registered: [
@@ -66,6 +71,7 @@ const CATALOG: BackendCatalog = {
       label: "Local volume",
       summary: "A directory on a filesystem this host can see.",
       role: "local_volume",
+      configurable: true,
       fields: [
         { id: "path", label: "Directory", kind: "path", required: true },
         { id: "prefix", label: "Key prefix", kind: "key_prefix", required: false }
@@ -77,6 +83,7 @@ const CATALOG: BackendCatalog = {
       label: "S3 bucket",
       summary: "A remote object store addressed by a bucket and a key.",
       role: "object_store",
+      configurable: true,
       fields: [
         { id: "bucket", label: "Bucket", kind: "string", required: true },
         { id: "credentials", label: "Credentials", kind: "credential", required: true }
@@ -88,11 +95,27 @@ const CATALOG: BackendCatalog = {
       label: "Object lake",
       summary: "A backend this build does not bundle, served by the fixture.",
       role: "object_store",
+      configurable: true,
       fields: [{ id: "bucket", label: "Bucket", kind: "string", required: true }],
+      probe: { steps: [] }
+    },
+    {
+      id: "sftp",
+      label: "SSH server (SFTP)",
+      summary: "A directory on another machine, reached over SSH.",
+      role: "remote_filesystem",
+      configurable: false,
+      fields: [
+        { id: "host", label: "Host", kind: "string", required: true },
+        { id: "credentials", label: "SSH private key", kind: "credential", required: true }
+      ],
       probe: { steps: [] }
     }
   ],
-  unregistered: [{ transport: "sftp" }],
+  // Disjoint from the registered list above, the way the server
+  // computes it: `unregistered` is a subtraction, and a transport
+  // cannot be both. sftp came off this list when #731 registered it.
+  unregistered: [{ transport: "webdav" }],
   instanceIdPattern: "^[a-z][a-z0-9_]*$",
   reservedInstanceId: "local"
 };
@@ -193,12 +216,54 @@ describe("choosing a backend (#668 step 1)", () => {
     renderWizard([LOCAL]);
     await screen.findByRole("radio", { name: /^Local volume/ });
 
-    // Somebody who came here for SFTP learns nothing from a menu that
-    // never mentions it. The row that says the shape is understood and
-    // not registered is a real answer, and it can never be submitted.
-    const row = within(group()).getByRole("listitem", { name: "sftp" });
+    // Somebody who came here for a shape this build understands learns
+    // nothing from a menu that never mentions it. The row that says the
+    // shape is understood and not registered is a real answer, and it
+    // can never be submitted.
+    const row = within(group()).getByRole("listitem", { name: "webdav" });
     expect(within(row).getByText("not registered")).toBeTruthy();
     expect(within(row).queryByRole("radio")).toBeNull();
+  });
+
+  it("shows a registered backend that cannot be configured yet, disabled and with the reason", async () => {
+    renderWizard([LOCAL]);
+
+    // #731's row. Registered, so it is in the list with its own label
+    // and summary rather than as a transport name; not configurable, so
+    // the radio is disabled and there is nothing to choose.
+    const radio = (await screen.findByRole("radio", {
+      name: /^SSH server \(SFTP\)/
+    })) as HTMLInputElement;
+    expect(radio.disabled).toBe(true);
+    expect(within(group()).getByText(/Not yet configurable — tracked in #235/)).toBeTruthy();
+  });
+
+  it("cannot be walked past the picker on a backend that is not configurable", async () => {
+    const { confirmed } = renderWizard([LOCAL]);
+    const radio = await screen.findByRole("radio", { name: /^SSH server \(SFTP\)/ });
+
+    // A disabled control is not a request the wizard may honour, however
+    // it arrives: clicking it chooses nothing, so Next stays refused and
+    // the steps that collect and hand on a destination are unreachable.
+    fireEvent.click(radio);
+    const next = screen.getByRole("button", { name: "Next: name this instance" }) as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+
+    fireEvent.click(next);
+    expect(screen.queryByLabelText("Instance name")).toBeNull();
+    expect(confirmed).not.toHaveBeenCalled();
+  });
+
+  it("keeps a backend that cannot be configured yet in the search results", async () => {
+    renderWizard([LOCAL]);
+    await screen.findByRole("radio", { name: /^Local volume/ });
+
+    // The #731 milestone in one assertion: somebody searching for sftp
+    // finds it. A picker that hid what it cannot offer would answer that
+    // search with nothing at all.
+    fireEvent.change(screen.getByLabelText("Search backends"), { target: { value: "sftp" } });
+    expect(screen.getByRole("radio", { name: /^SSH server \(SFTP\)/ })).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: /^S3 bucket/ })).toBeNull();
   });
 
   it("filters the list without inventing entries", async () => {

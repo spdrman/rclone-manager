@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "8928d5ff93bc3372397b719ba27bd566267fdda32e54a37f4d3bf779e7d34769"
+const ContractSHA256 = "df7da94ec80bb995f1153c109d52fd5e9520f402c826ab954746ed5ae20f1aca"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1049,12 +1049,13 @@ type BackendEnumValue struct {
 // carries a label and a summary for a picker and says nothing about
 // any particular destination.
 type BackendManifest struct {
-	Fields  []BackendManifestField `json:"fields"`
-	ID      string                 `json:"id"`
-	Label   string                 `json:"label"`
-	Probe   BackendProbe           `json:"probe"`
-	Role    string                 `json:"role"`
-	Summary string                 `json:"summary"`
+	Configurable bool                   `json:"configurable"`
+	Fields       []BackendManifestField `json:"fields"`
+	ID           string                 `json:"id"`
+	Label        string                 `json:"label"`
+	Probe        BackendProbe           `json:"probe"`
+	Role         string                 `json:"role"`
+	Summary      string                 `json:"summary"`
 }
 
 // BackendManifestField is one thing an operator is asked for when they configure an instance

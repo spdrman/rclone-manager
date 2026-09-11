@@ -1228,9 +1228,15 @@ const VALIDATORS: ValidatorCatalogEntry[] = [
  * fields and no help text renders green here and wrong against the real
  * registry.
  *
- * `unregistered` carries sftp because the engine's transport layer asks
- * for it (FR-4's RequiredBackends) and no manifest declares it, which is
- * exactly the "understood, not registered" row #668's picker dims.
+ * `unregistered` is empty, and that is only half the answer after #731:
+ * it is RequiredBackends minus the transports a manifest claims,
+ * computed on the server (core/service.RegisteredBackends), and sftp
+ * was the last one on it. The other half is the sftp row below, which
+ * is registered and reports `configurable: false` — the shape is real,
+ * and nothing behind it can store or dial an instance yet. The field
+ * stays in the shape because the subtraction is what the "understood,
+ * not registered" row #668's picker dims reads, and the next backend
+ * FR-4 links for a source will land on it again.
  */
 const BACKEND_CATALOG: BackendCatalog = {
   registered: [
@@ -1240,6 +1246,7 @@ const BACKEND_CATALOG: BackendCatalog = {
       summary:
         "A directory on a disk this NAS can see. A second internal drive, a USB disk, or an already-mounted network share.",
       role: "local_volume",
+      configurable: true,
       fields: [
         {
           id: "path",
@@ -1296,6 +1303,7 @@ const BACKEND_CATALOG: BackendCatalog = {
       summary:
         "Amazon S3, or any service that speaks its API: MinIO, Ceph, Backblaze B2, Wasabi, a private gateway.",
       role: "object_store",
+      configurable: true,
       fields: [
         {
           id: "bucket",
@@ -1373,9 +1381,103 @@ const BACKEND_CATALOG: BackendCatalog = {
           { step: "delete", run: true }
         ]
       }
+    },
+    {
+      id: "sftp",
+      label: "SSH server (SFTP)",
+      summary:
+        "A directory on another machine, reached over SSH. The same protocol a backup source is read over, pointed the other way: a second NAS, a VPS, or a friend's box in another building.",
+      role: "remote_filesystem",
+      // Registered, described, searchable, and not authorable: no layer
+      // behind this fixture can store or dial an sftp instance yet
+      // (#235). The picker renders it disabled, which is the answer
+      // somebody who came looking for SFTP came for.
+      configurable: false,
+      fields: [
+        {
+          id: "host",
+          label: "Host",
+          help: "A hostname or an address. Nothing else belongs here: the port, the user and the directory each have their own field, and a URL pasted into this box is refused rather than half-understood.",
+          kind: "string",
+          required: true,
+          pattern: "^[^\\s/]+$"
+        },
+        {
+          id: "port",
+          label: "Port",
+          help: "Leave empty for SSH's own port, 22. A port this product holds no opinion about beyond it being a port.",
+          kind: "string",
+          required: false,
+          pattern: "^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+        },
+        {
+          id: "user",
+          label: "User",
+          help: "The account on the far host. Give it write access to the directory below and nothing else: this product only ever writes, reads back and deletes its own artifacts.",
+          kind: "string",
+          required: true,
+          pattern: "^[^\\s/]+$"
+        },
+        {
+          id: "known_hosts",
+          label: "known_hosts file",
+          help: "An absolute path to a known_hosts file on THIS machine, holding the far host's public key. It is required, and it is required for a reason: left unset, the SSH client accepts any key from any server that answers, which turns a destination into somewhere a backup can be delivered to whoever is listening (FR-6).",
+          kind: "path",
+          required: true
+        },
+        {
+          id: "path",
+          label: "Directory",
+          help: "An absolute path on the far host that the user above can write to. It has to exist: a directory this product created itself would look exactly the same as one created on the wrong volume, so the connection test writes a file into this one and reads it back.",
+          kind: "path",
+          required: true
+        },
+        {
+          id: "prefix",
+          label: "Subdirectory",
+          help: "A namespace inside the directory, so one destination can hold more than this product's artifacts. Leave empty to write at the top.",
+          kind: "key_prefix",
+          required: false
+        },
+        {
+          id: "upload_verification",
+          label: "How a copy is proven",
+          kind: "enum",
+          required: false,
+          unsetMeans: "readback",
+          values: [
+            { value: "readback", label: "Download the copy again and re-hash it" },
+            { value: "attested", label: "Believe the destination's own full-object digest" }
+          ]
+        },
+        {
+          id: "credentials",
+          label: "SSH private key",
+          help: "Stored once, in a file only this service can read. It is never shown again and never leaves this host in a response. An SSH key is the only thing this product authenticates with, for a source or for a destination, so there is no other box to fill in here.",
+          kind: "credential",
+          required: true
+        }
+      ],
+      probe: {
+        steps: [
+          { step: "credentials", run: true },
+          { step: "reach", run: true },
+          { step: "deliverable", run: true },
+          { step: "write", run: true },
+          { step: "read_back", run: true },
+          {
+            step: "storage_class",
+            run: false,
+            reason:
+              "a directory on an SSH server has no storage classes, so there is nothing here that could have landed in a different one than the configuration asked for."
+          },
+          { step: "verification", run: true },
+          { step: "delete", run: true }
+        ]
+      }
     }
   ],
-  unregistered: [{ transport: "sftp" }],
+  unregistered: [],
   // config.StorageMediumIDPattern, which is RetentionTierNamePattern
   // itself rather than a second copy of the same expression.
   instanceIdPattern: "^[a-z][a-z0-9_]*$",

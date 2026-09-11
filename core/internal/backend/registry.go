@@ -29,7 +29,13 @@ var ProbeStepNames = []string{
 // SUBSET of what the binary actually registers, not as an equal set - by
 // TestEveryBundledManifestNamesABackendThisBinaryRegisters in
 // core/internal/transport/rclone's external test package.
-var SupportedRcloneBackends = map[string]bool{"local": true, "s3": true}
+//
+// sftp is #731's addition, and it is the review #665 section 4.2 asked
+// for rather than a widening of the dependency surface: the backend was
+// already registered and already dialed, for a backup SOURCE, so the
+// entry below buys a DESTINATION for no blank import and no binary-size
+// delta (see doc.go, "What is genuinely weakened").
+var SupportedRcloneBackends = map[string]bool{"local": true, "s3": true, "sftp": true}
 
 // ReservedInstanceID is config.MediumLocal, duplicated because this
 // package may not import config (see doc.go), and pinned to it by

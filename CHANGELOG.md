@@ -102,6 +102,27 @@
   in the one the correlation id already needs — which is also what keeps
   `proxy_error` reporting how long the browser waited on a default `info`
   deployment, where the failure it describes actually happens.
+- **SSH (SFTP) destinations are described, and say they are not ready yet**
+  (#731). `sftp` is a registered destination backend now, with its own bundled
+  manifest: a host, a port that defaults to 22, a user, a `known_hosts` file,
+  the directory to write into, an optional subdirectory, and an SSH private
+  key stored the way every other credential is. `known_hosts` is required, not
+  optional, for the reason the source side already refuses to connect without
+  one: unset, an SSH client accepts any key from any server that answers.
+  This cost no new dependency and no binary growth — the sftp backend has been
+  linked since FR-4, because a backup source is read over it — so what it cost
+  instead is written down in `docs/adr/0005-destination-backend-decision.md`:
+  a destination backend is its own decision, taken separately from the source
+  backend that shares its implementation, and a fourth one fails a named test.
+
+  Declaring one in `config.yaml` or saving one from the wizard is not wired
+  yet (#235), and the catalogue says so rather than leaving an operator to
+  find out at the end of a form: a manifest carries a new `configurable` flag,
+  `sftp` reports `false`, `GET /api/v1/backends` serves it, and the
+  add-a-destination picker renders that row disabled with the reason. Searching
+  for "sftp" still finds it — that is the point of describing it at all — and
+  nothing about it can be submitted. `configurable` defaults to true, so an
+  ordinary manifest says nothing and behaves as it always has.
 
 ## [0.4.0] - 2026-09-09
 

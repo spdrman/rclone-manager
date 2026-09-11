@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "8928d5ff93bc3372397b719ba27bd566267fdda32e54a37f4d3bf779e7d34769";
+export const CONTRACT_SHA256 = "df7da94ec80bb995f1153c109d52fd5e9520f402c826ab954746ed5ae20f1aca";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1473,11 +1473,12 @@ export interface WireBackendEnumValue {
  *  carries a label and a summary for a picker and says nothing about
  *  any particular destination. */
 export interface WireBackendManifest {
+  configurable: boolean;
   fields: WireBackendManifestField[];
   id: string;
   label: string;
   probe: WireBackendProbe;
-  role: "object_store" | "local_volume";
+  role: "object_store" | "local_volume" | "remote_filesystem";
   summary: string;
 }
 

@@ -259,7 +259,24 @@ call.
   omitted);
 - a new response field (clients must ignore fields they do not know);
 - a new error code, provided existing codes keep their meaning and their status;
-- a new value in a capability set.
+- a new value in a capability set;
+- a new value in a RESPONSE enum, provided the existing values keep their
+  meaning. A response enum is what the server may say, not a closed set a
+  client may assume: `BackendManifest.role` gained `remote_filesystem`
+  under `v1` when #731 registered a backend that is a directory on
+  another host, and it will gain another the next time a shape appears
+  that none of the existing values honestly describes. A client MUST
+  preserve a value it does not recognise and render it as itself; one
+  that switches on the value needs a branch for the unknown case, and one
+  that maps an unfamiliar value onto a familiar one reports a thing as
+  something it is not. The schema still lists every value this build
+  serves, because a list that named none would tell a client nothing;
+  what is additive is adding to it.
+
+  A REQUEST enum is the other direction and is not covered by this: a
+  client sending a value the server does not know is refused, so a new
+  accepted request value is additive and a new value a client is
+  EXPECTED to send is not.
 
 **Breaking, and therefore `/api/v2` rather than a change here:**
 

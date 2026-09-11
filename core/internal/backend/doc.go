@@ -5,10 +5,10 @@
 // A Manifest is one registered backend: its id, its label, the fields an
 // operator fills in to configure an instance of it, which rclone backend
 // carries it, and which of mediumcheck's eight probe steps apply to it.
-// Registry.Bundled loads the two manifests this build ships
-// (bundled/local_volume.json, bundled/s3.json) from files embedded at
-// build time. Nothing reads a manifest from disk, from a request body or
-// from a database: see "Bundled only" below.
+// Registry.Bundled loads the three manifests this build ships
+// (bundled/local_volume.json, bundled/s3.json, bundled/sftp.json) from
+// files embedded at build time. Nothing reads a manifest from disk, from
+// a request body or from a database: see "Bundled only" below.
 //
 // Nothing here changes observable product behaviour yet. It adds a
 // package nothing calls except at startup, to refuse a malformed
@@ -98,9 +98,13 @@
 // Three further guarantees carry the doctrine forward:
 //
 //   - A manifest can declare a new BACKEND. It cannot declare a new ROLE.
-//     Role is a closed Go enum with two members (RoleObjectStore,
-//     RoleLocalVolume); adding a third is a Go change with a
-//     compiler-enforced blast radius, exactly what MediumType was.
+//     Role is a closed Go enum with three members (RoleObjectStore,
+//     RoleLocalVolume, RoleRemoteFilesystem); adding a fourth is a Go
+//     change with a compiler-enforced blast radius, exactly what
+//     MediumType was. #731 added the third one and paid that toll: a
+//     role internal/app's mediumType does not dispatch on is a refusal
+//     at the moment something is about to be reached, which is where
+//     sftp-as-a-destination stands until an adapter dials it.
 //   - config.MediumLocal ("local") stays exactly one answer for where
 //     local artifacts live. No instance of any backend may claim it
 //     (core/internal/config/validate.go), and after #665 no *manifest*
@@ -116,7 +120,7 @@
 //     core/internal/retention never imports this package and never
 //     will.
 //
-// # What is genuinely weakened, on the record (issue #665, section 4.2)
+// # What was genuinely weakened, on the record (issue #665, section 4.2; issue #731)
 //
 // sftp is already in rclone.RequiredBackends, because a backup SOURCE is
 // reached over it. Once SupportedRcloneBackends exists, shipping SFTP as
@@ -127,19 +131,53 @@
 // backups to", and after #665 those two are one decision for any backend
 // already required as a source.
 //
-// SupportedRcloneBackends is therefore deliberately {local, s3} and NOT
-// rclone.RequiredBackends: the narrower list, checked as a SUBSET of what
-// the binary actually registers (not equal to it) by
-// TestEveryBundledManifestNamesABackendThisBinaryRegisters. Adding sftp
-// to it is its own diff, with its own review. That is a review gate, not
-// a structural one, and it is the honest limit of what this package
+// #665 left SupportedRcloneBackends at {local, s3} and named that gap
+// rather than closing it. #731 walked through it on purpose: the set is
+// now {local, s3, sftp} and bundled/sftp.json is the third shipped
+// manifest, so a destination on another machine reached over SSH is a
+// shape this build describes rather than one it has no words for. What
+// the toll bought instead of a binary-size measurement is written down
+// in docs/adr/0005-destination-backend-decision.md, which is the ADR
+// this paragraph used to ask a future reviewer for.
+//
+// SupportedRcloneBackends is still NOT rclone.RequiredBackends, and the
+// distinction is now about what it MEANS rather than about which names
+// are in it: it is the list of backends a DESTINATION may be declared
+// on, checked as a SUBSET of what the binary registers (not equal to it)
+// by TestEveryBundledManifestNamesABackendThisBinaryRegisters, and
+// pinned name for name by TestSupportedRcloneBackendsIsItsOwnReviewedList
+// so a fourth one fails a named test. That is a review gate, not a
+// structural one, and it is the honest limit of what this package
 // achieves: the structural gate is the compiler for Role and fs.Find for
 // an unregistered rclone backend name; between them sits one map literal
 // whose only defence is that changing it shows up in a diff and fails a
-// named test. If that is not enough, the answer is an ADR under
-// docs/adr/ stating that a destination backend is its own FR-4 decision
-// independent of a source backend - #665 does not write that ADR, it
-// names the gap here so a future reviewer sees it.
+// named test.
+//
+// # A registered backend nothing can configure yet
+//
+// Registering a backend does not make an instance of it authorable, and
+// Manifest.Configurable is where a manifest says which of the two it
+// is. sftp is registered and reports false: config.expressibleBackendIDs
+// still reports [local_volume s3] because StorageMedium has no field for
+// a host, a user or a known_hosts file, service's field mapper names the
+// field it cannot store, and internal/app's mediumType refuses a role it
+// cannot dial. Issue #235 is where those three grow.
+//
+// The flag exists because a catalogue can be complete and still lie. A
+// picker reading a registered backend offers it; an operator names an
+// instance, fills in eight values and an SSH key, and the save is
+// refused by the schema at the end of it. The row that says "not yet
+// configurable" costs that operator one sentence instead of a wizard.
+// It defaults to TRUE (see Manifest.Configurable), so it is a claim a
+// preview backend makes rather than one every ordinary manifest has to
+// remember, and the two backends that are configurable are unchanged
+// files.
+//
+// Nothing in this package enforces the flag, and nothing can: whether a
+// consumer refuses to offer a row is the consumer's own answer, and the
+// consumers that MATTER refuse an sftp instance by name whatever a
+// surface renders. It is disclosure, not a gate - which is the same
+// thing BackendCatalog.Unregistered has always been.
 //
 // # Credentials: a reference, never material, and nothing new is built
 //
