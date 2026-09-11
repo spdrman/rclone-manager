@@ -185,3 +185,50 @@ against `scripts/tests/testdata/*.help.txt` on every gate run, the way
 `core/tests/compat` pins the CLI under FR-35 clause 4, so a reword fails until
 somebody updates the golden on purpose. It also proves the property that used to
 be missing: a comment added above the block leaves the rendered help unchanged.
+
+## Reproducing #730 (the Activity fetch that throws)
+
+`rclone-manager#730` is the Activity page's `fetch(/api/v1/activity)`
+throwing `TypeError: Failed to fetch` on a real 0.4.0 NAS, while `curl` to
+the same route answers cleanly. The client request is byte-for-byte the
+same relative, same-origin GET every other page makes (`ui/shared/src/api/
+client.ts`, `BASE = "/api/v1"`, `credentials: "same-origin"`), so a
+same-origin *relative* fetch cannot be failing on CORS or mixed content.
+What the operator's browser has and this plain-HTTP rig did not is a front
+reverse proxy terminating TLS and speaking **HTTP/2** — browsers only
+negotiate h2 over TLS, so the default rig drives the whole stack over
+HTTP/1.1 and never exercises that transport.
+
+`--front-proxy-tls` adds that missing hop:
+
+```
+browser --TLS/HTTP2--> nginx (proxy-machine) --HTTP/1.1--> serve-ui --> serve
+```
+
+Run it against the real published 0.4.0 image (the artefact #730 was seen
+on), rather than a build from this tree:
+
+```sh
+docker pull ghcr.io/spdrman/backup-manager:0.4.0
+scripts/e2e/three-machine-web-ui.sh \
+  --image ghcr.io/spdrman/backup-manager:0.4.0 \
+  --front-proxy-tls
+# optionally enlarge the authenticated /api/v1/activity payload:
+RM_SEED_CYCLES=8 scripts/e2e/three-machine-web-ui.sh \
+  --image ghcr.io/spdrman/backup-manager:0.4.0 --front-proxy-tls
+```
+
+The built-in `web-ui-smoke.mjs` client counts a failed request or an
+uncaught rejection on the Activity page as a failure, which is exactly
+#730's shape; `--suite ../rclone-manager-tests/suites/web-ui` runs the full
+Suite B, whose `real-path.spec.ts` asserts `getByRole("alert")` is absent
+on `/activity`. Either goes **red** if #730 reproduces over this transport.
+
+It is a genuine experiment, not a guaranteed repro. The proxy
+(`proxy-machine.Dockerfile`, `proxy.nginx.conf`) is a deliberately ordinary
+operator front door, not one built to trip the bug. If an ordinary h2 front
+proxy in front of the real 0.4.0 image turns the Activity page red, the
+fault is in what serve-ui / the engine put on the wire for that one route;
+if it stays green even here, the trigger is more specific to the operator's
+own front end (their proxy build, TLS stack, or browser), and the rig has
+narrowed it either way.

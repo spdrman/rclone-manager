@@ -97,7 +97,16 @@ const browser = await chromium.launch({
   // supported", which is the message everyone meets and nobody enjoys.
   args: process.env.RM_CHROMIUM_NO_SANDBOX === "1" ? ["--no-sandbox"] : []
 });
-const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+const context = await browser.newContext({
+  viewport: { width: 1440, height: 900 },
+  // The #730 reproduction (three-machine-web-ui.sh --front-proxy-tls) puts a
+  // TLS + HTTP/2 reverse proxy with a self-signed leaf in front of serve-ui,
+  // so the browser negotiates h2 the way a real NAS's front door does rather
+  // than the plain HTTP/1.1 this rig otherwise uses. Trust the leaf: the
+  // point is the transport, not certificate provenance. Off unless the
+  // harness sets it, so the default plain-HTTP run is unchanged.
+  ignoreHTTPSErrors: process.env.RM_IGNORE_HTTPS === "1"
+});
 const page = await context.newPage();
 
 page.on("console", (m) => {

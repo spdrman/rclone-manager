@@ -134,6 +134,12 @@
 #                     deleted with the stack is worse than no evidence.
 #   --image REF       skip the build and use an already-built product image.
 #   --keep-on-failure leave a failed stack up for reading.
+#   --front-proxy-tls put an ordinary TLS + HTTP/2 reverse proxy in front of
+#                     serve-ui, so the browser reaches the stack the way a
+#                     real NAS's front door does (h2 over TLS) rather than
+#                     the plain HTTP/1.1 this rig otherwise uses. The
+#                     reproduction for rclone-manager#730. RM_SEED_CYCLES=N
+#                     additionally runs N backup cycles to enlarge the feed.
 #
 # The exit status is the client container's, not the teardown's. A run that
 # tore down cleanly after a red suite is a red run.
@@ -209,6 +215,11 @@ artifacts_dir=""
 keep_on_failure=0
 keep_up=0
 prebuilt_image="${RM_PRODUCT_IMAGE:-}"
+# rclone-manager#730 reproduction: put an ordinary TLS + HTTP/2 reverse
+# proxy in front of serve-ui, so the browser reaches the stack the way it
+# reaches a real NAS (h2 over TLS) rather than the plain HTTP/1.1 the rig
+# otherwise uses. Off by default; the default rig is unchanged.
+front_proxy="${RM_FRONT_PROXY_TLS:-0}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -220,9 +231,10 @@ while [ $# -gt 0 ]; do
     --image=*) prebuilt_image="${1#--image=}"; shift ;;
     --keep-on-failure) keep_on_failure=1; shift ;;
     --keep-up) keep_up=1; shift ;;
+    --front-proxy-tls) front_proxy=1; shift ;;
     -h|--help) render_help; exit 0 ;;
     *) die "unknown option $1" \
-           "Usage: $0 [--suite DIR] [--artifacts DIR] [--image REF] [--keep-up] [--keep-on-failure]" ;;
+           "Usage: $0 [--suite DIR] [--artifacts DIR] [--image REF] [--front-proxy-tls] [--keep-up] [--keep-on-failure]" ;;
   esac
 done
 
@@ -247,6 +259,7 @@ c_source="rm-webui-vps-$run_id"
 c_engine="rm-webui-engine-$run_id"
 c_web="rm-webui-web-$run_id"
 c_client="rm-webui-client-$run_id"
+c_proxy="rm-webui-proxy-$run_id"
 
 # The deployment's state, in Docker volumes rather than host directories,
 # and the reason is the SSH key. core/internal/transport/rclone/ssh.go
@@ -279,11 +292,15 @@ run_dir="$tmp_root/$run_id"
 product_image="${prebuilt_image:-rclone-manager-web-ui-e2e:$run_id}"
 source_image="rclone-manager-e2e-source:1"
 client_image="rclone-manager-e2e-client:1"
+proxy_image="rclone-manager-e2e-proxy:1"
 
 source_dockerfile="$repo_root/scripts/e2e/source-machine.Dockerfile"
 client_dockerfile="$repo_root/scripts/e2e/client-machine.Dockerfile"
+proxy_dockerfile="$repo_root/scripts/e2e/proxy-machine.Dockerfile"
 [ -r "$source_dockerfile" ] || die "the VPS machine Dockerfile is missing at $source_dockerfile."
 [ -r "$client_dockerfile" ] || die "the client machine Dockerfile is missing at $client_dockerfile."
+[ "$front_proxy" != 1 ] || [ -r "$proxy_dockerfile" ] \
+  || die "the front-proxy machine Dockerfile is missing at $proxy_dockerfile."
 
 sftp_user="backupuser"
 sftp_uid=1001
@@ -299,8 +316,23 @@ backup_set="e2e/vps"
 
 # What the client is told. `rclone-manager` is an alias on the edge network
 # and on no other, so it resolves to exactly one container from exactly one
-# place: the UI container, seen from the client.
-base_url="http://rclone-manager:8080"
+# place, seen from the client: the UI container normally, or the TLS/HTTP-2
+# front proxy when --front-proxy-tls is set (which then upstreams to the UI
+# container, aliased `origin` on the same edge network).
+# When the front proxy is in play the browser and any node fetch reach the
+# stack over TLS with a self-signed leaf, so the probes and the client are
+# told to accept it: this rig is exercising the h2/transport path, not
+# certificate trust. front_proxy_probe_env is used UNQUOTED on purpose so
+# the empty default expands to no argument at all.
+if [ "$front_proxy" = 1 ]; then
+  base_url="https://rclone-manager"
+  edge_web_alias="origin"
+  front_proxy_probe_env="-e NODE_NO_WARNINGS=1 -e NODE_TLS_REJECT_UNAUTHORIZED=0"
+else
+  base_url="http://rclone-manager:8080"
+  edge_web_alias="rclone-manager"
+  front_proxy_probe_env=""
+fi
 
 # Generated here, printed below, never written to a file by this script. It
 # reaches `auth create-admin` down a pipe into stdin and reaches the client
@@ -539,6 +571,12 @@ docker build -q -t "$client_image" -f "$client_dockerfile" "$(dirname "$client_d
          "It is the pinned Playwright image plus the runner: if the pull failed, this machine has no route to mcr.microsoft.com."
 note "VPS machine:    $source_image"
 note "client machine: $client_image"
+if [ "$front_proxy" = 1 ]; then
+  docker build -q -t "$proxy_image" -f "$proxy_dockerfile" "$(dirname "$proxy_dockerfile")" >/dev/null \
+    || die "could not build the front-proxy machine image from $proxy_dockerfile."
+  created_images+=("$proxy_image")
+  note "front proxy:    $proxy_image (TLS + HTTP/2, #730 reproduction)"
+fi
 
 # ------------------------------------------------------------- payload
 
@@ -699,6 +737,24 @@ oneshot "$net_backhaul" \
   || die "the backup cycle exited non-zero, so the deployment could not pull from the VPS." \
          "Everything the browser is about to look at would be empty, and a suite passing against empty tables proves nothing."
 
+# Optionally run more cycles to grow the durable activity journal past the
+# size a three-file seed produces. #730's throw is on the AUTHENTICATED
+# /api/v1/activity payload, and a larger one is likelier to cross whatever
+# streaming/framing threshold a plain seed never reaches. Default 1 leaves
+# the base rig byte-identical; the verify below still holds because the
+# files on the VPS do not change between cycles.
+seed_cycles="${RM_SEED_CYCLES:-1}"
+if [ "$seed_cycles" -gt 1 ]; then
+  step "running $((seed_cycles - 1)) more backup cycle(s) to enlarge the activity journal"
+  i=1
+  while [ "$i" -lt "$seed_cycles" ]; do
+    oneshot "$net_backhaul" /rbm run --config /etc/backup-manager/config \
+      || die "seed cycle $((i + 1)) of $seed_cycles exited non-zero."
+    i=$((i + 1))
+  done
+  note "$seed_cycles cycles run; the activity feed holds more than the first three events"
+fi
+
 for pair in "payload.bin:$want_payload" "schema.sql:$want_schema" "notes.txt:$want_notes"; do
   name="${pair%%:*}"
   want="${pair##*:}"
@@ -767,12 +823,41 @@ created_containers+=("$c_web")
 # This is the ONLY container on that network besides the client, so a spec
 # that tried to reach the engine directly would find nothing at all, which
 # is the point of there being three networks rather than one.
-docker network connect --alias rclone-manager "$net_edge" "$c_web" \
+docker network connect --alias "$edge_web_alias" "$net_edge" "$c_web" \
   || die "could not put the UI host on the edge network, so the client would have nothing to talk to."
 
 wait_or_die 180 "the UI host to answer its own listener" \
   docker exec "$c_web" /rbm-web healthcheck
-note "$c_web is serving on the edge network as \"rclone-manager\", proxying to \"engine\""
+note "$c_web is serving on the edge network as \"$edge_web_alias\", proxying to \"engine\""
+
+if [ "$front_proxy" = 1 ]; then
+  step "starting the TLS + HTTP/2 front proxy (rclone-manager#730 reproduction)"
+  # An ordinary reverse proxy in front of serve-ui, taking the edge-network
+  # name the client is given and upstreaming to serve-ui's "origin" alias.
+  # This is the hop a real NAS has and the plain-HTTP rig did not: the
+  # browser now negotiates HTTP/2 over TLS instead of HTTP/1.1 in the clear,
+  # which is the transport the client request is identical to every other
+  # page's on yet #730 says only /api/v1/activity fails over.
+  docker run -d \
+    --name "$c_proxy" \
+    --network "$net_edge" \
+    --network-alias rclone-manager \
+    --label "$label" \
+    "$proxy_image" >/dev/null \
+    || die "could not start the front proxy."
+  created_containers+=("$c_proxy")
+
+  proxy_up=0
+  for _ in $(seq 1 30); do
+    if toolbox --network "$net_edge" -- 'nc -z -w 3 rclone-manager 443'; then
+      proxy_up=1; break
+    fi
+    sleep 1
+  done
+  [ "$proxy_up" = 1 ] \
+    || die "the front proxy never accepted TLS on 443 on the edge network."
+  note "$c_proxy terminates TLS + HTTP/2 as \"rclone-manager\", upstream to \"$edge_web_alias\""
+fi
 
 # ============================================ the two reachability proofs
 
@@ -793,7 +878,7 @@ esac
 # throwaway on the edge network from the client image itself, so what is
 # proven reachable is reachable from the thing that will do the reaching.
 login_probe="$(docker run --rm --label "$label" --network "$net_edge" \
-  -e "RM_BASE_URL=$base_url" "$client_image" \
+  -e "RM_BASE_URL=$base_url" $front_proxy_probe_env "$client_image" \
   node -e '
     (async () => {
       const r = await fetch(process.env.RM_BASE_URL + "/");
@@ -826,6 +911,14 @@ client_env=(
   -e "RM_CHROMIUM_NO_SANDBOX=${RM_CHROMIUM_NO_SANDBOX:-0}"
   -e "HOME=/tmp"
 )
+# Over the self-signed front proxy the browser and any node fetch in the
+# suite must accept the leaf; RM_IGNORE_HTTPS switches on Playwright's
+# ignoreHTTPSErrors in web-ui-smoke.mjs, and NODE_TLS_REJECT_UNAUTHORIZED
+# covers a suite that fetches from node. Appended after the array literal so
+# an empty case never expands to a stray argument.
+if [ "$front_proxy" = 1 ]; then
+  client_env+=(-e "RM_IGNORE_HTTPS=1" -e "NODE_TLS_REJECT_UNAUTHORIZED=0" -e "NODE_NO_WARNINGS=1")
+fi
 
 client_run=(
   docker run
