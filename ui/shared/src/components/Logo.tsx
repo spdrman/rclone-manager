@@ -31,7 +31,7 @@ export function Wordmark({ size = 14 }: { size?: number }) {
         fontSize: size, letterSpacing: "-0.01em", whiteSpace: "nowrap"
       }}
     >
-      rclone<span style={{ color: "var(--text-3)" }}>-</span>manager
+      backup<span style={{ color: "var(--text-3)" }}>d</span>
     </span>
   );
 }
