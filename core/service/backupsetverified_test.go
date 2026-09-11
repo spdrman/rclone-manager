@@ -442,11 +442,12 @@ func fullyConnectedSet() config.BackupSet {
 				},
 			},
 		},
-		RemotePath: "/var/backups/postgres",
-		LocalPath:  "/srv/backups/postgres",
-		Include:    []string{"*.dump"},
-		Completion: config.Completion{Strategy: "rename"},
-		StaleAfter: config.Duration(24 * time.Hour),
+		RemotePath:   "/var/backups/postgres",
+		LocalPath:    "/srv/backups/postgres",
+		Include:      []string{"*.dump"},
+		ExcludePaths: []string{"tiles"},
+		Completion:   config.Completion{Strategy: "rename"},
+		StaleAfter:   config.Duration(24 * time.Hour),
 	}
 }
 

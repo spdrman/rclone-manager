@@ -143,6 +143,7 @@ func connectionSourceFor(bs config.BackupSet, keyEnc config.KeyEncryption) trans
 		KeyEncryptionCommand: keyEnc.Command,
 		KnownHosts:           r.KnownHosts,
 		Root:                 root,
+		ExcludePaths:         bs.ExcludePaths,
 	}
 }
 
