@@ -339,7 +339,7 @@ label{display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bo
           <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">deliverable</span>
             <span class="chk__out">passed</span><span class="chk__detail">STANDARD_IA can take delivery of an artifact</span></div>
           <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">write</span>
-            <span class="chk__out">passed</span><span class="chk__detail">probe object put under monthly/.rclone-manager-preflight/</span></div>
+            <span class="chk__out">passed</span><span class="chk__detail">probe object put under monthly/.backupd-preflight/</span></div>
           <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">read_back</span>
             <span class="chk__out">passed</span><span class="chk__detail">read back and compared byte for byte</span></div>
           <div class="chk ok"><span class="chk__ico">&check;</span><span class="chk__step">storage_class</span>
@@ -353,7 +353,7 @@ label{display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bo
       <div class="term">
         <div><span class="t">00:41:02</span> <span class="i">preflight offsite_s3: resolving credential reference</span></div>
         <div><span class="t">00:41:03</span> <span class="i">HEAD nas-backups &rarr; 200 (region us-east-1)</span></div>
-        <div><span class="t">00:41:04</span> <span class="i">PUT monthly/.rclone-manager-preflight/2f9c&hellip; (117 bytes, STANDARD_IA)</span></div>
+        <div><span class="t">00:41:04</span> <span class="i">PUT monthly/.backupd-preflight/2f9c&hellip; (117 bytes, STANDARD_IA)</span></div>
         <div><span class="t">00:41:05</span> <span class="g">GET matched 117 of 117 bytes</span></div>
         <div><span class="t">00:41:05</span> <span class="g">DELETE confirmed, nothing left behind</span><span class="cur"></span></div>
       </div>
@@ -431,7 +431,7 @@ label{display:block;font-size:12px;font-weight:600;color:var(--text-2);margin-bo
     <span class="k">prefix</span>: monthly
     <span class="k">storage_class</span>: STANDARD_IA
     <span class="k">credentials</span>:
-      <span class="k">file</span>: /etc/backup-manager/s3_credentials/9b41c7e2 <span class="c"># 0600, written by step 2</span></div>
+      <span class="k">file</span>: /etc/backupd/s3_credentials/9b41c7e2 <span class="c"># 0600, written by step 2</span></div>
         <div class="hint" style="margin-top:var(--space-3)">There is no access_key_id key here and there is no
           secret_access_key key here. A configuration file carrying either is a parse error, before validation
           even runs.</div>

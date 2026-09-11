@@ -2,13 +2,13 @@
   "version": "0.4.0",
   "commit": "77427012c8f6b23faa01713d59c0df8ba3bf1657",
   "generated_at": "2026-09-10T07:54:41Z",
-  "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script now refuses to record a commit that is not an ancestor of origin/main and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled. registry_digest is the digest ghcr.io assigns ghcr.io/spdrman/backup-manager on push (docker buildx build --push prints it, docker buildx imagetools inspect reads it back).",
+  "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script now refuses to record a commit that is not an ancestor of origin/main and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled. registry_digest is the digest ghcr.io assigns ghcr.io/spdrman/backupd on push (docker buildx build --push prints it, docker buildx imagetools inspect reads it back).",
   "architectures": [
     {
       "architecture": "amd64",
       "binary_sha256": {
-        "rbm": "90fc987c74515e1c53083836e45c23919c4a437f8e1e8fdfc05f5136198e4975",
-        "rbm-web": "90180bf71b929e27d6cb4aeb23c0eafb7303c151c07af30d7c22d964fef3c0c1"
+        "backupd": "90fc987c74515e1c53083836e45c23919c4a437f8e1e8fdfc05f5136198e4975",
+        "backupd-web": "90180bf71b929e27d6cb4aeb23c0eafb7303c151c07af30d7c22d964fef3c0c1"
       },
       "local_image_id_sha256": "c0e45ba266a338d07063dbda5e0704649e0ed77d9ec473f492c24f14e7d46ef4",
       "registry_digest": "sha256:6e2bffd8ba3dc864c317b9fc1ac8d3c38ed5cc5bbb4327ae53c253f48ffd4888"
@@ -16,8 +16,8 @@
     {
       "architecture": "arm64",
       "binary_sha256": {
-        "rbm": "5418896e1028bc3d5d20c7c4dec88ea8a61fafa694e78725b3b46325343e9fcb",
-        "rbm-web": "cc3bd1a7be26b67315de8d6edfa5927c80348f9e149bb74e34664d8867163cbb"
+        "backupd": "5418896e1028bc3d5d20c7c4dec88ea8a61fafa694e78725b3b46325343e9fcb",
+        "backupd-web": "cc3bd1a7be26b67315de8d6edfa5927c80348f9e149bb74e34664d8867163cbb"
       },
       "local_image_id_sha256": "a0ec8ec8c19b7f9d339522977efd754e41b6d3f3d455092e55976acb3522131e",
       "registry_digest": "sha256:6aa825ef1abb9540ae6f4b668eeb822216eacd9f146efde709563d64242fd794"

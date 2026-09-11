@@ -54,7 +54,7 @@ function readPin() {
 function loadPlaywright() {
   const cacheRoot = resolve(
     process.env.XDG_CACHE_HOME ?? resolve(process.env.HOME ?? "", ".cache"),
-    "rclone-manager-tests-gate"
+    "backupd-tests-gate"
   );
   const suite = resolve(cacheRoot, readPin(), "suites/web-ui");
   if (!existsSync(resolve(suite, "node_modules/playwright-core"))) {

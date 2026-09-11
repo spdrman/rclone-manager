@@ -1,5 +1,5 @@
 {
-  "schema": "rclone-manager/perf-baseline/1",
+  "schema": "backupd/perf-baseline/1",
   "workload": "phase6-baseline-v1",
   "host_id": "darwin-arm64-mac17-2",
   "host": {

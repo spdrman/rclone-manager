@@ -8,7 +8,7 @@ import type { AuthContext, PlatformBridge } from "@shared/types/platform";
  *  acting as the container host, running the canonical OCI image: a VM by
  *  default, or an unprivileged LXC with nesting if you accept the caveats.
  *  Never the PVE host itself. The guest sees the shared host directory or
- *  dataset at /mnt/backup-manager; `storageMount` is its `backups` child, the
+ *  dataset at /mnt/backupd; `storageMount` is its `backups` child, the
  *  backup root the wizard seeds a destination from, which is deliberately not
  *  the share root that also holds state, config and key material.
  *  distribution/packaging pins it to canonical.json. */
@@ -19,7 +19,7 @@ export const proxmoxBridge: PlatformBridge = {
 
   deployment: {
     label: "Dedicated container host",
-    storageMount: "/mnt/backup-manager/backups",
+    storageMount: "/mnt/backupd/backups",
     adapterVersion: "proxmox 1.1.0"
   },
 

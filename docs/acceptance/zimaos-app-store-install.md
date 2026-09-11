@@ -6,7 +6,7 @@ it is unticked and the evidence table at the bottom is empty, which is the
 honest state: ZimaOS is build-supported and uncertified.
 
 ZimaOS reads the same `x-casaos` block CasaOS does, so
-`apps/zimaos/compose/backup-manager.yml` is both the runtime definition and the
+`apps/zimaos/compose/backupd.yml` is both the runtime definition and the
 store submission.
 
 It is a separate procedure from the CasaOS one even though the stack is the same
@@ -28,18 +28,18 @@ ZimaOS packaging, so nothing here is a migration from an earlier one.
 
 ### 0.2 Make the canonical image resolvable
 
-`ghcr.io/spdrman/backup-manager:0.4.0` is cut but not pushed yet:
+`ghcr.io/spdrman/backupd:0.4.0` is cut but not pushed yet:
 `distribution/packaging/canonical.json` records `image.published: false`, and
 `container/release-manifest.json` carries a `registry_digest` of `null` per
 architecture. So the reference does not resolve from the registry today, and the
 steps below are how you make it resolve, by pushing a build to a registry this host
 can reach or building elsewhere and loading it. The previous release,
-`ghcr.io/spdrman/backup-manager:0.3.3`, stays published and signed if you would
+`ghcr.io/spdrman/backupd:0.3.3`, stays published and signed if you would
 rather run that:
 
 ```bash
-docker buildx build --platform=linux/amd64,linux/arm64 -f container/Dockerfile -t backup-manager:acceptance .
-docker save backup-manager:acceptance | ssh admin@<host> 'docker load'
+docker buildx build --platform=linux/amd64,linux/arm64 -f container/Dockerfile -t backupd:acceptance .
+docker save backupd:acceptance | ssh admin@<host> 'docker load'
 ```
 
 - [ ] The image is resolvable on the host, and the exact reference used is recorded
@@ -47,8 +47,8 @@ docker save backup-manager:acceptance | ssh admin@<host> 'docker load'
 ### 0.3 Create the host paths
 
 ```bash
-mkdir -p /DATA/AppData/backup-manager/state /DATA/AppData/backup-manager/config \
-         /DATA/AppData/backup-manager/secrets /DATA/Backups/backup-manager
+mkdir -p /DATA/AppData/backupd/state /DATA/AppData/backupd/config \
+         /DATA/AppData/backupd/secrets /DATA/Backups/backupd
 ```
 
 The runtime image is distroless: no shell, no root step, nothing inside the
@@ -60,11 +60,11 @@ following `docs/ssh-setup.md`. Never commit either, and never paste a private ke
 into the evidence table.
 
 ```bash
-ssh-keygen -t ed25519 -N "" -f /DATA/AppData/backup-manager/secrets/id_ed25519
-ssh-keyscan -t ed25519 <sftp-host> > /DATA/AppData/backup-manager/secrets/known_hosts
+ssh-keygen -t ed25519 -N "" -f /DATA/AppData/backupd/secrets/id_ed25519
+ssh-keyscan -t ed25519 <sftp-host> > /DATA/AppData/backupd/secrets/known_hosts
 ```
 
-**Recurse only over what this step created.** `/DATA/Backups/backup-manager` is the retained
+**Recurse only over what this step created.** `/DATA/Backups/backupd` is the retained
 backup store: on a reinstall it already holds data this procedure did not write,
 and a recursive ownership change across it rewrites all of it with nothing to
 restore it from. So the private trees are chowned recursively and the backup root
@@ -73,15 +73,15 @@ fails the build if any procedure in this directory recurses over a backup root o
 a parent of one.
 
 ```bash
-chown -R 1000:1000 /DATA/AppData/backup-manager/state /DATA/AppData/backup-manager/config /DATA/AppData/backup-manager/secrets
-chown 1000:1000 /DATA/Backups/backup-manager
-chmod 600 /DATA/AppData/backup-manager/secrets/id_ed25519
+chown -R 1000:1000 /DATA/AppData/backupd/state /DATA/AppData/backupd/config /DATA/AppData/backupd/secrets
+chown 1000:1000 /DATA/Backups/backupd
+chmod 600 /DATA/AppData/backupd/secrets/id_ed25519
 ```
 
 - [ ] All four paths exist and are owned by the app's uid and gid
 - [ ] The recursive ownership change touched only state, config and secrets
 - [ ] It ran **after** the key and `known_hosts` were created
-- [ ] `/DATA/AppData/backup-manager/config` is writable by the app's uid and gid
+- [ ] `/DATA/AppData/backupd/config` is writable by the app's uid and gid
 - [ ] Key material lives only on this host, redacted everywhere else
 
 ---
@@ -90,9 +90,9 @@ chmod 600 /DATA/AppData/backup-manager/secrets/id_ed25519
 
 The engine's start gate is a liveness question, not a backup-freshness verdict
 (issue #206). It declares
-`["CMD", "/rbm-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]`,
-derived from `container/compose.yaml`, and `backup-manager-ui` waits on that with
-`condition: service_healthy`. `/rbm status` is still FR-24's freshness
+`["CMD", "/backupd-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]`,
+derived from `container/compose.yaml`, and `backupd-ui` waits on that with
+`condition: service_healthy`. `/backupd status` is still FR-24's freshness
 verdict and still the image's own baked-in `HEALTHCHECK`, and it exits non-zero on a
 fresh install by design, which is exactly why nothing waits on it any more. So a
 **fresh install reaches the web UI**: an empty configuration directory is a legitimate
@@ -114,9 +114,9 @@ reads on its first start. Put it there over SSH or through the ZimaOS file manag
 the directory 0.3 created. Skip this block entirely to use the first-run flow instead.
 
 ```bash
-$EDITOR /DATA/AppData/backup-manager/config/config.yaml
-chown 1000:1000 /DATA/AppData/backup-manager/config/config.yaml
-chmod 600 /DATA/AppData/backup-manager/config/config.yaml
+$EDITOR /DATA/AppData/backupd/config/config.yaml
+chown 1000:1000 /DATA/AppData/backupd/config/config.yaml
+chmod 600 /DATA/AppData/backupd/config/config.yaml
 ```
 
 The container-side paths in it are fixed by this package and must not be changed:
@@ -127,7 +127,7 @@ annotated example is this same file with another platform's host paths, and
 **Never commit the config or paste one into the evidence table:** it names the SFTP
 host and user.
 
-- [ ] Either `config.yaml` is written into `/DATA/AppData/backup-manager/config` **before** the install
+- [ ] Either `config.yaml` is written into `/DATA/AppData/backupd/config` **before** the install
       and is valid, or that directory is left empty and the first-run flow writes it.
       A file that exists and does not validate is the one state that refuses the start,
       so record which of the two routes this run took
@@ -140,7 +140,7 @@ host and user.
 ## Step 1 — Install
 
 1. In ZimaOS, install the app from its store, or use the custom-install route
-   with `apps/zimaos/compose/backup-manager.yml`.
+   with `apps/zimaos/compose/backupd.yml`.
 2. ZimaOS renders the install dialog out of the `x-casaos` block. Change nothing.
 3. Install.
 
@@ -149,11 +149,11 @@ host and user.
 - [ ] The install dialog listed the five volumes and the two environment values
       the per-service `x-casaos` blocks describe
 - [ ] Both containers reach `running`
-- [ ] `backup-manager` reports healthy (it declares the liveness probe
-      `/rbm-web healthcheck --url http://127.0.0.1:8080/health/live`,
-      not the image's own `/rbm status`: the web UI waits on this, and
+- [ ] `backupd` reports healthy (it declares the liveness probe
+      `/backupd-web healthcheck --url http://127.0.0.1:8080/health/live`,
+      not the image's own `/backupd status`: the web UI waits on this, and
       the backup-freshness verdict is non-zero on a fresh install)
-- [ ] `backup-manager-ui` reports healthy, having overridden the image's own healthcheck
+- [ ] `backupd-ui` reports healthy, having overridden the image's own healthcheck
 - [ ] The app claims `amd64` and `arm64`, and it installed on this machine's architecture
 
 ## Step 2 — Web UI
@@ -176,10 +176,10 @@ host and user.
 
 ## Step 4 — Storage mapping and backup-root containment
 
-- [ ] Private state lands under `/DATA/AppData/backup-manager/state`
-- [ ] Retained artifacts land under `/DATA/Backups/backup-manager`
+- [ ] Private state lands under `/DATA/AppData/backupd/state`
+- [ ] Retained artifacts land under `/DATA/Backups/backupd`
 - [ ] No SSH private key, `known_hosts`, config file or authentication record
-      exists anywhere under `/DATA/Backups/backup-manager`
+      exists anywhere under `/DATA/Backups/backupd`
 - [ ] The key and `known_hosts` are mounted read-only, and a write attempt from
       inside the container fails
 - [ ] The configuration directory is mounted **writable**: creating a backup set
@@ -193,7 +193,7 @@ host and user.
       uses host networking or the host PID namespace, and neither adds a capability:
 
       ```bash
-      docker inspect backup-manager backup-manager-ui \
+      docker inspect backupd backupd-ui \
         --format '{{.Name}} priv={{.HostConfig.Privileged}} net={{.HostConfig.NetworkMode}} binds={{.HostConfig.Binds}}'
       ```
 - [ ] Both containers run as uid 1000, on a read-only root filesystem
@@ -210,14 +210,14 @@ Capture a baseline before the pull and compare after it, so "everything
 survived" is a diff rather than an impression:
 
 ```bash
-sha256sum /DATA/AppData/backup-manager/state/state.db | tee /root/zimaos-before-update.sha256
-find /DATA/Backups/backup-manager -type f -printf '%p %s\n' | sort > /root/zimaos-before-update.txt
+sha256sum /DATA/AppData/backupd/state/state.db | tee /root/zimaos-before-update.sha256
+find /DATA/Backups/backupd -type f -printf '%p %s\n' | sort > /root/zimaos-before-update.txt
 ```
 
 Then use ZimaOS's **Update** on the app tile.
 
 ```bash
-find /DATA/Backups/backup-manager -type f -printf '%p %s\n' | sort > /root/zimaos-after-update.txt
+find /DATA/Backups/backupd -type f -printf '%p %s\n' | sort > /root/zimaos-after-update.txt
 diff /root/zimaos-before-update.txt /root/zimaos-after-update.txt
 ```
 
@@ -234,9 +234,9 @@ looking. **Capture the baseline first and write it outside the tree you are
 about to test**, so whatever damages the tree cannot damage the evidence:
 
 ```bash
-dd if=/dev/urandom of=/DATA/Backups/backup-manager/acceptance-canary.bin bs=1M count=8
-sha256sum /DATA/Backups/backup-manager/acceptance-canary.bin | tee /root/zimaos-canary.sha256
-find /DATA/Backups/backup-manager -type f -printf '%p %s\n' | sort > /root/zimaos-before-remove.txt
+dd if=/dev/urandom of=/DATA/Backups/backupd/acceptance-canary.bin bs=1M count=8
+sha256sum /DATA/Backups/backupd/acceptance-canary.bin | tee /root/zimaos-canary.sha256
+find /DATA/Backups/backupd -type f -printf '%p %s\n' | sort > /root/zimaos-before-remove.txt
 ```
 
 Now uninstall the app from ZimaOS, twice: once declining to delete the app's
@@ -247,7 +247,7 @@ Then verify against the baseline, before inspecting anything else:
 
 ```bash
 sha256sum -c /root/zimaos-canary.sha256
-find /DATA/Backups/backup-manager -type f -printf '%p %s\n' | sort > /root/zimaos-after-remove.txt
+find /DATA/Backups/backupd -type f -printf '%p %s\n' | sort > /root/zimaos-after-remove.txt
 diff /root/zimaos-before-remove.txt /root/zimaos-after-remove.txt
 ```
 
@@ -256,7 +256,7 @@ diff /root/zimaos-before-remove.txt /root/zimaos-after-remove.txt
 - [ ] Uninstalling with "delete data" accepted deleted no retained
       artifact either: the backup root is outside `/DATA/AppData`, and the same
       `sha256sum -c` and `diff` are still clean
-- [ ] `/DATA/AppData/backup-manager/state` still holds the catalogue, so a reinstall
+- [ ] `/DATA/AppData/backupd/state` still holds the catalogue, so a reinstall
       pointed at the same paths comes back with the same backup sets
 - [ ] Removing this adapter removes no core behaviour: the same image runs
       unchanged under `container/compose.yaml` on a plain Docker host
@@ -279,7 +279,7 @@ ls /etc/systemd/system > /root/zimaos-baseline-units.txt 2>/dev/null || true
 
 ## Step 9 — Destructive-safety re-check
 
-- [ ] A backup set configured with a root outside `/DATA/Backups/backup-manager` is refused
+- [ ] A backup set configured with a root outside `/DATA/Backups/backupd` is refused
 - [ ] A symlink inside the backup root that points outside it is not followed into a delete
 - [ ] A retention apply deletes only artifacts under the backup root
 - [ ] Nothing under the private state, config or secrets paths is ever a delete target

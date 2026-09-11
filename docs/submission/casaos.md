@@ -8,7 +8,7 @@ store compose file under `apps/casaos/`.
 That store's own published requirements: https://github.com/IceWhaleTech/CasaOS-AppStore
 
 CasaOS installs a third-party application by reading one docker-compose file carrying an
-`x-casaos` block, so `apps/casaos/compose/backup-manager.yml` is both the runtime
+`x-casaos` block, so `apps/casaos/compose/backupd.yml` is both the runtime
 definition and the whole submission. Everything outside `x-casaos` is derived from
 `container/compose.yaml` and held to it field by field; everything inside it is store
 presentation and reaches no Go package and no shared UI module.

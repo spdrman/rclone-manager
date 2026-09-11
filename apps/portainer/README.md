@@ -1,4 +1,4 @@
-# Backup Manager on Portainer
+# Backupd on Portainer
 
 Portainer CE deploys this product as a **stack**, from the App Template in
 [`templates.json`](templates.json) or from the same file pasted into Portainer's
@@ -30,7 +30,7 @@ under this directory.
 ## The Docker socket, which is the only interesting security question here
 
 Portainer holds `/var/run/docker.sock`. That is what Portainer is, and it is
-Portainer's business. **Backup Manager never inherits it.** The stack mounts no
+Portainer's business. **Backupd never inherits it.** The stack mounts no
 socket, adds no capability, runs non-root on a read-only root filesystem, and
 would behave identically if it had been started with `docker compose up` and
 Portainer uninstalled.
@@ -49,20 +49,20 @@ shape every metadata format reduces to.
    nothing inside the container can create or chown them for you.
 
    ```
-   mkdir -p /opt/backup-manager/state /opt/backup-manager/backups \
-            /opt/backup-manager/config /opt/backup-manager/secrets
-   chown 1000:1000 /opt/backup-manager/state /opt/backup-manager/backups \
-                   /opt/backup-manager/config /opt/backup-manager/secrets
+   mkdir -p /opt/backupd/state /opt/backupd/backups \
+            /opt/backupd/config /opt/backupd/secrets
+   chown 1000:1000 /opt/backupd/state /opt/backupd/backups \
+                   /opt/backupd/config /opt/backupd/secrets
    ```
 
-2. Put the SFTP private key at `/opt/backup-manager/secrets/id_ed25519` (mode
-   0600) and the pinned host key at `/opt/backup-manager/secrets/known_hosts`.
+2. Put the SFTP private key at `/opt/backupd/secrets/id_ed25519` (mode
+   0600) and the pinned host key at `/opt/backupd/secrets/known_hosts`.
    Neither is ever baked into the image or into any file in this repository.
 
 3. Register the template. In Portainer, **Settings, App Templates**, and point
    the URL at this repository's `apps/portainer/templates.json`. On a host that
    cannot reach the repository, use **Custom Templates, Add, Repository** or
-   paste `compose/backup-manager.yml` in directly.
+   paste `compose/backupd.yml` in directly.
 
 4. Deploy it from **App Templates**, fill the form, and open the published port.
    The engine prints a one-time enrollment link on first start; read it from the
@@ -78,11 +78,11 @@ it is ticked.
 
 | Host path | Container path | Holds |
 | --- | --- | --- |
-| `/opt/backup-manager/state` | `/data/state` | the catalogue and the local administrator record. Private. |
-| `/opt/backup-manager/backups` | `/data/backups` | retained artifacts, and nothing else. |
-| `/opt/backup-manager/config` | `/etc/backup-manager/config` | `config.yaml`, writable, plus the engine's `ssh_keys/` and `known_hosts.d/` stores. |
-| `/opt/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | the SFTP private key, read-only. |
-| `/opt/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | the pinned host key, read-only. |
+| `/opt/backupd/state` | `/data/state` | the catalogue and the local administrator record. Private. |
+| `/opt/backupd/backups` | `/data/backups` | retained artifacts, and nothing else. |
+| `/opt/backupd/config` | `/etc/backupd/config` | `config.yaml`, writable, plus the engine's `ssh_keys/` and `known_hosts.d/` stores. |
+| `/opt/backupd/secrets/id_ed25519` | `/etc/backupd/id_ed25519` | the SFTP private key, read-only. |
+| `/opt/backupd/secrets/known_hosts` | `/etc/backupd/known_hosts` | the pinned host key, read-only. |
 
 Private state and the backup root are separate security domains and neither one
 is inside the other. `distribution/packaging` fails the build if that stops
@@ -110,11 +110,11 @@ generic bridge says exactly that rather than claiming otherwise.
 
 ## Where the runtime definition comes from
 
-`compose/backup-manager.yml` is derived from `container/compose.yaml` at runtime
+`compose/backupd.yml` is derived from `container/compose.yaml` at runtime
 contract 1.2.0. Seven fields have one authority each and a mismatch names the
 field (`distribution/packaging/derive.go`), and on top of that the whole stack is
 held to the canonical one semantically, service by service, by
 `TestEveryNewAdapterIsSemanticallyEquivalentToTheCanonicalStack`. The App
-Template's environment list is checked against `compose/backup-manager.env` in
+Template's environment list is checked against `compose/backupd.env` in
 both directions, so the form an operator fills in and the file it feeds can
 never name different variables.

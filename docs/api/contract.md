@@ -439,7 +439,7 @@ alternative was to serve `"medium": "local"` everywhere, the way
 written before EPIC E holds every copy locally, so that spelling would have put
 a new key on every verdict of every response those deployments serve, to say
 the only thing that was ever true of them. Absence says the same thing and
-leaves them byte for byte as they were. `rbm retention` made the
+leaves them byte for byte as they were. `backupd retention` made the
 same call for the same reason (`mediumSuffix`), so the two operator surfaces
 now read alike instead of each having its own convention.
 

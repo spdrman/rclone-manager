@@ -19,7 +19,7 @@ What it stands up, per case:
     playing the VPS being backed up;
   * a temporary network joining exactly those two.
 
-Then it installs rclone-manager onto the manager machine with
+Then it installs backupd onto the manager machine with
 scripts/install/install_docker_host.py, the real installer, creates a
 backup set through the CLI, runs it, and compares the artifact's SHA-256
 against the source's. Not "the file is there": the bug this was written
@@ -71,7 +71,7 @@ the version and commit that were installed.
   connection-cap  #264, the shape that actually broke on real hardware.
                   Both production sources carry an iptables rule
                   rejecting a third simultaneous SSH connection from one
-                  address with a TCP reset. rclone-manager failed
+                  address with a TCP reset. backupd failed
                   against it because every operation built its own Fs
                   and nothing released one, so the pools accumulated
                   until the third was refused. Listing succeeded and the
@@ -93,7 +93,7 @@ the version and commit that were installed.
                   order they matter.
 
                   First, that the lifecycle feed is readable at all
-                  against a real deployment: `rbm activity`
+                  against a real deployment: `backupd activity`
                   with the route configured announces
                   `mode: engine-attached`, which means it asked the
                   engine over HTTP, and it lists the transitions the
@@ -162,7 +162,7 @@ the version and commit that were installed.
                   Two parts. The first is a FENCE: for every artifact
                   the set produced, a fresh sha256 of the committed
                   file, computed inside the manager machine, has to
-                  equal what the real `rbm` reports for it AND what the
+                  equal what the real `backupd` reports for it AND what the
                   sidecar recovery manifest records. Nothing in this
                   repository could say that before -- every other test
                   compares a record against another record, or against
@@ -178,7 +178,7 @@ the version and commit that were installed.
                   the field produced -- an empty record (size_bytes 0,
                   and the sha256 of no bytes at all, carrying
                   verification_class "content") over a good file at its
-                  final name -- the product's own `rbm reconcile` is run
+                  final name -- the product's own `backupd reconcile` is run
                   over it, and three things are then required. The copy
                   is NOT condemned: reconciliation finds nothing
                   unresolved and leaves the artifact at a durable
@@ -234,7 +234,7 @@ cache: plain 1m40s, empty-record 1m49s, so the #662 case costs about ten
 seconds more than the install-and-back-up it shares with plain. The plant
 itself is milliseconds; the ten seconds are the two backup cycles the
 dead-end walk has to actually perform against a real source, and the
-nine `rbm` invocations it walks.
+nine `backupd` invocations it walks.
 
 The image build is the expensive part on a cold Docker cache (minutes:
 it compiles the Go binaries and builds the UI bundle) and is done once

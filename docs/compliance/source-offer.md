@@ -1,12 +1,12 @@
 # Source code and the written offer
 
-Backup Manager, `com.iasbuilt.rclonemanager`. This is the source and
+Backupd, `com.iasbuilt.backupd`. This is the source and
 source-offer material §73 Work Package 5.2 requires, and it is what the
 `source-offer` link in `distribution/packaging/compliance.json` resolves to.
 
 ## The licence
 
-Backup Manager is distributed under the **Apache License, Version 2.0**. The
+Backupd is distributed under the **Apache License, Version 2.0**. The
 full text is in `LICENSE` at the root of the source tree, and it is the same
 text a distributed package carries.
 
@@ -33,7 +33,7 @@ obligation is recorded and this file does not actually carry the offer.
 
 The one dependency worth naming here is **rclone**, which is MIT licensed and is
 consumed as a Go module rather than as an executable: its packages are compiled
-directly into `/rbm` behind a narrow transport adapter. There is no
+directly into `/backupd` behind a narrow transport adapter. There is no
 `rclone` binary anywhere in the image, and `container/Dockerfile` says so and is
 checked on it.
 
@@ -83,7 +83,7 @@ rclone's `s3` backend through `github.com/IBM/go-sdk-core/v5`, which
 `backend/s3`'s `ibm_signer.go` imports with no build tag, so registering the
 backend and not linking them is not something this project can choose. They are
 genuinely in the binaries and not only in `go.mod`: `go tool nm` on a
-linux/amd64 `backup-manager` finds 17 `go-retryablehttp` symbols and one
+linux/amd64 `backupd` finds 17 `go-retryablehttp` symbols and one
 `go-cleanhttp` symbol surviving dead-code elimination, `NewClient`,
 `DefaultRetryPolicy`, `DefaultBackoff` and `DefaultPooledTransport` among them.
 
@@ -118,10 +118,10 @@ corresponding source is the module archive upstream published, served
 immutably and without an account:
 
 - `github.com/hashicorp/go-cleanhttp@v0.5.2` (MPL-2.0), linked into
-  `backup-manager` and `backup-manager-web`:
+  `backupd` and `backupd-web`:
   <https://proxy.golang.org/github.com/hashicorp/go-cleanhttp/@v/v0.5.2.zip>
 - `github.com/hashicorp/go-retryablehttp@v0.7.8` (MPL-2.0), linked into
-  `backup-manager` and `backup-manager-web`:
+  `backupd` and `backupd-web`:
   <https://proxy.golang.org/github.com/hashicorp/go-retryablehttp/@v/v0.7.8.zip>
 
 Two things make those addresses an answer rather than a gesture. They are
@@ -162,7 +162,7 @@ licence, this offer and the machine-readable inventory the other two point at,
 without needing this repository, which is private. The image also says so to
 `docker inspect`, which is the only question you can ask it without opening it:
 `org.opencontainers.image.licenses` is the licence id and
-`com.iasbuilt.rclonemanager.licenses.path` is `/licenses`.
+`com.iasbuilt.backupd.licenses.path` is `/licenses`.
 
 The image has no shell, so read them from outside it. `docker create` needs a
 command named because this image sets no `ENTRYPOINT` and no `CMD` on purpose,
@@ -170,7 +170,7 @@ and the container is never started, so the command never runs:
 
 ```
 docker image inspect --format '{{json .Config.Labels}}' <image>
-docker create --name bm <image> /rbm version
+docker create --name bm <image> /backupd version
 docker cp bm:/licenses .
 docker rm bm
 ```
@@ -211,12 +211,12 @@ has to notice.
 
 ## Getting the source
 
-The source repository is <https://github.com/spdrman/rclone-manager>.
+The source repository is <https://github.com/spdrman/backupd>.
 
 It is public, and that is recorded rather than assumed, in
 `distribution/packaging/compliance.json` (`sourceRepository.visibility`) and in
 `provenance/release-provenance.json` (`links.publiclyReachable`). Both are read
-from `gh repo view spdrman/rclone-manager --json visibility`, and both said
+from `gh repo view spdrman/backupd --json visibility`, and both said
 private for a while after the repository stopped being private, which is issue
 #484's finding: a recorded measurement with a note asserting its freshness is
 worse than an unmeasured value, because the note is what stops anyone checking.
@@ -229,9 +229,9 @@ and no browser is owed the source by the licence, not by the repository being
 open.
 
 **Written offer.** Anyone who has received a
-distributed copy of Backup Manager may obtain the complete corresponding source
+distributed copy of Backupd may obtain the complete corresponding source
 for that copy by opening an issue at
-<https://github.com/spdrman/rclone-manager/issues>, or by contacting the
+<https://github.com/spdrman/backupd/issues>, or by contacting the
 distributor of the package they received. The copy supplied is the exact commit
 recorded in `container/release-manifest.json` for that release, which is the
 same commit the binaries were built from and the same commit the SBOM describes.

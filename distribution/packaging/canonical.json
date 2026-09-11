@@ -10,9 +10,9 @@
   ],
   "image": {
     "registry": "ghcr.io",
-    "repository": "spdrman/backup-manager",
+    "repository": "spdrman/backupd",
     "tag": "0.4.0",
-    "reference": "ghcr.io/spdrman/backup-manager:0.4.0",
+    "reference": "ghcr.io/spdrman/backupd:0.4.0",
     "published": true,
     "note": [
       "published:false. 0.4.0 is cut but not pushed: container/release-manifest.json carries a",
@@ -27,7 +27,7 @@
       "twice: it said 0.3.0 through the whole of 0.3.1 and 0.3.2, and it went on saying 0.3.2",
       "after 0.3.3 was pushed. The durable answer is the git history of this file, where each",
       "`Record <version>'s registry digests` commit is one real push, and",
-      "`docker buildx imagetools inspect ghcr.io/spdrman/backup-manager:<version>` asks the",
+      "`docker buildx imagetools inspect ghcr.io/spdrman/backupd:<version>` asks the",
       "registry directly.",
       "This reference is the one string every provider package must carry, so pointing the",
       "project at a different registry stays a one-line change here rather than an edit in four",
@@ -88,14 +88,14 @@
   "healthchecks": {
     "engine": [
       "CMD",
-      "/rbm-web",
+      "/backupd-web",
       "healthcheck",
       "--url",
       "http://127.0.0.1:8080/health/live"
     ],
     "webUI": [
       "CMD",
-      "/rbm-web",
+      "/backupd-web",
       "healthcheck"
     ]
   },
@@ -110,7 +110,7 @@
     "derive.go has to hold four metadata formats to them, one of which is an",
     "Unraid XML template no Compose parser can read.",
     "",
-    "The engine's is a LIVENESS question and deliberately not `backup-manager",
+    "The engine's is a LIVENESS question and deliberately not `backupd",
     "status` (issue #206). Every adapter's Web UI declares",
     "`depends_on: <engine>: condition: service_healthy`, so whatever this asks",
     "stands between an operator and the only LAN-facing container in the",
@@ -133,7 +133,7 @@
     "dependency either, so the badge it produces is the freshness report it is",
     "meant to be.",
     "",
-    "The Web UI's is unchanged: `/rbm status` needs a config file and a",
+    "The Web UI's is unchanged: `/backupd status` needs a config file and a",
     "state database that container does not have, so every adapter has to either",
     "override it with the Web UI test or disable it outright (Unraid, whose only",
     "seam is `docker run --health-cmd`, which is shell form the distroless image",
@@ -141,36 +141,36 @@
   ],
   "commands": {
     "engine": [
-      "/rbm-web",
+      "/backupd-web",
       "serve"
     ],
     "webUI": [
-      "/rbm-web",
+      "/backupd-web",
       "serve-ui"
     ],
     "headless": [
-      "/rbm",
+      "/backupd",
       "daemon"
     ],
     "healthcheck": [
-      "/rbm-web",
+      "/backupd-web",
       "healthcheck"
     ],
     "imageHealthcheck": [
-      "/rbm",
+      "/backupd",
       "status"
     ]
   },
   "binaries": [
-    "/rbm",
-    "/rbm-web"
+    "/backupd",
+    "/backupd-web"
   ],
   "containerPaths": {
     "state": "/data/state",
     "backups": "/data/backups",
-    "config": "/etc/backup-manager/config",
-    "sshKey": "/etc/backup-manager/id_ed25519",
-    "knownHosts": "/etc/backup-manager/known_hosts"
+    "config": "/etc/backupd/config",
+    "sshKey": "/etc/backupd/id_ed25519",
+    "knownHosts": "/etc/backupd/known_hosts"
   },
   "configFileName": "config.yaml",
   "_config_role_comment": [
@@ -195,26 +195,26 @@
     "engine only ever reads it, and the shapes are different claims."
   ],
   "readOnlyContainerPaths": [
-    "/etc/backup-manager/id_ed25519",
-    "/etc/backup-manager/known_hosts"
+    "/etc/backupd/id_ed25519",
+    "/etc/backupd/known_hosts"
   ],
   "writableContainerPaths": [
     "/data/state",
     "/data/backups",
-    "/etc/backup-manager/config"
+    "/etc/backupd/config"
   ],
   "platforms": {
     "truenas": {
       "uiBridge": "apps/truenas/frontend/platform.ts",
       "displayName": "TrueNAS",
       "tier": "B",
-      "storageMount": "/mnt/tank/backup-manager/backups",
+      "storageMount": "/mnt/tank/backupd/backups",
       "hostPaths": {
-        "state": "/mnt/tank/backup-manager/state",
-        "backups": "/mnt/tank/backup-manager/backups",
-        "config": "/mnt/tank/backup-manager/config",
-        "sshKey": "/mnt/tank/backup-manager/secrets/id_ed25519",
-        "knownHosts": "/mnt/tank/backup-manager/secrets/known_hosts"
+        "state": "/mnt/tank/backupd/state",
+        "backups": "/mnt/tank/backupd/backups",
+        "config": "/mnt/tank/backupd/config",
+        "sshKey": "/mnt/tank/backupd/secrets/id_ed25519",
+        "knownHosts": "/mnt/tank/backupd/secrets/known_hosts"
       },
       "hostPathNote": "tank is the pool name the defaults assume; docs/acceptance/truenas-provider-acceptance.md step 0.2 covers substituting a real pool.",
       "trustForwardedHeaders": true,
@@ -229,17 +229,17 @@
       "uiBridge": "apps/unraid/frontend/platform.ts",
       "displayName": "Unraid",
       "tier": "B",
-      "storageMount": "/mnt/user/backups/backup-manager",
+      "storageMount": "/mnt/user/backups/backupd",
       "hostPaths": {
-        "state": "/mnt/user/appdata/backup-manager/state",
-        "backups": "/mnt/user/backups/backup-manager",
-        "config": "/mnt/user/appdata/backup-manager/config",
-        "sshKey": "/mnt/user/appdata/backup-manager/secrets/id_ed25519",
-        "knownHosts": "/mnt/user/appdata/backup-manager/secrets/known_hosts"
+        "state": "/mnt/user/appdata/backupd/state",
+        "backups": "/mnt/user/backups/backupd",
+        "config": "/mnt/user/appdata/backupd/config",
+        "sshKey": "/mnt/user/appdata/backupd/secrets/id_ed25519",
+        "knownHosts": "/mnt/user/appdata/backupd/secrets/known_hosts"
       },
       "hostPathNote": "appdata holds private state, and retained artifacts land in a directory of the app's own inside the backups user share; \u00a719.2 keeps those two separate security domains. The backup root is deliberately a dedicated child of the share rather than the share itself: the share is very likely to be one the operator already uses, and step 0 of the acceptance procedure creates and owns only paths it created.",
       "trustForwardedHeaders": false,
-      "trustForwardedHeadersNote": "Unraid's two templates join `backup-manager`, a durable, host-wide, generically named user-defined bridge the operator creates by hand. Every container on such a bridge reaches every port of every other one, so the engine's isolation from anything else attached later is a convention, not a topology, and apps/common/auth/local requires a topology. The engine therefore does not trust forwarded headers here and rate-limits on the proxy's own address: one shared bucket for all clients, which over-limits rather than not limiting at all. This is the one place the Unraid profile is weaker than the compose ones, and apps/unraid/README.md says so.",
+      "trustForwardedHeadersNote": "Unraid's two templates join `backupd`, a durable, host-wide, generically named user-defined bridge the operator creates by hand. Every container on such a bridge reaches every port of every other one, so the engine's isolation from anything else attached later is a convention, not a topology, and apps/common/auth/local requires a topology. The engine therefore does not trust forwarded headers here and rate-limits on the proxy's own address: one shared bucket for all clients, which over-limits rather than not limiting at all. This is the one place the Unraid profile is weaker than the compose ones, and apps/unraid/README.md says so.",
       "profile": "unraid",
       "derivesFrom": {
         "source": "container/compose.yaml",
@@ -250,13 +250,13 @@
       "uiBridge": "apps/openmediavault/frontend/platform.ts",
       "displayName": "OpenMediaVault",
       "tier": "C",
-      "storageMount": "/srv/dev-disk-by-uuid/backups/backup-manager",
+      "storageMount": "/srv/dev-disk-by-uuid/backups/backupd",
       "hostPaths": {
-        "state": "/srv/dev-disk-by-uuid/appdata/backup-manager/state",
-        "backups": "/srv/dev-disk-by-uuid/backups/backup-manager",
-        "config": "/srv/dev-disk-by-uuid/appdata/backup-manager/config",
-        "sshKey": "/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/id_ed25519",
-        "knownHosts": "/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/known_hosts"
+        "state": "/srv/dev-disk-by-uuid/appdata/backupd/state",
+        "backups": "/srv/dev-disk-by-uuid/backups/backupd",
+        "config": "/srv/dev-disk-by-uuid/appdata/backupd/config",
+        "sshKey": "/srv/dev-disk-by-uuid/appdata/backupd/secrets/id_ed25519",
+        "knownHosts": "/srv/dev-disk-by-uuid/appdata/backupd/secrets/known_hosts"
       },
       "hostPathNote": "dev-disk-by-uuid is a placeholder, deliberately matching what apps/openmediavault/frontend/platform.ts already declares: a real OMV system mounts data filesystems at /srv/dev-disk-by-uuid-<UUID>/, which differs per machine. The profile funnels every host path through the one DISK variable so the UUID is substituted exactly once, and the compose file derives the rest. Retained artifacts land in a dedicated child of the backups directory rather than in the directory itself, so step 0 of the acceptance procedure only ever creates and owns paths it created.",
       "trustForwardedHeaders": true,
@@ -271,15 +271,15 @@
       "uiBridge": "apps/proxmox/frontend/platform.ts",
       "displayName": "Proxmox VE",
       "tier": "C",
-      "storageMount": "/mnt/backup-manager/backups",
+      "storageMount": "/mnt/backupd/backups",
       "hostPaths": {
-        "state": "/mnt/backup-manager/state",
-        "backups": "/mnt/backup-manager/backups",
-        "config": "/mnt/backup-manager/config",
-        "sshKey": "/mnt/backup-manager/secrets/id_ed25519",
-        "knownHosts": "/mnt/backup-manager/secrets/known_hosts"
+        "state": "/mnt/backupd/state",
+        "backups": "/mnt/backupd/backups",
+        "config": "/mnt/backupd/config",
+        "sshKey": "/mnt/backupd/secrets/id_ed25519",
+        "knownHosts": "/mnt/backupd/secrets/known_hosts"
       },
-      "hostPathNote": "These are paths inside the GUEST, not on the Proxmox VE host. WP4.5 rules out running the app on the host, so the supported model is a dedicated container-host guest (a VM by default) with one PVE host directory or dataset shared into it at /mnt/backup-manager. That share root is not the backup root: storageMount is its backups child, so private state, config and key material are siblings of the retained artifacts rather than parents of them, and step 0.6 of the acceptance procedure only ever recurses over the paths it created. How the sharing is configured is the operator's choice (virtiofs, NFS, or pct --mp0 for the LXC variant) and is therefore documented rather than declared here.",
+      "hostPathNote": "These are paths inside the GUEST, not on the Proxmox VE host. WP4.5 rules out running the app on the host, so the supported model is a dedicated container-host guest (a VM by default) with one PVE host directory or dataset shared into it at /mnt/backupd. That share root is not the backup root: storageMount is its backups child, so private state, config and key material are siblings of the retained artifacts rather than parents of them, and step 0.6 of the acceptance procedure only ever recurses over the paths it created. How the sharing is configured is the operator's choice (virtiofs, NFS, or pct --mp0 for the LXC variant) and is therefore documented rather than declared here.",
       "trustForwardedHeaders": true,
       "trustForwardedHeadersNote": "The compose file declares its own project network, created and destroyed with the deployment, whose only two members are these two containers. The guest is dedicated to being the container host, so nothing else on the PVE cluster shares that network: the engine's sole possible direct TCP peer is the Web UI container, by topology rather than by convention.",
       "profile": "proxmox",
@@ -292,15 +292,15 @@
       "uiBridge": "apps/synology/frontend/platform.ts",
       "displayName": "Synology DSM",
       "tier": "B",
-      "storageMount": "/volume1/backup-manager",
+      "storageMount": "/volume1/backupd",
       "hostPaths": {
-        "state": "/volume1/docker/backup-manager/state",
-        "backups": "/volume1/backup-manager",
-        "config": "/volume1/docker/backup-manager/config",
-        "sshKey": "/volume1/docker/backup-manager/secrets/id_ed25519",
-        "knownHosts": "/volume1/docker/backup-manager/secrets/known_hosts"
+        "state": "/volume1/docker/backupd/state",
+        "backups": "/volume1/backupd",
+        "config": "/volume1/docker/backupd/config",
+        "sshKey": "/volume1/docker/backupd/secrets/id_ed25519",
+        "knownHosts": "/volume1/docker/backupd/secrets/known_hosts"
       },
-      "hostPathNote": "These are the CONTAINER MANAGER project's paths (issue #169), not the .spk's. The .spk keeps its state under the DSM package FHS at /var/packages/BackupManager/{etc,var} and is untouched by this entry; the two are alternative ways to install the same release on the same NAS, and apps/synology/README.md says which to pick. /volume1/docker is Container Manager's own default project location and /volume1/backup-manager is the shared folder the .spk's data-share worker already asks DSM for, so an operator who has run either one recognises both. Substitute your own volume number.",
+      "hostPathNote": "These are the CONTAINER MANAGER project's paths (issue #169), not the .spk's. The .spk keeps its state under the DSM package FHS at /var/packages/Backupd/{etc,var} and is untouched by this entry; the two are alternative ways to install the same release on the same NAS, and apps/synology/README.md says which to pick. /volume1/docker is Container Manager's own default project location and /volume1/backupd is the shared folder the .spk's data-share worker already asks DSM for, so an operator who has run either one recognises both. Substitute your own volume number.",
       "profile": "synology",
       "derivesFrom": {
         "source": "container/compose.yaml",
@@ -314,15 +314,15 @@
       "uiBridgeNote": "No frontend bridge. A Portainer App Template has no payload to carry a bundle in, the canonical image has 347,956 bytes of headroom and a bundle costs roughly 352 KB, and a bridge would need this platform's id in the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. The deployment selects the generic profile and the shared UI describes it as the Docker Compose deployment it is.",
       "displayName": "Portainer CE",
       "tier": "B",
-      "storageMount": "/opt/backup-manager/backups",
+      "storageMount": "/opt/backupd/backups",
       "hostPaths": {
-        "state": "/opt/backup-manager/state",
-        "backups": "/opt/backup-manager/backups",
-        "config": "/opt/backup-manager/config",
-        "sshKey": "/opt/backup-manager/secrets/id_ed25519",
-        "knownHosts": "/opt/backup-manager/secrets/known_hosts"
+        "state": "/opt/backupd/state",
+        "backups": "/opt/backupd/backups",
+        "config": "/opt/backupd/config",
+        "sshKey": "/opt/backupd/secrets/id_ed25519",
+        "knownHosts": "/opt/backupd/secrets/known_hosts"
       },
-      "hostPathNote": "Portainer runs on an ordinary Docker host, so there is no vendor share layout to follow. /opt/backup-manager is the default the App Template puts in front of an operator and is substitutable in one place, the template's env list, which distribution/packaging pins to compose/backup-manager.env. Retained artifacts land in a dedicated child rather than in the app root, so state, config and key material are siblings of the backup root and never parents of it.",
+      "hostPathNote": "Portainer runs on an ordinary Docker host, so there is no vendor share layout to follow. /opt/backupd is the default the App Template puts in front of an operator and is substitutable in one place, the template's env list, which distribution/packaging pins to compose/backupd.env. Retained artifacts land in a dedicated child rather than in the app root, so state, config and key material are siblings of the backup root and never parents of it.",
       "trustForwardedHeaders": true,
       "trustForwardedHeadersNote": "The stack declares its own project network, created and destroyed with the stack, whose only two members are these two containers. Portainer itself is not on it. The engine's sole possible direct TCP peer is the Web UI container, by topology rather than by convention, which is what apps/common/auth/local requires.",
       "profile": "generic",
@@ -338,11 +338,11 @@
       "tier": "C",
       "storageMount": "/volume1/backups",
       "hostPaths": {
-        "state": "/volume1/backup-manager/state",
+        "state": "/volume1/backupd/state",
         "backups": "/volume1/backups",
-        "config": "/volume1/backup-manager/config",
-        "sshKey": "/volume1/backup-manager/secrets/id_ed25519",
-        "knownHosts": "/volume1/backup-manager/secrets/known_hosts"
+        "config": "/volume1/backupd/config",
+        "sshKey": "/volume1/backupd/secrets/id_ed25519",
+        "knownHosts": "/volume1/backupd/secrets/known_hosts"
       },
       "hostPathNote": "These are container/.env.example's own defaults, not a Dockge layout, and that is the point: Dockge deploys the canonical stack unmodified, so its host paths ARE the canonical stack's. TestTheDockgeStackIsTheCanonicalStack pins these five to that file, so the import workflow in apps/dockge/README.md cannot drift from the runtime it imports.",
       "trustForwardedHeaders": true,
@@ -358,13 +358,13 @@
       "uiBridgeNote": "No frontend bridge. A store compose file has no payload to carry a bundle in and the canonical image cannot carry a sixth one; a bridge would also need a CasaOS platform id in the /api/v1 contract, the capability table, the profile table and the bundle list, and this adapter's own contract says no CasaOS import may enter the Go core or the shared UI.",
       "displayName": "CasaOS",
       "tier": "B",
-      "storageMount": "/DATA/Backups/backup-manager",
+      "storageMount": "/DATA/Backups/backupd",
       "hostPaths": {
-        "state": "/DATA/AppData/backup-manager/state",
-        "backups": "/DATA/Backups/backup-manager",
-        "config": "/DATA/AppData/backup-manager/config",
-        "sshKey": "/DATA/AppData/backup-manager/secrets/id_ed25519",
-        "knownHosts": "/DATA/AppData/backup-manager/secrets/known_hosts"
+        "state": "/DATA/AppData/backupd/state",
+        "backups": "/DATA/Backups/backupd",
+        "config": "/DATA/AppData/backupd/config",
+        "sshKey": "/DATA/AppData/backupd/secrets/id_ed25519",
+        "knownHosts": "/DATA/AppData/backupd/secrets/known_hosts"
       },
       "hostPathNote": "CasaOS's own layout: private application data under /DATA/AppData, user data under /DATA. The backup root is deliberately outside /DATA/AppData, so an uninstall that offers to delete the app's data cannot reach a retained artifact. Literal, not variables: a CasaOS store install deploys the file as it stands with no .env beside it, so a ${VAR} here would be an unresolved reference at install time rather than a knob.",
       "trustForwardedHeaders": true,
@@ -380,13 +380,13 @@
       "uiBridgeNote": "No frontend bridge, for the same three reasons CasaOS ships none: no payload, no room in the image, and a bridge would put a ZimaOS platform id into the Go core and the shared UI.",
       "displayName": "ZimaOS",
       "tier": "B",
-      "storageMount": "/DATA/Backups/backup-manager",
+      "storageMount": "/DATA/Backups/backupd",
       "hostPaths": {
-        "state": "/DATA/AppData/backup-manager/state",
-        "backups": "/DATA/Backups/backup-manager",
-        "config": "/DATA/AppData/backup-manager/config",
-        "sshKey": "/DATA/AppData/backup-manager/secrets/id_ed25519",
-        "knownHosts": "/DATA/AppData/backup-manager/secrets/known_hosts"
+        "state": "/DATA/AppData/backupd/state",
+        "backups": "/DATA/Backups/backupd",
+        "config": "/DATA/AppData/backupd/config",
+        "sshKey": "/DATA/AppData/backupd/secrets/id_ed25519",
+        "knownHosts": "/DATA/AppData/backupd/secrets/known_hosts"
       },
       "hostPathNote": "The same five paths CasaOS uses, because ZimaOS is built on CasaOS and lays /DATA out the same way. They are identical on purpose and the two adapters are one runtime under two store registrations; inventing a difference to justify the second directory would be worse than saying so.",
       "trustForwardedHeaders": true,

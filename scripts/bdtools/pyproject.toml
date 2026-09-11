@@ -1,0 +1,114 @@
+# Lint and type-check settings for the repository's Python (EPIC I, I1.6 /
+# #672).
+#
+# WHY THIS FILE IS HERE AND NOT AT THE REPOSITORY ROOT
+#
+# It began scoped to scripts/bdtools alone, and said so: nothing in this
+# repository linted Python before #672, so a root-level configuration would
+# have been a new gate over `scripts/install/install_docker_host.py` and its
+# 5,100-line test suite, and the first thing anybody would have seen is
+# somebody else's file going red for a rule nobody agreed to. "Widening it is
+# a decision somebody makes on purpose, with the diff to look at" is what it
+# said, and this is that diff.
+#
+# WHAT WIDENED, AND WHAT DID NOT
+#
+# ruff now runs over all of `scripts/`. The trial run before widening found
+# 49 findings across the six files in scripts/install and scripts/deploy; all
+# 49 are fixed at the cause in the same change, and no rule was dropped to
+# get there. The one exemption is E501 on the two files named below, and it
+# is a fact about their contents rather than a concession.
+#
+# mypy --strict did NOT widen to all of `scripts/`, and the number is the
+# reason: the same trial run reported 965 errors, 944 of them in
+# scripts/install (161 in install_docker_host.py, 783 in its test suite), and
+# 855 of the 965 were `no-untyped-def`/`no-untyped-call` -- the annotation
+# backlog of two files written before any type checker looked at them. None
+# of the 161 in the installer was a latent defect; every one is
+# annotation-shaped. A gate that arrived with 965 suppressions would be worse
+# than no gate, so `scripts/ci-local.sh` names the paths mypy checks and the
+# two install files are not among them yet. Typing them is a separate change
+# with its own diff to look at, which is the same rule this file was written
+# under.
+#
+# WHAT CANNOT FOLD IN AT ALL
+#
+# `scripts/install/install_docker_host.py` is copied to a NAS on its own and
+# run there with nothing beside it (#262). It may import only the standard
+# library. It can therefore never become an `bdtools` module the way the
+# twelve script domains did, whatever else happens to it, and
+# `TestTheInstallerStillTravelsAlone` in its test suite is what holds that
+# rather than a comment. `scripts/deploy/deploy_generic.py` has no such
+# property -- it resolves REPO_ROOT from its own location, reads
+# `container/compose.yaml` and runs `docker compose` with cwd=REPO_ROOT, so
+# it only ever works from inside a checkout.
+#
+# ruff discovers this file by walking up from each linted file, which stops
+# working the moment the linted file is outside this directory, so
+# `scripts/ci-local.sh` passes `--config` explicitly for ruff exactly as it
+# already did `--config-file` for mypy.
+
+[tool.ruff]
+# 120, not 88. These files are heavily commented by design -- the comments are
+# the record of why each refusal exists, which is the house style the bash
+# they replace established -- and reflowing prose to 88 columns to satisfy a
+# default would cost more in readability than it buys. 120 is what the
+# existing text already fits in.
+line-length = 120
+
+# 3.8 is the floor `scripts/install/install_docker_host.py` documents and
+# argues for: a NAS appliance may not let you install anything, so a script
+# with its own dependencies is a script that cannot run. The same rule binds
+# here, which means no match statements, no `X | Y` at runtime, and
+# `from __future__ import annotations` in every module.
+target-version = "py38"
+
+[tool.ruff.lint]
+# E and F are ruff's default. The rest are the rules that catch a real defect
+# in this kind of code rather than expressing a taste:
+#
+#   B    bugbear: mutable default arguments, `except` that swallows, loop
+#        variables captured by a closure -- the last one matters here because
+#        `wait_or_die` takes a lambda per call site.
+#   I    import order, so a merge between two porting agents does not turn
+#        into a diff about where an import went.
+#   UP   pyupgrade, pinned to py38 above so it cannot suggest anything the
+#        floor forbids.
+#   RUF  ruff's own, chiefly the mutable-class-attribute and unused-noqa
+#        checks. An unused `noqa` is how a real finding gets silenced by an
+#        exemption nobody rechecked.
+select = ["E", "F", "B", "I", "UP", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# The only two exemptions in this file, and both are about bytes nobody is
+# allowed to reflow rather than about lines nobody got round to wrapping.
+#
+# install_docker_host.py carries EMBEDDED_COMPOSE_YAML, a byte-for-byte copy
+# of container/compose.yaml written by embed_compose.py and held to a sha256
+# by TestEmbeddedComposeMatchesCanonical. One line of that copy is 123
+# columns (container/compose.yaml:345, the KNOWN_HOSTS_FILE mount). Wrapping
+# it would break the digest; wrapping the canonical file to satisfy a Python
+# column rule would be the tail wagging the runtime contract.
+#
+# test_install_docker_host.py pastes real `iptables -L -n -v --line-numbers`
+# output as a fixture. Two of those lines are 121 columns because that is
+# what iptables printed. Re-indenting captured output to fit a linter turns a
+# fixture into an invention.
+#
+# A `# noqa` cannot reach either one: both are inside string literals, where
+# a comment is content. The exemption is checked rather than assumed -- every
+# line over 120 columns in these two files is inside a string literal, which
+# `python3 -c` over tokenize will confirm in a few seconds if it is ever
+# doubted.
+"install_docker_host.py" = ["E501"]
+"test_install_docker_host.py" = ["E501"]
+
+[tool.mypy]
+strict = true
+# NOT the py38 floor, and it cannot be: mypy 2.x refuses any python_version
+# below 3.10 outright ("Python 3.8 is not supported (must be 3.10 or
+# higher)"). So the floor is enforced by ruff's target-version above, which
+# is what stops UP suggesting syntax 3.8 does not have, and mypy checks the
+# same code under a newer interpreter's rules. Stated rather than left as a
+# number that looks like it agrees with the line above and does not.
+python_version = "3.10"

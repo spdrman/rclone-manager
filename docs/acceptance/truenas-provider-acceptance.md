@@ -26,8 +26,8 @@ reach.
 | Term | Meaning here |
 | --- | --- |
 | `POOL` | The ZFS pool you install into. The package's defaults assume `tank`; substitute yours everywhere. |
-| Engine container | `/rbm-web serve`: API, scheduler, local authentication. No published port. |
-| Web UI container | `/rbm-web serve-ui`: static UI plus reverse proxy. The only published port. |
+| Engine container | `/backupd-web serve`: API, scheduler, local authentication. No published port. |
+| Web UI container | `/backupd-web serve-ui`: static UI plus reverse proxy. The only published port. |
 | Canonical image | The single OCI reference in `distribution/packaging/canonical.json`. |
 
 ---
@@ -36,13 +36,13 @@ reach.
 
 ### 0.1 Make the canonical image resolvable
 
-`ghcr.io/spdrman/backup-manager:0.4.0` is cut but not pushed yet:
+`ghcr.io/spdrman/backupd:0.4.0` is cut but not pushed yet:
 `distribution/packaging/canonical.json` records `image.published: false`, and
 `container/release-manifest.json` carries a `registry_digest` of `null` per
 architecture. So the reference does not resolve from the registry today, and the
 steps below are how you make it resolve, by pushing a build to a registry this host
 can reach or building elsewhere and loading it. The previous release,
-`ghcr.io/spdrman/backup-manager:0.3.3`, stays published and signed if you would
+`ghcr.io/spdrman/backupd:0.3.3`, stays published and signed if you would
 rather run that, so pick one:
 
 **Option A, your own registry.** Build and push both architectures, then override
@@ -54,7 +54,7 @@ docker buildx build \
   --build-arg VERSION="$(git describe --tags --always)" \
   --build-arg COMMIT="$(git rev-parse HEAD)" \
   -f container/Dockerfile \
-  -t <your-registry>/backup-manager:<version> \
+  -t <your-registry>/backupd:<version> \
   --push .
 ```
 
@@ -62,10 +62,10 @@ docker buildx build \
 
 ```bash
 docker buildx build --platform=linux/amd64 -f container/Dockerfile \
-  -t backup-manager:<version> --load .
-docker save backup-manager:<version> | gzip > backup-manager.tar.gz
-scp backup-manager.tar.gz root@<truenas>:/mnt/POOL/
-ssh root@<truenas> 'gunzip -c /mnt/POOL/backup-manager.tar.gz | docker load'
+  -t backupd:<version> --load .
+docker save backupd:<version> | gzip > backupd.tar.gz
+scp backupd.tar.gz root@<truenas>:/mnt/POOL/
+ssh root@<truenas> 'gunzip -c /mnt/POOL/backupd.tar.gz | docker load'
 ```
 
 Record which option you used and the exact reference in the evidence table. If you
@@ -82,18 +82,18 @@ The package's host-path defaults come from `distribution/packaging/canonical.jso
 declares. Create them as datasets, not directories, so snapshots and quotas work:
 
 ```bash
-zfs create -p POOL/backup-manager/state
-zfs create -p POOL/backup-manager/backups
-zfs create -p POOL/backup-manager/config
-zfs create -p POOL/backup-manager/secrets
+zfs create -p POOL/backupd/state
+zfs create -p POOL/backupd/backups
+zfs create -p POOL/backupd/config
+zfs create -p POOL/backupd/secrets
 ```
 
 Then confirm all four are actually mounted before you install anything:
 
 ```bash
-zfs list -o name,mountpoint -r POOL/backup-manager
+zfs list -o name,mountpoint -r POOL/backupd
 for d in state backups config secrets; do
-  mountpoint -q "/mnt/POOL/backup-manager/$d" || echo "NOT MOUNTED: $d"
+  mountpoint -q "/mnt/POOL/backupd/$d" || echo "NOT MOUNTED: $d"
 done
 ```
 
@@ -117,9 +117,9 @@ Pick the uid/gid the app will run as and set it now. TrueNAS's own `apps` accoun
 is `568:568` and is the conventional choice:
 
 ```bash
-chown 568:568 /mnt/POOL/backup-manager \
-  /mnt/POOL/backup-manager/{state,backups,config,secrets}
-chmod 700 /mnt/POOL/backup-manager/secrets
+chown 568:568 /mnt/POOL/backupd \
+  /mnt/POOL/backupd/{state,backups,config,secrets}
+chmod 700 /mnt/POOL/backupd/secrets
 ```
 
 The mountpoints are chowned, not the trees beneath them. On a first install that
@@ -152,7 +152,7 @@ Nothing in this app needs that, so nothing here does it.
 > confirmed on its Verify server step, and no `config.yaml` is written by hand
 > at all.
 
-`/rbm-web serve` starts without a `config.yaml` and serves the
+`/backupd-web serve` starts without a `config.yaml` and serves the
 first-run setup flow instead (#176), but a config file that EXISTS and does not
 validate is still a hard startup failure. Given the read-only mount above,
 create all three before the first start.
@@ -162,21 +162,21 @@ now a writable directory the application owns, so the container can create and r
 `config.yaml` itself, and an empty directory is a legitimate state rather than a broken
 deployment. Two things nonetheless keep this step here. The directory itself must exist
 and be owned by `PUID:PGID` before the first start, because a bind mount does not create
-or chown its source. And `/rbm-web serve` still refuses to start without a
+or chown its source. And `/backupd-web serve` still refuses to start without a
 valid config: removing that refusal, and serving a first-run flow instead, is #176's
 work and is not merged. Once it is, everything below except creating and owning the
 directory becomes optional.
 
 
 ```bash
-ssh-keygen -t ed25519 -N '' -f /mnt/POOL/backup-manager/secrets/id_ed25519
-ssh-keyscan -t ed25519 <your-sftp-host> > /mnt/POOL/backup-manager/secrets/known_hosts
-chmod 600 /mnt/POOL/backup-manager/secrets/id_ed25519
-chown 568:568 /mnt/POOL/backup-manager/secrets/*
+ssh-keygen -t ed25519 -N '' -f /mnt/POOL/backupd/secrets/id_ed25519
+ssh-keyscan -t ed25519 <your-sftp-host> > /mnt/POOL/backupd/secrets/known_hosts
+chmod 600 /mnt/POOL/backupd/secrets/id_ed25519
+chown 568:568 /mnt/POOL/backupd/secrets/*
 ```
 
 Verify the host key fingerprint out of band before you trust it. Then write
-`/mnt/POOL/backup-manager/config/config.yaml`; the container-side paths in it are
+`/mnt/POOL/backupd/config/config.yaml`; the container-side paths in it are
 fixed by the package and must not be changed (see
 `apps/truenas/README.md` for the annotated example, and
 `scripts/deploy/deploy_generic.py`'s `render_config_yaml` for the authoritative
@@ -186,7 +186,7 @@ shape).
 
 - [ ] Key pair generated, mode 0600, owned by `PUID:PGID`
 - [ ] `known_hosts` pinned, fingerprint verified out of band
-- [ ] `/mnt/POOL/backup-manager/config` exists and is **writable** by `PUID:PGID`
+- [ ] `/mnt/POOL/backupd/config` exists and is **writable** by `PUID:PGID`
 - [ ] `config.yaml` written inside it and readable by `PUID:PGID`
 
 ---
@@ -195,12 +195,12 @@ shape).
 
 1. In the TrueNAS Web UI go to **Apps → Discover Apps → Custom App**.
 2. Choose **Install via YAML**.
-3. Paste the whole of `apps/truenas/compose/backup-manager.yaml`.
+3. Paste the whole of `apps/truenas/compose/backupd.yaml`.
 4. Substitute, at the top of the pasted YAML only:
    - the image reference from step 0.1, if you did not push to the recorded one;
    - `POOL` in each host path;
    - `PUID`/`PGID` from step 0.3.
-5. Name the app `backup-manager`.
+5. Name the app `backupd`.
 6. Install.
 
 Record: how long the install took, and the full text of any warning TrueNAS showed.
@@ -208,13 +208,13 @@ Record: how long the install took, and the full text of any warning TrueNAS show
 - [ ] Install completed without error
 - [ ] TrueNAS shows the app, and both containers reach **running**
 - [ ] The engine container reaches Docker health **healthy** (it declares the
-      liveness probe, `/rbm-web healthcheck --url
+      liveness probe, `/backupd-web healthcheck --url
       http://127.0.0.1:8080/health/live`, and NOT the image's own
-      `HEALTHCHECK`, `/rbm status`. The Web UI will not start until
+      `HEALTHCHECK`, `/backupd status`. The Web UI will not start until
       this reports healthy, and `status` is the backup-freshness verdict, which
       is non-zero on a fresh install that has backed nothing up)
 - [ ] The Web UI container reaches Docker health **healthy** (it overrides that
-      healthcheck with `/rbm-web healthcheck`, because it has no config
+      healthcheck with `/backupd-web healthcheck`, because it has no config
       file and no state database of its own to report on)
 
 If the Web UI container is unhealthy while the engine is healthy, the override did
@@ -226,7 +226,7 @@ changing anything.
 
 ## Step 2 — Web portal link
 
-1. Open **Apps → Installed → backup-manager**.
+1. Open **Apps → Installed → backupd**.
 2. Click the **Web Portal** button.
 
 - [ ] The portal button exists and is not greyed out
@@ -262,7 +262,7 @@ package ships no credential of its own.
 - [ ] Logout then login succeeds
 - [ ] The enrollment link is refused the second time (single-use)
 - [ ] `GET /api/v1/system/capabilities` reports `nativeAuth: false`
-- [ ] `/mnt/POOL/backup-manager/state/local-auth.json` exists and contains an
+- [ ] `/mnt/POOL/backupd/state/local-auth.json` exists and contains an
       Argon2id hash, never a plaintext password
 
 ---
@@ -274,9 +274,9 @@ package ships no credential of its own.
 2. Then, on the NAS:
 
 ```bash
-ls -la /mnt/POOL/backup-manager/backups
-ls -la /mnt/POOL/backup-manager/state
-grep -rIl 'PRIVATE KEY' /mnt/POOL/backup-manager/backups || echo "clean"
+ls -la /mnt/POOL/backupd/backups
+ls -la /mnt/POOL/backupd/state
+grep -rIl 'PRIVATE KEY' /mnt/POOL/backupd/backups || echo "clean"
 ```
 
 Then record a baseline for the removal check at the end of this procedure. The
@@ -288,13 +288,13 @@ hash and a full file listing **outside** the backup root, where whatever might
 damage that tree cannot reach the evidence:
 
 ```bash
-mkdir -p /root/backup-manager-acceptance
-head -c 8M /dev/urandom > /mnt/POOL/backup-manager/backups/canary.bin
-sha256sum /mnt/POOL/backup-manager/backups/canary.bin | tee /root/backup-manager-acceptance/canary.sha256
-find /mnt/POOL/backup-manager/backups -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.before
+mkdir -p /root/backupd-acceptance
+head -c 8M /dev/urandom > /mnt/POOL/backupd/backups/canary.bin
+sha256sum /mnt/POOL/backupd/backups/canary.bin | tee /root/backupd-acceptance/canary.sha256
+find /mnt/POOL/backupd/backups -type f -printf '%p %s\n' | sort > /root/backupd-acceptance/backup-root.before
 ```
 
-Keep `/root/backup-manager-acceptance` off the repository: the listing names your own backup
+Keep `/root/backupd-acceptance` off the repository: the listing names your own backup
 sets. Record only that it was taken, and the canary's hash, in the evidence table.
 
 - [ ] At least one completed artifact is under the backups dataset
@@ -323,7 +323,7 @@ already has real state from step 4.
    find <backups dataset> -type f -printf '%p %s\n' | sort > /tmp/before-update.txt
    ```
 3. Push or side-load a newer image tag.
-4. In TrueNAS, **Apps → Installed → backup-manager → Edit**, change the image tag,
+4. In TrueNAS, **Apps → Installed → backupd → Edit**, change the image tag,
    and save. TrueNAS recreates both containers.
 5. Compare afterwards:
    ```bash
@@ -369,7 +369,7 @@ storage step, because after the delete there is nothing left to compare against,
 "the dataset looks fine" is not a result, and any deletion the comparison turns
 up is a release blocker rather than a finding to triage.
 
-1. **Apps → Installed → backup-manager → Delete**.
+1. **Apps → Installed → backupd → Delete**.
 2. When TrueNAS asks, do **not** tick anything that deletes the app's datasets.
 
 - [ ] Both containers are gone
@@ -378,9 +378,9 @@ Check the backup root against the baseline recorded in the storage step, before
 looking at anything else:
 
 ```bash
-sha256sum -c /root/backup-manager-acceptance/canary.sha256
-find /mnt/POOL/backup-manager/backups -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.after
-diff /root/backup-manager-acceptance/backup-root.before /root/backup-manager-acceptance/backup-root.after
+sha256sum -c /root/backupd-acceptance/canary.sha256
+find /mnt/POOL/backupd/backups -type f -printf '%p %s\n' | sort > /root/backupd-acceptance/backup-root.after
+diff /root/backupd-acceptance/backup-root.before /root/backupd-acceptance/backup-root.after
 ```
 
 - [ ] `sha256sum -c` reports the canary `OK`
@@ -406,11 +406,11 @@ catalog. Nothing on a developer laptop can run TrueNAS's own catalog validator, 
 that check lives here.
 
 1. Clone the TrueNAS apps repository.
-2. Copy `apps/truenas/catalog/` in as `ix-dev/community/backup-manager/`.
+2. Copy `apps/truenas/catalog/` in as `ix-dev/community/backupd/`.
 3. Run that repository's own validation and render tooling.
 
 - [ ] The catalog validator accepts the app
-- [ ] The rendered compose matches `apps/truenas/compose/backup-manager.yaml`
+- [ ] The rendered compose matches `apps/truenas/compose/backupd.yaml`
       apart from values the questions supply
 - [ ] Every question in `questions.yaml` is consumed by the template, and every
       template variable is answered by a question

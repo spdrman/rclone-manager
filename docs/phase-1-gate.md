@@ -22,7 +22,7 @@ stable, exported rclone APIs. The subprocess fallback is not needed.
 
 | # | Requirement | Result | Evidence |
 |---|---|---|---|
-| 1 | A Go application embeds rclone successfully | PASS | `go build ./...` on this module; `cmd/backup-manager` links against the pinned rclone v1.75.0 with no CGO. |
+| 1 | A Go application embeds rclone successfully | PASS | `go build ./...` on this module; `cmd/backupd` links against the pinned rclone v1.75.0 with no CGO. |
 | 2 | Only the local and SFTP backends are registered | PASS, with a documented exception | `local` and `sftp` are the only direct imports. `fs.Registry` also has `crypt`, registered transitively through `fs/operations` (needed for `operations.Copy`). Traced, measured (~2% of binary size) and accepted in `internal/transport/rclone/backends.go`, enforced by `TestRegisteredBackendsExactSet` so it can never widen silently. See "What did not pass outright" below for why this doesn't sink the gate. |
 | 3 | Remote listing works | PASS | `TestPhase1Gate/Listing` and `/Connects`, real `Adapter.List` against `tests/sftpfixture`'s Docker SFTP server. |
 | 4 | Single-file copy works | PASS | `TestPhase1Gate/CopyAndTransferStatistics` copies a 256KiB file over SFTP and compares it byte-for-byte against the source. |
@@ -30,7 +30,7 @@ stable, exported rclone APIs. The subprocess fallback is not needed.
 | 6 | Transfer statistics are accessible | PASS | `TestPhase1Gate/CopyAndTransferStatistics` reads `accounting.StatsGroup(ctx, group).GetBytes()` / `GetTransfers()` after a real SFTP copy and gets the real numbers back, not just the adapter's own return value. |
 | 7 | Explicit remote delete works | PASS | `TestPhase1Gate/ExplicitDelete`: `DeleteRemote` over SFTP, checked two ways, the file is gone from the server's filesystem and gone from a follow-up `List`. |
 | 8 | Host-key verification works | PASS | `internal/transport/rclone/ssh_test.go`'s `TestSFTPHostKeyVerification`, merged with #6: a positive control, an unknown host key refused, and a changed host key (MITM) refused, all against a real Docker sshd. I didn't duplicate that here; `TestPhase1Gate/Connects` just confirms my own fixture and Source are wired correctly. |
-| 9 | The target UGREEN architecture builds and runs | PASS | `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build` produces a 21MiB static binary (matches the measurement in #5's PR). I went further than "builds" for this gate: I ran that exact binary, and the amd64 equivalent, inside `docker run --platform linux/arm64|amd64 alpine:3.20`, and both printed `rbm version` correctly. Building was already established before I started; running it is new. |
+| 9 | The target UGREEN architecture builds and runs | PASS | `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build` produces a 21MiB static binary (matches the measurement in #5's PR). I went further than "builds" for this gate: I ran that exact binary, and the amd64 equivalent, inside `docker run --platform linux/arm64|amd64 alpine:3.20`, and both printed `backupd version` correctly. Building was already established before I started; running it is new. |
 
 **Exit gate: proceed.** The required rclone APIs (`fs.Find`, `fs.NewFs`/`info.NewFs`,
 `fs.Object`, `operations.Copy`, `fs/accounting`, `fs/hash`) are all stable, documented,

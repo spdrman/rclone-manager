@@ -1,7 +1,7 @@
-# Backup Manager configuration, seeded by the DSM package on first
+# Backupd configuration, seeded by the DSM package on first
 # install. Edit it, then start the package from Package Center.
 #
-# This file lives at /var/packages/BackupManager/etc/config.yaml, which
+# This file lives at /var/packages/Backupd/etc/config.yaml, which
 # Synology's package FHS documents as surviving both an upgrade and an
 # uninstall. The package never overwrites it once it exists.
 #
@@ -15,14 +15,14 @@ poll_interval: 15m
 
 state:
   # The SQLite lifecycle journal. Under var/, which survives upgrades.
-  database: /var/packages/BackupManager/var/state/backup-manager.db
+  database: /var/packages/Backupd/var/state/backupd.db
 
 sources: []
 
 # Replace the empty list above with something like this. The paths assume
 # the shared folder this package asked DSM to create, which appears as
-# /volume1/backup-manager on a single-volume NAS - check `ls -d
-# /volume*/backup-manager` if yours has more than one volume.
+# /volume1/backupd on a single-volume NAS - check `ls -d
+# /volume*/backupd` if yours has more than one volume.
 #
 # sources:
 #   - id: production
@@ -32,10 +32,10 @@ sources: []
 #           type: sftp
 #           host: production.example.internal
 #           user: backup
-#           key_file: /var/packages/BackupManager/etc/id_ed25519
-#           known_hosts: /var/packages/BackupManager/etc/known_hosts
+#           key_file: /var/packages/Backupd/etc/id_ed25519
+#           known_hosts: /var/packages/Backupd/etc/known_hosts
 #         remote_path: /backups/postgres
-#         local_path: /volume1/backup-manager/production/postgres
+#         local_path: /volume1/backupd/production/postgres
 #         completion:
 #           strategy: stable
 #           stable_for: 10m

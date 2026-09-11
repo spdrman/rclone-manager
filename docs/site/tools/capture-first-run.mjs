@@ -22,7 +22,7 @@
 // # The shape of this flow changed under the old version of this file
 //
 // It used to walk a dedicated `FirstRunPage` whose heading was "Set up
-// Backup Manager". That page is gone. #275 replaced it with the ordinary
+// Backupd". That page is gone. #275 replaced it with the ordinary
 // add-backup-set wizard running with `firstRun` set, reached the way an
 // operator reaches it: enrol, land on a dashboard that says there is no
 // configuration yet, and press Add backup set. Everything below follows
@@ -91,7 +91,7 @@ await withDevServer(async (app) => {
   // placeholder: the mock does not check it, and a real one must never
   // be committed.
   await page.goto(app.base + "/enroll?scenario=first-run&token=" + EXAMPLE.token);
-  await page.getByRole("heading", { name: /Create Backup Manager administrator/ }).waitFor();
+  await page.getByRole("heading", { name: /Create Backupd administrator/ }).waitFor();
   await take("01-enrolment-empty", AUTH_CARD);
 
   await page.getByLabel("Username").fill(EXAMPLE.adminUser);
@@ -122,7 +122,7 @@ await withDevServer(async (app) => {
   // backup set and a banner repeating it would put the same primary
   // action on one page twice.
   await page.getByRole("navigation", { name: "Sections" }).waitFor();
-  await page.getByText("Backup Manager has no configuration yet").waitFor();
+  await page.getByText("Backupd has no configuration yet").waitFor();
   await take("04-first-run-dashboard", WINDOW);
 
   // ---------------------------------------------------------------- step 1

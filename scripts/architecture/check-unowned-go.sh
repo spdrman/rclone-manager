@@ -2,7 +2,7 @@
 # Is every Go file in this repository owned by a module, and if not, is it
 # checked anyway? (issue #417)
 #
-# The check itself is scripts/rcmtools/architecture/check_unowned_go.py now
+# The check itself is scripts/bdtools/architecture/check_unowned_go.py now
 # (EPIC I, I1.6 / #672 / #697). This file stays because the path is load
 # bearing:
 #
@@ -36,4 +36,4 @@
 # is what lets the self-test point it at a mutant copy.
 set -euo pipefail
 
-exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/rcmtools/architecture/check_unowned_go.py" "$@"
+exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/bdtools/architecture/check_unowned_go.py" "$@"

@@ -1,6 +1,6 @@
 # The front reverse proxy the real NAS has and the plain-HTTP rig did not.
 #
-# rclone-manager#730 is the Activity page's fetch(/api/v1/activity) throwing
+# backupd#730 is the Activity page's fetch(/api/v1/activity) throwing
 # TypeError: Failed to fetch on a real 0.4.0 deployment, while curl to the
 # same route answers cleanly. The client request is byte-identical to every
 # other page's (a relative, same-origin GET through the same api client), so
@@ -10,7 +10,7 @@
 # browsers only negotiate h2 over TLS, so the plain-HTTP rig drives the whole
 # stack over HTTP/1.1 and never exercises the transport the operator's does.
 #
-# This container is that missing hop, added in front of `rbm-web serve-ui`:
+# This container is that missing hop, added in front of `backupd-web serve-ui`:
 #
 #     browser --TLS/h2--> THIS nginx --http/1.1--> serve-ui --> serve
 #
@@ -30,8 +30,8 @@ RUN apk add --no-cache openssl \
  && openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
       -keyout /etc/nginx/tls/key.pem \
       -out /etc/nginx/tls/cert.pem \
-      -subj "/CN=rclone-manager" \
-      -addext "subjectAltName=DNS:rclone-manager,DNS:localhost" \
+      -subj "/CN=backupd" \
+      -addext "subjectAltName=DNS:backupd,DNS:localhost" \
  && chmod 0644 /etc/nginx/tls/key.pem
 
 # The upstream is reached by the edge-network alias the rig gives serve-ui

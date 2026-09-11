@@ -38,7 +38,7 @@
 # # The version tracks the tests repository's lockfile, deliberately
 #
 # PLAYWRIGHT_VERSION and the image tag are the same number, and that number
-# is whatever spdrman/rclone-manager-tests has in
+# is whatever spdrman/backupd-tests has in
 # suites/web-ui/package-lock.json. It has to be: the browsers live in the
 # image at /ms-playwright under a build id the npm package computes, so a
 # runner from one version looking for the browsers of another finds

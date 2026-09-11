@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>The web interface, in motion: rclone-manager</title>
-  <meta name="description" content="Animated walkthroughs of the rclone-manager web interface: the docked terminal, run controls, per-backup-set activity, retention previews, edit mode and dark mode.">
+  <title>The web interface, in motion: backupd</title>
+  <meta name="description" content="Animated walkthroughs of the backupd web interface: the docked terminal, run controls, per-backup-set activity, retention previews, edit mode and dark mode.">
   <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
   <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
@@ -21,7 +21,7 @@
 <header class="topbar" id="topbar">
   <div class="topbar-content">
     <a class="topbar-brand" href="index.html">
-      <img src="assets/logo-mark-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress">
+      <img src="assets/logo-mark-light.svg" alt="backupd mark: a broken ring standing for a transfer cycle in progress">
       <h1 class="brand-name">rclone<span class="brand-dash">-</span>manager</h1>
     </a>
   </div>
@@ -57,21 +57,21 @@
         <span class="nav-label nav-label-short">Ref</span>
       </a>
 
-      <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+      <a href="https://github.com/spdrman/backupd" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
         <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
           <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
         </svg>
         <span class="nav-label nav-label-full">GitHub</span>
       </a>
 
-      <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/spdrman/backupd/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">README</span>
       </a>
-      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/spdrman/backupd/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Deployment</span>
         <span class="nav-label nav-label-short">Deploy</span>
       </a>
-      <a href="https://github.com/spdrman/rclone-manager/issues" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/spdrman/backupd/issues" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Issues</span>
       </a>
 
@@ -121,7 +121,7 @@
   <section>
     <h2 id="terminal">The terminal at the bottom of every page</h2>
     <p>There is a log panel docked to the bottom of the browser window on every signed-in page. It answers one question: what has this deployment done recently, including the thing I just clicked. It reads the engine's own buffers, so two people watching one NAS see the same lines in the same order with the same sequence numbers and can quote a timestamp at each other.</p>
-    <p>It is pinned to the window, not to the end of the document, and that distinction is the whole of <a href="https://github.com/spdrman/rclone-manager/issues/617">#617</a>. In flow it rode the bottom of the page, so on anything longer than a screen the always-on panel had scrolled out of view and only appeared once you had already got to the bottom, which is the opposite of what an always-on panel is for. Watch the page move under it.</p>
+    <p>It is pinned to the window, not to the end of the document, and that distinction is the whole of <a href="https://github.com/spdrman/backupd/issues/617">#617</a>. In flow it rode the bottom of the page, so on anything longer than a screen the always-on panel had scrolled out of view and only appeared once you had already got to the bottom, which is the opposite of what an always-on panel is for. Watch the page move under it.</p>
   <figure class="wide">
     <img src="screens/ui-terminal-pinned.gif" alt="The backup set page scrolling from top to bottom while the terminal stays fixed to the bottom of the window" loading="lazy">
     <figcaption><span class="clip-tag">clip</span>One backup set's page, scrolled from the top to the bottom and back. The terminal does not move, and the content column reserves room under itself so the last row of a long table can still be scrolled clear of it.</figcaption>
@@ -146,8 +146,8 @@
 
   <section>
     <h2 id="runs">Starting a run, and reading the answer</h2>
-    <p>Both run buttons are real now. Before <a href="https://github.com/spdrman/rclone-manager/issues/597">#597</a> two of them called the API with no error handler, an empty configuration revision and no idempotency key, and the third had no handler at all, so a refusal from the destructive gate, a stale revision, a malformed request and a dead engine were all pixel-identical to a button that did nothing.</p>
-    <p>What comes back is a notice with four parts, and each part is there for a reason. It states an outcome rather than leaving one to be inferred. It says what to do about it when there is something to do. It names the command the press was equivalent to, copy-pasteable exactly as written, which matters most on a <em>refusal</em>, because while the destructive gate is shut that command is the only remaining way to start the backup that was just refused. And it has a close control, which is <a href="https://github.com/spdrman/rclone-manager/issues/620">#620</a>: a banner you have read and cannot put away is a banner that pushes the page down forever.</p>
+    <p>Both run buttons are real now. Before <a href="https://github.com/spdrman/backupd/issues/597">#597</a> two of them called the API with no error handler, an empty configuration revision and no idempotency key, and the third had no handler at all, so a refusal from the destructive gate, a stale revision, a malformed request and a dead engine were all pixel-identical to a button that did nothing.</p>
+    <p>What comes back is a notice with four parts, and each part is there for a reason. It states an outcome rather than leaving one to be inferred. It says what to do about it when there is something to do. It names the command the press was equivalent to, copy-pasteable exactly as written, which matters most on a <em>refusal</em>, because while the destructive gate is shut that command is the only remaining way to start the backup that was just refused. And it has a close control, which is <a href="https://github.com/spdrman/backupd/issues/620">#620</a>: a banner you have read and cannot put away is a banner that pushes the page down forever.</p>
     <p>The same line lands in the terminal at the bottom of the window, with a prompt in front of the command and a mark saying this browser wrote it. That is what makes the terminal the one place to look: whatever page you pressed the button on, and whichever of them you are on now, the answer to what just happened is in the same panel.</p>
   <figure class="wide">
     <img src="screens/ui-run-controls.gif" alt="Pressing Run this backup set, the notice appearing with the equivalent command, the same line arriving in the docked terminal, the This browser filter isolating it, then closing the notice" loading="lazy">
@@ -174,7 +174,7 @@
 
   <section>
     <h2 id="edit">Editing a set, and getting out of it</h2>
-    <p>Opening the editor takes a hold on that backup set. The hold is a real thing on the server with a command of its own, and it exists so a cycle does not start against a set somebody is halfway through changing. Which means leaving the editor has to give the hold back, and before <a href="https://github.com/spdrman/rclone-manager/issues/591">#591</a> there was a back link and no way to discard what you had typed, so an operator who opened the form just to read it walked away leaving the set held.</p>
+    <p>Opening the editor takes a hold on that backup set. The hold is a real thing on the server with a command of its own, and it exists so a cycle does not start against a set somebody is halfway through changing. Which means leaving the editor has to give the hold back, and before <a href="https://github.com/spdrman/backupd/issues/591">#591</a> there was a back link and no way to discard what you had typed, so an operator who opened the form just to read it walked away leaving the set held.</p>
   <figure class="wide">
     <img src="screens/ui-edit-mode.gif" alt="Opening edit mode on a backup set, then leaving it with Cancel and exit edit mode" loading="lazy">
     <figcaption><span class="clip-tag">clip</span>Edit mode, and the way out that discards. Save all and exit is the other one, and the two are deliberately not the same button in two moods.</figcaption>
@@ -184,7 +184,7 @@
 
   <section>
     <h2 id="theme">Dark mode</h2>
-    <p>The defect <a href="https://github.com/spdrman/rclone-manager/issues/618">#618</a> fixed was not that dark mode looked bad. It was that the application painted its own surfaces dark and left every native control at the browser's default, so a <code>select</code>, a number input and a file field drew black text on a dark field. It read correctly in light mode, where the browser's default happens to match, which is why it survived so long.</p>
+    <p>The defect <a href="https://github.com/spdrman/backupd/issues/618">#618</a> fixed was not that dark mode looked bad. It was that the application painted its own surfaces dark and left every native control at the browser's default, so a <code>select</code>, a number input and a file field drew black text on a dark field. It read correctly in light mode, where the browser's default happens to match, which is why it survived so long.</p>
   <figure class="wide">
     <img src="screens/ui-dark-mode.gif" alt="The settings page switching to dark mode, scrolling through a form of native selects and number inputs, then switching back" loading="lazy">
     <figcaption><span class="clip-tag">clip</span>The settings page is the worst case and so it is the one in shot: it is mostly native controls. The choice is remembered per browser.</figcaption>
@@ -194,7 +194,7 @@
 
   <section>
     <h2 id="icons">The icons</h2>
-    <p>Everything drawn as an icon is Font Awesome Free 6.7.2, compiled into the bundle as paths rather than fetched, under CC-BY-4.0 and reproduced unmodified. Before <a href="https://github.com/spdrman/rclone-manager/issues/621">#621</a> they were Unicode glyphs, which means the navigation looked different on every operating system and sometimes rendered as an emoji. The typeface went the same way in <a href="https://github.com/spdrman/rclone-manager/issues/631">#631</a>: IBM Plex is vendored into the image and served from it, so an isolated deployment with no route to Google Fonts keeps the face it was designed in instead of silently falling back.</p>
+    <p>Everything drawn as an icon is Font Awesome Free 6.7.2, compiled into the bundle as paths rather than fetched, under CC-BY-4.0 and reproduced unmodified. Before <a href="https://github.com/spdrman/backupd/issues/621">#621</a> they were Unicode glyphs, which means the navigation looked different on every operating system and sometimes rendered as an emoji. The typeface went the same way in <a href="https://github.com/spdrman/backupd/issues/631">#631</a>: IBM Plex is vendored into the image and served from it, so an isolated deployment with no route to Google Fonts keeps the face it was designed in instead of silently falling back.</p>
   </section>
 
   <section>
@@ -211,7 +211,7 @@
 </main>
 
 <footer>
-  <p>rclone-manager is Apache-2.0 licensed. <a href="https://github.com/spdrman/rclone-manager">View on GitHub</a></p>
+  <p>backupd is Apache-2.0 licensed. <a href="https://github.com/spdrman/backupd">View on GitHub</a></p>
   <p>Pictures taken against the development fixture API. No picture or clip on this page is evidence about a running engine.</p>
 </footer>
 

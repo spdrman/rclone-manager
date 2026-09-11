@@ -2,7 +2,7 @@
 # The release-manifest binary-parity proof (#260), at the path everything
 # already names.
 #
-# The proof itself is scripts/rcmtools/release/verify_manifest_parity.py now
+# The proof itself is scripts/bdtools/release/verify_manifest_parity.py now
 # (EPIC I, I1.6 / #672 / #697). This file stays because the path is load
 # bearing in places that are not this port's to move:
 #
@@ -22,4 +22,4 @@
 # location.
 set -euo pipefail
 
-exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/rcmtools/release/verify_manifest_parity.py" "$@"
+exec python3 "$(cd "$(dirname "$0")/../.." && pwd)/scripts/bdtools/release/verify_manifest_parity.py" "$@"

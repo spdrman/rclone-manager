@@ -170,4 +170,4 @@ in the first ten minutes.
   documentation; reinstalling does not touch your retained artifacts, which live outside
   the application's state on purpose.
 - **Anything else.** Open an issue with the set's detail page and the failing run's error
-  message. https://github.com/spdrman/rclone-manager/issues
+  message. https://github.com/spdrman/backupd/issues

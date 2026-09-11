@@ -77,8 +77,8 @@
       <sc-if value="{{ authIsEnroll }}" hint-placeholder-val="{{ false }}">
         <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 28px">
           <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-3)">First run</div>
-          <h1 style="margin: 8px 0 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.015em">Create Backup Manager administrator</h1>
-          <p style="margin: 0 0 22px; color: var(--text-2); font-size: 13px">This account manages Backup Manager only. It is separate from your NAS operating-system account.</p>
+          <h1 style="margin: 8px 0 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.015em">Create Backupd administrator</h1>
+          <p style="margin: 0 0 22px; color: var(--text-2); font-size: 13px">This account manages Backupd only. It is separate from your NAS operating-system account.</p>
           <div style="display: flex; flex-direction: column; gap: 14px">
             <label style="display: flex; flex-direction: column; gap: 6px">
               <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Username</span>
@@ -104,7 +104,7 @@
       <sc-if value="{{ authIsLogin }}" hint-placeholder-val="{{ true }}">
         <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 28px">
           <h1 style="margin: 0 0 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.015em">Sign in</h1>
-          <p style="margin: 0 0 22px; color: var(--text-2); font-size: 13px">Backup Manager local account — <span style="color: var(--text)">not</span> your NAS operating-system login.</p>
+          <p style="margin: 0 0 22px; color: var(--text-2); font-size: 13px">Backupd local account — <span style="color: var(--text)">not</span> your NAS operating-system login.</p>
           <div style="display: flex; flex-direction: column; gap: 14px">
             <label style="display: flex; flex-direction: column; gap: 6px">
               <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Username</span>
@@ -154,7 +154,7 @@
         <span style="width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); display: block"></span>
         <span style="width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); display: block"></span>
       </div>
-      <span style="margin-left: 6px; font-family: 'IBM Plex Mono', monospace">rclone-manager — {{ platformName }}</span>
+      <span style="margin-left: 6px; font-family: 'IBM Plex Mono', monospace">backupd — {{ platformName }}</span>
     </div>
   </sc-if>
 
@@ -213,7 +213,7 @@
           <div role="alert" style="display: flex; gap: 13px; padding: 15px 16px; background: var(--warn-quiet); border: 1px solid var(--warn); border-radius: 8px">
             <span aria-hidden="true" style="color: var(--warn); line-height: 1.5">▲</span>
             <div style="flex: 1; display: flex; flex-direction: column; gap: 6px">
-              <div style="font-weight: 600; font-size: 13.5px">Backup Manager update required</div>
+              <div style="font-weight: 600; font-size: 13.5px">Backupd update required</div>
               <div style="font-size: 13px; color: var(--text-2); max-width: 76ch">The user interface and backup service versions do not match. Management actions have been disabled to prevent unsafe changes. Read-only information remains visible.</div>
               <div style="display: flex; gap: 18px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--text-2)"><span>UI 1.3.0</span><span>Service 1.2.0</span></div>
             </div>
@@ -452,7 +452,7 @@
             </div>
             <div style="margin-top: 6px; padding: 34px 22px; border: 1px dashed var(--border-strong); border-radius: 10px; background: var(--surface-2); text-align: center">
               <div style="font-size: 15px; font-weight: 600">No backup sets yet</div>
-              <p style="margin: 6px auto 14px; max-width: 46ch; font-size: 13px; color: var(--text-2)">Connect Backup Manager to your first server to begin collecting and retaining verified backups.</p>
+              <p style="margin: 6px auto 14px; max-width: 46ch; font-size: 13px; color: var(--text-2)">Connect Backupd to your first server to begin collecting and retaining verified backups.</p>
               <button onClick="{{ goWizard }}" style="height: 34px; padding: 0 14px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-size: 13px; font-weight: 600">Add backup set</button>
               <div style="margin-top: 10px; font-size: 11.5px; color: var(--text-3); font-family: 'IBM Plex Mono', monospace">empty-state reference</div>
             </div>
@@ -499,7 +499,7 @@
                   <dl style="margin: 0; padding: 16px 18px; display: grid; grid-template-columns: 172px 1fr; gap: 11px 16px; font-size: 13px">
                     <dt style="color: var(--text-2)">Host</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">prod-db-01.internal</dd>
                     <dt style="color: var(--text-2)">Port · user</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">22 · backup-agent</dd>
-                    <dt style="color: var(--text-2)">Key</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">ed25519 · managed by Backup Manager</dd>
+                    <dt style="color: var(--text-2)">Key</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">ed25519 · managed by Backupd</dd>
                     <dt style="color: var(--text-2)">Host fingerprint</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; word-break: break-all">SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM</dd>
                     <dt style="color: var(--text-2)">Trusted</dt><dd style="margin: 0">Aug 02 2026 by bm-admin</dd>
                   </dl>
@@ -591,7 +591,7 @@
                   <div style="display: flex; flex-direction: column; gap: 18px">
                     <div>
                       <h2 style="margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">Source</h2>
-                      <p style="margin: 5px 0 0; font-size: 13px; color: var(--text-2)">The remote server that produces the backup artifacts. Backup Manager pulls — it is never given write access to your data.</p>
+                      <p style="margin: 5px 0 0; font-size: 13px; color: var(--text-2)">The remote server that produces the backup artifacts. Backupd pulls — it is never given write access to your data.</p>
                     </div>
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(228px, 1fr)); gap: 15px 18px">
                       <label style="display: flex; flex-direction: column; gap: 6px; grid-column: 1 / -1; max-width: 420px">
@@ -627,7 +627,7 @@
                       </label>
                       <label style="display: flex; gap: 10px; padding: 13px 14px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-2); cursor: pointer">
                         <input type="radio" name="keysrc" style="margin-top: 2px; accent-color: var(--accent)" />
-                        <span><span style="display: block; font-size: 13px; font-weight: 600">Use managed key</span><span style="display: block; margin-top: 3px; font-size: 12px; color: var(--text-2)">Reuse an existing Backup Manager key</span></span>
+                        <span><span style="display: block; font-size: 13px; font-weight: 600">Use managed key</span><span style="display: block; margin-top: 3px; font-size: 12px; color: var(--text-2)">Reuse an existing Backupd key</span></span>
                       </label>
                       <label style="display: flex; gap: 10px; padding: 13px 14px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-2); cursor: pointer">
                         <input type="radio" name="keysrc" style="margin-top: 2px; accent-color: var(--accent)" />
@@ -639,7 +639,7 @@
                         <span style="font-size: 11.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-3)">Public key · ed25519</span>
                         <button style="height: 28px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12px; font-weight: 500">Copy public key</button>
                       </div>
-                      <div style="padding: 13px 14px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.6; word-break: break-all">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4pQ7mXvR2tYc8nJ0dKeW1sBfHgZaTqOo9UiKrEu backup-manager@nas-01</div>
+                      <div style="padding: 13px 14px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.6; word-break: break-all">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4pQ7mXvR2tYc8nJ0dKeW1sBfHgZaTqOo9UiKrEu backupd@nas-01</div>
                       <div style="padding: 0 14px 13px; font-size: 12px; color: var(--text-3)">Add to <span style="font-family: 'IBM Plex Mono', monospace">/home/backup-agent/.ssh/authorized_keys</span> on the remote server.</div>
                     </div>
                   </div>
@@ -675,7 +675,7 @@
                   <div style="display: flex; flex-direction: column; gap: 18px">
                     <div>
                       <h2 style="margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">Backup discovery</h2>
-                      <p style="margin: 5px 0 0; font-size: 13px; color: var(--text-2)">Where artifacts appear, and how Backup Manager knows one is finished being written.</p>
+                      <p style="margin: 5px 0 0; font-size: 13px; color: var(--text-2)">Where artifacts appear, and how Backupd knows one is finished being written.</p>
                     </div>
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(228px, 1fr)); gap: 15px 18px">
                       <label style="display: flex; flex-direction: column; gap: 6px; grid-column: 1 / -1; max-width: 420px">
@@ -790,7 +790,7 @@
                         <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; letter-spacing: 0.09em; text-transform: uppercase; font-weight: 600">Remote source handling</span>
                       </div>
                       <div style="padding: 16px; background: var(--surface); display: flex; flex-direction: column; gap: 14px">
-                        <p style="margin: 0; font-size: 13.5px; max-width: 78ch">After a backup has been successfully transferred, verified, durably committed to this NAS, and recorded as safe, Backup Manager will delete the original backup artifact from the remote server.</p>
+                        <p style="margin: 0; font-size: 13.5px; max-width: 78ch">After a backup has been successfully transferred, verified, durably committed to this NAS, and recorded as safe, Backupd will delete the original backup artifact from the remote server.</p>
                         <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--text-2)">
                           <li>Discovered</li><li aria-hidden="true">→</li><li>Transferred</li><li aria-hidden="true">→</li><li>Verified</li><li aria-hidden="true">→</li><li>Committed</li><li aria-hidden="true">→</li><li>Safe state persisted</li><li aria-hidden="true">→</li><li style="color: var(--warn); font-weight: 600">Remote artifact deleted</li>
                         </ol>
@@ -872,7 +872,7 @@
               </div>
               <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 16px; background: var(--surface-2); font-size: 12.5px; color: var(--text-2)">
                 <span>Showing 8 of 318</span>
-                <span style="font-size: 12px; color: var(--text-3)">Backup Manager does not perform application restore — these are retained, verified copies.</span>
+                <span style="font-size: 12px; color: var(--text-3)">Backupd does not perform application restore — these are retained, verified copies.</span>
               </div>
             </div>
           </div>
@@ -1043,7 +1043,7 @@
                   <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Catalog recovery</h2>
                   <div style="padding: 16px 18px; display: flex; flex-direction: column; gap: 12px">
                     <div style="font-size: 13.5px; font-weight: 600">Existing backup data detected</div>
-                    <p style="margin: 0; font-size: 13px; color: var(--text-2); max-width: 74ch">Backup files were found in the configured storage location, but they are not currently present in the Backup Manager catalog. Scanning is read-only — no files will be deleted.</p>
+                    <p style="margin: 0; font-size: 13px; color: var(--text-2); max-width: 74ch">Backup files were found in the configured storage location, but they are not currently present in the Backupd catalog. Scanning is read-only — no files will be deleted.</p>
                     <div style="display: flex; gap: 9px; flex-wrap: wrap">
                       <button onClick="{{ openCatalogRebuild }}" style="height: 34px; padding: 0 13px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-size: 13px; font-weight: 600">Scan backup storage</button>
                       <button style="height: 34px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px">Dismiss for now</button>
@@ -1079,7 +1079,7 @@
                 <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
                   <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">System information</h2>
                   <dl style="margin: 0; padding: 16px 18px; display: grid; grid-template-columns: 1fr auto; gap: 10px 14px; font-size: 12.5px">
-                    <dt style="color: var(--text-2)">Backup Manager version</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">1.3.0</dd>
+                    <dt style="color: var(--text-2)">Backupd version</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">1.3.0</dd>
                     <dt style="color: var(--text-2)">Core version</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">1.3.0</dd>
                     <dt style="color: var(--text-2)">Embedded rclone</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">1.68.2</dd>
                     <dt style="color: var(--text-2)">Database schema</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">41</dd>
@@ -1203,13 +1203,13 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:940},&quot;startTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light' | 'dark'&quot;,&quot;section&quot;:&quot;Demo state&quot;},&quot;startPlatform&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;generic&quot;,&quot;ugos&quot;,&quot;synology&quot;,&quot;truenas&quot;,&quot;unraid&quot;,&quot;openmediavault&quot;,&quot;proxmox&quot;],&quot;default&quot;:&quot;generic&quot;,&quot;tsType&quot;:&quot;PlatformId&quot;,&quot;section&quot;:&quot;Demo state&quot;},&quot;showVersionMismatch&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Risk states&quot;},&quot;showHostKeyAlert&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Risk states&quot;}}">
 const PLATFORMS = {
-  generic: { name: "Generic Docker / Linux", integration: "Standalone web app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Docker Compose", mount: "/data/backups", adapter: "generic 1.3.0" },
-  ugos: { name: "UGREEN UGOS Pro", integration: "Native app", auth: "UGOS session", chrome: true, picker: true, nativeNotify: true, deployment: "UGOS package", mount: "/volume1/backup-manager", adapter: "ugos 1.3.0" },
-  synology: { name: "Synology DSM", integration: "Embedded web app", auth: "Backup Manager local account", chrome: true, picker: false, nativeNotify: false, deployment: "DSM package", mount: "/volume1/backup-manager", adapter: "synology 1.2.4" },
-  truenas: { name: "TrueNAS", integration: "Container app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "TrueNAS app (container)", mount: "/mnt/tank/backup-manager", adapter: "truenas 1.2.0" },
-  unraid: { name: "Unraid", integration: "Container app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Community Applications", mount: "/mnt/user/backups", adapter: "unraid 1.2.0" },
-  openmediavault: { name: "OpenMediaVault", integration: "Compose plugin container", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "omv-compose", mount: "/srv/dev-disk-by-uuid/backups", adapter: "omv 1.0.2" },
-  proxmox: { name: "Proxmox VE", integration: "Standalone web app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Dedicated container host", mount: "/mnt/backup-manager", adapter: "proxmox 1.1.0" }
+  generic: { name: "Generic Docker / Linux", integration: "Standalone web app", auth: "Backupd local account", chrome: false, picker: false, nativeNotify: false, deployment: "Docker Compose", mount: "/data/backups", adapter: "generic 1.3.0" },
+  ugos: { name: "UGREEN UGOS Pro", integration: "Native app", auth: "UGOS session", chrome: true, picker: true, nativeNotify: true, deployment: "UGOS package", mount: "/volume1/backupd", adapter: "ugos 1.3.0" },
+  synology: { name: "Synology DSM", integration: "Embedded web app", auth: "Backupd local account", chrome: true, picker: false, nativeNotify: false, deployment: "DSM package", mount: "/volume1/backupd", adapter: "synology 1.2.4" },
+  truenas: { name: "TrueNAS", integration: "Container app", auth: "Backupd local account", chrome: false, picker: false, nativeNotify: false, deployment: "TrueNAS app (container)", mount: "/mnt/tank/backupd", adapter: "truenas 1.2.0" },
+  unraid: { name: "Unraid", integration: "Container app", auth: "Backupd local account", chrome: false, picker: false, nativeNotify: false, deployment: "Community Applications", mount: "/mnt/user/backups", adapter: "unraid 1.2.0" },
+  openmediavault: { name: "OpenMediaVault", integration: "Compose plugin container", auth: "Backupd local account", chrome: false, picker: false, nativeNotify: false, deployment: "omv-compose", mount: "/srv/dev-disk-by-uuid/backups", adapter: "omv 1.0.2" },
+  proxmox: { name: "Proxmox VE", integration: "Standalone web app", auth: "Backupd local account", chrome: false, picker: false, nativeNotify: false, deployment: "Dedicated container host", mount: "/mnt/backupd", adapter: "proxmox 1.1.0" }
 };
 
 const NAV = [
@@ -1462,7 +1462,7 @@ class Component extends DCLogic {
         : "This platform integration has no native storage picker — enter the mounted path directly (" + p.mount + ").",
       notifyCopy: p.nativeNotify
         ? "Native " + p.name + " notifications are available and enabled for this platform integration."
-        : "Native NAS notifications are not available for this platform integration. Backup Manager webhook notifications are enabled instead.",
+        : "Native NAS notifications are not available for this platform integration. Backupd webhook notifications are enabled instead.",
       capabilities,
 
       theme: s.theme,

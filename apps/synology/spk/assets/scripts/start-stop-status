@@ -3,8 +3,8 @@
 # them.
 #
 # Two processes rather than one because that is what the canonical release
-# binary offers: `backup-manager-web serve` is the engine (local
-# authentication, /api/v1, the scheduler) and `backup-manager-web serve-ui`
+# binary offers: `backupd-web serve` is the engine (local
+# authentication, /api/v1, the scheduler) and `backupd-web serve-ui`
 # is the shared static UI plus a reverse proxy in front of it. Splitting
 # them this way is not a Synology decision - it is exactly the topology
 # container/compose.yaml already ships for the generic Docker app, running
@@ -21,7 +21,7 @@ if [ -f "${_sd}/common.sh" ]; then
 elif [ -f "/var/packages/${SYNOPKG_PKGNAME}/scripts/common.sh" ]; then
     . "/var/packages/${SYNOPKG_PKGNAME}/scripts/common.sh"
 else
-    echo "backup-manager: cannot locate common.sh next to $0" >&2
+    echo "backupd: cannot locate common.sh next to $0" >&2
     exit 1
 fi
 
@@ -88,7 +88,7 @@ start)
     # bind on a NAS is reachable by any local process, so the forwarded
     # headers here are not attributable to one verified peer.
     start_daemon "${ENGINE_LOG}" \
-        "${PKG_BIN}/backup-manager-web" serve \
+        "${PKG_BIN}/backupd-web" serve \
         --profile="${RUNTIME_PROFILE}" \
         --config "${CONFIG_FILE}" \
         --listen "${ENGINE_ADDR}" \
@@ -102,7 +102,7 @@ start)
     # failed start that says why.
     sleep 3
     if ! pid_alive "${ENGINE_PID}"; then
-        say "Backup Manager's engine exited immediately. Last lines of ${ENGINE_LOG}:"
+        say "Backupd's engine exited immediately. Last lines of ${ENGINE_LOG}:"
         tail -n 20 "${ENGINE_LOG}" 2>/dev/null | while IFS= read -r line; do say "  ${line}"; done
         say "A fresh install needs at least one source in ${CONFIG_FILE} before it can start."
         rm -f "${ENGINE_PID}"
@@ -119,7 +119,7 @@ start)
     # check below reports it instead of leaving a package that looks
     # installed and shows the wrong UI.
     start_daemon "${UI_LOG}" \
-        "${PKG_BIN}/backup-manager-web" serve-ui \
+        "${PKG_BIN}/backupd-web" serve-ui \
         --profile="${RUNTIME_PROFILE}" \
         --ui-dir "${UI_BUNDLE_DIR}" \
         --listen ":${UI_PORT}" \
@@ -128,7 +128,7 @@ start)
 
     sleep 1
     if ! pid_alive "${UI_PID}"; then
-        say "Backup Manager's web UI failed to start. Last lines of ${UI_LOG}:"
+        say "Backupd's web UI failed to start. Last lines of ${UI_LOG}:"
         tail -n 20 "${UI_LOG}" 2>/dev/null | while IFS= read -r line; do say "  ${line}"; done
         stop_daemon "${ENGINE_PID}" "engine"
         rm -f "${ENGINE_PID}"

@@ -1,4 +1,4 @@
-# SSH/SFTP setup for rbm
+# SSH/SFTP setup for backupd
 
 This is FR-6 from `docs/EPIC.md` ("SSH/SFTP Security") turned into something an
 operator can actually follow: how to create the dedicated key, how to lock
@@ -6,7 +6,7 @@ down the remote account, and how to capture its host key without just trusting
 whatever the network hands you. Read FR-6 and the Security Requirements
 section of the EPIC first if you haven't, this file assumes them.
 
-## What rbm actually enforces
+## What backupd actually enforces
 
 Before the how-to, the ground truth, because policy documents drift from code
 and this one shouldn't get the chance to. `core/internal/transport/rclone/ssh.go`
@@ -50,18 +50,18 @@ backup job and nothing else, so it can be rotated or revoked without touching
 anything unrelated:
 
 ```bash
-ssh-keygen -t ed25519 -f /etc/backup-manager/ssh/backup_key -C "backup-manager" -N ""
+ssh-keygen -t ed25519 -f /etc/backupd/ssh/backup_key -C "backupd" -N ""
 ```
 
 The empty `-N ""` means no passphrase. That's deliberate, not an oversight:
-rbm runs unattended and has nowhere to prompt for one. The
+backupd runs unattended and has nowhere to prompt for one. The
 passphrase's job (protecting the key if the file leaks) gets done instead by
 filesystem permissions and by mounting the key read-only into wherever
-rbm actually runs:
+backupd actually runs:
 
 ```bash
-chmod 600 /etc/backup-manager/ssh/backup_key
-chown root:root /etc/backup-manager/ssh/backup_key
+chmod 600 /etc/backupd/ssh/backup_key
+chown root:root /etc/backupd/ssh/backup_key
 ```
 
 Never commit this key, or any real key, to Git. If you generate it inside a
@@ -76,9 +76,9 @@ other server privileges. Here's what that looks like as actual commands, on
 the remote server, as root:
 
 ```bash
-useradd --system --create-home --home-dir /srv/backup-manager \
+useradd --system --create-home --home-dir /srv/backupd \
         --shell /usr/sbin/nologin backupsvc
-mkdir -p /srv/backup-manager/incoming
+mkdir -p /srv/backupd/incoming
 ```
 
 `/usr/sbin/nologin` blocks every login path that goes through the account's
@@ -92,11 +92,11 @@ next step is what actually does the confining.
 Add your dedicated public key to this account:
 
 ```bash
-mkdir -p /srv/backup-manager/incoming/.ssh
-chmod 700 /srv/backup-manager/incoming/.ssh
-cp /etc/backup-manager/ssh/backup_key.pub /srv/backup-manager/incoming/.ssh/authorized_keys
-chmod 600 /srv/backup-manager/incoming/.ssh/authorized_keys
-chown -R backupsvc:backupsvc /srv/backup-manager/incoming/.ssh
+mkdir -p /srv/backupd/incoming/.ssh
+chmod 700 /srv/backupd/incoming/.ssh
+cp /etc/backupd/ssh/backup_key.pub /srv/backupd/incoming/.ssh/authorized_keys
+chmod 600 /srv/backupd/incoming/.ssh/authorized_keys
+chown -R backupsvc:backupsvc /srv/backupd/incoming/.ssh
 ```
 
 OpenSSH is strict about ownership here and will silently refuse to read
@@ -111,7 +111,7 @@ single config line. Add to `/etc/ssh/sshd_config`:
 
 ```
 Match User backupsvc
-    ChrootDirectory /srv/backup-manager/incoming
+    ChrootDirectory /srv/backupd/incoming
     ForceCommand internal-sftp
     AllowTcpForwarding no
     AllowAgentForwarding no
@@ -123,17 +123,17 @@ Match User backupsvc
 the writable part, to be owned by root and not writable by group or other:
 
 ```bash
-chown root:root /srv/backup-manager /srv/backup-manager/incoming
-chmod 755 /srv/backup-manager /srv/backup-manager/incoming
+chown root:root /srv/backupd /srv/backupd/incoming
+chmod 755 /srv/backupd /srv/backupd/incoming
 ```
 
 Put the actual backup artifacts in a subdirectory the account owns, not in
 the chroot root itself:
 
 ```bash
-mkdir -p /srv/backup-manager/incoming/backups
-chown backupsvc:backupsvc /srv/backup-manager/incoming/backups
-chmod 750 /srv/backup-manager/incoming/backups
+mkdir -p /srv/backupd/incoming/backups
+chown backupsvc:backupsvc /srv/backupd/incoming/backups
+chmod 750 /srv/backupd/incoming/backups
 ```
 
 Now the "list/read/delete eligible artifacts, but never modify or replace a
@@ -151,14 +151,14 @@ needs:
 
 ```bash
 # run as the producer account, after a backup artifact is finalized
-chown produceruser:backupsvc /srv/backup-manager/incoming/backups/some-artifact.dump.zst
-chmod 440 /srv/backup-manager/incoming/backups/some-artifact.dump.zst
+chown produceruser:backupsvc /srv/backupd/incoming/backups/some-artifact.dump.zst
+chmod 440 /srv/backupd/incoming/backups/some-artifact.dump.zst
 ```
 
 With that combination, `backupsvc` can `list`, `get`, and `rm` the artifact
 over SFTP (directory permissions allow it), but `open()`-ing it for write
 fails (file permissions block it), so a compromised or buggy
-`rbm` process can delete a stale backup once it's confirmed
+`backupd` process can delete a stale backup once it's confirmed
 durably copied elsewhere, but it can never quietly corrupt or replace one in
 place. Also make sure the `backups/` directory does **not** have the sticky
 bit set: a sticky directory restricts deletion to the file's owner, which
@@ -190,18 +190,18 @@ already trust, before you write anything to `known_hosts`:
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-Then, from wherever rbm will actually connect from:
+Then, from wherever backupd will actually connect from:
 
 ```bash
-ssh-keyscan -t ed25519 -p 22 production.example.internal > /etc/backup-manager/known_hosts
-ssh-keygen -lf /etc/backup-manager/known_hosts
+ssh-keyscan -t ed25519 -p 22 production.example.internal > /etc/backupd/known_hosts
+ssh-keygen -lf /etc/backupd/known_hosts
 ```
 
 Compare the two fingerprints by eye. If they don't match, stop, you're either
 talking to the wrong host or something is intercepting the connection. Only
-once they match does `/etc/backup-manager/known_hosts` mean anything.
+once they match does `/etc/backupd/known_hosts` mean anything.
 
-From here on, rbm itself is what keeps this honest: if that host's
+From here on, backupd itself is what keeps this honest: if that host's
 key ever changes, whether from a legitimate server rebuild or from something
 worse, every connection attempt gets refused until a human repeats this
 verification step and updates the file on purpose. That refusal is exactly
@@ -213,7 +213,7 @@ refused rather than silently reconnecting to whatever answered.
 ## Choosing a key source (#74)
 
 Everything above produces one thing: a private key file. What you point
-rbm at is a separate decision, and there are three ways to make
+backupd at is a separate decision, and there are three ways to make
 it:
 
 ```yaml
@@ -222,22 +222,22 @@ remote:
   host: production.example.internal
   port: 22
   user: backupsvc
-  known_hosts: /etc/backup-manager/known_hosts
+  known_hosts: /etc/backupd/known_hosts
   key:
-    file: /etc/backup-manager/ssh/backup_key
+    file: /etc/backupd/ssh/backup_key
     # env: BACKUP_SSH_KEY
-    # command: ["op", "read", "op://infra/backup-manager/private-key"]
+    # command: ["op", "read", "op://infra/backupd/private-key"]
 ```
 
 Exactly one of `key.file`, `key.env` or `key.command` goes in that block (the
 bare top-level `key_file: /path` shape from earlier `docs/EPIC.md` examples
 still works too, unchanged, as a deprecated alias for `key.file`). Setting
-two is a config error rbm refuses at startup, not a precedence
+two is a config error backupd refuses at startup, not a precedence
 order it picks through for you.
 
 **`key.file` is the one to actually use, and it is the default for a
 reason.** It is the only one of the three where the key's bytes never enter
-rbm's own memory at all: rclone opens the file itself, reads it,
+backupd's own memory at all: rclone opens the file itself, reads it,
 and that's the end of this program's involvement. Nothing to validate,
 nothing to wrap, nothing that could theoretically end up somewhere it
 shouldn't, because it never comes near this process in the first place.
@@ -252,22 +252,22 @@ directly, never through a shell, so putting `;`, `|`, `` ` ``, or `$(...)` in
 one of its elements does nothing but sit there as a literal character in an
 argument, exactly like every other byte in that argument. It runs with a
 15-second timeout and a fixed, minimal environment (`PATH` only, nothing
-inherited from rbm's own process), so the command has to be
+inherited from backupd's own process), so the command has to be
 self-sufficient: an absolute executable path, and whatever authentication it
 needs already sitting on disk or baked into a wrapper script, not passed
-through an environment variable rbm would otherwise have to trust
+through an environment variable backupd would otherwise have to trust
 it with.
 
-Both of these put the resolved key in rbm's memory for the
+Both of these put the resolved key in backupd's memory for the
 duration of one connection attempt, which is exactly the cost `key.file`
-avoids. In exchange, rbm validates what came back before it goes
+avoids. In exchange, backupd validates what came back before it goes
 anywhere near rclone: it must parse as an unencrypted SSH private key, or the
 connection attempt fails right there, by name, rather than turning into a
 confusing rclone dial error somewhere else. A secrets manager CLI that isn't
 authenticated, is pointed at the wrong path, or answers with an HTML login
 page on stdout is refused for exactly that reason: "this is not a key,"
 never silently accepted. A key that needs a passphrase is refused too, with
-that named as the problem: rbm runs unattended, and there is
+that named as the problem: backupd runs unattended, and there is
 nowhere for a passphrase prompt to go. None of this resolved material is
 ever logged, at any level, including debug; it is held only long enough to
 open the connection.
@@ -286,18 +286,18 @@ unencrypted PEM file on disk, protected only by the filesystem permissions
 from step 1. That is fine on a host you control end to end. It is not fine
 the moment anything else can read that filesystem, and the case that
 motivated this section was exactly that: an operator decrypted a
-passphrase-protected production key to get it into a form rbm
+passphrase-protected production key to get it into a form backupd
 could use, and the resulting plaintext file sat on a volume also reachable
-over an SMB/AFP share, entirely outside rbm's own permission
+over an SMB/AFP share, entirely outside backupd's own permission
 model.
 
 `key_encryption` closes that gap, and it is entirely optional:
 
 ```yaml
 key_encryption:
-  file: /etc/backup-manager/secrets/key.dek
+  file: /etc/backupd/secrets/key.dek
   # env: BACKUP_MANAGER_KEY_DEK
-  # command: ["op", "read", "op://infra/backup-manager/key-encryption-key"]
+  # command: ["op", "read", "op://infra/backupd/key-encryption-key"]
 ```
 
 Exactly one of `file`, `env` or `command` goes in that block, the identical
@@ -310,16 +310,16 @@ an imported key is stored as plain PEM, defended only by permissions.
 **What this does and does not defend, stated plainly:**
 
 - It defends the key FILE against being read directly: disk theft, a copy
-  taken by a backup of rbm's own state directory, and -- the
+  taken by a backup of backupd's own state directory, and -- the
   case this was filed over -- access through an SMB/AFP share exported
   from the same volume, which can bypass Unix owner-only file permissions
   entirely depending on how the share itself is configured. An attacker
   with any of those three now gets ciphertext, not a usable key.
 - It does NOT defend a live process's memory. Authenticating a connection
-  still requires the plaintext key in rbm's own memory for the
+  still requires the plaintext key in backupd's own memory for the
   duration of that attempt, exactly like `key.env` or `key.command`
   already put a resolved key in memory today. A process compromise, a core
-  dump, or a debugger attached to a running rbm can still reach
+  dump, or a debugger attached to a running backupd can still reach
   the key. If that threat matters more to your deployment than the
   at-rest one, this feature does not change your risk there either way.
 - **It does NOT defend anything if the encryption key (the `key_encryption`
@@ -331,13 +331,13 @@ an imported key is stored as plain PEM, defended only by permissions.
   side and undo this entirely. Put it somewhere that export, and any backup
   of it, never reaches: a directory local to the host that is not shared
   and not part of the backed-up tree, an environment variable set only in
-  rbm's own runtime, or a secrets manager via `command`.
+  backupd's own runtime, or a secrets manager via `command`.
 
 **What happens to a key imported before this was configured:** nothing, on
 its own. `key_encryption` is opt-in and config-wide, not per-source, so an
 existing plaintext key file is picked up automatically the first time a
 source that uses it actually connects (a real cycle, or the wizard's "Test
-connection" step) once `key_encryption` is set: rbm detects the
+connection" step) once `key_encryption` is set: backupd detects the
 file is still plaintext, encrypts it in place with the configured key, and
 authenticates that same connection with the key it just read, all in memory,
 with the plaintext bytes never written back to disk. There is no separate
@@ -346,12 +346,12 @@ first real use after you add the `key_encryption` block IS the migration.
 
 An encrypted key file is easy to tell apart from a plain one if you ever
 need to check: a plain key still begins `-----BEGIN `, exactly like
-`ssh-keygen` produces; an encrypted one begins with rbm's own
+`ssh-keygen` produces; an encrypted one begins with backupd's own
 `RCLONEMGR-KEYENC-V2:` marker instead (a `RCLONEMGR-KEYENC-V1:` file just
 means it predates the DEK derivation hardening below -- it upgrades to V2
 automatically on the next real use, no action needed) and is not valid PEM
 to any other tool, `ssh-keygen -lf` included, on purpose -- nothing but
-rbm's own configured `key_encryption` source can read it.
+backupd's own configured `key_encryption` source can read it.
 
 The key that actually encrypts the file (the DEK, "data encryption key") is
 never `key_encryption`'s resolved value used raw: it's run through
@@ -377,18 +377,18 @@ sources:
           host: production.example.internal
           port: 22
           user: backupsvc
-          key_file: /etc/backup-manager/ssh/backup_key
-          known_hosts: /etc/backup-manager/known_hosts
+          key_file: /etc/backupd/ssh/backup_key
+          known_hosts: /etc/backupd/known_hosts
         remote_path: /backups
 ```
 
 (Or, per "Choosing a key source" above, `key: {file: ...}`, `key: {env: ...}`
 or `key: {command: [...]}` instead of the bare `key_file` line.)
 
-Mount `backup_key` and `known_hosts` read-only into wherever rbm
+Mount `backup_key` and `known_hosts` read-only into wherever backupd
 runs, per the Security Requirements section's "credentials mounted read-only
 where practical." (`key.env` and `key.command` are the exception: there is
-nothing to mount for either, since the key never lives in a file rbm
+nothing to mount for either, since the key never lives in a file backupd
 reads on this host at all.)
 
 If this remote's host, port or account name must never appear in a log line
@@ -396,7 +396,7 @@ or a journal detail (issue #295), for example a deployment where the port
 itself is treated as a credential, add `sensitive_endpoint: true` alongside
 the fields above. It defaults to false: most deployments would rather a
 connection failure said what it couldn't reach, so this is something a
-config asks for, not something rbm decides on its own.
+config asks for, not something backupd decides on its own.
 
 ### Hosts that cap simultaneous connections
 
@@ -406,7 +406,7 @@ address rather than queueing it, whether through `sshd_config`'s
 opening one connection too many is not slow, it is a failed backup, and it
 surfaces as a bare `connection refused` that points at nothing (issue #264).
 
-rbm stays under such a limit on its own: every operation it
+backupd stays under such a limit on its own: every operation it
 performs (list, stat, copy, hash, delete) opens one connection and hands it
 back when the operation finishes. That is not rclone's default behaviour and
 it is not free, so it is worth knowing what it costs and where it came from:
@@ -431,7 +431,7 @@ Two things to know before you rely on it. It bounds one *operation*, not the
 host: a scheduled cycle and someone clicking "test connection" in the web UI
 are two operations against one host, and each gets its own budget. And it is
 a different setting from rclone's `concurrency`, which is how many requests
-are in flight *inside* one connection (rbm pins that at 64, and it
+are in flight *inside* one connection (backupd pins that at 64, and it
 is what keeps a single connection fast). Omit it, or set `0`, for rclone's
 own unlimited default, which is what every config that predates this field
 means.
@@ -439,11 +439,11 @@ means.
 ## 6. Verify it end to end before pointing it at anything real
 
 Before trusting this setup with production data, do a manual sanity check
-with the same files rbm will use:
+with the same files backupd will use:
 
 ```bash
-sftp -i /etc/backup-manager/ssh/backup_key \
-     -o UserKnownHostsFile=/etc/backup-manager/known_hosts \
+sftp -i /etc/backupd/ssh/backup_key \
+     -o UserKnownHostsFile=/etc/backupd/known_hosts \
      -o StrictHostKeyChecking=yes \
      backupsvc@production.example.internal
 ```
@@ -451,7 +451,7 @@ sftp -i /etc/backup-manager/ssh/backup_key \
 You should land in `backups/` with no shell, no password prompt, and the
 ability to `ls`, `get`, and `rm` but not overwrite an existing artifact
 in place. If any of that isn't true, fix it here before wiring the config in
-step 5, since rbm itself will fail the same way for the same
+step 5, since backupd itself will fail the same way for the same
 reason.
 
 ## What this setup deliberately refuses
@@ -464,7 +464,7 @@ reason.
   `key.env` or `key.command` (or the deprecated `key_file` alias) or the
   source doesn't run.
 - More than one key source configured at once. Two is a mistake to fix, not
-  a precedence order rbm guesses through.
+  a precedence order backupd guesses through.
 - A `key.env` or `key.command` resolver whose output doesn't actually parse
   as an unencrypted SSH private key (an error string, an HTML login page, an
   empty body, or a passphrase-protected key). All of these fail loudly at
