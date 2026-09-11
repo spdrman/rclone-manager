@@ -61,7 +61,7 @@
 # install command, and CI_LOCAL_SKIP_E2E=1 is the out-loud opt-out that
 # ledgers. See scripts/e2e/run-tests-repo-gate.sh and the gate it execs,
 # scripts/bdtools/e2e/run_tests_repo_gate.py, which is where that
-# suite now runs from (#158 moved it to spdrman/backupd-tests, #197
+# suite now runs from (#158 moved it to backupdproject/backupd-tests, #197
 # is why it runs at all).
 #
 # The two-machine end-to-end backup proof (#356) is the fourth, with one
@@ -613,7 +613,7 @@ fi
 # and was dismissed twice as an ordering flake.
 #
 # The suite itself no longer lives in this repository; it is Suite B of
-# spdrman/backupd-tests, pinned by scripts/e2e/tests-repo.pin. What
+# backupdproject/backupd-tests, pinned by scripts/e2e/tests-repo.pin. What
 # it runs against is not the pin's own build, it is THIS working tree's
 # ui/shared, on a port the harness picks and proves free. The same step
 # also runs that repository's CLI smoke slice against a backupd

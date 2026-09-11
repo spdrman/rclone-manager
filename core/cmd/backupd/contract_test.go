@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/cliecho"
 )
 
 // What each command exits with, and what it says on the way out.

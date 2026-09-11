@@ -62,8 +62,8 @@ import (
 
 	"github.com/rclone/rclone/fs/config/configmap"
 
-	"github.com/spdrman/backupd/core/internal/obs"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // maxResolvedCredentialsSize bounds how many bytes of a command's stdout,

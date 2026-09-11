@@ -279,12 +279,12 @@ CARRIED_RELEASE_DIGEST = "sha256:f490abb3c2148eb47849597baff0bee820f70c8d7f3e2b9
 # pins to canonical.json, and a second literal beside it is the copy
 # nobody looks at.
 RELEASE_REGISTRY = "ghcr.io"
-RELEASE_REPOSITORY = "spdrman/backupd"
+RELEASE_REPOSITORY = "backupdproject/backupd"
 
 # Where a newer installer comes from, printed by the update check. An
 # installer can say a newer release exists; it cannot install one, and
 # offering to would be the floating default this design rules out.
-RELEASE_DOWNLOAD_PAGE = "https://github.com/spdrman/backupd/releases"
+RELEASE_DOWNLOAD_PAGE = "https://github.com/backupdproject/backupd/releases"
 
 # How long a registry read may take. Short on purpose: every one of them
 # is optional, none of them changes what is installed, and an operator
@@ -1351,7 +1351,7 @@ def render_cli_wrapper(args) -> str:
         "  echo \"\" >&2\n"
         "  echo \"This runs backupd inside the engine's own container and needs a\" >&2\n"
         "  echo \"command to run. 'backupd status' is a safe first one; every command\" >&2\n"
-        "  echo \"is listed at https://spdrman.github.io/backupd/reference.html\" >&2\n"
+        "  echo \"is listed at https://backupdproject.github.io/backupd/reference.html\" >&2\n"
         "  exit 2\n"
         "fi\n"
         "\n"
@@ -4638,7 +4638,7 @@ class BridgeDoctor:
         lines = [
             "[Unit]",
             "Description=backupd: re-assert this deployment's own Docker bridge firewall rules",
-            "Documentation=https://github.com/spdrman/backupd/blob/main/docs/install.md",
+            "Documentation=https://github.com/backupdproject/backupd/blob/main/docs/install.md",
             "# Ordered after everything that constructs the ruleset, so this runs on top of",
             "# whatever they built rather than underneath it. After= only, never Requires=:",
             "# a host without one of these should still get its rules, not a failed unit.",
@@ -4690,7 +4690,7 @@ class BridgeDoctor:
         return "\n".join([
             "[Unit]",
             "Description=backupd: periodically re-assert the Docker bridge firewall rules",
-            "Documentation=https://github.com/spdrman/backupd/blob/main/docs/install.md",
+            "Documentation=https://github.com/backupdproject/backupd/blob/main/docs/install.md",
             "",
             "[Timer]",
             "# The boot safety net, in case the service's own After= ordering is not enough",
@@ -5424,7 +5424,7 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
                               "test, so this installer needs no checkout on the host. Supply it to install "
                               "a locally modified runtime from a checkout; naming a path that does not "
                               "exist is still a refusal.")
-    runtime.add_argument("--image", default="ghcr.io/spdrman/backupd:0.4.0",
+    runtime.add_argument("--image", default="ghcr.io/backupdproject/backupd:0.4.0",
                          action=_RecordsThatItWasSupplied,
                          help="Image reference both services run.")
     runtime.add_argument("--release", default=CARRIED_RELEASE,
@@ -5598,7 +5598,7 @@ def build_parser() -> argparse.ArgumentParser:
             "      --prefix /volume1/backupd \\\n"
             "      --ssh-key /volume1/backupd/secrets/id_ed25519 \\\n"
             "      --known-hosts /volume1/backupd/secrets/known_hosts \\\n"
-            "      --image ghcr.io/spdrman/backupd:0.4.0\n"
+            "      --image ghcr.io/backupdproject/backupd:0.4.0\n"
         ),
     )
     _add_shared_groups(sp_install)

@@ -30,7 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // TestRunRestoreCheck_Passes is the positive control the whole file needs.

@@ -3,9 +3,9 @@ package alert
 import (
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/capacity"
-	"github.com/spdrman/backupd/core/internal/health"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/capacity"
+	"github.com/backupdproject/backupd/core/internal/health"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // This file is the whole of this package's translation layer: three pure

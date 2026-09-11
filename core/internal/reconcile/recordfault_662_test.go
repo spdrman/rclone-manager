@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // Issue #662, defect 2: reconciliation condemned a file it never opened.

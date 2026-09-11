@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // quarantineFixture drives artifact through the real nominal sequence up to

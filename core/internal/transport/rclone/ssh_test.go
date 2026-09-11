@@ -14,8 +14,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/spdrman/backupd/core/internal/obs"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // ---------------------------------------------------------------------------

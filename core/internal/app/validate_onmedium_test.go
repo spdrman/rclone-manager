@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // Issue #434's refusal, kept after issue #435 replaced most of it.

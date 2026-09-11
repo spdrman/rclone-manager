@@ -50,9 +50,9 @@ import (
 
 	"github.com/rclone/rclone/fs/accounting"
 
-	"github.com/spdrman/backupd/core/internal/transport"
-	"github.com/spdrman/backupd/core/internal/transport/rclone"
-	"github.com/spdrman/backupd/core/tests/machines"
+	"github.com/backupdproject/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport/rclone"
+	"github.com/backupdproject/backupd/core/tests/machines"
 )
 
 // The mid-transfer cancellation row that used to live in this gate moved

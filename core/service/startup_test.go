@@ -17,9 +17,9 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/state"
 
-	"github.com/spdrman/backupd/core/internal/testenv"
+	"github.com/backupdproject/backupd/core/internal/testenv"
 )
 
 // TestOpenConfigAndJournal_UnreadableDatabaseFile_NeverReturnsAJournal is

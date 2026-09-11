@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // Issue #662 at the surface the operator actually met it on: `backupd` in a

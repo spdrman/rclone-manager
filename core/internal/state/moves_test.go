@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/obs"
 )
 
 // This file tests the durable half of FR-30's journal directly: the

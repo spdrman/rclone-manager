@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // This file is the end-to-end proof for issue #286's actual requirement:

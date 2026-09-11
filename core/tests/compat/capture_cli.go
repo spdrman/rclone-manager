@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // FR-35 clause 4, the CLI: build backupd from this working tree,

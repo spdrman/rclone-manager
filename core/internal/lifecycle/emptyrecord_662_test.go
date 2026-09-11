@@ -53,10 +53,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/recovery"
-	"github.com/spdrman/backupd/core/internal/state"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/recovery"
+	"github.com/backupdproject/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // diversionsPayload is 294 bytes, the size of the artifact issue #662 was

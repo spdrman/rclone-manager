@@ -56,8 +56,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // keyQuarantineReleaseSuffix is appended to QuarantineReleaseParams.AttemptKey

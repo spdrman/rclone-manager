@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/testenv"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/testenv"
 )
 
 // This file is issue #196's missing test, and the reason it was missing is

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // The local hard drive as a first-class storage destination, and the

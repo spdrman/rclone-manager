@@ -52,13 +52,13 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/spdrman/backupd/apps/common/auth/local"
-	"github.com/spdrman/backupd/apps/common/csrf"
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
-	"github.com/spdrman/backupd/apps/common/platform/profile"
-	"github.com/spdrman/backupd/apps/common/webhost"
-	"github.com/spdrman/backupd/apps/common/webhost/serve"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/apps/common/auth/local"
+	"github.com/backupdproject/backupd/apps/common/csrf"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/apps/common/platform/profile"
+	"github.com/backupdproject/backupd/apps/common/webhost"
+	"github.com/backupdproject/backupd/apps/common/webhost/serve"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // loopbackCIDRs is the trusted-peer range that CONTAINS whatever httptest

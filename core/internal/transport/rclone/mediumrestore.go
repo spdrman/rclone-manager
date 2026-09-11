@@ -39,7 +39,7 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/filter"
 
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // restoreCommand and restoreStatusCommand are rclone's own names for the

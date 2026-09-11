@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // This file proves FR-22's bounded backoff without ever waiting out a real

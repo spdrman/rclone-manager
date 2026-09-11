@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/transport"
-	"github.com/spdrman/backupd/core/internal/transport/rclone"
-	"github.com/spdrman/backupd/core/tests/machines"
+	"github.com/backupdproject/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport/rclone"
+	"github.com/backupdproject/backupd/core/tests/machines"
 )
 
 // Issue #264's first acceptance criterion: the SFTP source path is proven

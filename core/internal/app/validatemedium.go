@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/archive"
-	"github.com/spdrman/backupd/core/internal/placement"
-	"github.com/spdrman/backupd/core/internal/state"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/archive"
+	"github.com/backupdproject/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // This file is issue #435: what `backupd validate <id>` does about

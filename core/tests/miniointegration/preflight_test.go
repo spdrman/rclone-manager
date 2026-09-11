@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/mediumcheck"
-	"github.com/spdrman/backupd/core/internal/placement"
-	"github.com/spdrman/backupd/core/internal/transport"
-	"github.com/spdrman/backupd/core/internal/transport/rclone"
-	"github.com/spdrman/backupd/core/tests/machines"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/mediumcheck"
+	"github.com/backupdproject/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport/rclone"
+	"github.com/backupdproject/backupd/core/tests/machines"
 )
 
 // Issue #443's medium preflight, run against a real S3 API rather than

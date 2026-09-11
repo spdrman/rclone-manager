@@ -25,13 +25,13 @@
 -->
 <Container version="2">
   <Name>backupd-ui</Name>
-  <Repository>ghcr.io/spdrman/backupd:0.4.0</Repository>
-  <Registry>https://github.com/spdrman/backupd/pkgs/container/backupd</Registry>
+  <Repository>ghcr.io/backupdproject/backupd:0.4.0</Repository>
+  <Registry>https://github.com/backupdproject/backupd/pkgs/container/backupd</Registry>
   <Network>backupd</Network>
   <MyIP/>
   <Privileged>false</Privileged>
-  <Support>https://github.com/spdrman/backupd/issues</Support>
-  <Project>https://github.com/spdrman/backupd</Project>
+  <Support>https://github.com/backupdproject/backupd/issues</Support>
+  <Project>https://github.com/backupdproject/backupd</Project>
   <Overview>
     The Backupd web interface: the shared UI plus a reverse proxy to the engine container. Install the backupd engine template first.
 
@@ -39,8 +39,8 @@
   </Overview>
   <Category>Backup: Tools: Utilities:</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/spdrman/backupd/main/apps/unraid/template/backupd-ui.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/spdrman/backupd/main/docs/submission/icon.svg</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/backupdproject/backupd/main/apps/unraid/template/backupd-ui.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/backupdproject/backupd/main/docs/submission/icon.svg</Icon>
   <Requires>Run `docker network create backupd` and install the backupd engine template before this one.</Requires>
   <ExtraParams>--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=16m,mode=1777,uid=99,gid=100 --user 99:100 --no-healthcheck</ExtraParams>
   <PostArgs>/backupd-web serve-ui --profile=unraid</PostArgs>

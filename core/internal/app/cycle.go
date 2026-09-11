@@ -5,12 +5,12 @@ import (
 	"errors"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/discovery"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/obs"
-	"github.com/spdrman/backupd/core/internal/placement"
-	"github.com/spdrman/backupd/core/internal/reconcile"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/discovery"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/reconcile"
 )
 
 // FR-1's processing cycle: the one piece of work `run` performs once and

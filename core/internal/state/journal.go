@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/obs"
 )
 
 // The write side of the journal: RecordTransition, which every lifecycle

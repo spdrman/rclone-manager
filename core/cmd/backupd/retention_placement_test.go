@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/retention"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/retention"
 )
 
 // FR-27/FR-30 (issue #239) on the surface FR-20 calls the mandatory
@@ -116,7 +116,7 @@ func TestRun_RetentionNamesTheMoveItWouldMake(t *testing.T) {
 // this repository.
 //
 // This command's per-artifact output is pinned by the black-box contract
-// suite in spdrman/backupd-tests (suites/cli/cases/retention/), and
+// suite in backupdproject/backupd-tests (suites/cli/cases/retention/), and
 // every case there is a medium-free deployment. A deployment with nowhere
 // else to put anything has nothing to say about placement, so the section
 // is not printed at all, and those cases stay byte-identical. Printing an

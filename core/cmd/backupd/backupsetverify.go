@@ -5,8 +5,8 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Issue #624 (H2.3): proving a backup set's SSH connection before this

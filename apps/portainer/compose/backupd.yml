@@ -23,7 +23,7 @@ services:
   # scheduler, one process sharing one shutdown context. Holds the state
   # database and the credentials, and publishes no port at all.
   backupd:
-    image: ${IMAGE:-ghcr.io/spdrman/backupd:0.4.0}
+    image: ${IMAGE:-ghcr.io/backupdproject/backupd:0.4.0}
     command: ["/backupd-web", "serve", "--profile=generic"]
 
     user: "${PUID:-1000}:${PGID:-1000}"
@@ -124,7 +124,7 @@ services:
   # operator ever opens. Portainer's "Published ports" link on the stack
   # view points at this one.
   backupd-ui:
-    image: ${IMAGE:-ghcr.io/spdrman/backupd:0.4.0}
+    image: ${IMAGE:-ghcr.io/backupdproject/backupd:0.4.0}
     command: ["/backupd-web", "serve-ui", "--profile=generic"]
 
     depends_on:

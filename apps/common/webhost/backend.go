@@ -3,7 +3,7 @@ package webhost
 import (
 	"context"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // The seam between this package and core/.

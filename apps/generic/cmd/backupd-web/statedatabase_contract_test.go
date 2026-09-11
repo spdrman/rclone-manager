@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Issue #571's second half: the guarantee that a `backup-set create` typed

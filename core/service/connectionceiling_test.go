@@ -19,10 +19,10 @@ import (
 	"io"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/obs"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // sourceRecordingTransport keeps the transport.Source it was last asked to

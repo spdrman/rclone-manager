@@ -75,7 +75,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/tests/dockerlease"
+	"github.com/backupdproject/backupd/core/tests/dockerlease"
 )
 
 const (

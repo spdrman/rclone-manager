@@ -1,7 +1,7 @@
 // The stack's own proof, run from the client machine.
 //
 // This is not a spec and it is not trying to be one: the Playwright suite
-// over in spdrman/backupd-tests is what asserts product behaviour.
+// over in backupdproject/backupd-tests is what asserts product behaviour.
 // This file answers a narrower question, and it is the question a topology
 // script has to answer before anyone builds on it. Is there a real browser
 // in this container, can it reach the UI container over the private

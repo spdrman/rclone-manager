@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/backend"
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/backend"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // The field-id table's two directions have to agree (I2.2, issue #669).

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // The edit hold, and mostly the null.

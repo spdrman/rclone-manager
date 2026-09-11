@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // Reconciliation right after a clean cycle has to find nothing.

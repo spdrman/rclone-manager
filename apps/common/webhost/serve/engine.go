@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
-	"github.com/spdrman/backupd/apps/common/platform/profile"
-	"github.com/spdrman/backupd/apps/common/webhost"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/apps/common/platform/profile"
+	"github.com/backupdproject/backupd/apps/common/webhost"
 )
 
 // The engine half of the two-container split: the process that holds the

@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/apicontract"
 )
 
 // The typed calls.

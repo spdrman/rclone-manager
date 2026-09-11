@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/discovery"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/reconcile"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/discovery"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/reconcile"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // One backup set's share of a cycle, on an operator's word rather than a

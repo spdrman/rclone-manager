@@ -45,10 +45,10 @@ description: >-
   them, retains them under a configurable policy, and keeps a durable
   catalog of everything it holds.
 
-home: https://github.com/spdrman/backupd
+home: https://github.com/backupdproject/backupd
 sources:
-  - https://github.com/spdrman/backupd
-icon: https://raw.githubusercontent.com/spdrman/backupd/main/docs/submission/icon.svg
+  - https://github.com/backupdproject/backupd
+icon: https://raw.githubusercontent.com/backupdproject/backupd/main/docs/submission/icon.svg
 
 # No added capabilities and no host mounts. The container drops ALL
 # capabilities, runs non-root on a read-only rootfs, and every path it
@@ -69,6 +69,6 @@ run_as_context:
 
 maintainers:
   - name: spdrman
-    url: https://github.com/spdrman/backupd
+    url: https://github.com/backupdproject/backupd
 
 screenshots: []

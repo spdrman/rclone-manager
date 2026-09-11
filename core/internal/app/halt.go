@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 
-	"github.com/spdrman/backupd/core/internal/state"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // The durable "this manager cannot get in" (issue #245), and the two halves

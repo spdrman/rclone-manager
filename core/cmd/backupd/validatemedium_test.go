@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // Issue #435 at the command, where two things can go wrong that no test

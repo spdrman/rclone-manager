@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // createdSetWithHistory is this file's fixture: one backup set created

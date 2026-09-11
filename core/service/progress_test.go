@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // int64p is a local helper: the byte fields are pointers precisely so a

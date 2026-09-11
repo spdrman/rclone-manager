@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/app"
 )
 
 // cmdCatalog is `backupd catalog`, so far just one subcommand,

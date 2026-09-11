@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/placement"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // This file is the negative control for the whole package.

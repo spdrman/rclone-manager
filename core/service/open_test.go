@@ -23,9 +23,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/backend"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/backend"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // writeTestConfigFile builds a minimal, valid config.yaml against real temp

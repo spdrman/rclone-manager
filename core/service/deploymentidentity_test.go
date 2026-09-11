@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // Issue #555's two properties, driven rather than asserted in prose.

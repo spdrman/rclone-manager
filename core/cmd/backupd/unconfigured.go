@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // cmdUnconfigured is `backupd unconfigured` and `backupd

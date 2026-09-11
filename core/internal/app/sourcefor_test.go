@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // The seam where configuration becomes a transport.Source, and the failure

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // This file answers the one question FR-8 turns on: is this remote object

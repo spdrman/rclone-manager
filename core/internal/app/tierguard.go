@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/retention"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/retention"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // The production placement.TierGuard (EPIC E, FR-30; issue #239,

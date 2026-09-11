@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // This file is where an operator's judgement enters a pipeline that

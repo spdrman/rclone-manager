@@ -237,7 +237,7 @@ type GoModuleRef struct {
 
 // firstPartyModulePrefix is this repository's own module namespace.
 // Modules under it are the product, not third-party dependencies of it.
-const firstPartyModulePrefix = "github.com/spdrman/backupd/"
+const firstPartyModulePrefix = "github.com/backupdproject/backupd/"
 
 // GoLinkedModules lists the third-party modules linked into one binary
 // for one target platform.
@@ -320,7 +320,7 @@ func parseGoListModules(out string) ([]GoModuleRef, error) {
 // isFirstPartyModule reports whether a module path is this repository's
 // own. The prefix has a trailing slash, so the bare namespace is matched
 // separately rather than by loosening the prefix, which would also match
-// a hypothetical github.com/spdrman/backupd-anything.
+// a hypothetical github.com/backupdproject/backupd-anything.
 func isFirstPartyModule(path string) bool {
 	return path == strings.TrimSuffix(firstPartyModulePrefix, "/") ||
 		strings.HasPrefix(path, firstPartyModulePrefix)
@@ -745,7 +745,7 @@ func ArtifactParityComplaints(targets map[string]DistributionTarget, recorded []
 // repository with no tags is an abbreviated commit) and the tag every
 // provider package advertises is a semantic version that resolves
 // nowhere. The moment a push happens, the two must be the same string,
-// or `docker run ghcr.io/spdrman/backupd:1.0.0 /backupd
+// or `docker run ghcr.io/backupdproject/backupd:1.0.0 /backupd
 // version` answers with a commit SHA that the listing never mentions.
 func VersionParityComplaints(published bool, canonicalTag, manifestVersion, bundleVersion string, versionIsABuildStamp bool) []string {
 	var out []string

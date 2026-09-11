@@ -97,10 +97,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/obs"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // ErrBackupSetConfigured refuses an operation that only makes sense for a

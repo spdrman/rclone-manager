@@ -45,8 +45,8 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"github.com/spdrman/backupd/core/internal/transport"
-	"github.com/spdrman/backupd/core/tests/dockerlease"
+	"github.com/backupdproject/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/tests/dockerlease"
 )
 
 // User is the fixed username created inside the container.

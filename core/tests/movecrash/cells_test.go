@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/placement"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // The matrix itself, and the three checks that keep it from certifying its

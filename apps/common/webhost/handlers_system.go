@@ -3,7 +3,7 @@ package webhost
 import (
 	"net/http"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // The three system reads a client makes before it does anything else:

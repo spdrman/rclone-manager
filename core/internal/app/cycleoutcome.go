@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/discovery"
+	"github.com/backupdproject/backupd/core/internal/discovery"
 )
 
 // This file is issue #361's answer to "did this cycle actually do

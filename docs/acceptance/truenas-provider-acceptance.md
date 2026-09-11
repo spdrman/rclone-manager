@@ -36,13 +36,13 @@ reach.
 
 ### 0.1 Make the canonical image resolvable
 
-`ghcr.io/spdrman/backupd:0.4.0` is cut but not pushed yet:
+`ghcr.io/backupdproject/backupd:0.4.0` is cut but not pushed yet:
 `distribution/packaging/canonical.json` records `image.published: false`, and
 `container/release-manifest.json` carries a `registry_digest` of `null` per
 architecture. So the reference does not resolve from the registry today, and the
 steps below are how you make it resolve, by pushing a build to a registry this host
 can reach or building elsewhere and loading it. The previous release,
-`ghcr.io/spdrman/backupd:0.3.3`, stays published and signed if you would
+`ghcr.io/backupdproject/backupd:0.3.3`, stays published and signed if you would
 rather run that, so pick one:
 
 **Option A, your own registry.** Build and push both architectures, then override

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // EPIC E, FR-34 and FR-27 at the contract (#240).

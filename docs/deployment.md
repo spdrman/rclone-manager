@@ -32,7 +32,7 @@ them OUT of the image names `/backupd` and `/backupd-web`.
 `scripts/release/verify-manifest-parity.sh` both do.
 
 What did NOT change is everything that names the project rather than the command: the
-image reference `ghcr.io/spdrman/backupd`, the `backupd` and `web-ui`
+image reference `ghcr.io/backupdproject/backupd`, the `backupd` and `web-ui`
 compose service names, the container config directory `/etc/backupd`, and the
 binary names `container/release-manifest.json` records a SHA-256 under. Renaming any of
 those would move somebody's data or invalidate a release record for no gain.
@@ -725,7 +725,7 @@ copy of it in prose is a copy that goes stale without anything noticing.
 
 **What this records about the registry**: nothing yet, for the version currently cut.
 `distribution/packaging/canonical.json` records `image.published: false` for
-`ghcr.io/spdrman/backupd:0.4.0`, and the manifest carries a `registry_digest` of
+`ghcr.io/backupdproject/backupd:0.4.0`, and the manifest carries a `registry_digest` of
 `null` per architecture and a null `index_digest` to say the same thing from the other
 side. `TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` holds the two
 together in both directions: a published flag with no digest and a digest with no

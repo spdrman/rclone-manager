@@ -214,7 +214,7 @@ func TestWhatThisGuardMustNotReport(t *testing.T) {
 		{
 			"an image reference, which is a name and a version rather than a host and a port",
 			"scripts/install/install_docker_host.py",
-			"# ssh key path only\nIMAGE = \"ghcr.io/spdrman/backupd:0.3.0\"\n",
+			"# ssh key path only\nIMAGE = \"ghcr.io/backupdproject/backupd:0.3.0\"\n",
 		},
 		{
 			"a generated throwaway keypair a test needs in order to parse one",

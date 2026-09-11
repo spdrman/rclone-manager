@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
 )
 
 // The three system reads, plus one standing constraint on all of them.

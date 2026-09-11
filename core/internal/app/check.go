@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // The one thing in this package that runs before a Service can exist.

@@ -158,7 +158,7 @@ export function PlacementList({
                             oversight.
 
                             This column says where a copy IS, and the
-                            black-box suite in spdrman/backupd-tests
+                            black-box suite in backupdproject/backupd-tests
                             pins these words at the sha this repository
                             pins. #622 is about where a tier SENDS its
                             backups, so renaming this one costs two specs

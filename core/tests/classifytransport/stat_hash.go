@@ -3,7 +3,7 @@ package classifytransport
 import (
 	"context"
 
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // A Transport decorator that attaches a best-effort hash to whatever Stat

@@ -29,7 +29,7 @@ services:
   # state database and the credentials. Publishes no port; reachable only
   # from backupd-ui over this project's own network.
   backupd:
-    image: ${IMAGE:-ghcr.io/spdrman/backupd:0.4.0}
+    image: ${IMAGE:-ghcr.io/backupdproject/backupd:0.4.0}
     command: ["/backupd-web", "serve", "--profile=proxmox"]
 
     user: "${PUID:-1000}:${PGID:-100}"
@@ -130,7 +130,7 @@ services:
   # operator ever opens. Proxmox has no navigation entry for it, by
   # design; see README.md.
   backupd-ui:
-    image: ${IMAGE:-ghcr.io/spdrman/backupd:0.4.0}
+    image: ${IMAGE:-ghcr.io/backupdproject/backupd:0.4.0}
     command: ["/backupd-web", "serve-ui", "--profile=proxmox"]
 
     depends_on:

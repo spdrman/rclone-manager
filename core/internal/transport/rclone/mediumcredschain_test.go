@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/obs"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // This file is about the AWS credential CHAIN, which is the part of the

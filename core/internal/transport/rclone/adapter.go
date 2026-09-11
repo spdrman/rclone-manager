@@ -33,7 +33,7 @@ import (
 	"github.com/rclone/rclone/fs/operations"
 	"github.com/rclone/rclone/fs/walk"
 
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // Adapter implements transport.Transport over embedded rclone packages,

@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/alert"
-	"github.com/spdrman/backupd/core/internal/capacity"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/alert"
+	"github.com/backupdproject/backupd/core/internal/capacity"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // Work Package 3.5: turning verdicts this product already reached into

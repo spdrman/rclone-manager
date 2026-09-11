@@ -27,10 +27,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/archive"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/placement"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/archive"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // MediumTypeLocal is what a local placement reports as its kind.

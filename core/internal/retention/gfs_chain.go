@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // This file turns FR-18's configured retention chain into the

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/health"
+	"github.com/backupdproject/backupd/core/internal/health"
 )
 
 // Issue #444's third acceptance line: `backupd status` and the Web

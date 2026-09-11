@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // The fixture helpers this package's cells share: a journal, a hash, and one

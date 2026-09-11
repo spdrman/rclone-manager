@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // This file is the one implementation of the seam store.go describes: the

@@ -20,7 +20,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // artifactResponse is one backup's wire shape, a field-for-field mirror of

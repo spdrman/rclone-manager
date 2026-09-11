@@ -419,10 +419,10 @@
     ]
   },
   "sourceRepository": {
-    "url": "https://github.com/spdrman/backupd",
+    "url": "https://github.com/backupdproject/backupd",
     "visibility": "public",
     "visibilityNote": [
-      "Measured, not assumed: `gh repo view spdrman/backupd --json visibility`",
+      "Measured, not assumed: `gh repo view backupdproject/backupd --json visibility`",
       "answers PUBLIC. §73 WP5.2 wants the source, privacy, licence and support links",
       "to resolve to real, current content for a store reviewer, and they now do:",
       "every link whose target is this repository resolves for anyone, which is why",
@@ -448,7 +448,7 @@
       "id": "source",
       "title": "Source code",
       "spec": "73 WP5.2",
-      "url": "https://github.com/spdrman/backupd",
+      "url": "https://github.com/backupdproject/backupd",
       "repoPath": "",
       "targetsThisRepository": true,
       "mustMention": []

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // The retention override flags, from the flag.FlagSet variables that back

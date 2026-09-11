@@ -49,7 +49,7 @@
 # to run only when somebody remembered to run it, which is how a
 # deterministically red spec sat on main through four merges and was
 # dismissed twice as an ordering flake. The suite itself no longer lives in
-# this repository either: #158 moved it to spdrman/backupd-tests, and
+# this repository either: #158 moved it to backupdproject/backupd-tests, and
 # scripts/ci-local.sh now runs it from there, at the sha in
 # scripts/e2e/tests-repo.pin, against THIS working tree's ui/shared. The same
 # step runs that repository's CLI smoke slice against a backupd built

@@ -67,7 +67,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/backupd/distribution/compose"
+	"github.com/backupdproject/backupd/distribution/compose"
 )
 
 // ---------------------------------------------------------------------

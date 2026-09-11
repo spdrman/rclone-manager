@@ -11,7 +11,7 @@ import (
 	// this package pulling rclone into the build closure,
 	// embeddedRcloneVersion would have nothing to find and this test could
 	// only ever assert "unknown", which would not prove anything.
-	_ "github.com/spdrman/backupd/core/internal/transport/rclone"
+	_ "github.com/backupdproject/backupd/core/internal/transport/rclone"
 )
 
 // The one test whose import list is half the test.

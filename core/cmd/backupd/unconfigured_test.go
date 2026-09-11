@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // The surface for backups whose backup set is no longer configured, and the
@@ -297,7 +297,7 @@ func TestRun_Retention_NamesTheSetsNoPolicyGovernsAtAll(t *testing.T) {
 
 // TestRun_Retention_SaysNothingExtraWhenEverySetIsConfigured is the
 // control that keeps the addition additive. This command's output is
-// pinned by the black-box suite in spdrman/backupd-tests, and
+// pinned by the black-box suite in backupdproject/backupd-tests, and
 // every case there is a configured-sets-only deployment, so printing this
 // section unconditionally would mean a cross-repo pin move for a line
 // that says "none".

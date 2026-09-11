@@ -1,10 +1,10 @@
-module github.com/spdrman/backupd/apps/common
+module github.com/backupdproject/backupd/apps/common
 
 go 1.27.0
 
 require (
 	github.com/go-chi/chi/v5 v5.3.2
-	github.com/spdrman/backupd/core v0.0.0-00010101000000-000000000000
+	github.com/backupdproject/backupd/core v0.0.0-00010101000000-000000000000
 	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.47.0
 )
@@ -113,4 +113,4 @@ require (
 // GOWORK=off, exactly as ci.yml's apps-common-build-vet-test job comment
 // requires (see that job for why this matters): it does not rely on the
 // repo-root go.work's `use` directives at all.
-replace github.com/spdrman/backupd/core => ../../core
+replace github.com/backupdproject/backupd/core => ../../core

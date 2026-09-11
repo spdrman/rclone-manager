@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/cliecho"
 )
 
 // Issue #543's acceptance criterion, driven rather than described: "a

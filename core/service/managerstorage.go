@@ -38,7 +38,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/spdrman/backupd/core/internal/capacity"
+	"github.com/backupdproject/backupd/core/internal/capacity"
 )
 
 // Denominator names what a storage gauge is a fraction OF.

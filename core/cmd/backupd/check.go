@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/app"
 )
 
 // cmdCheck is `backupd check`: a pre-flight answer to "can this

@@ -349,7 +349,7 @@ export function TierRow({
               // in the visible label is "Stored on", the group beside it
               // is already named "Storage medium disclosure", and this
               // accessible name is what the black-box suite in
-              // spdrman/backupd-tests queries the picker by at the
+              // backupdproject/backupd-tests queries the picker by at the
               // sha this repository pins. Renaming it is invisible to a
               // sighted operator, buys nothing #622 asked for, and would
               // turn five specs over there red for a word. See #622's PR
@@ -462,7 +462,7 @@ export function TierRow({
  * destinations are, and that is where it now appears (see
  * StorageDestinationsCard's describeDestination).
  *
- * It is also the name the black-box suite in spdrman/backupd-tests
+ * It is also the name the black-box suite in backupdproject/backupd-tests
  * pins at the sha this repository pins, which is a reason to keep a good
  * word rather than a reason to keep any word: renaming it would cost a
  * spec over there and buy an operator a path they already have one screen

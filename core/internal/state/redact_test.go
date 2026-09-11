@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/obs"
 )
 
 // realConnectionRefusedError reserves a TCP port, releases it immediately,

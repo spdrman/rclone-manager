@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/apps/common/auth/local"
+	"github.com/backupdproject/backupd/apps/common/auth/local"
 )
 
 // The create-admin subcommand, and mostly its stdin handling.

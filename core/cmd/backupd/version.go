@@ -4,8 +4,8 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/app"
 )
 
 // cmdVersion is FR-26's `version` command: it reports the backupd

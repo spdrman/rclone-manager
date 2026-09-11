@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/transport/rclone"
-	"github.com/spdrman/backupd/core/tests/machines"
+	"github.com/backupdproject/backupd/core/internal/transport/rclone"
+	"github.com/backupdproject/backupd/core/tests/machines"
 )
 
 // FR-6's host-key posture, held against real servers: the recorded key

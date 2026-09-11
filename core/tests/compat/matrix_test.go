@@ -47,7 +47,7 @@ const specPath = "../../../docs/EPIC-E-alternative-storage.md"
 // trees this suite also runs in (scripts/architecture deletes whole
 // layers) are not always full clones, and a check that silently resolved
 // against a different repository would answer confidently and wrongly.
-const matrixRepo = "spdrman/backupd"
+const matrixRepo = "backupdproject/backupd"
 
 // backtickPath matches a `like/this` span that looks like a repository
 // path: it has a slash and no spaces.

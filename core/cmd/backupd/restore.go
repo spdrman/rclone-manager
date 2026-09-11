@@ -6,9 +6,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // defaultRestoreWindowDays is the window a caller who names none asks for.

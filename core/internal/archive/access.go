@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/state"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // State is FR-34's closed vocabulary for what can be done with one durable

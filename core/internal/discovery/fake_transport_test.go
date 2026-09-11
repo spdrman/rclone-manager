@@ -18,7 +18,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // fakeTransport is a hand-rolled transport.Transport for tests that need

@@ -26,7 +26,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/config"
 )
 
 // maxRestoreCheckOutput mirrors verify.go's maxValidatorOutput: it bounds

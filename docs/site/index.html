@@ -66,21 +66,21 @@
         <span class="nav-label nav-label-short">Ref</span>
       </a>
 
-      <a href="https://github.com/spdrman/backupd" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+      <a href="https://github.com/backupdproject/backupd" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
         <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
           <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
         </svg>
         <span class="nav-label nav-label-full">GitHub</span>
       </a>
 
-      <a href="https://github.com/spdrman/backupd/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/backupdproject/backupd/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">README</span>
       </a>
-      <a href="https://github.com/spdrman/backupd/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/backupdproject/backupd/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Deployment</span>
         <span class="nav-label nav-label-short">Deploy</span>
       </a>
-      <a href="https://github.com/spdrman/backupd/issues" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/backupdproject/backupd/issues" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Issues</span>
       </a>
 
@@ -111,7 +111,7 @@
   <section class="install-hero">
     <h2 id="install">Installing it</h2>
     <p>Two commands, no arguments, on any machine with Docker:</p>
-    <pre class="cmd-primary"><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/backupd/main/scripts/install/install_docker_host.py</code></pre>
+    <pre class="cmd-primary"><code>curl -fsSLO https://raw.githubusercontent.com/backupdproject/backupd/main/scripts/install/install_docker_host.py</code></pre>
     <pre class="cmd-primary"><code>python3 install_docker_host.py install</code></pre>
 
     <p class="io-label">Output</p>
@@ -141,7 +141,7 @@ to create one (valid 30 minutes, single use).<!-- END ENROL-LOG-LINE --></code><
         <p><a href="first-run.html#enrol">Creating the administrator, screen by screen &rarr;</a></p>
       </aside>
     </div>
-    <p>The address in it is this machine's own rather than <code>localhost</code>, because the link is read from another machine on the same network: <code>localhost</code> over SSH on a laptop is the laptop, which is <a href="https://github.com/spdrman/backupd/issues/688">what the installer used to print</a>. Open it, set an administrator password, and <a href="first-run.html">the first-run tutorial</a> picks up from there.</p>
+    <p>The address in it is this machine's own rather than <code>localhost</code>, because the link is read from another machine on the same network: <code>localhost</code> over SSH on a laptop is the laptop, which is <a href="https://github.com/backupdproject/backupd/issues/688">what the installer used to print</a>. Open it, set an administrator password, and <a href="first-run.html">the first-run tutorial</a> picks up from there.</p>
 
 
     <div class="note ok">
@@ -161,7 +161,7 @@ backupd-web: no administrator account exists yet. Open http://10.0.0.10:8080/enr
 
     <h3 id="install-cli-only" style="margin-top:2rem">Command line only, no web interface</h3>
     <p>Same two commands, one flag on the second one:</p>
-    <pre><code>curl -fsSLO https://raw.githubusercontent.com/spdrman/backupd/main/scripts/install/install_docker_host.py</code></pre>
+    <pre><code>curl -fsSLO https://raw.githubusercontent.com/backupdproject/backupd/main/scripts/install/install_docker_host.py</code></pre>
     <pre><code>python3 install_docker_host.py install --cli-only</code></pre>
 
     <p class="io-label">Output</p>
@@ -214,9 +214,9 @@ backupd-web: no administrator account exists yet. Open http://10.0.0.10:8080/enr
     <p>A backend is described by a manifest the build carries &mdash; data, not code &mdash; and the manifest is what decides which fields a destination has, which steps its connection test runs, and what the steps it skips say instead. Two are registered: <code>local_volume</code>, a directory on a disk this machine can see, and <code>s3</code>, a bucket on Amazon's service or anything that speaks its API. The drive backups already land on is an instance too, seeded on a fresh install as a declared destination called <code>local</code>, so it is a row in the same list with the same controls rather than an unnamed default the interface had no way to talk about. A deployment can hold two volumes and two buckets now, and the list can tell them apart.</p>
     <p>Two wizards come with it. <strong>Add a destination</strong> is three steps &mdash; choose a backend, name the instance, confirm &mdash; and writes nothing at all, which the confirm step says in as many words. The backends it offers come from <code>GET /api/v1/backends</code>, so there is no list of backend names anywhere in the page, and a backend this build understands with no manifest behind it is drawn and refused rather than quietly left out. <strong>Configure</strong> is the manifest-driven half: one renderer, not a form per backend, and nothing in the page knows what a local volume asks for. It fills in what the manifest declares, proves it, and only then writes. That order is enforced rather than advised &mdash; editing any field makes an earlier pass stale, the screen says so where the edit was made, and <strong>Save configuration</strong> stays out of reach until a check against the values now on screen has passed &mdash; and the consequence an operator can use is that no retention tier can be pointed at a destination nobody has proved.</p>
     <p>Handing the <strong>Default</strong> mark from one destination to another is its own confirmation, because only one of the two things it does is the thing that was clicked: the destination taking the mark stops being removable, and the one giving it up becomes removable. Nothing already written moves. Declaring a destination moves nothing either; backups arrive somewhere only once a retention tier names it, which stays a separate decision.</p>
-    <p>The first correction is <a href="https://github.com/spdrman/backupd/issues/662">#662</a>, measured on 0.3.3 on the NAS this installer was proven on. A completed local copy could be recorded as zero bytes: whatever the backend reported for the read-back went into the journal and into the sidecar recovery manifest &mdash; the record a catalog rebuild trusts when the journal is gone &mdash; without ever being checked against the file. Reconciliation then found two journal fields disagreeing with each other and quarantined the intact file over it, without reading the file. And there was no way back out: <code>retry</code> and <code>fetch</code> looped, the artifact was re-discovered as already known, and the refusal named no verb that would resolve it. Commit now records the bytes it actually made durable, a transfer that reports less than its object does not carry the zero forward, a disagreement between two records is treated as a fault in the records rather than as a verdict about a file, and from a deployment already in that state some documented verb ends with the artifact at a durable restore point.</p>
+    <p>The first correction is <a href="https://github.com/backupdproject/backupd/issues/662">#662</a>, measured on 0.3.3 on the NAS this installer was proven on. A completed local copy could be recorded as zero bytes: whatever the backend reported for the read-back went into the journal and into the sidecar recovery manifest &mdash; the record a catalog rebuild trusts when the journal is gone &mdash; without ever being checked against the file. Reconciliation then found two journal fields disagreeing with each other and quarantined the intact file over it, without reading the file. And there was no way back out: <code>retry</code> and <code>fetch</code> looped, the artifact was re-discovered as already known, and the refusal named no verb that would resolve it. Commit now records the bytes it actually made durable, a transfer that reports less than its object does not carry the zero forward, a disagreement between two records is treated as a fault in the records rather than as a verdict about a file, and from a deployment already in that state some documented verb ends with the artifact at a durable restore point.</p>
     <p>The second is the surface that reported it. The activity feed keyed a run's severity on the destination it was writing to, so a real failure could read as ordinary; it keys on the transition now, and a FAILED backup has a control that reaches a recovery verb instead of a message recommending a command the same window called nonexistent.</p>
-    <p>The last piece is the first ten minutes. What the installer prints is transcribed from the installer on every run of the gate rather than written beside it (<a href="https://github.com/spdrman/backupd/issues/714">#714</a>), so the output blocks above are the real ones; and the enrolment link names this machine's own address rather than <code>localhost</code>, which on a laptop reading the log over SSH is the laptop (<a href="https://github.com/spdrman/backupd/issues/688">#688</a>). <code>enroll-link</code> reissues one when the thirty minutes have passed.</p>
+    <p>The last piece is the first ten minutes. What the installer prints is transcribed from the installer on every run of the gate rather than written beside it (<a href="https://github.com/backupdproject/backupd/issues/714">#714</a>), so the output blocks above are the real ones; and the enrolment link names this machine's own address rather than <code>localhost</code>, which on a laptop reading the log over SSH is the laptop (<a href="https://github.com/backupdproject/backupd/issues/688">#688</a>). <code>enroll-link</code> reissues one when the thirty minutes have passed.</p>
 
     <div class="cards">
       <a href="reference.html#web-destinations" class="clipping">
@@ -299,7 +299,7 @@ backupd-web: no administrator account exists yet. Open http://10.0.0.10:8080/enr
         </tbody>
       </table>
     </div>
-    <p>The <a href="https://github.com/spdrman/backupd/blob/main/README.md">README</a>'s copy of this table is checked against the binary's own dispatch table on every run of the repository's gate, so it cannot quietly go stale. The copy above is a transcription of it and is not checked, so if the two ever disagree, the README is right.</p>
+    <p>The <a href="https://github.com/backupdproject/backupd/blob/main/README.md">README</a>'s copy of this table is checked against the binary's own dispatch table on every run of the repository's gate, so it cannot quietly go stale. The copy above is a transcription of it and is not checked, so if the two ever disagree, the README is right.</p>
     <p><a href="reference.html#cli">The reference page</a> carries the same table with the subcommands and the interesting flags filled in, plus where a configuration change is written and what each exit code means. That copy is checked.</p>
   </section>
 
@@ -319,7 +319,7 @@ backupd-web: no administrator account exists yet. Open http://10.0.0.10:8080/enr
 </main>
 
 <footer>
-  <p>backupd is Apache-2.0 licensed. <a href="https://github.com/spdrman/backupd">View on GitHub</a></p>
+  <p>backupd is Apache-2.0 licensed. <a href="https://github.com/backupdproject/backupd">View on GitHub</a></p>
   <p>Not affiliated with the rclone project. rclone is embedded as a pinned Go library under its own licence.</p>
 </footer>
 

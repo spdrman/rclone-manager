@@ -1,4 +1,4 @@
-module github.com/spdrman/backupd/core
+module github.com/backupdproject/backupd/core
 
 go 1.27.0
 

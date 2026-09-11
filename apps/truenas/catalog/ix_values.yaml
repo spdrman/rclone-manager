@@ -2,7 +2,7 @@
 # fails the build if a question has no default here, or if this file
 # declares a value no question asks for.
 image:
-  reference: "ghcr.io/spdrman/backupd:0.4.0"
+  reference: "ghcr.io/backupdproject/backupd:0.4.0"
 
 storage:
   state:

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // The preview and the apply, tested as the pair they are.

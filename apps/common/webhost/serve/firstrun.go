@@ -18,8 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/spdrman/backupd/apps/common/auth/local"
-	"github.com/spdrman/backupd/apps/common/webhost"
+	"github.com/backupdproject/backupd/apps/common/auth/local"
+	"github.com/backupdproject/backupd/apps/common/webhost"
 )
 
 // ErrNoActivator is returned by NewFirstRunEngine when cfg carries a

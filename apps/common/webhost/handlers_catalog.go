@@ -10,7 +10,7 @@ package webhost
 import (
 	"net/http"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // catalogFailureResponse is one recovery manifest a pass could not use.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/apicontract"
 )
 
 // The three read operations issue #544 routes, and the one piece of

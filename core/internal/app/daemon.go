@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/internal/obs"
 )
 
 // FR-1's long-running mode, and why the loop is here rather than in the CLI.

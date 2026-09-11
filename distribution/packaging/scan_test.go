@@ -45,7 +45,7 @@ func cleanFixture(t *testing.T) string {
 	mustWrite(t, filepath.Join(root, "README.md"), "# Example\n\nRun `sh -c true` is fine in prose.\n")
 	mustWrite(t, filepath.Join(root, "compose", "backupd.yml"), `services:
   engine:
-    image: ghcr.io/spdrman/backupd:1.0.0
+    image: ghcr.io/backupdproject/backupd:1.0.0
     command: ["/backupd-web", "serve"]
     read_only: true
     volumes:
@@ -152,7 +152,7 @@ func TestScanLifecycleCatchesViolations(t *testing.T) {
 			mutate: func(t *testing.T, root string) {
 				mustWrite(t, filepath.Join(root, "compose", "backupd.yml"), `services:
   engine:
-    image: ghcr.io/spdrman/backupd:1.0.0
+    image: ghcr.io/backupdproject/backupd:1.0.0
     command: ["/bin/sh", "-c", "/setup && /backupd-web serve"]
 `)
 			},
@@ -163,7 +163,7 @@ func TestScanLifecycleCatchesViolations(t *testing.T) {
 			mutate: func(t *testing.T, root string) {
 				mustWrite(t, filepath.Join(root, "compose", "backupd.yml"), `services:
   engine:
-    image: ghcr.io/spdrman/backupd:1.0.0
+    image: ghcr.io/backupdproject/backupd:1.0.0
     entrypoint: ["/init"]
     command: ["/backupd-web", "serve"]
 `)
@@ -184,7 +184,7 @@ post_install: /usr/local/bin/seed-state.sh
 			mutate: func(t *testing.T, root string) {
 				mustWrite(t, filepath.Join(root, "compose", "backupd.yml"), `services:
   engine:
-    image: ghcr.io/spdrman/backupd:1.0.0
+    image: ghcr.io/backupdproject/backupd:1.0.0
     command: ["/backupd-web", "serve"]
     privileged: true
 `)
@@ -627,7 +627,7 @@ func TestAStoragePathWithADefaultIsVisibleAsSuch(t *testing.T) {
 	path := filepath.Join(root, "compose.yml")
 	mustWrite(t, path, `services:
   engine:
-    image: ghcr.io/spdrman/backupd:1.0.0
+    image: ghcr.io/backupdproject/backupd:1.0.0
     volumes:
       - ${STATE_DIR:-/srv/fallback/state}:/data/state
       - ${BACKUP_DIR:?set BACKUP_DIR}:/data/backups

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Issue #542, Phase 2 of #536: the mode an invocation ran in is decided

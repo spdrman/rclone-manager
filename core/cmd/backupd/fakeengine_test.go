@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/apicontract"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // A stand-in for the engine, with the real service layer behind it.

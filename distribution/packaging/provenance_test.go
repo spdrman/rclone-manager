@@ -338,8 +338,8 @@ func TestSBOMTakesItsTimestampFromTheManifestNotTheClock(t *testing.T) {
 // to watch the refusal fire before the day somebody adds the fourth.
 func TestParseGoListModulesRefusesAnUnversionedThirdPartyModule(t *testing.T) {
 	const (
-		mainModule  = "github.com/spdrman/backupd/core\t\t/repo/core"
-		firstParty  = "github.com/spdrman/backupd/apps/common\t\t/repo/apps/common"
+		mainModule  = "github.com/backupdproject/backupd/core\t\t/repo/core"
+		firstParty  = "github.com/backupdproject/backupd/apps/common\t\t/repo/apps/common"
 		thirdParty  = "github.com/rclone/rclone\tv1.70.0\t/gopath/rclone@v1.70.0"
 		replacedDep = "github.com/some/thirdparty\t\t/repo/vendor/thirdparty"
 	)

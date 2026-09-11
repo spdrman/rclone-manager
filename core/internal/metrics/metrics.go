@@ -48,8 +48,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spdrman/backupd/core/internal/health"
-	"github.com/spdrman/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/health"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
 )
 
 // ContentType is the MIME type a caller should set on an HTTP response

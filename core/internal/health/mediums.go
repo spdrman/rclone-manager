@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // This file is FR-24's placement half (issue #444): not "are this backup

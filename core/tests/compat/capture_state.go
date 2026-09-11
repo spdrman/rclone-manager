@@ -14,9 +14,9 @@ import (
 	// read surface would hide.
 	_ "modernc.org/sqlite"
 
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/retention"
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/retention"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // The cells that read the migrated SQLite file directly: the artifact rows

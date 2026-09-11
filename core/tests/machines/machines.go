@@ -75,7 +75,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/tests/dockerlease"
+	"github.com/backupdproject/backupd/core/tests/dockerlease"
 )
 
 // NetworkEnv, when set, names the network this test process is already a

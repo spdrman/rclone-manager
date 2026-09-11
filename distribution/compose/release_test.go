@@ -28,8 +28,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/distribution/compose"
-	"github.com/spdrman/backupd/distribution/packaging"
+	"github.com/backupdproject/backupd/distribution/compose"
+	"github.com/backupdproject/backupd/distribution/packaging"
 )
 
 // TestArchitecturesAgreeAcrossTheThreePlacesTheyAreWrittenDown is the

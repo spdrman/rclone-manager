@@ -36,8 +36,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/state"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // Class is one rung of FR-31's verification ladder.

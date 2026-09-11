@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/alert"
+	"github.com/backupdproject/backupd/core/internal/alert"
 )
 
 // This file is this work package's own gate, in the same spirit as
@@ -180,9 +180,9 @@ func TestKindsAreExactlyTheFourWorkPackage35Names(t *testing.T) {
 func TestAlertingNeverDeletes(t *testing.T) {
 	banned := map[string]string{
 		`"os"`: "the filesystem",
-		`"github.com/spdrman/backupd/core/internal/retention"`: "retention",
-		`"github.com/spdrman/backupd/core/internal/lifecycle"`: "the artifact lifecycle",
-		`"github.com/spdrman/backupd/core/internal/state"`:     "the journal",
+		`"github.com/backupdproject/backupd/core/internal/retention"`: "retention",
+		`"github.com/backupdproject/backupd/core/internal/lifecycle"`: "the artifact lifecycle",
+		`"github.com/backupdproject/backupd/core/internal/state"`:     "the journal",
 	}
 
 	for path, file := range parseProductionSources(t, parser.ImportsOnly) {

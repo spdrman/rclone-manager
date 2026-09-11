@@ -8,9 +8,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/spdrman/backupd/core/internal/apiclient"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/internal/apiclient"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Issue #544, Phase 2 of #536: the read commands get the mode mode.go

@@ -5,7 +5,7 @@
 #
 # # The blind spot this closes
 #
-# suites/web-ui over in spdrman/backupd-tests starts `npm run dev`
+# suites/web-ui over in backupdproject/backupd-tests starts `npm run dev`
 # and the app it drives resolves createMockApi out of
 # ui/shared/src/api/mock.ts. So every case in that suite is a claim about a
 # component rendering correctly GIVEN a fixture, and not one of them can go

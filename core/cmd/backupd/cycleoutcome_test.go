@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/app"
 )
 
 // What a cycle's exit status means, driven through the real command.

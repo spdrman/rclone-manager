@@ -91,9 +91,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spdrman/backupd/core/internal/archive"
-	"github.com/spdrman/backupd/core/internal/placement"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/archive"
+	"github.com/backupdproject/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // Step names one thing the preflight proves. The set is closed and

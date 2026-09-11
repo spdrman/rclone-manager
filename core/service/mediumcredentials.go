@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/spdrman/backupd/core/internal/transport/rclone"
+	"github.com/backupdproject/backupd/core/internal/transport/rclone"
 )
 
 // Importing S3 credentials: the same one-way door POST /ssh-keys already

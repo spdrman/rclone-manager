@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // GET /api/v1/activity/live on the wire (issue #573).

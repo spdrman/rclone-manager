@@ -6,7 +6,7 @@ Implement a purpose-built backup lifecycle manager in its own
 repository:
 
 ``` text
-spdrman/backupd
+backupdproject/backupd
 ```
 
 The manager will run on a UGREEN NAS and ingest backup artifacts that
@@ -1949,7 +1949,7 @@ Potential:
 
 # Acceptance Criteria
 
--   [ ] Tool lives in its own repository, `spdrman/backupd`.
+-   [ ] Tool lives in its own repository, `backupdproject/backupd`.
 -   [ ] Implementation is Go.
 -   [ ] rclone is embedded as Go modules.
 -   [ ] rclone is not forked.

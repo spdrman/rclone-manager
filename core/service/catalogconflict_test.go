@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/recovery"
+	"github.com/backupdproject/backupd/core/internal/recovery"
 )
 
 // TestCatalogPass_ReportsAConflictingSidecarThroughTheServiceSurface holds

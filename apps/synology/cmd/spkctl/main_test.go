@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/apps/synology/spk"
+	"github.com/backupdproject/backupd/apps/synology/spk"
 )
 
 // The library under this CLI is thoroughly tested, which makes this seam

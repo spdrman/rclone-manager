@@ -55,7 +55,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/backupd/core/tests/dockerlease"
+	"github.com/backupdproject/backupd/core/tests/dockerlease"
 )
 
 // repoRoot is this file's own directory, four levels up

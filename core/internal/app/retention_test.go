@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/spdrman/backupd/core/internal/lifecycle"
-	"github.com/spdrman/backupd/core/internal/transport"
+	"github.com/backupdproject/backupd/core/internal/lifecycle"
+	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
 // Classification only, which is what makes these tests cheap.

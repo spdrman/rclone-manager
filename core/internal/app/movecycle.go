@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/artifactstore"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/model"
-	"github.com/spdrman/backupd/core/internal/placement"
-	"github.com/spdrman/backupd/core/internal/retention"
+	"github.com/backupdproject/backupd/core/internal/artifactstore"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/placement"
+	"github.com/backupdproject/backupd/core/internal/retention"
 )
 
 // This file is where FR-30's move engine is finally driven by something

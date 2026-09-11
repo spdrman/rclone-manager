@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // Issue #538, Phase 1 of #536: the CLI refusing to write a configuration

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/cliecho"
 )
 
 // The gate itself: capture every FR-35 surface from this working tree and

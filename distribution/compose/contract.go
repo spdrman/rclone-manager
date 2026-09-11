@@ -38,7 +38,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/backupd/distribution/packaging"
+	"github.com/backupdproject/backupd/distribution/packaging"
 )
 
 //go:embed runtime-contract.json

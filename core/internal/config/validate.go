@@ -57,8 +57,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/backend"
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/backend"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // Validate checks a Config for every problem this package knows how to

@@ -54,7 +54,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // mediumFieldValue is one manifest-declared value, as a pair.

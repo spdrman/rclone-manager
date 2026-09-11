@@ -3,7 +3,7 @@ package retention
 import (
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // This file answers the question FR-18 used to leave open (issue #192):

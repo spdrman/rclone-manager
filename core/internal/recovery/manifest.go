@@ -43,7 +43,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // CurrentFormatVersion is the "backupd format version" section

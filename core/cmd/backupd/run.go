@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/spdrman/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/app"
 )
 
 // cmdRun is FR-1's `run` execution mode: perform one processing cycle and

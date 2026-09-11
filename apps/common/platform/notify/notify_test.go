@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/apps/common/platform/capabilities"
-	"github.com/spdrman/backupd/apps/common/platform/notify"
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/apps/common/platform/capabilities"
+	"github.com/backupdproject/backupd/apps/common/platform/notify"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // These tests cover the two things that make alerting a capability rather

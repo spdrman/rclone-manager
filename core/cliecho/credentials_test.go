@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spdrman/backupd/core/apicontract"
-	"github.com/spdrman/backupd/core/internal/backend"
+	"github.com/backupdproject/backupd/core/apicontract"
+	"github.com/backupdproject/backupd/core/internal/backend"
 )
 
 // The mechanical form of "a command never carries a key, a password or a

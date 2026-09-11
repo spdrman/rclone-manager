@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/mediumcheck"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/mediumcheck"
 )
 
 // This file is issue #443's storage-medium preflight: prove a declared

@@ -27,10 +27,10 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/spdrman/backupd/core/cliecho"
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/config"
-	"github.com/spdrman/backupd/core/internal/obs"
+	"github.com/backupdproject/backupd/core/cliecho"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/config"
+	"github.com/backupdproject/backupd/core/internal/obs"
 )
 
 // oneSetService is the fixture these cases need: exactly one configured

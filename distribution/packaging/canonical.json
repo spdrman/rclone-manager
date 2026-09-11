@@ -10,9 +10,9 @@
   ],
   "image": {
     "registry": "ghcr.io",
-    "repository": "spdrman/backupd",
+    "repository": "backupdproject/backupd",
     "tag": "0.4.0",
-    "reference": "ghcr.io/spdrman/backupd:0.4.0",
+    "reference": "ghcr.io/backupdproject/backupd:0.4.0",
     "published": true,
     "note": [
       "published:false. 0.4.0 is cut but not pushed: container/release-manifest.json carries a",
@@ -27,7 +27,7 @@
       "twice: it said 0.3.0 through the whole of 0.3.1 and 0.3.2, and it went on saying 0.3.2",
       "after 0.3.3 was pushed. The durable answer is the git history of this file, where each",
       "`Record <version>'s registry digests` commit is one real push, and",
-      "`docker buildx imagetools inspect ghcr.io/spdrman/backupd:<version>` asks the",
+      "`docker buildx imagetools inspect ghcr.io/backupdproject/backupd:<version>` asks the",
       "registry directly.",
       "This reference is the one string every provider package must carry, so pointing the",
       "project at a different registry stays a one-line change here rather than an edit in four",

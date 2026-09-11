@@ -3,7 +3,7 @@ package webhost
 import (
 	"net/http"
 
-	"github.com/spdrman/backupd/core/service"
+	"github.com/backupdproject/backupd/core/service"
 )
 
 // This file is EPIC I's (#664) read-only half of the backend registry:

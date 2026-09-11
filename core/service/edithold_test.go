@@ -28,8 +28,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/backupd/core/internal/app"
-	"github.com/spdrman/backupd/core/internal/model"
+	"github.com/backupdproject/backupd/core/internal/app"
+	"github.com/backupdproject/backupd/core/internal/model"
 )
 
 // fixtureModelSetID is fixtureSetID as the typed id a CycleReport

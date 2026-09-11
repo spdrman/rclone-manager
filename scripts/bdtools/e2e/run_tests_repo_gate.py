@@ -21,7 +21,7 @@ refuses the commit. It does two things:
      through RM_UI_DIR, until the tests repository dropped RM_UI_DIR
      and moved Suite B onto RM_BASE_URL against a real deployment).
 
-Both come from spdrman/backupd-tests at the sha in tests-repo.pin,
+Both come from backupdproject/backupd-tests at the sha in tests-repo.pin,
 so the tests are versioned independently of the product and a new test
 cannot break in-flight work here until the pin is bumped. What is under
 test is never the pin's own idea of a build: it is the tree being

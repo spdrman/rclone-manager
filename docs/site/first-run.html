@@ -59,21 +59,21 @@
         <span class="nav-label nav-label-short">Ref</span>
       </a>
 
-      <a href="https://github.com/spdrman/backupd" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+      <a href="https://github.com/backupdproject/backupd" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
         <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
           <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
         </svg>
         <span class="nav-label nav-label-full">GitHub</span>
       </a>
 
-      <a href="https://github.com/spdrman/backupd/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/backupdproject/backupd/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">README</span>
       </a>
-      <a href="https://github.com/spdrman/backupd/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/backupdproject/backupd/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Deployment</span>
         <span class="nav-label nav-label-short">Deploy</span>
       </a>
-      <a href="https://github.com/spdrman/backupd/issues" target="_blank" rel="noopener" class="nav-item">
+      <a href="https://github.com/backupdproject/backupd/issues" target="_blank" rel="noopener" class="nav-item">
         <span class="nav-label nav-label-full">Issues</span>
       </a>
 
@@ -110,7 +110,7 @@
 
     <div class="note ok">
       <span class="note-label">Two defects this page used to warn about are fixed</span>
-      <p><a href="https://github.com/spdrman/backupd/issues/274">#274</a> made an expired enrolment token report &ldquo;The administrator account could not be created&rdquo;, which blamed your password for a problem with the link. <a href="https://github.com/spdrman/backupd/issues/275">#275</a> drew a Cancel control during first run that could not do anything. Both are closed, and the flow below is the one that replaced them.</p>
+      <p><a href="https://github.com/backupdproject/backupd/issues/274">#274</a> made an expired enrolment token report &ldquo;The administrator account could not be created&rdquo;, which blamed your password for a problem with the link. <a href="https://github.com/backupdproject/backupd/issues/275">#275</a> drew a Cancel control during first run that could not do anything. Both are closed, and the flow below is the one that replaced them.</p>
     </div>
   </section>
 
@@ -120,7 +120,7 @@
     <ol>
       <li><strong>The host directories exist and the container can write them.</strong> The runtime image is distroless with no root step, and a bind mount does not chown its source, so create the state, backup and config directories on the NAS and chown them to the container's uid and gid yourself. The config directory is mounted as a writable <em>directory</em>, not a read-only file, which is exactly what lets setup write <code>config.yaml</code> into it.</li>
       <li><strong>The config directory is empty.</strong> Setup is a one-time door. If anything is already at <code>/etc/backupd/config/config.yaml</code>, however it got there, the first-run write refuses rather than overwriting it, and the instance serves the ordinary application instead of the setup flow.</li>
-      <li><strong>The remote server has an account to pull from.</strong> A dedicated, shell-less, chrooted SFTP account is what the project's own <a href="https://github.com/spdrman/backupd/blob/main/docs/ssh-setup.md">SSH setup guide</a> recommends, and it has a consequence worth knowing before you get to step 5: against that account shape a remote checksum cannot be computed at all, so verification is transfer verification, not a remote-versus-local hash comparison.</li>
+      <li><strong>The remote server has an account to pull from.</strong> A dedicated, shell-less, chrooted SFTP account is what the project's own <a href="https://github.com/backupdproject/backupd/blob/main/docs/ssh-setup.md">SSH setup guide</a> recommends, and it has a consequence worth knowing before you get to step 5: against that account shape a remote checksum cannot be computed at all, so verification is transfer verification, not a remote-versus-local hash comparison.</li>
     </ol>
   </section>
 
@@ -248,12 +248,12 @@ backupd-web: no administrator account exists yet. Open http://10.0.0.10:8080/enr
       <span class="note-label">If it says the account could not be created</span>
       <p>Read that message as <em>the token</em>, not the password. When the enrolment secret is missing, expired or already used, the API answers <code>BOOTSTRAP_TOKEN_INVALID</code> with &ldquo;missing, expired or already-used bootstrap token&rdquo;, and the page currently discards that and shows &ldquo;The administrator account could not be created&rdquo; instead. Trying a different password cannot help.</p>
       <p>The fix is a fresh token: restart the engine container, read the new link out of the log, and open that one. If the token was already <em>used</em>, an administrator exists and you should sign in instead.</p>
-      <p>The correlation id shown on that error, <code>cid_enroll</code>, is a hardcoded literal and does not match the one in the response, so it will not find anything in a log. This is <a href="https://github.com/spdrman/backupd/issues/274">#274</a> and it is being fixed.</p>
+      <p>The correlation id shown on that error, <code>cid_enroll</code>, is a hardcoded literal and does not match the one in the response, so it will not find anything in a log. This is <a href="https://github.com/backupdproject/backupd/issues/274">#274</a> and it is being fixed.</p>
     </div>
 
     <div class="note">
       <span class="note-label">Something this page used to warn about</span>
-      <p>Error banners here once rendered their leading glyph as the literal six characters <code>&#92;u2715</code> rather than as a cross, which was <a href="https://github.com/spdrman/backupd/issues/257">#257</a>. Every glyph in the interface is now a compiled Font Awesome path rather than a Unicode character, so that class of defect is gone along with the one where the navigation looked different on every operating system.</p>
+      <p>Error banners here once rendered their leading glyph as the literal six characters <code>&#92;u2715</code> rather than as a cross, which was <a href="https://github.com/backupdproject/backupd/issues/257">#257</a>. Every glyph in the interface is now a compiled Font Awesome path rather than a Unicode character, so that class of defect is gone along with the one where the navigation looked different on every operating system.</p>
     </div>
   </section>
 
@@ -548,7 +548,7 @@ backupd-web: no administrator account exists yet. Open http://10.0.0.10:8080/enr
     </figure>
 
     <h3 id="proof">The connection has to be proven before anything is written</h3>
-    <p>This is <a href="https://github.com/spdrman/backupd/issues/624">#624</a>, and it closed a gap that had been open since the wizard existed. Saving used to be gated on a pinned <code>known_hosts</code> line and an imported key, and both of those settle host <em>identity</em>: which machine answered. Neither says whether the key authenticates or whether the account can read the folder. So a backup set could be created, enabled and put on a schedule against a connection nobody had ever made.</p>
+    <p>This is <a href="https://github.com/backupdproject/backupd/issues/624">#624</a>, and it closed a gap that had been open since the wizard existed. Saving used to be gated on a pinned <code>known_hosts</code> line and an imported key, and both of those settle host <em>identity</em>: which machine answered. Neither says whether the key authenticates or whether the account can read the folder. So a backup set could be created, enabled and put on a schedule against a connection nobody had ever made.</p>
 
     <figure>
       <img src="screens/16-wizard-step-6-connection-proven.png" alt="The connection panel after Test connection, listing six named steps all passed and the sentence This source has been proven" loading="lazy">
@@ -699,19 +699,19 @@ backupd-web: no administrator account exists yet. Open http://10.0.0.10:8080/enr
     <h2 id="gaps">Screens not pictured here</h2>
     <p>Three states on this path exist in the product and are not on this page, because the development mock cannot produce them. They are described rather than quietly omitted.</p>
     <ul>
-      <li><strong>A failed enrolment.</strong> The fixture's enrolment call always succeeds, so the error banner cannot be reached locally. Since <a href="https://github.com/spdrman/backupd/issues/274">#274</a> it distinguishes a token that has expired or been used from a password the server would not accept, rather than blaming your password for a problem with the link.</li>
+      <li><strong>A failed enrolment.</strong> The fixture's enrolment call always succeeds, so the error banner cannot be reached locally. Since <a href="https://github.com/backupdproject/backupd/issues/274">#274</a> it distinguishes a token that has expired or been used from a password the server would not accept, rather than blaming your password for a problem with the link.</li>
       <li><strong>&ldquo;Configuration saved&rdquo;, the restart-required screen.</strong> Reached when the configuration is written but the instance cannot start serving it in the same process. It reads: &ldquo;Your configuration has been written and is safe. This instance could not start serving it without a restart, so restart the Backupd container or service and open this page again. You do not need to enter any of it a second time.&rdquo; The fixture always reports that activation succeeded, so this state is unreachable locally. If you see it, restart the container and sign back in; do not run the wizard again.</li>
       <li><strong>The real post-setup backup sets list.</strong> One backup set, no artifacts, nothing in the activity feed. See the warning on <a href="#after">screen 9</a>.</li>
     </ul>
     <div class="note">
       <span class="note-label">This page moved under itself once already</span>
-      <p>An earlier version of it walked a dedicated setup page whose heading was &ldquo;Set up Backupd&rdquo;. That page no longer exists: <a href="https://github.com/spdrman/backupd/issues/275">#275</a> replaced it with the ordinary wizard reached from the banner, and the capture script kept describing the old flow until it stopped running at all.</p>
+      <p>An earlier version of it walked a dedicated setup page whose heading was &ldquo;Set up Backupd&rdquo;. That page no longer exists: <a href="https://github.com/backupdproject/backupd/issues/275">#275</a> replaced it with the ordinary wizard reached from the banner, and the capture script kept describing the old flow until it stopped running at all.</p>
     </div>
   </section>
 </main>
 
 <footer>
-  <p>backupd is Apache-2.0 licensed. <a href="https://github.com/spdrman/backupd">View on GitHub</a></p>
+  <p>backupd is Apache-2.0 licensed. <a href="https://github.com/backupdproject/backupd">View on GitHub</a></p>
   <p>Screenshots taken against the development fixture API. No screenshot on this page is evidence about a running engine.</p>
 </footer>
 

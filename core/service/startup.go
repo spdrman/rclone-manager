@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/backupd/core/internal/state"
+	"github.com/backupdproject/backupd/core/internal/state"
 )
 
 // startupLockSuffix names the advisory lock file next to the journal

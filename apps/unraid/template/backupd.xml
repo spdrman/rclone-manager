@@ -31,13 +31,13 @@
 -->
 <Container version="2">
   <Name>backupd</Name>
-  <Repository>ghcr.io/spdrman/backupd:0.4.0</Repository>
-  <Registry>https://github.com/spdrman/backupd/pkgs/container/backupd</Registry>
+  <Repository>ghcr.io/backupdproject/backupd:0.4.0</Repository>
+  <Registry>https://github.com/backupdproject/backupd/pkgs/container/backupd</Registry>
   <Network>backupd</Network>
   <MyIP/>
   <Privileged>false</Privileged>
-  <Support>https://github.com/spdrman/backupd/issues</Support>
-  <Project>https://github.com/spdrman/backupd</Project>
+  <Support>https://github.com/backupdproject/backupd/issues</Support>
+  <Project>https://github.com/backupdproject/backupd</Project>
   <Overview>
     Backupd pulls backup artifacts off a remote SFTP source on a schedule, verifies them, retains them under a configurable policy, and keeps a durable catalog of everything it holds.
 
@@ -49,8 +49,8 @@
   </Overview>
   <Category>Backup: Tools: Utilities:</Category>
   <WebUI/>
-  <TemplateURL>https://raw.githubusercontent.com/spdrman/backupd/main/apps/unraid/template/backupd.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/spdrman/backupd/main/docs/submission/icon.svg</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/backupdproject/backupd/main/apps/unraid/template/backupd.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/backupdproject/backupd/main/docs/submission/icon.svg</Icon>
   <Requires>Run `docker network create backupd` before installing, and install the companion backupd-ui template for the web interface.</Requires>
   <ExtraParams>--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=64m,mode=1777,uid=99,gid=100 --user 99:100</ExtraParams>
   <PostArgs>/backupd-web serve --profile=unraid</PostArgs>
