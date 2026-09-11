@@ -1,4 +1,4 @@
-# ZimaOS app-store entry for Backup Manager (issue #170, B6.6).
+# ZimaOS app-store entry for Backupd (issue #170, B6.6).
 #
 # ZimaOS is built on CasaOS and reads the same `x-casaos` block out of a
 # docker-compose file, so this single file is both the runtime definition
@@ -10,7 +10,7 @@
 #
 # This is a SECOND STORE REGISTRATION OVER ONE RUNTIME, not a second
 # runtime. Its services are byte-for-byte the same shape as
-# apps/casaos/compose/backup-manager.yml and its host paths are the same
+# apps/casaos/compose/backupd.yml and its host paths are the same
 # paths, because ZimaOS lays /DATA out the way CasaOS does. What differs
 # is the store the file is submitted to and the identity it is submitted
 # under, which is exactly the amount of difference a thin adapter is
@@ -37,18 +37,18 @@ x-casaos:
   architectures:
     - amd64
     - arm64
-  main: backup-manager-ui
+  main: backupd-ui
   author: spdrman
   developer: spdrman
   category: Backup
-  store_app_id: backup-manager
-  icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/apps/zimaos/icon.svg
+  store_app_id: backupd
+  icon: https://raw.githubusercontent.com/spdrman/backupd/main/apps/zimaos/icon.svg
   scheme: http
   hostname: ""
   port_map: "8080"
   index: /
   title:
-    en_us: Backup Manager
+    en_us: Backupd
   tagline:
     en_us: Scheduled, verified pull-based backups with retention tiers
   description:
@@ -62,11 +62,11 @@ x-casaos:
   tips:
     before_install:
       en_us: >-
-        Create /DATA/AppData/backup-manager/state, /DATA/AppData/backup-manager/config,
-        /DATA/AppData/backup-manager/secrets and /DATA/Backups/backup-manager and give
+        Create /DATA/AppData/backupd/state, /DATA/AppData/backupd/config,
+        /DATA/AppData/backupd/secrets and /DATA/Backups/backupd and give
         them to uid 1000 / gid 1000 before installing. The runtime image is distroless,
         so nothing inside the container can create or chown them for you. Put your SFTP
-        private key at /DATA/AppData/backup-manager/secrets/id_ed25519 (mode 0600) and
+        private key at /DATA/AppData/backupd/secrets/id_ed25519 (mode 0600) and
         the pinned host key at .../known_hosts. The engine prints a one-time enrollment
         link on first start; read it in the container log.
 
@@ -74,9 +74,9 @@ services:
   # The engine: local authentication, the versioned /api/v1 API and the
   # scheduler in one process. Holds the state database and the
   # credentials, and publishes no port at all.
-  backup-manager:
-    image: ghcr.io/spdrman/backup-manager:0.4.0
-    command: ["/rbm-web", "serve", "--profile=generic"]
+  backupd:
+    image: ghcr.io/spdrman/backupd:0.4.0
+    command: ["/backupd-web", "serve", "--profile=generic"]
 
     user: "1000:1000"
     read_only: true
@@ -120,23 +120,23 @@ services:
       TRUSTED_UPSTREAM_CIDRS: ""
 
     volumes:
-      - /DATA/AppData/backup-manager/state:/data/state
-      - /DATA/Backups/backup-manager:/data/backups
+      - /DATA/AppData/backupd/state:/data/state
+      - /DATA/Backups/backupd:/data/backups
       # A writable DIRECTORY holding config.yaml (issue #196), not a
       # read-only single file: the engine replaces that file through a
       # temp file created beside it, and its ssh_keys/ and known_hosts.d/
       # stores are siblings of it. It may legitimately be empty on a
       # fresh install, which a directory can express and a file mount
       # cannot.
-      - /DATA/AppData/backup-manager/config:/etc/backup-manager/config
-      - /DATA/AppData/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
-      - /DATA/AppData/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
+      - /DATA/AppData/backupd/config:/etc/backupd/config
+      - /DATA/AppData/backupd/secrets/id_ed25519:/etc/backupd/id_ed25519:ro
+      - /DATA/AppData/backupd/secrets/known_hosts:/etc/backupd/known_hosts:ro
 
     # The start gate, and a liveness question rather than a health
     # verdict (issue #206). The Web UI below declares
-    # `depends_on: backup-manager: condition: service_healthy`, so
+    # `depends_on: backupd: condition: service_healthy`, so
     # whatever this asks stands between an operator and the only
-    # container with a published port. `/rbm status` is
+    # container with a published port. `/backupd status` is
     # FR-24's backup-freshness verdict and exits non-zero on any
     # DEGRADED, STALE or FAILING set, and on a fresh install, which has
     # backed nothing up yet: gating the Web UI on it means an app an
@@ -147,12 +147,12 @@ services:
     # is the right default for a plain `docker run` and for the headless
     # `daemon` command, which serves no HTTP and so has no liveness
     # endpoint to ask. Backup freshness is not lost - read it with
-    # `docker exec backup-manager /rbm status`, or let the
+    # `docker exec backupd /backupd status`, or let the
     # alerts block deliver it.
     #
     # Derived from container/compose.yaml, never authored here.
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      test: ["CMD", "/backupd-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -182,25 +182,25 @@ services:
         - container: /data/backups
           description:
             en_us: The backup root. Retained artifacts land here and nothing else does.
-        - container: /etc/backup-manager/config
+        - container: /etc/backupd/config
           description:
             en_us: Writable configuration directory holding config.yaml.
-        - container: /etc/backup-manager/id_ed25519
+        - container: /etc/backupd/id_ed25519
           description:
             en_us: SFTP private key, mounted read-only.
-        - container: /etc/backup-manager/known_hosts
+        - container: /etc/backupd/known_hosts
           description:
             en_us: Pinned SFTP host key, mounted read-only.
 
   # The web UI: the shared static bundle plus a reverse proxy to the
   # engine. The only container with a published port, and the app ZimaOS
   # opens when the tile is clicked.
-  backup-manager-ui:
-    image: ghcr.io/spdrman/backup-manager:0.4.0
-    command: ["/rbm-web", "serve-ui", "--profile=generic"]
+  backupd-ui:
+    image: ghcr.io/spdrman/backupd:0.4.0
+    command: ["/backupd-web", "serve-ui", "--profile=generic"]
 
     depends_on:
-      backup-manager:
+      backupd:
         condition: service_healthy
 
     user: "1000:1000"
@@ -221,7 +221,7 @@ services:
       # engine's own line for it.
       LOG_LEVEL: "info"
       LISTEN_ADDR: ":8080"
-      UPSTREAM_ADDR: "http://backup-manager:8080"
+      UPSTREAM_ADDR: "http://backupd:8080"
 
     # Neither UI_DIR nor UI_ROOT, on purpose: this adapter serves the
     # bundle compiled into the binary. apps/zimaos/README.md has the
@@ -231,7 +231,7 @@ services:
     # key, known_hosts, or either data directory.
 
     healthcheck:
-      test: ["CMD", "/rbm-web", "healthcheck"]
+      test: ["CMD", "/backupd-web", "healthcheck"]
       interval: 30s
       timeout: 5s
       start_period: 5s

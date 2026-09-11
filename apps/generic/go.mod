@@ -1,10 +1,10 @@
-module github.com/spdrman/rclone-manager/apps/generic
+module github.com/spdrman/backupd/apps/generic
 
 go 1.27.0
 
 require (
-	github.com/spdrman/rclone-manager/apps/common v0.0.0-00010101000000-000000000000
-	github.com/spdrman/rclone-manager/core v0.0.0-00010101000000-000000000000
+	github.com/spdrman/backupd/apps/common v0.0.0-00010101000000-000000000000
+	github.com/spdrman/backupd/core v0.0.0-00010101000000-000000000000
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -112,6 +112,6 @@ require (
 // published anywhere go.sum could verify a checksum against - matching
 // apps/common/go.mod's own replace directives and its own comment on
 // why this has to be here rather than relying on the repo-root go.work.
-replace github.com/spdrman/rclone-manager/core => ../../core
+replace github.com/spdrman/backupd/core => ../../core
 
-replace github.com/spdrman/rclone-manager/apps/common => ../common
+replace github.com/spdrman/backupd/apps/common => ../common

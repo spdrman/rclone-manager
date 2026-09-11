@@ -1,5 +1,5 @@
 {
-  "name": "@backup-manager/provider-conformance",
+  "name": "@backupd/provider-conformance",
   "private": true,
   "version": "0.0.0",
   "type": "module",

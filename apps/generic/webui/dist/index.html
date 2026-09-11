@@ -11,7 +11,7 @@
 
   container/Dockerfile's frontend-build stage overwrites this file (and
   everything else in this directory) with ui/shared's real `npm run
-  build` output before compiling apps/generic/cmd/backup-manager-web; see
+  build` output before compiling apps/generic/cmd/backupd-web; see
   that Dockerfile stage and docs/deployment.md's "The generic Web host"
   section.
 
@@ -19,8 +19,8 @@
   without running the frontend build step.
 -->
 <html lang="en">
-  <head><meta charset="utf-8" /><title>Backup Manager</title></head>
+  <head><meta charset="utf-8" /><title>Backupd</title></head>
   <body>
-    <p>Backup Manager's frontend was not built into this image.</p>
+    <p>Backupd's frontend was not built into this image.</p>
   </body>
 </html>

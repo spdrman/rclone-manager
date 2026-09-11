@@ -6,14 +6,14 @@
 # must pass, and each must have tested the image it built itself.
 #
 # Before the per-run reference this checks, both runs built and retagged
-# one name, `backup-manager:dockercli-test`. Whichever built last owned
+# one name, `backupd:dockercli-test`. Whichever built last owned
 # it, and the other run went on inspecting, running and compose-ing an
 # image built from a different commit, with nothing able to notice. The
 # suite's own TestTheImageUnderTestIsTheOneThisRunBuilt is what would
 # notice now, and this script is what puts two real runs in each other's
 # way so that test has something to notice.
 #
-# Each worktree gets its own marker file under core/cmd/backup-manager,
+# Each worktree gets its own marker file under core/cmd/backupd,
 # which container/Dockerfile copies into the build. That is deliberate: it
 # makes the two images differ in content and not only in name, so a run
 # that picked up the other worktree's image would be running a different
@@ -57,7 +57,7 @@ for i in $(seq 1 "$runs"); do
   # The content divergence. An unused constant is legal Go, changes the
   # COPY layer container/Dockerfile builds from, and touches nothing the
   # suite asserts on.
-  cat > "$dir/core/cmd/backup-manager/zz_concurrency_marker.go" <<EOF
+  cat > "$dir/core/cmd/backupd/zz_concurrency_marker.go" <<EOF
 package main
 
 const concurrencyMarker = "worktree-$i-$stamp"
@@ -112,7 +112,7 @@ else
 fi
 
 for ref in "${refs[@]:-}"; do
-  if [ "$ref" = "backup-manager:dockercli-test" ]; then
+  if [ "$ref" = "backupd:dockercli-test" ]; then
     echo "    FAIL: a run built the old globally shared tag $ref"
     status=1
   fi
