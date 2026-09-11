@@ -5,7 +5,7 @@ little to disclose.
 
 ## Does this application collect personal data?
 
-No. Backup Manager collects no personal data of any kind, from the administrator or from
+No. Backupd collects no personal data of any kind, from the administrator or from
 anyone else. It has no account system of ours, no registration, no licence check and no
 account linking.
 

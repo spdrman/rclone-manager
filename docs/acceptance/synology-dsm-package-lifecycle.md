@@ -24,8 +24,8 @@ core binaries:
 
 | SPK artifact | INFO `arch` | Go target | DSM platforms covered |
 |---|---|---|---|
-| `BackupManager-x86_64-<version>.spk` | `x86_64` | `linux/amd64` | apollolake, avoton, braswell, broadwell, broadwellnk, broadwellntb, broadwellntbap, bromolow, cedarview, coffeelake, denverton, geminilake, grantley, kvmx64, purley, skylaked, v1000 |
-| `BackupManager-armv8-<version>.spk` | `armv8` | `linux/arm64` | rtd1296, armada37xx, rtd1619, rtd1619b |
+| `Backupd-x86_64-<version>.spk` | `x86_64` | `linux/amd64` | apollolake, avoton, braswell, broadwell, broadwellnk, broadwellntb, broadwellntbap, bromolow, cedarview, coffeelake, denverton, geminilake, grantley, kvmx64, purley, skylaked, v1000 |
+| `Backupd-armv8-<version>.spk` | `armv8` | `linux/arm64` | rtd1296, armada37xx, rtd1619, rtd1619b |
 
 The `arch` family names and their member platforms come from Synology's
 own Appendix A platform/arch mapping table, not from inspection of a
@@ -129,13 +129,13 @@ A result on one architecture says nothing about the other.
 5. Confirm over SSH that the payload landed where the package framework
    says it should:
    ```sh
-   ls -l /var/packages/BackupManager/target/bin/
+   ls -l /var/packages/Backupd/target/bin/
    ```
-   Expect `backup-manager` and `backup-manager-web`, both executable.
+   Expect `backupd` and `backupd-web`, both executable.
 6. Confirm the packaged binaries are byte-identical to the release ones:
    ```sh
-   sha256sum /var/packages/BackupManager/target/bin/backup-manager \
-             /var/packages/BackupManager/target/bin/backup-manager-web
+   sha256sum /var/packages/Backupd/target/bin/backupd \
+             /var/packages/Backupd/target/bin/backupd-web
    ```
    Compare against `container/release-manifest.json` for this
    architecture. This is acceptance criterion "SPK contains the exact
@@ -147,11 +147,11 @@ A result on one architecture says nothing about the other.
    no `chown` anywhere, so this is the one assumption nothing in the
    repository can check for itself:
    ```sh
-   ls -ln /var/packages/BackupManager/var \
-          /var/packages/BackupManager/var/state \
-          /var/packages/BackupManager/var/log \
-          /var/packages/BackupManager/var/run
-   grep "Created package directories as uid" /var/log/packages/BackupManager.log
+   ls -ln /var/packages/Backupd/var \
+          /var/packages/Backupd/var/state \
+          /var/packages/Backupd/var/log \
+          /var/packages/Backupd/var/run
+   grep "Created package directories as uid" /var/log/packages/Backupd.log
    ```
    Record the owning uid and the mode of each. Whether that uid is the
    one the daemons run as is settled in step 2.7, and the two answers
@@ -163,7 +163,7 @@ A result on one architecture says nothing about the other.
    exact refusal text.
 
 **Failure to record, not work around:** if install fails on a
-`conf/resource` worker, capture `/var/log/packages/BackupManager.log` and
+`conf/resource` worker, capture `/var/log/packages/Backupd.log` and
 the DSM error verbatim before changing anything. That log names the
 worker, and it is the difference between "the resource spec is wrong" and
 "this model cannot host the package at all".
@@ -177,18 +177,18 @@ worker, and it is the difference between "the resource spec is wrong" and
    behavior of the generic Web host too, not something Synology-specific,
    and it is deliberately part of this procedure so nobody records it
    later as a Synology bug.
-3. Over SSH, edit `/var/packages/BackupManager/etc/config.yaml`: set
+3. Over SSH, edit `/var/packages/Backupd/etc/config.yaml`: set
    `state.database` (already seeded), and add one real source and backup
    set pointing at the shared folder DSM created for the package.
    Confirm that shared folder exists:
    ```sh
-   ls -ld /volume*/rbm
+   ls -ld /volume*/backupd
    ```
 4. Start the package again.
 5. Expect: Package Center shows Running.
 6. Read the one-time enrollment notice:
    ```sh
-   cat /var/packages/BackupManager/var/log/engine.log
+   cat /var/packages/Backupd/var/log/engine.log
    ```
    Expect a bootstrap token, and expect it to be a token only, never a
    password. Confirm the log contains no credential, no key material and
@@ -203,9 +203,9 @@ worker, and it is the difference between "the resource spec is wrong" and
 8. Record the uid the daemons actually run as, and whether they could
    write at all:
    ```sh
-   ps -eo user,pid,args | grep backup-manager-web
-   ls -ln /var/packages/BackupManager/var/log/engine.log \
-          /var/packages/BackupManager/var/run/engine.pid
+   ps -eo user,pid,args | grep backupd-web
+   ls -ln /var/packages/Backupd/var/log/engine.log \
+          /var/packages/Backupd/var/run/engine.pid
    ```
    Expect: both files exist and are owned by the uid in the `ps` output.
    If the engine "exited immediately" and `engine.log` does not exist,
@@ -216,8 +216,8 @@ worker, and it is the difference between "the resource spec is wrong" and
    ```sh
    sudo reboot
    # after it comes back, before touching anything else:
-   cat /var/packages/BackupManager/var/run/engine.pid
-   ps -eo pid,args | grep backup-manager-web
+   cat /var/packages/Backupd/var/run/engine.pid
+   ps -eo pid,args | grep backupd-web
    ```
    `var/` survives a reboot, so the pid file that comes back names the
    pid space that existed before it. Expect: Package Center shows the
@@ -238,7 +238,7 @@ the tester reached DSM with is otherwise invisible in the result, and
 this criterion is the one most likely to differ between the two.
 
 1. Log in to DSM as the administrator. Open the Main Menu.
-2. Expect: a "Backup Manager" entry with the package icon.
+2. Expect: a "Backupd" entry with the package icon.
 3. Click it.
 4. Expect: it opens the shared Web UI, served by the package's own UI
    host on port 8477, showing the local-auth login or enrollment screen.
@@ -254,7 +254,7 @@ this criterion is the one most likely to differ between the two.
    passing `--ui-dir`; record which, because `serve-ui` fails closed on an
    unusable `--ui-dir` and a running package with the wrong bridge means
    something served the compiled-in bundle instead.
-7. Also open Package Center → Backup Manager → Open, and confirm it
+7. Also open Package Center → Backupd → Open, and confirm it
    reaches the same UI. Two documented routes exist (`dsmuidir` plus a
    `.url` desktop entry, and INFO's `adminport`/`adminurl`); record which
    ones actually worked, because that decides which one the package keeps.
@@ -272,10 +272,10 @@ this criterion is the one most likely to differ between the two.
 1. Before updating, capture the state that has to survive, into files you
    can hold the upgrade against afterwards rather than into your memory:
    ```sh
-   sha256sum /var/packages/BackupManager/var/state/backup-manager.db \
-             /var/packages/BackupManager/etc/config.yaml \
+   sha256sum /var/packages/Backupd/var/state/backupd.db \
+             /var/packages/Backupd/etc/config.yaml \
      | tee /tmp/before-upgrade.sha256
-   find /var/packages/BackupManager/var/state -type f | sort > /tmp/before-upgrade.txt
+   find /var/packages/Backupd/var/state -type f | sort > /tmp/before-upgrade.txt
    ```
    and, in the UI, note the logged-in session, the configured backup set,
    and at least one artifact row.
@@ -292,7 +292,7 @@ this criterion is the one most likely to differ between the two.
    re-reading it by eye:
    ```sh
    sha256sum -c /tmp/before-upgrade.sha256
-   find /var/packages/BackupManager/var/state -type f | sort > /tmp/after-upgrade.txt
+   find /var/packages/Backupd/var/state -type f | sort > /tmp/after-upgrade.txt
    diff /tmp/before-upgrade.txt /tmp/after-upgrade.txt
    ```
 6. Expect: every line of `sha256sum -c` says OK, the diff is empty, the
@@ -315,22 +315,22 @@ This is the destructive-safety step. Read it fully before starting.
 1. Put real, identifiable data in the backup share, outside the package's
    own footprint:
    ```sh
-   mkdir -p /volume1/backup-manager/acceptance
-   dd if=/dev/urandom of=/volume1/backup-manager/acceptance/canary.bin bs=1M count=8
-   sha256sum /volume1/backup-manager/acceptance/canary.bin | tee /tmp/canary.sha256
-   find /volume1/backup-manager -type f | sort > /tmp/before-uninstall.txt
+   mkdir -p /volume1/backupd/acceptance
+   dd if=/dev/urandom of=/volume1/backupd/acceptance/canary.bin bs=1M count=8
+   sha256sum /volume1/backupd/acceptance/canary.bin | tee /tmp/canary.sha256
+   find /volume1/backupd -type f | sort > /tmp/before-uninstall.txt
    ```
 2. Also record what exists outside the share that must survive:
    ```sh
-   ls -ld /volume*/ /volume1/@appstore/BackupManager \
-          /var/packages/BackupManager/etc /var/packages/BackupManager/var
+   ls -ld /volume*/ /volume1/@appstore/Backupd \
+          /var/packages/Backupd/etc /var/packages/Backupd/var
    ```
 3. Uninstall the package through Package Center.
 4. Expect: uninstall completes.
 5. Now check the canary FIRST, before anything else:
    ```sh
    sha256sum -c /tmp/canary.sha256
-   find /volume1/backup-manager -type f | sort > /tmp/after-uninstall.txt
+   find /volume1/backupd -type f | sort > /tmp/after-uninstall.txt
    diff /tmp/before-uninstall.txt /tmp/after-uninstall.txt
    ```
    Expect: the canary verifies, and the diff is empty. Synology documents
@@ -341,9 +341,9 @@ This is the destructive-safety step. Read it fully before starting.
    **Any deletion here is a release blocker, not a finding to triage.**
 6. Record what DSM removed on its own:
    ```sh
-   ls -ld /volume1/@appstore/BackupManager 2>&1
-   ls -ld /var/packages/BackupManager 2>&1
-   ls -l  /var/packages/BackupManager/var/state 2>&1
+   ls -ld /volume1/@appstore/Backupd 2>&1
+   ls -ld /var/packages/Backupd 2>&1
+   ls -l  /var/packages/Backupd/var/state 2>&1
    ```
    `target` is documented to go; `etc` and `var` are documented to stay.
    Record what actually happened for each, because a reinstall in step 6
@@ -368,8 +368,8 @@ This is the destructive-safety step. Read it fully before starting.
 - Package Center screenshots for install, upgrade, uninstall and the
   architecture-mismatch refusal in step 1.7, each with the DSM clock
   visible.
-- `/var/log/packages/BackupManager.log` for every lifecycle operation.
-- `/var/packages/BackupManager/var/log/engine.log` and `ui.log`.
+- `/var/log/packages/Backupd.log` for every lifecycle operation.
+- `/var/packages/Backupd/var/log/engine.log` and `ui.log`.
 - The `ls -ln` output from steps 1.7 and 2.8, and the `ps` line showing
   the daemons' uid.
 - Step 3 run from both an HTTP and an HTTPS DSM session, recorded

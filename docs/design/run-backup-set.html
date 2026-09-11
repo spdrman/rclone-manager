@@ -159,7 +159,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
       <span class="grow"></span><button class="tbtn">Copy</button><button class="tbtn">Save .txt</button>
     </div>
     <div class="term">
-      <div><span class="t">00:41:07</span> <span class="cmdq">$</span> <span class="cmd">rbm fetch --backup-set api-server/var-backups</span></div>
+      <div><span class="t">00:41:07</span> <span class="cmdq">$</span> <span class="cmd">backupd fetch --backup-set api-server/var-backups</span></div>
       <div><span class="t">00:41:07</span> <span class="b">run requested for api-server/var-backups by rom (op_9f31c4)</span></div>
       <div><span class="t">00:41:07</span> <span class="i">this run covers ONE backup set. Nothing else on this deployment is touched</span></div>
       <div><span class="t">00:41:07</span> <span class="i">reconcile: 24 journal rows checked, 0 findings</span></div>
@@ -169,7 +169,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
     </div>
     <div class="note">The engine already does exactly this:
       <strong>internal/app.Service.Fetch(ctx, source, set, dryRun)</strong>, which
-      <code>rbm fetch --backup-set api-server/var-backups</code> has called since FR-1. What is
+      <code>backupd fetch --backup-set api-server/var-backups</code> has called since FR-1. What is
       missing is a route to it, so the button is an <code>action:"run_backup_set"</code> on the operations
       route that already carries <code>run_cycle</code>, keeping one durable, idempotency-keyed,
       revision-checked way to start long work.</div>
@@ -220,7 +220,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
         already here and verified. The last pass before this one finished 3 minutes ago.</span></span>
     </div>
     <div class="term term--tiny">
-      <div><span class="t">01:04:00</span> <span class="cmdq">$</span> <span class="cmd">rbm run</span></div>
+      <div><span class="t">01:04:00</span> <span class="cmdq">$</span> <span class="cmd">backupd run</span></div>
       <div><span class="t">01:04:00</span> <span class="dep">[deployment]</span> <span class="i">cycle started (scheduled, poll_interval 1h)</span></div>
       <div><span class="t">01:04:11</span> <span class="dep">[deployment]</span> <span class="g">cycle finished: 4 sets, 0 artifacts transferred, 0 failures, 11s</span></div>
       <div><span class="t">01:04:11</span> <span class="dep">[deployment]</span> <span class="i">next scheduled pass 02:04</span><span class="cur"></span></div>
@@ -248,7 +248,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
     <div class="card__header"><h2 class="eyebrow">api-server / var-backups</h2>
       <span class="pill pill--err"><span class="dot"></span>RUN REFUSED</span></div>
     <div class="term term--tiny">
-      <div><span class="t">00:52:14</span> <span class="cmdq">$</span> <span class="cmd">rbm run</span></div>
+      <div><span class="t">00:52:14</span> <span class="cmdq">$</span> <span class="cmd">backupd run</span></div>
       <div><span class="t">00:52:14</span> <span class="e">run refused: this deployment will not start a backup run</span></div>
       <div><span class="t">00:52:14</span> <span class="e">&nbsp;&nbsp;DESTRUCTIVE_OPERATIONS_DISABLED (403), correlation id c7f2a1e9</span></div>
       <div><span class="t">00:52:14</span> <span class="i">&nbsp;&nbsp;nothing was submitted, nothing is queued, and this set was not touched</span></div>
@@ -258,7 +258,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
     <div class="card__header"><h2 class="eyebrow">nas-media / photos</h2>
       <span class="pill pill--err"><span class="dot"></span>RUN REFUSED</span></div>
     <div class="term term--tiny">
-      <div><span class="t">00:52:14</span> <span class="cmdq">$</span> <span class="cmd">rbm run</span></div>
+      <div><span class="t">00:52:14</span> <span class="cmdq">$</span> <span class="cmd">backupd run</span></div>
       <div><span class="t">00:52:14</span> <span class="e">run refused: this deployment will not start a backup run</span></div>
       <div><span class="t">00:52:14</span> <span class="e">&nbsp;&nbsp;DESTRUCTIVE_OPERATIONS_DISABLED (403), correlation id c7f2a1e9</span></div>
       <div><span class="t">00:52:14</span> <span class="i">&nbsp;&nbsp;nothing was submitted, nothing is queued, and this set was not touched</span></div>
@@ -287,7 +287,7 @@ h1{font-size:15px;font-weight:600;margin:0 0 var(--space-1);letter-spacing:-.01e
     <div class="setrow"><span class="tag tag--held">503</span><span class="name">the engine is not serving</span>
       <span class="why">the poll behind the strip is already failing, so the terminal says the refusal is a
         guess about a process nothing can currently reach</span></div>
-    <div class="note">Every press names its command, and here that is load-bearing rather than decorative: the line the button prints is the one thing an operator can still do when the button itself is refused. <code>rbm run</code> is the deployment-wide equivalent and <code>rbm fetch --backup-set S/B</code> the per-set one, so neither control has a naming gap. They have a routing gap, which this rule makes visible on day one: neither command routes to the serving engine today, so pasting the echoed line starts a SECOND process against the same journal instead of doing what the button did. Closing that is part of this issue.<br><br>Two classes and both have to land in the terminal. A refusal the <em>engine</em> produced
+    <div class="note">Every press names its command, and here that is load-bearing rather than decorative: the line the button prints is the one thing an operator can still do when the button itself is refused. <code>backupd run</code> is the deployment-wide equivalent and <code>backupd fetch --backup-set S/B</code> the per-set one, so neither control has a naming gap. They have a routing gap, which this rule makes visible on day one: neither command routes to the serving engine today, so pasting the echoed line starts a SECOND process against the same journal instead of doing what the button did. Closing that is part of this issue.<br><br>Two classes and both have to land in the terminal. A refusal the <em>engine</em> produced
       (409, and a run stopped mid-pass) can be emitted through <code>obs</code> and arrive in the live feed
       like any other line. A refusal produced <em>in front of</em> the engine (the 403 gate, CSRF, a dead
       connection) never reaches that buffer at all, so the client writes it into the same log, marked as coming

@@ -39,7 +39,7 @@ it; it does not own it.
 A **runtime profile** changes behaviour that genuinely depends on the host: a
 trusted native authentication gateway, a provider notification bridge, a launch
 or navigation bridge, platform capability reporting. Selected explicitly, for
-example `rbm serve --profile=generic`.
+example `backupd serve --profile=generic`.
 
 **A profile must never alter backup lifecycle semantics.** That is #81's wording
 and it is the line that separates a profile from a fork.
@@ -177,7 +177,7 @@ somewhere else:
 | was | is | who |
 |---|---|---|
 | `apps/common/packaging/` | `distribution/packaging/` | #165, done |
-| `github.com/spdrman/rclone-manager/apps/common/packaging` | `github.com/spdrman/rclone-manager/distribution/packaging` (new module) | #165, done |
+| `github.com/spdrman/backupd/apps/common/packaging` | `github.com/spdrman/backupd/distribution/packaging` (new module) | #165, done |
 | `cd apps/common && go test ./packaging/` | `cd distribution && go test ./packaging/` | #165, done |
 | `apps/common/cmd/provenance` | `distribution/cmd/provenance` | #165, done |
 | `cd apps/common && go run ./cmd/provenance -write` | `cd distribution && go run ./cmd/provenance -write` | #165, done |
@@ -221,7 +221,7 @@ The enforcement cost is still one edit in `scripts/architecture/layers.conf`.
 ## A note on the source specification's paths
 
 The refactor specification behind #81's standing constraint roots its structure
-diagram at `tools/backup-manager/`, a path that does not exist in this
+diagram at `tools/backupd/`, a path that does not exist in this
 repository. The binding requirement is the **dependency direction**, not the
 literal paths: #81 says so, and #165 restates it. The layer a file is in is what
 `scripts/architecture/layers.conf` says it is, not what its directory happens to

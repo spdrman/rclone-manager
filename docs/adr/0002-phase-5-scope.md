@@ -21,7 +21,7 @@ tested logic in `internal/lifecycle`, `internal/discovery`, `internal/retention`
 `internal/revalidate`, and `internal/quarantine`, and none of it is wired to anything that
 runs continuously:
 
-- `cmd/backup-manager/main.go` is 25 lines and understands exactly one subcommand,
+- `cmd/backupd/main.go` is 25 lines and understands exactly one subcommand,
   `version`. There is no `run`, `daemon`, `status`, `retention`, or `reconcile` subcommand.
   Issues #25 (execution modes) and #26 (the CLI surface) are both still open.
 - `internal/obs`'s structured logger has zero callers anywhere in this repository, including
@@ -76,9 +76,9 @@ the property a snapshot-based recovery story needs, and it required no new code 
 
 **Recommendation: not now, and not really this codebase's to build.** The actionable
 version of this candidate is operational guidance (point the configured local backup root
-at a snapshot-capable volume, schedule snapshots independently of `backup-manager`), which
+at a snapshot-capable volume, schedule snapshots independently of `backupd`), which
 belongs in deployment documentation, not in `internal/`. Revisit only if a requirement
-appears for `backup-manager` itself to trigger a snapshot (e.g. shell out to a NAS vendor
+appears for `backupd` itself to trigger a snapshot (e.g. shell out to a NAS vendor
 API right after a `COMPLETE` transition). At that point the trigger, the specific
 snapshot mechanism, and its failure modes all need to be named before it's a design, not
 just a feature checkbox.
@@ -208,7 +208,7 @@ recomputing anything.
 
 It also doesn't need a daemon to be useful the way alert delivery would: a Prometheus
 exposition-format renderer is exactly the shape the "textfile collector" pattern wants
-(`rbm status --prometheus > some.prom` on a cron, no HTTP server, no long-running
+(`backupd status --prometheus > some.prom` on a cron, no HTTP server, no long-running
 process), which fits a binary that doesn't have a daemon mode yet better than a `/metrics`
 HTTP endpoint would.
 
@@ -264,7 +264,7 @@ those the caller actually populated (`BackupSetInputs`' optional fields stay opt
 too; an unset value omits that metric series rather than fabricating a zero).
 
 It is deliberately a pure, dependency-free, standard-library-only transformation with no
-new call site anywhere else in the repository. Wiring it into a `rbm status
+new call site anywhere else in the repository. Wiring it into a `backupd status
 --prometheus` flag or an HTTP handler is issue #25/#26's job, once a daemon or a CLI exists
 to call it from; this package is written so that wiring, whenever it lands, is a few lines
 calling `metrics.Render`, not a redesign.

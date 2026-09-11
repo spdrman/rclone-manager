@@ -1,6 +1,6 @@
 # Privacy policy
 
-Backup Manager, `com.iasbuilt.rclonemanager`. This is the privacy disclosure
+Backupd, `com.iasbuilt.backupd`. This is the privacy disclosure
 §73 Work Package 5.2 and §45.5 require, and it is the content the `privacy`
 link in `distribution/packaging/compliance.json` resolves to.
 
@@ -10,7 +10,7 @@ by a test or a grep, the check is named.
 
 ## What leaves the machine
 
-Nothing that Backup Manager itself originates.
+Nothing that Backupd itself originates.
 
 The app sends no telemetry, no analytics, no crash reports, no usage counters
 and no licence or activation call. There is no cloud account, no vendor
@@ -21,12 +21,12 @@ for one.
 
 The one HTTP client the shipped binaries construct talks to `127.0.0.1`: it is
 the container health check asking the local process whether it is healthy
-(`apps/generic/cmd/backup-manager-web`). It never leaves the container.
+(`apps/generic/cmd/backupd-web`). It never leaves the container.
 
 The app does open outbound network connections, and it opens exactly the ones
 the operator configured: SFTP sessions to the hosts named in the operator's own
 backup sets, made by the pinned rclone packages compiled into
-`/rbm`. Those connections carry the operator's own data to the
+`/backupd`. Those connections carry the operator's own data to the
 operator's own destination. No third party is in that path, and the app adds no
 destination of its own.
 
@@ -39,7 +39,7 @@ through creating them.
 
 - **Backup set configuration**: source paths, destination hosts and paths,
   schedules and retention policy. Stored in the config file
-  (`/etc/backup-manager/config.yaml` inside the container).
+  (`/etc/backupd/config.yaml` inside the container).
 - **SSH private key and known-hosts file**: the credential material for the
   SFTP destinations. Mounted read-only, never copied elsewhere by the app, and
   never written to a log. The host-key policy is strict: an unknown or changed
@@ -53,7 +53,7 @@ through creating them.
 
 ## Personal data
 
-Backup Manager collects no personal data about the person using it. It has no
+Backupd collects no personal data about the person using it. It has no
 user profile, no contact field, no identifier that follows anyone between
 installations, and no analytics identity.
 
@@ -78,7 +78,7 @@ claim that decays silently.
 ## Deleting everything
 
 Removing the app and deleting the state, config and secrets directories the
-platform's acceptance procedure created removes everything Backup Manager
+platform's acceptance procedure created removes everything Backupd
 stored. There is nothing held anywhere else, so there is no deletion request to
 make of anybody and nobody to make it to.
 

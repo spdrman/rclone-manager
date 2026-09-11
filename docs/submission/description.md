@@ -11,7 +11,7 @@ the text they are shortened from.
 
 ## Name
 
-Backup Manager
+Backupd
 
 ## One line
 
@@ -26,7 +26,7 @@ anything.
 
 ## Full description
 
-Backup Manager runs on your NAS and pulls backup artifacts off a remote SFTP source on a
+Backupd runs on your NAS and pulls backup artifacts off a remote SFTP source on a
 schedule you choose. Every artifact it fetches is verified against the hash the source
 published before it counts as retained, and every artifact it holds is recorded in a
 durable local catalog, so the question "do I still have Tuesday's database dump, and is it

@@ -1,39 +1,39 @@
 # UGREEN container deployment
 
-This documents the container packaging for `core/cmd/backup-manager` (A3.9): what's in
+This documents the container packaging for `core/cmd/backupd` (A3.9): what's in
 `container/`, why it's shaped the way it is, and how I verified each requirement rather
 than just asserting it. It's meant to be read next to `container/Dockerfile` and
 `container/compose.yaml`, which carry the same reasoning inline as comments.
 
-## The command is `rbm`, and `backup-manager` is gone
+## The command is `backupd`, and `backupd` is gone
 
-0.3.3 renamed the command an operator types. The engine CLI is `rbm` and the web host is
-`rbm-web`, and inside the image those are the two real binaries at `/rbm` and `/rbm-web`.
+0.3.3 renamed the command an operator types. The engine CLI is `backupd` and the web host is
+`backupd-web`, and inside the image those are the two real binaries at `/backupd` and `/backupd-web`.
 Everything in this file, in `container/compose.yaml` and in every adapter now names them.
 
-It is a clean cut, not an alias. `container/Dockerfile` copies `/rbm` and `/rbm-web` into
+It is a clean cut, not an alias. `container/Dockerfile` copies `/backupd` and `/backupd-web` into
 the runtime stage and creates nothing else: there is no link under the old name beside
-either binary, the image's own `HEALTHCHECK` is `["/rbm", "status"]`, and the distroless
+either binary, the image's own `HEALTHCHECK` is `["/backupd", "status"]`, and the distroless
 runtime has no shell to resolve a name through in any case. So an existing compose file,
 `docker run` line, `docker exec`, cron entry or wrapper script that spells
-`backup-manager` or `backup-manager-web` stops working the moment the tag moves, with
-`exec /backup-manager: no such file or directory` and a container that never comes up.
+`backupd` or `backupd-web` stops working the moment the tag moves, with
+`exec /backupd: no such file or directory` and a container that never comes up.
 
-Upgrading is therefore a tag bump **plus** moving every one of those callers onto `rbm`
-and `rbm-web`. `container/Dockerfile` carries the reasoning under "THE BINARY NAMES",
+Upgrading is therefore a tag bump **plus** moving every one of those callers onto `backupd`
+and `backupd-web`. `container/Dockerfile` carries the reasoning under "THE BINARY NAMES",
 and `scripts/install/install_docker_host.py` refuses `--release` below 0.3.3 for the
-mirror-image reason: the compose definition it writes runs `/rbm-web`, which no image
+mirror-image reason: the compose definition it writes runs `/backupd-web`, which no image
 published before 0.3.3 contains.
 
 One thing to know if you script against the image rather than run it: the two binaries
 are real files rather than links, so `docker cp` needs no `-L`, and anything pulling
-them OUT of the image names `/rbm` and `/rbm-web`.
+them OUT of the image names `/backupd` and `/backupd-web`.
 `scripts/release/record-release-hashes.sh` and
 `scripts/release/verify-manifest-parity.sh` both do.
 
 What did NOT change is everything that names the project rather than the command: the
-image reference `ghcr.io/spdrman/backup-manager`, the `rclone-manager` and `web-ui`
-compose service names, the container config directory `/etc/backup-manager`, and the
+image reference `ghcr.io/spdrman/backupd`, the `backupd` and `web-ui`
+compose service names, the container config directory `/etc/backupd`, and the
 binary names `container/release-manifest.json` records a SHA-256 under. Renaming any of
 those would move somebody's data or invalidate a release record for no gain.
 
@@ -53,14 +53,14 @@ requirement was verified rather than asserted. The two are meant to be read toge
 
 ## Status
 
-`core/cmd/backup-manager` implements every execution mode this deployment shape was
+`core/cmd/backupd` implements every execution mode this deployment shape was
 originally packaged ahead of: `run`, `daemon`, `check`, `status`, `sources`, `artifacts`,
 `fetch`, `retention`, `reconcile`, `validate` and `version`. `container/compose.yaml`
-defaults to the real long-running process (`/rbm-web serve`, see "The generic
-Web host" below) and `container/Dockerfile`'s `HEALTHCHECK` tracks `rbm
+defaults to the real long-running process (`/backupd-web serve`, see "The generic
+Web host" below) and `container/Dockerfile`'s `HEALTHCHECK` tracks `backupd
 status`'s real exit code (HEALTHY vs DEGRADED/STALE/FAILING), not just process liveness
 (issue #82/B4.1). Headless-only deployment (no web listener at all) is still available
-by overriding `command` to `["/rbm", "daemon"]`.
+by overriding `command` to `["/backupd", "daemon"]`.
 
 ## rclone is compiled in, not shelled out to
 
@@ -68,7 +68,7 @@ The image contains no `rclone` binary anywhere, and I checked that directly agai
 built image rather than trusting the design:
 
 ```
-$ docker create --platform linux/arm64 backup-manager:0.0.0-a3.9 version
+$ docker create --platform linux/arm64 backupd:0.0.0-a3.9 version
 $ docker export <container-id> | tar -tv | grep -i rclone
 $ echo $?
 1
@@ -76,7 +76,7 @@ $ echo $?
 
 Exit 1 means zero matches, checked case-insensitively against the full file listing of
 the exported image filesystem (1447 entries: the distroless base's certs/tzdata/passwd
-plus exactly one executable, then called `/backup-manager` and renamed to `/rbm` by
+plus exactly one executable, then called `/backupd` and renamed to `/backupd` by
 0.3.3). There's no file named `rclone`, no
 `rclone` directory, nothing.
 
@@ -84,9 +84,9 @@ The flip side, that rclone's packages are genuinely compiled into that one binar
 than the manager silently doing nothing useful, is also checked directly:
 
 ```
-$ strings backup-manager | grep -c 'rclone/rclone'
+$ strings backupd | grep -c 'rclone/rclone'
 2770
-$ strings backup-manager | grep 'rclone/rclone' | sort -u | head
+$ strings backupd | grep 'rclone/rclone' | sort -u | head
  github.com/rclone/rclone/fs/hash
  github.com/rclone/rclone/fs/list
  github.com/rclone/rclone/fs/walk
@@ -98,7 +98,7 @@ $ strings backup-manager | grep 'rclone/rclone' | sort -u | head
 2770 occurrences of `rclone/rclone` import paths inside a `stripped`, `statically
 linked` ELF binary. rclone is a Go module dependency (`core/go.mod` pins
 `github.com/rclone/rclone v1.75.0`), imported as packages by `core/internal/transport/rclone`,
-and compiled straight into `/rbm` by the builder stage. `CGO_ENABLED=0`
+and compiled straight into `/backupd` by the builder stage. `CGO_ENABLED=0`
 throughout means this holds without a C toolchain on either target architecture, which is
 also why `modernc.org/sqlite` (the state package's SQLite driver, pure Go, no cgo) was
 the only option that ever made sense here.
@@ -113,7 +113,7 @@ the only option that ever made sense here.
 - **`GOTOOLCHAIN=local`** so `go build` never reaches out to fetch a different toolchain
   mid-build if some future `core/go.mod` bump disagreed with the pinned builder image.
 - **`-trimpath`** strips the builder's absolute source paths from the binary. Checked
-  directly: `strings backup-manager | grep -E '/Users/rom|/src/'` returns nothing.
+  directly: `strings backupd | grep -E '/Users/rom|/src/'` returns nothing.
 - **`-buildvcs=false`** so the build doesn't stamp VCS state read off a `.git` directory
   that may or may not even be in the build context (`.dockerignore` excludes `.git`
   deliberately, for this exact reason).
@@ -148,9 +148,9 @@ Built and measured directly, both architectures:
 | linux/amd64   | yes   | yes, under QEMU emulation (no native amd64 host available here) | 18.5 MB |
 
 Both were built with `docker buildx build --platform linux/<arch> ...` from
-`container/Dockerfile`, and both ran `rbm version` successfully and printed
+`container/Dockerfile`, and both ran `backupd version` successfully and printed
 the expected version/commit/Go-version line. `docker compose build` (which does not
-cross-build; see below) plus `docker compose run --rm rclone-manager` was also exercised
+cross-build; see below) plus `docker compose run --rm backupd` was also exercised
 end to end on linux/amd64, with the full read-only-rootfs/tmpfs/non-root/bind-mount shape
 from `container/compose.yaml` in effect, not just a bare `docker run`.
 
@@ -163,7 +163,7 @@ docker buildx build \
   --build-arg VERSION=$(git describe --tags --always) \
   --build-arg COMMIT=$(git rev-parse HEAD) \
   -f container/Dockerfile \
-  -t <registry>/backup-manager:<version> \
+  -t <registry>/backupd:<version> \
   --push \
   .
 ```
@@ -226,7 +226,7 @@ This image has no shell and no root-then-drop-privileges init step (that would n
 `privileged`-adjacent capabilities this container deliberately doesn't have), so it
 cannot `chown` the mounted directories for you at startup. **Whatever `PUID`/`PGID` you
 set has to already own `STATE_DIR` and `BACKUP_DIR` on the host before the first start**,
-e.g. `chown -R 1000:1000 /volume1/backup-manager/state /volume1/backups` on the NAS
+e.g. `chown -R 1000:1000 /volume1/backupd/state /volume1/backups` on the NAS
 itself, matching whichever PUID/PGID you put in `.env`.
 
 One honest limitation: I built and ran all of this on macOS with Docker Desktop, whose
@@ -249,11 +249,11 @@ is owned by uid 65532 specifically, not by whatever `PUID` you set.
 
 - `/data/state` (writable): the SQLite journal directory, see above.
 - `/data/backups` (writable): the NAS backup volume/share completed artifacts land on.
-- `/etc/backup-manager/config` (writable): the DIRECTORY holding the manager's YAML
+- `/etc/backupd/config` (writable): the DIRECTORY holding the manager's YAML
   config (FR-5), and the two stores the engine creates beside it, `ssh_keys/` and
   `known_hosts.d/`.
-- `/etc/backup-manager/id_ed25519` (`:ro`): the SFTP client private key.
-- `/etc/backup-manager/known_hosts` (`:ro`): the pinned host keys (FR-6).
+- `/etc/backupd/id_ed25519` (`:ro`): the SFTP client private key.
+- `/etc/backupd/known_hosts` (`:ro`): the pinned host keys (FR-6).
 
 The configuration mount is a writable directory rather than a read-only single file,
 and that is issue #196 rather than a preference. Adding a backup set, saving settings
@@ -282,26 +282,26 @@ non-root uid) needs any capability at all.
 ## Restart policy
 
 `restart: unless-stopped`: come back after a crash or a NAS reboot, stay down if an
-operator deliberately stops it. `command: ["/rbm-web", "serve"]` is a real
+operator deliberately stops it. `command: ["/backupd-web", "serve"]` is a real
 long-running process (the generic Web host's HTTP server plus the backup scheduler, see
 below), so this policy now does what it says rather than looping a container that exits
-immediately. For a one-shot check instead, use `docker compose run --rm rclone-manager
-/rbm version` (or `... check`), which bypasses `restart` entirely.
+immediately. For a one-shot check instead, use `docker compose run --rm backupd
+/backupd version` (or `... check`), which bypasses `restart` entirely.
 
 ## Health check
 
-`rbm status` (issue #26, FR-24) reports `HEALTHY`/`DEGRADED`/`STALE`/`FAILING`
+`backupd status` (issue #26, FR-24) reports `HEALTHY`/`DEGRADED`/`STALE`/`FAILING`
 per backup set and exits 0 only when every one of them is `HEALTHY`. `container/Dockerfile`'s
 `HEALTHCHECK` runs exactly that:
 
 ```
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD ["/rbm", "status"]
+    CMD ["/backupd", "status"]
 ```
 
 Verified directly (`apps/generic/tests/dockercli`), not just asserted: a container whose one
 backup set is `DEGRADED` (no artifact ever discovered for it) reports Docker health
-`unhealthy`, not `healthy`. Before this issue, `HEALTHCHECK` ran `rbm version`,
+`unhealthy`, not `healthy`. Before this issue, `HEALTHCHECK` ran `backupd version`,
 which exits 0 unconditionally and so reported `healthy` regardless of backup health — real
 (if minimal) process-liveness evidence, but not what FR-24's health states are for.
 
@@ -316,15 +316,15 @@ single pass and was gone by the time anybody looked. A deployment that declares 
 storage medium reports nothing new at all.
 
 `container/compose.yaml` deliberately overrides that for the engine service, and asks
-`/health/live` instead. The reason is `web-ui`'s `depends_on: rclone-manager: condition:
+`/health/live` instead. The reason is `web-ui`'s `depends_on: backupd: condition:
 service_healthy`: whatever the engine's healthcheck asks is what stands between an operator
-and the only LAN-facing listener, and `rbm status` exits non-zero on a `DEGRADED`
+and the only LAN-facing listener, and `backupd status` exits non-zero on a `DEGRADED`
 or `STALE` set and on an instance with no configuration at all. Gating startup on it means a
 stale backup set, or a fresh install, keeps the UI from ever coming up, which is the worst
 moment to lose the page you would fix it from. Backup freshness stays what it was built to
 be: the image's own `HEALTHCHECK` (so a plain `docker run` still reports it, and so does the
 headless `daemon` command, which serves no HTTP and has no liveness endpoint to ask), the
-alerts block, and `docker compose exec rclone-manager /rbm status`.
+alerts block, and `docker compose exec backupd /backupd status`.
 
 Every packaged adapter declares the same start gate, and has to (issue #206). The image's
 instruction and the canonical start gate are now deliberately different commands, so an
@@ -332,7 +332,7 @@ adapter that declares nothing for the engine inherits the freshness verdict rath
 gate: `distribution/packaging`'s derivation gate allows that only where nothing waits on the
 engine's health, which is the Unraid template and only that. `apps/generic/tests/dockercli`
 brings every derived runtime definition up on a real fresh install and requires the Web UI to
-serve, with `rbm status` non-zero inside the same stack as the control that makes
+serve, with `backupd status` non-zero inside the same stack as the control that makes
 the result mean something.
 
 ## Building and running it yourself
@@ -342,9 +342,9 @@ the result mean something.
 docker buildx build --platform linux/arm64 \
   --build-arg VERSION=$(git describe --tags --always) \
   --build-arg COMMIT=$(git rev-parse HEAD) \
-  -f container/Dockerfile -t backup-manager:dev --load .
+  -f container/Dockerfile -t backupd:dev --load .
 
-docker run --rm --platform linux/arm64 backup-manager:dev /rbm version
+docker run --rm --platform linux/arm64 backupd:dev /backupd version
 
 # The full deployment shape, via compose (starts the generic Web host —
 # see below — listening on LISTEN_PORT, default 8080):
@@ -353,7 +353,7 @@ docker compose -f container/compose.yaml build
 docker compose -f container/compose.yaml up -d
 
 # A one-shot check instead of the long-running Web host:
-docker compose -f container/compose.yaml run --rm rclone-manager /rbm check
+docker compose -f container/compose.yaml run --rm backupd /backupd check
 ```
 
 See "The generic Web host" below for what `serve` actually composes, and
@@ -363,9 +363,9 @@ also renders `config.yaml`/`.env` for you from a private key and a remote host.
 ## The generic Web host: two containers, one image
 
 The "generic Web App host" (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2) is two
-separate Docker containers, both running the exact same `/rbm-web` binary
+separate Docker containers, both running the exact same `/backupd-web` binary
 from the exact same image - only `command:` differs, the same "one canonical image,
-vary command" principle already applied to `/rbm` vs. `/rbm-web`
+vary command" principle already applied to `/backupd` vs. `/backupd-web`
 themselves. No nginx or other new runtime dependency was introduced for the split: the
 UI-host container's reverse proxy is a plain `net/http/httputil.ReverseProxy`
 (`apps/common/webhost/serve.NewUI`).
@@ -379,17 +379,17 @@ UI-host container's reverse proxy is a plain `net/http/httputil.ReverseProxy`
                           │ static UI + proxy  │
                           └─────────┬──────────┘
                                     │ internal Docker network only
-                                    │ (http://rclone-manager:8080)
+                                    │ (http://backupd:8080)
                                     ▼
                           ┌───────────────────┐
-                          │  rclone-manager    │   no published port -
+                          │  backupd    │   no published port -
                           │ engine: core svc + │   reachable only from
                           │ scheduler + local  │   web-ui, over the
                           │ auth + /api/v1     │   `internal` network
                           └───────────────────┘
 ```
 
-**`rclone-manager`** (`/rbm-web serve`) is the engine: local authentication
+**`backupd`** (`/backupd-web serve`) is the engine: local authentication
 (`apps/common/auth/local`), the versioned `/api/v1` API (`apps/common/webhost`), and the
 backup scheduler (`core/service.BackupService.RunOnSchedule`, at the config file's own
 `poll_interval`) - one process sharing one `*service.BackupService` and one
@@ -402,16 +402,16 @@ port** - `container/compose.yaml` gives it no `ports:` entry at all, so it is re
 only from `web-ui`, over the `internal` bridge network compose.yaml defines for exactly
 this project (nothing external, nothing shared with any other container on the host).
 
-**`web-ui`** (`/rbm-web serve-ui`) serves the shared static UI (`ui/shared`'s
+**`web-ui`** (`/backupd-web serve-ui`) serves the shared static UI (`ui/shared`'s
 built bundle, embedded via `apps/generic/webui`'s `go:embed`, with an SPA fallback to
 `index.html` for any client-side route) and reverse-proxies `/api/v1/*` and `/health/*`
 unchanged (same path, method, body, and - critically - the browser's session/CSRF
-cookies) to `rclone-manager` over that same `internal` network, by its compose service
+cookies) to `backupd` over that same `internal` network, by its compose service
 name. This is the **only** container with a `ports:` entry - the one thing a browser or
 an operator's terminal is meant to reach directly.
 
 What this topology actually buys: even a full compromise of the UI-host process (the
-one facing the LAN) reaches `rclone-manager`'s API the exact same way a legitimate
+one facing the LAN) reaches `backupd`'s API the exact same way a legitimate
 browser would - it does not get a bind mount to `config.yaml`, the SSH key,
 `known_hosts`, or either data directory, because `web-ui` never has any of those
 mounted in the first place (see `container/compose.yaml`: it declares zero `volumes:`).
@@ -419,14 +419,14 @@ This is plain Docker Compose network topology, nothing more - no `internal: true
 network flag and no firewall rules block `web-ui`'s own outbound internet access, which
 would be a further hardening step beyond what this issue asked for.
 
-**First run.** With no administrator account yet, `rclone-manager` prints a one-time
+**First run.** With no administrator account yet, `backupd` prints a one-time
 enrollment link straight to its own container log:
 
 ```
-rbm-web: no administrator account exists yet. Open http://localhost:8080/enroll?token=... to create one (valid 30 minutes, single use).
+backupd-web: no administrator account exists yet. Open http://localhost:8080/enroll?token=... to create one (valid 30 minutes, single use).
 ```
 
-`rclone-manager` has no published port of its own (see above), so its own `--listen`
+`backupd` has no published port of its own (see above), so its own `--listen`
 address is never something an operator could actually open - printing a link against
 that address was a real bug fixed as part of issue #119's review: `--public-base-url`/
 `$PUBLIC_BASE_URL` tells `serve` what `web-ui`'s own externally-reachable address
@@ -444,18 +444,18 @@ DNS record somebody set up, nowhere else. On a host with no default route to rea
 address off, it falls back to the hostname. `compose.yaml` itself cannot do any of
 this, which is why its own default is still `localhost`: it has no way to ask the
 kernel anything. Leaving `PUBLIC_BASE_URL` unset entirely (outside of `compose.yaml`'s own default,
-e.g. when running `/rbm-web serve` directly) prints just the raw token
+e.g. when running `/backupd-web serve` directly) prints just the raw token
 instead of a clickable but wrong link.
 
 The token itself is required to complete `POST /api/v1/auth/enroll` — reaching the port
 is not enough to claim the account (§49.1) — and is invalidated the moment enrollment
 completes, or by the next process restart before it does. It travels as a URL query
 parameter, not a form field: neither `EnrollmentPage.tsx` nor the design canvas
-(`docs/design/Backup Manager.dc.html`) has one, so `ui/shared/src/api/client.ts` reads
+(`docs/design/Backupd.dc.html`) has one, so `ui/shared/src/api/client.ts` reads
 it off `window.location.search` and attaches it as the `X-Bootstrap-Token` header
 instead.
 
-**Trusting `web-ui`'s reverse proxy (`TRUST_FORWARDED_HEADERS`).** `rclone-manager`
+**Trusting `web-ui`'s reverse proxy (`TRUST_FORWARDED_HEADERS`).** `backupd`
 only ever sees requests from `web-ui`'s own reverse proxy, over the `internal` network -
 every request's `RemoteAddr` is `web-ui`'s own container address, never the real
 external client's. Left uncorrected, that collapses per-IP rate limiting on
@@ -464,10 +464,10 @@ on the internet-facing side (an attacker-usable denial-of-service against the ad
 own login), and permanently prevents the session/CSRF cookies' `Secure` flag from ever
 being `true`, regardless of TLS in front of `web-ui`'s published port (issue #119's
 review, findings 1 and 4). `container/compose.yaml` sets
-`TRUST_FORWARDED_HEADERS=true` for `rclone-manager` only, which makes it trust
+`TRUST_FORWARDED_HEADERS=true` for `backupd` only, which makes it trust
 `X-Forwarded-For`/`X-Forwarded-Proto` from its one caller instead of its own
 `RemoteAddr`/TLS state - safe specifically because network isolation guarantees
-`web-ui` is the only thing that can ever be `rclone-manager`'s direct TCP peer, and
+`web-ui` is the only thing that can ever be `backupd`'s direct TCP peer, and
 `apps/common/webhost/serve.NewUI`'s reverse proxy always sets both headers itself, derived
 from its own real connection to the browser, never copied from anything the browser
 sent. This is never set for `web-ui` itself: that container IS the actual
@@ -477,30 +477,30 @@ its published port.
 **Two binaries, one image, no `ENTRYPOINT`.** `apps/generic` is its own Go module — it
 has to be, since it imports `apps/common/webhost/serve` and `apps/common/auth/local`,
 and `core/`'s own module cannot depend on `apps/` in either direction (§7.1) — so
-`/rbm-web` is a second binary alongside the unchanged `/rbm`,
+`/backupd-web` is a second binary alongside the unchanged `/backupd`,
 not a new subcommand of it. `container/Dockerfile` sets no `ENTRYPOINT` for exactly
 this reason (a fixed `ENTRYPOINT` can only ever prefix one binary): every `command:` in
 `container/compose.yaml`, and every example above, names its binary by full path.
 
-**Healthchecks differ per container.** `rclone-manager` keeps the image's own baked-in
-`HEALTHCHECK` (`rbm status`, real backup-freshness evidence against the
+**Healthchecks differ per container.** `backupd` keeps the image's own baked-in
+`HEALTHCHECK` (`backupd status`, real backup-freshness evidence against the
 state database it actually holds). `web-ui` has neither a config file nor a state
 database, so `container/compose.yaml` overrides its `healthcheck:` to
-`/rbm-web healthcheck` instead - a plain HTTP GET against its own listener,
+`/backupd-web healthcheck` instead - a plain HTTP GET against its own listener,
 the only question that applies to a container whose entire job is "serve static files
 and proxy requests."
 
-**Headless mode is still just the other binary.** `/rbm daemon` (or `run`,
-`check`, ...) never binds a web listener at all — override `rclone-manager`'s `command`
-in `container/compose.yaml` to `["/rbm", "daemon"]` (and simply omit the
+**Headless mode is still just the other binary.** `/backupd daemon` (or `run`,
+`check`, ...) never binds a web listener at all — override `backupd`'s `command`
+in `container/compose.yaml` to `["/backupd", "daemon"]` (and simply omit the
 `web-ui` service, or stop it) for a deployment that should never expose the API/UI at
-all. `rbm status` works identically either way, since it is always a fresh,
+all. `backupd status` works identically either way, since it is always a fresh,
 read-only check against the shared state database file, independent of which binary is
-actually running as `rclone-manager`'s main process.
+actually running as `backupd`'s main process.
 
 ## Storage capacity, and capping what this manager may use
 
-By default backup manager measures the filesystem your backup root is on and reports
+By default backupd measures the filesystem your backup root is on and reports
 against the whole volume: no configuration, and useful from the moment setup finishes.
 If you would rather it stayed inside an allowance, set a cap:
 
@@ -583,7 +583,7 @@ notifies nobody, so turning this on is always a deliberate edit.
 notification capability, supplied by the provider app rather than by this file, which
 is why there is no URL, command or credential to get wrong. A platform that declares
 no native notification capability, and the generic Docker/Linux host is one, cannot
-deliver: `/rbm-web serve` prints `proactive alerting is off` at startup and
+deliver: `/backupd-web serve` prints `proactive alerting is off` at startup and
 carries on running backups normally. It never emulates delivery, so alerting is either
 visibly on or visibly off, never silently swallowed.
 
@@ -609,7 +609,7 @@ There are **three** switches, and they are three because a request crosses three
 places that each know something the other two cannot see.
 
 **Both containers.** `LOG_LEVEL=debug` in `container/.env`, which
-`container/compose.yaml` passes to `rclone-manager` and to `web-ui` alike:
+`container/compose.yaml` passes to `backupd` and to `web-ui` alike:
 
 ```
 # container/.env
@@ -637,7 +637,7 @@ What appears at `debug` that does not appear at `info`:
 
 | event | container | what it answers |
 | --- | --- | --- |
-| `activity_debug` | `rclone-manager` | what the activity feed actually served: how many events, how many bytes, which cursor, and the forwarded headers it was asked under |
+| `activity_debug` | `backupd` | what the activity feed actually served: how many events, how many bytes, which cursor, and the forwarded headers it was asked under |
 | `proxy_upstream_headers` | `web-ui` | what the engine answered and with what framing — status, `Content-Length`, `Content-Encoding`, `Transfer-Encoding` |
 | `proxy_upstream_complete` | `web-ui` | what the body turned out to be: bytes actually copied against the length declared, whether the read ended at EOF, and any read or close error. A body that ends short of its declared length is logged at `warn` |
 
@@ -675,7 +675,7 @@ posture, not an operating one.
 ## Release hashes
 
 `scripts/release/record-release-hashes.sh` builds `container/Dockerfile` for both
-`linux/amd64` and `linux/arm64`, extracts `/rbm` and `/rbm-web`
+`linux/amd64` and `linux/arm64`, extracts `/backupd` and `/backupd-web`
 from each built image, and writes their SHA-256 hashes (plus each build's local Docker
 image ID) to `container/release-manifest.json` — the Phase 4 TDD Gate's "binary
 SHA-256 and image/package digests," and §8's "release manifest SHALL prove core parity
@@ -725,7 +725,7 @@ copy of it in prose is a copy that goes stale without anything noticing.
 
 **What this records about the registry**: nothing yet, for the version currently cut.
 `distribution/packaging/canonical.json` records `image.published: false` for
-`ghcr.io/spdrman/backup-manager:0.4.0`, and the manifest carries a `registry_digest` of
+`ghcr.io/spdrman/backupd:0.4.0`, and the manifest carries a `registry_digest` of
 `null` per architecture and a null `index_digest` to say the same thing from the other
 side. `TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` holds the two
 together in both directions: a published flag with no digest and a digest with no

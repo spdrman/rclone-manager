@@ -1,6 +1,6 @@
 # The bundled icon artwork, and the licence it is under
 
-Backup Manager draws its icons as inline SVG paths compiled into the web
+Backupd draws its icons as inline SVG paths compiled into the web
 bundle. Those paths are Font Awesome Free artwork, which is CC BY 4.0, and
 this file is the attribution that licence asks for. Issue #621 is the
 change that put them there.

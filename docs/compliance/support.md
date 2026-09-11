@@ -1,12 +1,12 @@
 # Support
 
-Backup Manager, `com.iasbuilt.rclonemanager`. This is the support material
+Backupd, `com.iasbuilt.backupd`. This is the support material
 §73 Work Package 5.2 requires, and it is what the `support` link in
 `distribution/packaging/compliance.json` resolves to.
 
 ## Where to get help
 
-Open an issue at <https://github.com/spdrman/rclone-manager/issues>.
+Open an issue at <https://github.com/spdrman/backupd/issues>.
 
 That address is the single support channel. There is no separate support inbox,
 no forum and no chat, on purpose: a channel nobody reads is worse than one
@@ -26,12 +26,12 @@ no browser: Apache-2.0 §4a is owed to a recipient, not to a visitor.
 Four things turn a report into something actionable, and all four come out of
 the app itself rather than out of memory:
 
-1. The version. `/rbm version` prints it, and it matches the
+1. The version. `/backupd version` prints it, and it matches the
    `version` field of `container/release-manifest.json` for the release you are
    running.
 2. The platform and how the app was installed: which NAS or hypervisor, and
    which of the packaging paths in `docs/acceptance/` you followed.
-3. What the app says about itself. `/rbm status` reports each backup
+3. What the app says about itself. `/backupd status` reports each backup
    set's health state, and it is the same signal the container health check
    reads.
 4. The relevant log lines. Secrets are redacted before anything is written, so
@@ -64,10 +64,10 @@ listing would be worse than saying this.
 
 ## Diagnosing before you file
 
-- `/rbm status` gives every backup set's health state and exits
+- `/backupd status` gives every backup set's health state and exits
   non-zero when any of them is degraded, stale or failing.
-- `/rbm check` validates the configuration without moving data.
-- `/rbm validate` exercises the configured transport, including the
+- `/backupd check` validates the configuration without moving data.
+- `/backupd validate` exercises the configured transport, including the
   SSH host-key policy, which is the most common cause of a set that never
   starts.
 

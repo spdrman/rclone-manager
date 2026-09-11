@@ -3,7 +3,7 @@
 This is the page to read when a backup didn't arrive, an artifact looks wrong, or you're
 trying to figure out whether you can still get a file back. It assumes you've already read
 the README's [Status](../README.md#status-what-actually-runs-today) section; the short
-version repeated here because it changes every answer below: there is no `rbm
+version repeated here because it changes every answer below: there is no `backupd
 status`, `restore`, `run` or `daemon` command yet (issues #25, #26). Everything in this
 document works directly against the SQLite journal and the NAS filesystem, because that's
 genuinely the only interface that exists today.
@@ -113,7 +113,7 @@ strength of that alone; you don't need to re-verify it before copying it out, th
 re-running whatever validator the backup set's config names is never wrong if the stakes
 are high enough to justify the time.
 
-Copy it wherever the restore actually needs to happen. There is no `backup-manager restore`
+Copy it wherever the restore actually needs to happen. There is no `backupd restore`
 command to do this for you; a plain `cp`, `scp`, or whatever your restore target needs is
 the entire remaining procedure once you have the right path.
 
@@ -212,7 +212,7 @@ That's a real operational consequence, not a cosmetic one:
   producer side, manual cleanup, a shorter retention window configured at the source), it
   will fill up on a long enough timeline, in every deployment that follows this project's
   own hardening advice. Monitor remote disk usage independently of this project; don't
-  assume `backup-manager` is freeing space on the source just because backups keep landing
+  assume `backupd` is freeing space on the source just because backups keep landing
   successfully on the NAS.
 - If you need remote pruning to actually happen in this deployment shape, the honest options
   are: relax the SFTP account's hardening to allow a remote hash command (trading delete-
@@ -239,11 +239,11 @@ section is the longer version:
   `ApplyRetentionPlan` deletes only against that `plan_id`, and only while the plan it
   re-derives still matches the one an administrator reviewed. No cycle, no daemon and no
   timer ever calls it, so local disk usage grows until somebody applies a plan.
-- `rbm retention` is a preview in both of its modes and deletes nothing, with or
+- `backupd retention` is a preview in both of its modes and deletes nothing, with or
   without `--dry-run`. That is not a gap waiting to be filled: a CLI that deleted backups
   without the `plan_id` confirmation the HTTP path insists on would be a second, weaker
   authorisation path to the same act (issue #431).
-- `rbm retention apply <source/backup-set> --acknowledge` is the terminal's own
+- `backupd retention apply <source/backup-set> --acknowledge` is the terminal's own
   way in (issue #602), and it is not that second path: it goes through the same
   `PreviewRetention`/`ApplyRetentionPlan` pair, prints the plan it is about to apply, and
   refuses with `RETENTION_PLAN_STALE` and zero deletions if the set moved in between.
@@ -255,7 +255,7 @@ be safe to remove"; applying them is somebody's deliberate act, through the API 
 that verb.
 
 One thing to know before reading a preview taken AFTER an apply: deleting a file does not
-change the journal, so `rbm retention` goes on listing a pruned artifact as
+change the journal, so `backupd retention` goes on listing a pruned artifact as
 `DELETE` (it reads FR-18/FR-19 classification and never looks at the disk), while the API's
 own preview reports `REFUSE` for it, because FR-20's checks stat the path and find nothing
 there. Both are describing the same backup set; only one of them has looked.
@@ -275,7 +275,7 @@ you.
 First, read why:
 
 ```
-rbm artifacts production/postgres/dump-2026-09-04.zst
+backupd artifacts production/postgres/dump-2026-09-04.zst
 ```
 
 The `reason` line is the literal sentence the manager recorded at the moment it gave up.
@@ -296,7 +296,7 @@ Three shapes come up most:
 Then put it back into the pipeline:
 
 ```
-backup-manager retry production/postgres/dump-2026-09-04.zst --note "the NAS came back"
+backupd retry production/postgres/dump-2026-09-04.zst --note "the NAS came back"
 ```
 
 That moves the row from `FAILED` to `DISCOVERED` and the next cycle picks it up like any
@@ -321,7 +321,7 @@ recovery path reaches. Create a backup set with the same source and name first.
 |---|---|---|
 | Newest row is `COMMITTED`/`REMOTE_DELETE_PENDING`/`COMPLETE`/`REMOTE_RETAINED`, recent | Healthy | Nothing |
 | No good row inside `stale_after` | Stale | Investigate why new backups aren't landing |
-| `FAILED`, no `next_retry_at` | The attempt did not finish and nothing will try again on its own | Read the reason, fix it, then `backup-manager retry <id>` (Step 7) |
+| `FAILED`, no `next_retry_at` | The attempt did not finish and nothing will try again on its own | Read the reason, fix it, then `backupd retry <id>` (Step 7) |
 | `QUARANTINED_LOST` anywhere | Irrecoverable loss | Restore from the next-newest good row; report the gap honestly |
 | Newest good row is `QUARANTINED` | Content suspect, source may still exist | Manual re-fetch or re-run reconciliation yourself |
 | `REMOTE_DELETE_PENDING` stuck, `remote_delete_error` set | Expected refusal under a hardened SFTP account | Monitor remote disk directly; this is not corrupting anything |

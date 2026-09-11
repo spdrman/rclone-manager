@@ -73,16 +73,16 @@ pveversion -v | head -3
 ### 0.2 Choose and create the storage the app will use
 
 The profile keeps every persistent path under one host directory or dataset, which
-is mounted into the guest at `/mnt/backup-manager`. On ZFS:
+is mounted into the guest at `/mnt/backupd`. On ZFS:
 
 ```bash
-zfs create -o mountpoint=/srv/backup-manager rpool/backup-manager
+zfs create -o mountpoint=/srv/backupd rpool/backupd
 ```
 
 or on a plain directory storage:
 
 ```bash
-mkdir -p /srv/backup-manager
+mkdir -p /srv/backupd
 ```
 
 - [ ] Host path created, recorded in the evidence table
@@ -111,7 +111,7 @@ that id belongs to an existing guest: pick another and re-run until both fail.
 Default (VM). Use any current Debian or Ubuntu LTS cloud image:
 
 ```bash
-qm create "$VMID" --name backup-manager --memory 2048 --cores 2 \
+qm create "$VMID" --name backupd --memory 2048 --cores 2 \
   --net0 virtio,bridge=vmbr0 --scsihw virtio-scsi-single
 # import the cloud image, set --scsi0, --ide2 cloudinit, --boot order=scsi0
 qm set "$VMID" --ciuser admin --sshkeys ~/.ssh/id_ed25519.pub
@@ -130,7 +130,7 @@ from the host, or give the VM its own disk and skip the host-side dataset. Recor
 which you used.
 
 - [ ] Guest created and reachable over SSH
-- [ ] Host directory visible inside the guest at `/mnt/backup-manager`
+- [ ] Host directory visible inside the guest at `/mnt/backupd`
 - [ ] `qm config $VMID` recorded
 
 **Variant (unprivileged LXC).** Only if you accept the caveats in
@@ -139,7 +139,7 @@ which you used.
 ```bash
 pct create "$VMID" <template> --unprivileged 1 --features nesting=1,keyctl=1 \
   --memory 2048 --cores 2 --net0 name=eth0,bridge=vmbr0,ip=dhcp
-pct set "$VMID" --mp0 /srv/backup-manager,mp=/mnt/backup-manager
+pct set "$VMID" --mp0 /srv/backupd,mp=/mnt/backupd
 pct start "$VMID"
 ```
 
@@ -158,13 +158,13 @@ ssh admin@<guest> 'docker --version && docker compose version'
 
 ### 0.5 Make the canonical image resolvable
 
-`ghcr.io/spdrman/backup-manager:0.4.0` is cut but not pushed yet:
+`ghcr.io/spdrman/backupd:0.4.0` is cut but not pushed yet:
 `distribution/packaging/canonical.json` records `image.published: false`, and
 `container/release-manifest.json` carries a `registry_digest` of `null` per
 architecture. So the reference does not resolve from the registry today, and the
 steps below are how you make it resolve, by pushing a build to a registry this host
 can reach or building elsewhere and loading it. The previous release,
-`ghcr.io/spdrman/backup-manager:0.3.3`, stays published and signed if you would
+`ghcr.io/spdrman/backupd:0.3.3`, stays published and signed if you would
 rather run that. Either push to your own registry:
 
 ```bash
@@ -173,27 +173,27 @@ docker buildx build \
   --build-arg VERSION="$(git describe --tags --always)" \
   --build-arg COMMIT="$(git rev-parse HEAD)" \
   -f container/Dockerfile \
-  -t <your-registry>/backup-manager:<version> \
+  -t <your-registry>/backupd:<version> \
   --push .
 ```
 
 or side-load into the guest and set `IMAGE` in the env file to the loaded tag:
 
 ```bash
-docker save backup-manager:<version> | gzip > backup-manager.tar.gz
-scp backup-manager.tar.gz admin@<guest>:/tmp/
-ssh admin@<guest> 'gunzip -c /tmp/backup-manager.tar.gz | docker load'
+docker save backupd:<version> | gzip > backupd.tar.gz
+scp backupd.tar.gz admin@<guest>:/tmp/
+ssh admin@<guest> 'gunzip -c /tmp/backupd.tar.gz | docker load'
 ```
 
 The compose file reads the image reference from a single `IMAGE` variable in
-`apps/proxmox/compose/backup-manager.env`, so this is one line in one file.
+`apps/proxmox/compose/backupd.env`, so this is one line in one file.
 
 - [ ] Canonical image resolvable inside the guest, reference recorded
 
 ### 0.6 Resolve paths, ownership, key material and config
 
 ```bash
-ssh admin@<guest> 'sudo mkdir -p /mnt/backup-manager/{state,backups,config,secrets}'
+ssh admin@<guest> 'sudo mkdir -p /mnt/backupd/{state,backups,config,secrets}'
 ```
 
 The runtime image is distroless: no shell, no root step, nothing inside the
@@ -205,8 +205,8 @@ Create the SSH key and pinned `known_hosts` **on the guest**, following
 key into the evidence table, and never put one in `apps/proxmox/`.
 
 ```bash
-ssh admin@<guest> 'ssh-keygen -t ed25519 -N "" -f /mnt/backup-manager/secrets/id_ed25519'
-ssh admin@<guest> 'ssh-keyscan -t ed25519 <sftp-host> > /mnt/backup-manager/secrets/known_hosts'
+ssh admin@<guest> 'ssh-keygen -t ed25519 -N "" -f /mnt/backupd/secrets/id_ed25519'
+ssh admin@<guest> 'ssh-keyscan -t ed25519 <sftp-host> > /mnt/backupd/secrets/known_hosts'
 ```
 
 **Chown last, once the files exist.** `ssh-keygen` writes the private key owned
@@ -217,8 +217,8 @@ SFTP connection fails with a permission error that points at the key rather than
 at this step. This is the same ordering the TrueNAS, Unraid and OpenMediaVault
 procedures already use.
 
-**Recurse only over what this step created.** `/mnt/backup-manager` is the shared
-host directory, and `/mnt/backup-manager/backups` is the retained backup store: on
+**Recurse only over what this step created.** `/mnt/backupd` is the shared
+host directory, and `/mnt/backupd/backups` is the retained backup store: on
 a reinstall both already hold data this procedure did not write, and a `chown -R`
 across either rewrites the ownership of all of it with nothing to restore it from.
 So the two private trees are chowned recursively and the share root and the backup
@@ -229,19 +229,19 @@ backup root or a parent of it.
 
 ```bash
 ssh admin@<guest> '
-  sudo chown -R 1000:100 /mnt/backup-manager/state /mnt/backup-manager/config /mnt/backup-manager/secrets
-  sudo chown 1000:100 /mnt/backup-manager /mnt/backup-manager/backups
-  sudo chmod 600 /mnt/backup-manager/secrets/id_ed25519
-  sudo -u "#1000" cat /mnt/backup-manager/secrets/id_ed25519 > /dev/null && echo readable
+  sudo chown -R 1000:100 /mnt/backupd/state /mnt/backupd/config /mnt/backupd/secrets
+  sudo chown 1000:100 /mnt/backupd /mnt/backupd/backups
+  sudo chmod 600 /mnt/backupd/secrets/id_ed25519
+  sudo -u "#1000" cat /mnt/backupd/secrets/id_ed25519 > /dev/null && echo readable
 '
 ```
 
-- [ ] `/mnt/backup-manager/{state,backups,config,secrets}` exist, owned by the app's uid/gid
+- [ ] `/mnt/backupd/{state,backups,config,secrets}` exist, owned by the app's uid/gid
 - [ ] The recursive chown touched only `state`, `config` and `secrets`; the share
       root and `backups` were chowned as mountpoints, not as trees
 - [ ] The chown ran **after** the key and `known_hosts` were created
 - [ ] `sudo -u '#1000' cat .../secrets/id_ed25519` succeeded, and the key is mode 600
-- [ ] `/mnt/backup-manager/config` exists and is **writable** by the app's uid/gid
+- [ ] `/mnt/backupd/config` exists and is **writable** by the app's uid/gid
 - [ ] `config/config.yaml` written inside it and valid
 - [ ] Key material lives only on the guest, redacted everywhere else
 
@@ -258,23 +258,23 @@ would look healthy while writing the state database and every retained artifact
 somewhere the recovery story in step 8 cannot find them.
 
 ```bash
-ssh admin@<guest> 'mountpoint -q /mnt/backup-manager && echo mounted'
+ssh admin@<guest> 'mountpoint -q /mnt/backupd && echo mounted'
 ```
 
-- [ ] `mountpoint -q /mnt/backup-manager` succeeded in the guest, before `up -d`
+- [ ] `mountpoint -q /mnt/backupd` succeeded in the guest, before `up -d`
 
 ```bash
-scp apps/proxmox/compose/backup-manager.yml admin@<guest>:/opt/backup-manager/
-scp apps/proxmox/compose/backup-manager.env admin@<guest>:/opt/backup-manager/.env
-ssh admin@<guest> 'cd /opt/backup-manager && docker compose -f backup-manager.yml up -d'
+scp apps/proxmox/compose/backupd.yml admin@<guest>:/opt/backupd/
+scp apps/proxmox/compose/backupd.env admin@<guest>:/opt/backupd/.env
+ssh admin@<guest> 'cd /opt/backupd && docker compose -f backupd.yml up -d'
 ```
 
 - [ ] Both containers reach `running`
-- [ ] `backup-manager` reports healthy (it declares the liveness probe
-      `/rbm-web healthcheck --url http://127.0.0.1:8080/health/live`,
-      not the image's own `/rbm status`: the Web UI waits on this, and
+- [ ] `backupd` reports healthy (it declares the liveness probe
+      `/backupd-web healthcheck --url http://127.0.0.1:8080/health/live`,
+      not the image's own `/backupd status`: the Web UI waits on this, and
       the backup-freshness verdict is non-zero on a fresh install)
-- [ ] `backup-manager-ui` reports healthy (it overrides the image's own healthcheck)
+- [ ] `backupd-ui` reports healthy (it overrides the image's own healthcheck)
 - [ ] `docker compose logs` shows no repeated restart
 
 ## Step 2 — Reproducibility
@@ -284,7 +284,7 @@ means a second operator following this file from a clean guest lands in the same
 place. Prove it rather than asserting it:
 
 ```bash
-qm clone "$VMID" "$((VMID + 1))" --name backup-manager-repro   # or pct clone
+qm clone "$VMID" "$((VMID + 1))" --name backupd-repro   # or pct clone
 ```
 
 Bring the clone up from step 0.5 onward against a *separate* host directory, using
@@ -292,7 +292,7 @@ the same two files and no manual edits beyond the env file's documented
 substitutions.
 
 - [ ] Second guest reaches the same running state from the same two files
-- [ ] The only edits needed were inside `backup-manager.env`
+- [ ] The only edits needed were inside `backupd.env`
 - [ ] Number of undocumented manual steps required: **must be zero**, record it
 
 ## Step 3 — Web UI access
@@ -316,8 +316,8 @@ reached at the guest's own address and published port.
 
 ## Step 5 — Storage mapping and backup-root containment
 
-- [ ] State lands under the host path mapped to `/mnt/backup-manager/state`
-- [ ] Retained artifacts land under the host path mapped to `/mnt/backup-manager/backups`
+- [ ] State lands under the host path mapped to `/mnt/backupd/state`
+- [ ] Retained artifacts land under the host path mapped to `/mnt/backupd/backups`
 - [ ] No SSH private key, `known_hosts`, config file or auth record exists anywhere
       inside the backup root (§19.2)
 - [ ] The key and `known_hosts` are mounted read-only, and a write attempt from
@@ -346,12 +346,12 @@ diff rather than an impression:
 
 ```bash
 ssh admin@<guest> '
-  sha256sum /mnt/backup-manager/state/state.db | tee /tmp/before-update.sha256
-  find /mnt/backup-manager/backups -type f -printf "%p %s\n" | sort > /tmp/before-update.txt
+  sha256sum /mnt/backupd/state/state.db | tee /tmp/before-update.sha256
+  find /mnt/backupd/backups -type f -printf "%p %s\n" | sort > /tmp/before-update.txt
 '
-ssh admin@<guest> 'cd /opt/backup-manager && docker compose pull && docker compose up -d'
+ssh admin@<guest> 'cd /opt/backupd && docker compose pull && docker compose up -d'
 ssh admin@<guest> '
-  find /mnt/backup-manager/backups -type f -printf "%p %s\n" | sort > /tmp/after-update.txt
+  find /mnt/backupd/backups -type f -printf "%p %s\n" | sort > /tmp/after-update.txt
   diff /tmp/before-update.txt /tmp/after-update.txt
 '
 ```
@@ -378,9 +378,9 @@ through a virtiofs or `mp0` mapping, so it is the one where a mapping problem ca
 silently empty the guest's view of it.
 
 ```bash
-dd if=/dev/urandom of=/srv/backup-manager/backups/acceptance-canary.bin bs=1M count=8
-sha256sum /srv/backup-manager/backups/acceptance-canary.bin | tee /root/pve-canary.sha256
-find /srv/backup-manager -type f -printf '%p %s\n' | sort > /root/pve-before-destroy.txt
+dd if=/dev/urandom of=/srv/backupd/backups/acceptance-canary.bin bs=1M count=8
+sha256sum /srv/backupd/backups/acceptance-canary.bin | tee /root/pve-canary.sha256
+find /srv/backupd -type f -printf '%p %s\n' | sort > /root/pve-before-destroy.txt
 ```
 
 Confirm the id you are about to destroy is the one this procedure created:
@@ -397,7 +397,7 @@ Then verify against the baseline, before doing anything else:
 
 ```bash
 sha256sum -c /root/pve-canary.sha256
-find /srv/backup-manager -type f -printf '%p %s\n' | sort > /root/pve-after-destroy.txt
+find /srv/backupd -type f -printf '%p %s\n' | sort > /root/pve-after-destroy.txt
 diff /root/pve-before-destroy.txt /root/pve-after-destroy.txt
 ```
 
@@ -445,11 +445,11 @@ must say so rather than being filled in green.
 The host directory or dataset is new containment surface, so re-run the
 destructive-safety expectations against it specifically:
 
-- [ ] A backup set configured with a root outside `/mnt/backup-manager/backups` is refused
+- [ ] A backup set configured with a root outside `/mnt/backupd/backups` is refused
 - [ ] A symlink placed inside the backup root that points outside it is not followed
       into a delete
 - [ ] A retention apply deletes only artifacts under the backup root
-- [ ] Nothing under `/mnt/backup-manager/{state,config,secrets}` is ever a delete target
+- [ ] Nothing under `/mnt/backupd/{state,config,secrets}` is ever a delete target
 - [ ] Destroying the guest mid-operation leaves the state database recoverable
 
 ## Step 11 — Cross-check against the automated matrix
@@ -477,7 +477,7 @@ certified.
 | Architecture | |
 | Guest shape used (VM or unprivileged LXC) and its config | |
 | VMID chosen at step 0.3, and the evidence both `qm status` and `pct status` reported it free | |
-| Host storage / dataset used for `/mnt/backup-manager` | |
+| Host storage / dataset used for `/mnt/backupd` | |
 | How the host directory was shared into the guest | |
 | Package / image version | |
 | Image reference used, and how it was made resolvable | |
