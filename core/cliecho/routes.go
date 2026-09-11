@@ -555,13 +555,20 @@ var routes = map[string]entry{
 	key("GET", "/activity"): {
 		build: func(a Action) *cmd {
 			c := newCmd("activity")
-			// The one query parameter this route reads. The handler
-			// treats an absent, unparseable or non-positive value as the
-			// backend's own default, so a line that printed --limit 0
-			// would be naming a value the request did not make.
+			// The one query parameter this route reads that a command can
+			// say. The handler treats an absent, unparseable or
+			// non-positive value as the backend's own default, so a line
+			// that printed --limit 0 would be naming a value the request
+			// did not make.
 			if n := positiveQuery(a, "limit"); n > 0 {
 				c.flag("limit", itoa(n))
 			}
+			// `before` is deliberately not echoed, for the same reason
+			// `since` is not on the live route below: it is a browser's
+			// paging cursor into a record it is already partway through,
+			// there is no flag for it, and a command run at a terminal
+			// starts at the newest page. Printing one that named a cursor
+			// would be printing a flag this binary does not have.
 			return c
 		},
 		examples: []Action{{}, {Query: mustQuery("limit=50")}},

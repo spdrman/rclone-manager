@@ -212,7 +212,7 @@ func TestListActivity_ReportsTheTransitionsARealCycleRecorded(t *testing.T) {
 	svc, _ := openTestService(t)
 	ctx := context.Background()
 
-	before, err := svc.ListActivity(ctx, 0)
+	before, _, err := svc.ListActivity(ctx, 0, "")
 	if err != nil {
 		t.Fatalf("ListActivity (before): %v", err)
 	}
@@ -222,7 +222,7 @@ func TestListActivity_ReportsTheTransitionsARealCycleRecorded(t *testing.T) {
 
 	runOneCycle(t, svc)
 
-	got, err := svc.ListActivity(ctx, 0)
+	got, _, err := svc.ListActivity(ctx, 0, "")
 	if err != nil {
 		t.Fatalf("ListActivity: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestListActivity_ClampsTheLimit(t *testing.T) {
 	ctx := context.Background()
 	runOneCycle(t, svc)
 
-	all, err := svc.ListActivity(ctx, 0)
+	all, _, err := svc.ListActivity(ctx, 0, "")
 	if err != nil {
 		t.Fatalf("ListActivity: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestListActivity_ClampsTheLimit(t *testing.T) {
 		t.Fatalf("only %d events, so a limit test proves nothing", len(all))
 	}
 
-	one, err := svc.ListActivity(ctx, 1)
+	one, _, err := svc.ListActivity(ctx, 1, "")
 	if err != nil {
 		t.Fatalf("ListActivity(1): %v", err)
 	}
@@ -269,12 +269,87 @@ func TestListActivity_ClampsTheLimit(t *testing.T) {
 	}
 
 	// Above the cap is clamped, not refused: the caller asked for a feed.
-	huge, err := svc.ListActivity(ctx, MaxActivityLimit*10)
+	huge, cursor, err := svc.ListActivity(ctx, MaxActivityLimit*10, "")
 	if err != nil {
 		t.Fatalf("ListActivity(huge): %v", err)
 	}
 	if len(huge) != len(all) {
 		t.Errorf("len = %d, want %d", len(huge), len(all))
+	}
+	// A page nothing was left out of says so by carrying no cursor: a
+	// client that got one would offer an operator a "load older" control
+	// that produces nothing.
+	if cursor != "" {
+		t.Errorf("next cursor = %q on a read that returned the whole log, want empty", cursor)
+	}
+}
+
+// TestListActivity_PagesOlderEventsWithTheCursor is the other half of the
+// bound above (issue #730). Clamping alone means a client can only ever
+// see the newest MaxActivityLimit events: the response's cursor is what
+// lets it walk past them without asking for the deployment's whole
+// history in one payload.
+//
+// The walk is asserted end to end rather than one page deep. What can go
+// wrong here is an off-by-one at a page edge, which a single hop cannot
+// see: a cursor that is inclusive repeats a row, and one that skips a row
+// loses an event nothing else in this product records durably.
+func TestListActivity_PagesOlderEventsWithTheCursor(t *testing.T) {
+	svc, _ := openTestService(t)
+	ctx := context.Background()
+	runOneCycle(t, svc)
+
+	all, _, err := svc.ListActivity(ctx, 0, "")
+	if err != nil {
+		t.Fatalf("ListActivity: %v", err)
+	}
+	if len(all) < 3 {
+		t.Fatalf("only %d events, so paging two at a time proves nothing", len(all))
+	}
+
+	var (
+		walked []ActivityEvent
+		cursor string
+	)
+	for page := 0; ; page++ {
+		if page > len(all) {
+			t.Fatalf("the walk did not terminate after %d pages over a log of %d events", page, len(all))
+		}
+		events, next, err := svc.ListActivity(ctx, 2, cursor)
+		if err != nil {
+			t.Fatalf("ListActivity(page %d, before=%q): %v", page, cursor, err)
+		}
+		if len(events) > 2 {
+			t.Fatalf("page %d returned %d events for a limit of 2", page, len(events))
+		}
+		walked = append(walked, events...)
+		if next == "" {
+			break
+		}
+		if len(events) < 2 {
+			t.Fatalf("page %d came back short (%d events) and still carried a cursor; there is nothing behind a page the log ran out on", page, len(events))
+		}
+		cursor = next
+	}
+
+	if len(walked) != len(all) {
+		t.Fatalf("the walk saw %d events, want the %d the unpaged read returned", len(walked), len(all))
+	}
+	for i := range all {
+		if walked[i].ArtifactID != all[i].ArtifactID || walked[i].To != all[i].To || !walked[i].OccurredAt.Equal(all[i].OccurredAt) {
+			t.Fatalf("walked[%d] = %+v, want %+v; the pages are not the unpaged feed in order", i, walked[i], all[i])
+		}
+	}
+
+	// A cursor this feed did not issue is ignored, not refused, exactly as
+	// an unparseable limit is: a stale bookmark should show the newest
+	// page, not an error page.
+	garbage, _, err := svc.ListActivity(ctx, 1, "not-a-cursor")
+	if err != nil {
+		t.Fatalf("ListActivity(before=garbage): %v", err)
+	}
+	if len(garbage) != 1 || garbage[0].To != all[0].To {
+		t.Errorf("an unparseable cursor returned %+v, want the newest page", garbage)
 	}
 }
 

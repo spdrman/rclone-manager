@@ -1545,6 +1545,29 @@ export interface ArtifactReinstatement {
   reason: string;
 }
 
+/** Which slice of the durable activity feed to read (issue #730). */
+export interface ActivityQuery {
+  /** How many events to ask for. The service has a default and a
+   *  maximum of its own, so this is a request rather than a promise; a
+   *  caller that sends nothing gets the default. */
+  limit?: number;
+  /** A `nextCursor` from an earlier page, which asks for the events
+   *  OLDER than that page ended at. Opaque: it is the service's own
+   *  ordering key and nothing here may parse it. */
+  before?: string;
+}
+
+/** One page of {@link BackupManagerApi.listActivity}. */
+export interface ActivityFeedPage {
+  /** The page itself, newest first. */
+  events: ActivityEvent[];
+  /** Where to continue from, absent when this page reached the end of
+   *  the record. Absent is what a surface must test to decide whether to
+   *  offer "load older" at all: offering it for a record that has ended
+   *  is a control that does nothing. */
+  nextCursor?: string;
+}
+
 /**
  * Everything this frontend can ask a backend to do.
  *
@@ -1787,7 +1810,17 @@ export interface BackupManagerApi {
   getArtifact(id: string): Promise<BackupArtifact>;
 
   listOperations(): Promise<Operation[]>;
-  listActivity(): Promise<ActivityEvent[]>;
+  /**
+   * One page of the durable lifecycle record, newest first (issue #730).
+   *
+   * A page rather than "the feed" because the record is append-only and
+   * nothing prunes it: a deployment that has been running a year holds
+   * more events than any screen can render, and a caller that asked for
+   * all of them would make the page that opens on the worst deployment
+   * the slowest one. Read the first page with a `limit`, then follow
+   * `nextCursor` for what is behind it.
+   */
+  listActivity(query?: ActivityQuery): Promise<ActivityFeedPage>;
 
   /**
    * What every configured backup set is doing right now, plus a bounded

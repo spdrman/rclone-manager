@@ -198,7 +198,10 @@ func readActivity(ctx context.Context, mode readDecision, cfg *config.Config, jo
 		return answer.Events, nil
 	}
 
-	events, err := service.New(cfg, journal, nil, nil).ListActivity(ctx, limit)
+	// No cursor: this command prints one window and exits, so there is no
+	// second page for a cursor to name. `--limit` is the whole of what an
+	// operator here asks for.
+	events, _, err := service.New(cfg, journal, nil, nil).ListActivity(ctx, limit, "")
 	if err != nil {
 		return nil, err
 	}

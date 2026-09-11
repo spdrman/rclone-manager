@@ -150,7 +150,7 @@ describe("request() diagnostics for #730's rejected fetch", () => {
     const [prefix, event, detail] = error.mock.calls[0] as [string, string, Record<string, unknown>];
     expect(prefix).toBe("[rm-debug]");
     expect(event).toBe("request.no-response");
-    expect(detail.url).toBe("/api/v1/activity");
+    expect(detail.url).toBe("/api/v1/activity?");
     expect(detail.method).toBe("GET");
     expect(detail.protocol).toBe(window.location.protocol);
     expect(detail.cause).toMatchObject({ name: "TypeError", message: "Failed to fetch" });

@@ -28,6 +28,28 @@
   `tiles ` would become a filter matching nothing and quietly resume the full
   walk. Writing none of them is every configuration that exists today,
   unchanged.
+- **The activity feed is read a page at a time** (#730). `GET /api/v1/activity`
+  takes a `before` cursor and answers with a `next_cursor`, so the Activity
+  page asks for a bounded first page and offers "Load older events" instead of
+  loading a deployment's entire lifecycle record on open. The record is
+  append-only and nothing prunes it, so the previous shape got slower every
+  week a deployment stayed up, and clamping alone would have left everything
+  older than the newest thousand events unreachable. The cursor is opaque, it
+  pages on the journal's own ordering rather than on an offset — so a
+  transition recorded between two requests cannot make a page repeat itself —
+  and a cursor the feed did not issue is ignored rather than refused, the same
+  way an unparseable `limit` already was. The filters above the list apply to
+  every page loaded, not only the newest one.
+
+### Fixed
+
+- **`scripts/api/check-client-paths.sh` runs again** (#730). The diagnostics
+  commit on this branch changed `ui/shared/src/api/client.ts` to fetch through
+  a local `const url = BASE + path`, and that gate refuses to trust the paths
+  it reduced unless the client's single `fetch` literally reads `fetch(BASE +
+  path` — a URL built any other way is one the gate never saw. It had been
+  failing for every path in the file, which is a CI step red for reasons that
+  have nothing to do with the change being checked.
 
 ## [0.4.0] - 2026-09-09
 

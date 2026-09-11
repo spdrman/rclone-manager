@@ -10,7 +10,7 @@
  * same thing to somebody filtering: neither is a problem. That collapse is
  * why the control offers a threshold rather than a set of checkboxes.
  */
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
 import { useCausl } from "@shared/state/graph";
@@ -20,17 +20,29 @@ import { FieldHelp } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
-import { isNotConfigured } from "@shared/api/failure";
+import { isNotConfigured, describeFailure } from "@shared/api/failure";
 import { isDebugEnabled } from "@shared/api/debug";
 import type { ApiError } from "@shared/api/contracts";
-import type { Severity } from "@shared/types/operation";
+import type { ActivityEvent, Severity } from "@shared/types/operation";
+
+/**
+ * How many events one page asks for (issue #730).
+ *
+ * Named here rather than left to the service's own default so this page
+ * asks for a page SIZE it renders and then pages, instead of asking for
+ * "the feed" and receiving whatever a deployment has accumulated since
+ * the day it was installed. The number matches the service's default, so
+ * the request this page makes is the one every other reader already
+ * made; what is new is that it follows the cursor afterwards.
+ */
+const ACTIVITY_PAGE_SIZE = 200;
 
 /** Deliberately not overbuilt (§19): two filters, one list. It said four
  *  until #299 took the "Time range" select away, which had no handler and
  *  no endpoint parameter behind it to acquire one. */
 export function ActivityPage() {
   const api = useApi();
-  const events = useAsync(() => api.listActivity(), [api]);
+  const page = useAsync(() => api.listActivity({ limit: ACTIVITY_PAGE_SIZE }), [api]);
   // Reads the same shared node BackupSetsPage/DashboardPage/BackupsPage do
   // (#106) instead of running a fifth independent listSets() fetch just to
   // populate this filter dropdown (#103).
@@ -44,18 +56,60 @@ export function ActivityPage() {
   // in it would be reset by the very act it is meant to record.
   const [retriedAt, setRetriedAt] = useState<string | null>(null);
 
+  // Issue #730. The pages loaded BEHIND the first one, in load order,
+  // with the cursor the last of them ended at.
+  //
+  // null means nobody has asked for an older page yet, and while it is
+  // null the first page's own cursor is the authority. Once it is set, it
+  // is: a cursor of null then means the record ended, which is a
+  // different state from "not asked yet" and the reason this is one piece
+  // of state rather than an events array beside an optional string. With
+  // two, a page that came back empty with no cursor would fall back to
+  // the first page's cursor and offer the control again forever.
+  const [older, setOlder] = useState<{ events: ActivityEvent[]; cursor: string | null } | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderFailure, setOlderFailure] = useState<string | null>(null);
+
+  const cursor = older ? older.cursor : page.data?.nextCursor ?? null;
+
+  const loadOlder = useCallback(() => {
+    if (!cursor || loadingOlder) return;
+    setLoadingOlder(true);
+    setOlderFailure(null);
+    api
+      .listActivity({ limit: ACTIVITY_PAGE_SIZE, before: cursor })
+      .then((next) => {
+        setOlder((held) => ({
+          events: [...(held?.events ?? []), ...next.events],
+          cursor: next.nextCursor ?? null
+        }));
+      })
+      .catch((e: unknown) => {
+        // Reported beside the control rather than through ErrorState: the
+        // events already on screen are still true, and replacing a
+        // rendered timeline with an error panel because the page BEHIND
+        // it could not be read would lose the thing the reader came for.
+        setOlderFailure(describeFailure(e, "Backup Manager could not read older events.").message);
+      })
+      .finally(() => setLoadingOlder(false));
+  }, [api, cursor, loadingOlder]);
+
   const filtered = useMemo(() => {
     const rank: Record<Severity, number> = { info: 0, ok: 0, warn: 1, error: 2 };
-    return (events.data ?? []).filter((e) => {
+    // Every page loaded so far, filtered as one list: a filter that only
+    // applied to the newest page would hide matches an operator has
+    // already fetched.
+    const loaded = [...(page.data?.events ?? []), ...(older?.events ?? [])];
+    return loaded.filter((e) => {
       if (setId && e.setId !== setId) return false;
       if (minSeverity && rank[e.severity] < Number(minSeverity)) return false;
       return true;
     });
-  }, [events.data, setId, minSeverity]);
+  }, [page.data, older, setId, minSeverity]);
 
   // #275: an empty timeline is the truth on an unconfigured instance, and
   // the filters above have nothing to filter.
-  if (isNotConfigured(events.error))
+  if (isNotConfigured(page.error))
     return (
       <>
         <PageHeader title="Activity" subtitle="Nothing has happened yet" />
@@ -66,19 +120,25 @@ export function ActivityPage() {
       </>
     );
 
-  if (events.error)
+  if (page.error)
     return (
       <>
         <PageHeader title="Activity" subtitle="Operational timeline across all backup sets" />
         <ErrorState
-          {...events.error}
+          {...page.error}
           retriedAt={retriedAt ?? undefined}
           onRetry={() => {
             setRetriedAt(new Date().toLocaleTimeString());
-            events.reload();
+            // The pages loaded behind the first one are dropped with it:
+            // they were read against a cursor the reload has no reason to
+            // land on, and keeping them would splice two different reads
+            // of a growing record into one list.
+            setOlder(null);
+            setOlderFailure(null);
+            page.reload();
           }}
         />
-        {isDebugEnabled() ? <DebugFailure error={events.error} /> : null}
+        {isDebugEnabled() ? <DebugFailure error={page.error} /> : null}
       </>
     );
 
@@ -118,9 +178,10 @@ export function ActivityPage() {
         </FieldHelp>
         {/* Issue #299: a "Time range" select used to sit here,
             `defaultValue="24"` with no `onChange` and nothing reading it.
-            Removed rather than wired: listActivity() takes no window
-            argument, and building server-side windowing is out of scope
-            for that issue. */}
+            Removed rather than wired: there was no endpoint parameter
+            behind it. #730 gave the route a cursor rather than a window,
+            so what this page offers instead is the control below, which
+            reads further back one page at a time. */}
       </div>
 
       {filtered.length === 0 ? (
@@ -132,6 +193,25 @@ export function ActivityPage() {
           <ActivityTimeline events={filtered} />
         </div>
       )}
+
+      {/* Issue #730. Offered whenever the service said there is a page
+          behind the one on screen, INCLUDING when the filters above match
+          nothing in what is loaded: the events an operator is looking for
+          may be in the next page, and hiding the only way to reach them
+          under an empty state is the dead end that made this page load
+          the whole record in the first place. */}
+      {cursor ? (
+        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+          <button className="btn" type="button" disabled={loadingOlder} onClick={loadOlder}>
+            {loadingOlder ? "Loading older events…" : "Load older events"}
+          </button>
+          {olderFailure ? (
+            <span role="alert" style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+              {olderFailure}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
     </>
   );
 }

@@ -519,6 +519,12 @@ func scanRecords(ctx context.Context, q querier, rows *sql.Rows, artifactWhere s
 // the fact and is not what an operator's "recent activity" list can be
 // built from; this table already is, and RecentActivity below is the read.
 type ActivityRecord struct {
+	// ID is the transition's own primary key: monotonic in insertion
+	// order, unique, and the key the feed is ordered by (see
+	// RecentActivity). It is exposed because it is the only thing a
+	// caller can page with. Nothing outside this package should read
+	// meaning into the number itself; what it guarantees is the order.
+	ID         int64
 	Artifact   model.ArtifactID
 	From       string
 	To         string
@@ -540,17 +546,48 @@ type ActivityRecord struct {
 // "everything": an unbounded read of an append-only table grows without
 // end, and the caller that meant "all of it" should say a number.
 func (j *Journal) RecentActivity(ctx context.Context, limit int) ([]ActivityRecord, error) {
+	return j.RecentActivityBefore(ctx, 0, limit)
+}
+
+// RecentActivityBefore is RecentActivity starting one row behind a cursor:
+// the most recent limit transitions whose id is below before, newest
+// first. A before of zero or less means start at the newest row, which
+// makes this the same read RecentActivity is.
+//
+// The cursor is an id from an earlier page (its last, oldest row), not an
+// offset. An OFFSET into an append-only table that is written to while an
+// operator reads it slides: rows arrive at the newest end between two
+// requests, so page two taken by offset repeats what page one already
+// showed. Keyed off the id, a page is the same page whenever it is asked
+// for.
+func (j *Journal) RecentActivityBefore(ctx context.Context, before int64, limit int) ([]ActivityRecord, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("state: recent activity: limit must be positive, got %d", limit)
 	}
 
-	rows, err := j.db.QueryContext(ctx,
-		`SELECT a.source, a.backup_set, a.artifact_name,
+	// Two statements rather than one with a "(:before <= 0 OR t.id <
+	// :before)" disjunction: that form is opaque to the index on the
+	// primary key for the unpaged read, which is the read every dashboard
+	// makes.
+	query := `SELECT t.id, a.source, a.backup_set, a.artifact_name,
 		        t.from_state, t.to_state, t.occurred_at, t.detail
 		   FROM state_transitions t
 		   JOIN artifacts a ON a.id = t.artifact_id
 		  ORDER BY t.id DESC
-		  LIMIT ?`, limit)
+		  LIMIT ?`
+	args := []any{limit}
+	if before > 0 {
+		query = `SELECT t.id, a.source, a.backup_set, a.artifact_name,
+		        t.from_state, t.to_state, t.occurred_at, t.detail
+		   FROM state_transitions t
+		   JOIN artifacts a ON a.id = t.artifact_id
+		  WHERE t.id < ?
+		  ORDER BY t.id DESC
+		  LIMIT ?`
+		args = []any{before, limit}
+	}
+
+	rows, err := j.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("state: recent activity: %w", err)
 	}
@@ -563,7 +600,7 @@ func (j *Journal) RecentActivity(ctx context.Context, limit int) ([]ActivityReco
 			rec                     ActivityRecord
 			occurred                string
 		)
-		if err := rows.Scan(&source, &backupSet, &name, &rec.From, &rec.To, &occurred, &rec.Detail); err != nil {
+		if err := rows.Scan(&rec.ID, &source, &backupSet, &name, &rec.From, &rec.To, &occurred, &rec.Detail); err != nil {
 			return nil, fmt.Errorf("state: recent activity: %w", err)
 		}
 		set, err := model.NewBackupSetID(source, backupSet)

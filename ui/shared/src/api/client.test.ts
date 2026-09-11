@@ -464,7 +464,7 @@ describe("httpApi error envelope handling", () => {
     expect(caught).toBeInstanceOf(RequestFailure);
     const failure = caught as RequestFailure;
     expect(failure.kind).toBe("no-response");
-    expect(failure.path).toBe("/activity");
+    expect(failure.path).toBe("/activity?");
     // No response, so no header, so no id. Never the literal.
     expect(failure.correlationId).toBeUndefined();
     expect((failure.cause as Error).message).toBe("Failed to fetch");
@@ -1566,7 +1566,7 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
       ]
     }));
 
-    const got = await httpApi.listActivity();
+    const { events: got } = await httpApi.listActivity();
 
     expect(got[0].type).toBe("remote-source-deleted");
     expect(got[0].severity).toBe("ok");
@@ -1618,7 +1618,7 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
       ]
     }));
 
-    const got = await httpApi.listActivity();
+    const { events: got } = await httpApi.listActivity();
 
     // Both rows, because there are two false ones today and fixing only
     // the red one would leave the amber one claiming the attempt failed.
@@ -1644,7 +1644,7 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
       ]
     }));
 
-    const got = await httpApi.listActivity();
+    const { events: got } = await httpApi.listActivity();
 
     for (const e of got) {
       expect(e.text).toBe("Quarantined for review");
@@ -1677,7 +1677,7 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
       ]
     }));
 
-    const got = await httpApi.listActivity();
+    const { events: got } = await httpApi.listActivity();
 
     // An unnamed edge into a named state still reads as that state.
     expect(got[0].text).toBe("Backup committed");
@@ -1688,6 +1688,48 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
     // And an event carrying no origin at all is unchanged.
     expect(got[2].text).toBe("Transfer started");
     expect(got[2].severity).toBe("info");
+  });
+
+  /**
+   * Issue #730. The durable feed is append-only and nothing prunes it, so
+   * this call has to be able to ask for a bounded page and then for the
+   * page behind it. Both directions are asserted here because either one
+   * alone is inert: a limit and cursor that never reach the query string
+   * mean the browser still asks for the whole record, and a next_cursor
+   * the mapper drops means it can never ask for anything older.
+   */
+  it("asks for a bounded page, passes the cursor back, and keeps the one the service returned", async () => {
+    const fetchMock = mockFetchOk({
+      events: [
+        {
+          artifact_id: "a/one/x.tar", backup_set_id: "a/one", source_name: "a",
+          set_name: "one", artifact_name: "x.tar",
+          to: "COMMITTED", occurred_at: "2026-08-30T09:00:00Z"
+        }
+      ],
+      next_cursor: "8231"
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await httpApi.listActivity({ limit: 2, before: "9004" });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/activity?limit=2&before=9004");
+    expect(page.events).toHaveLength(1);
+    expect(page.nextCursor).toBe("8231");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("reports the end of the record as an absent cursor, not as an empty string", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({ events: [] }));
+
+    const page = await httpApi.listActivity();
+
+    // A surface decides whether to offer "load older" by testing this
+    // key: "" would read as a cursor that exists and pages to nothing.
+    expect(page.nextCursor).toBeUndefined();
+    expect("nextCursor" in page).toBe(false);
   });
 
   it("reports no progress at all for an operation the service sent none for, running or finished", async () => {

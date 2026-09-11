@@ -224,7 +224,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const startedAt = performance.now();
   debugLog("request.start", { method, url });
   try {
-    res = await fetch(url, {
+    // `BASE + path` spelled out again here rather than passing `url`:
+    // scripts/api/check-client-paths.sh reduces every path expression in
+    // this file statically and then REFUSES to trust its own result
+    // unless the single fetch() in it literally reads `fetch(BASE +
+    // path`, because a fetch given anything else could be requesting a
+    // URL the gate never saw. `url` above reads identically at runtime
+    // and still failed that check, which is how #730's diagnostics
+    // commit turned a CI step red.
+    res = await fetch(BASE + path, {
       credentials: "same-origin",
       ...init,
       // headers last: spreading ...init after a merged `headers` object
@@ -2135,8 +2143,26 @@ export const httpApi: BackupManagerApi = {
 
   listOperations: () =>
     request<WireListOperationsResponse>("/operations").then((r) => r.operations.map(fromWireOperation)),
-  listActivity: () =>
-    request<WireListActivityResponse>("/activity").then((r) => r.events.map(fromWireActivityEvent)),
+  // Bounded by construction: a caller that names no limit still gets the
+  // service's default rather than the whole record, and the cursor it
+  // hands back is how the next page is asked for.
+  //
+  // Same always-present "?" and per-parameter trailing separator as
+  // getLiveActivity below, for the reason spelled out there: it is what
+  // keeps every branch of this expression a path whose query begins in
+  // the same place.
+  listActivity: (query) =>
+    request<WireListActivityResponse>(
+      "/activity?" +
+        (query?.limit ? "limit=" + query.limit + "&" : "") +
+        (query?.before ? "before=" + encodeURIComponent(query.before) : "")
+    ).then((r) => ({
+      events: r.events.map(fromWireActivityEvent),
+      // Absent stays absent: a client tests for the key to decide
+      // whether there is a page behind this one, and an empty string
+      // would answer that question wrongly in every truthy check.
+      ...(r.next_cursor ? { nextCursor: r.next_cursor } : {})
+    })),
   // Every parameter is optional and each one is appended with its own
   // trailing separator after a "?" that is always present. That is not
   // fussiness: it means every branch of this expression builds a path

@@ -39,6 +39,11 @@ type activityEventResponse struct {
 
 type listActivityResponse struct {
 	Events []activityEventResponse `json:"events"`
+	// NextCursor is where this page ended, for a caller that wants the
+	// events behind it: send it back as ?before=. Absent when this page
+	// was not full, which is as much as the read can say cheaply about
+	// whether anything older exists.
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // listActivity is GET /api/v1/activity: recent lifecycle events across
@@ -50,6 +55,14 @@ type listActivityResponse struct {
 // value above its maximum is clamped rather than refused. A caller asking
 // for a feed gets a feed; refusing the request over a number would fail a
 // page that is only ever trying to render a list.
+//
+// before is the same kind of advisory: an opaque cursor from an earlier
+// response's next_cursor, naming where that page ended, and a value this
+// feed did not issue reads as no cursor at all rather than a 400. It is
+// what keeps the payload bounded AND the record reachable: without it the
+// only way to see past the newest page is to raise limit, and the page
+// that opens on a year-old deployment then carries the whole history
+// (issue #730).
 func (h *handlers) listActivity(w http.ResponseWriter, r *http.Request) {
 	limit := 0
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -58,13 +71,16 @@ func (h *handlers) listActivity(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events, err := h.backend.ListActivity(r.Context(), limit)
+	events, nextCursor, err := h.backend.ListActivity(r.Context(), limit, r.URL.Query().Get("before"))
 	if err != nil {
 		h.internalError(w, r, "INTERNAL", "failed to list activity", err)
 		return
 	}
 
-	resp := listActivityResponse{Events: make([]activityEventResponse, 0, len(events))}
+	resp := listActivityResponse{
+		Events:     make([]activityEventResponse, 0, len(events)),
+		NextCursor: nextCursor,
+	}
 	for _, e := range events {
 		resp.Events = append(resp.Events, activityEventResponse{
 			ArtifactID:   e.ArtifactID,
@@ -120,6 +136,13 @@ func (h *handlers) logActivityDebug(w http.ResponseWriter, r *http.Request, limi
 	h.logger.Event(r.Context(), slog.LevelDebug, "activity_debug", "served activity feed",
 		slog.String("correlation_id", id),
 		slog.Int("limit", limit),
+		// The cursor pair is here because the payload size above is #730's
+		// live suspect: a request that sent no cursor and came back with a
+		// next one is the operator's browser on page one of a record that
+		// is longer than the page, which is exactly the shape this route
+		// used to answer in a single unbounded response.
+		slog.String("before", r.URL.Query().Get("before")),
+		slog.String("next_cursor", resp.NextCursor),
 		slog.Int("event_count", len(resp.Events)),
 		slog.Int("bytes", len(body)),
 		slog.String("x_forwarded_for", r.Header.Get("X-Forwarded-For")),

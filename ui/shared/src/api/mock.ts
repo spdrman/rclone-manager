@@ -1,4 +1,6 @@
 import type {
+  ActivityFeedPage,
+  ActivityQuery,
   AppSettings,
   BackendCatalog,
   BackupManagerApi,
@@ -719,6 +721,36 @@ const ACTIVITY: ActivityEvent[] = [
   { id: "ev_11", at: "2026-08-28T12:44:17+02:00", type: "storage-critical", severity: "warn", setId: null, setName: "System", text: "Storage warning", detail: "81% of pool used", correlationId: "cid_88fa02" },
   { id: "ev_12", at: "2026-08-28T02:00:04+02:00", type: "transfer-started", severity: "info", setId: "production/billing-mysql", setName: "Billing MySQL", text: "Transfer started", detail: "3.4 GB", correlationId: "cid_71bc03" }
 ];
+
+/** What the service's own default limit is (service.DefaultActivityLimit).
+ *  Mirrored rather than imported: this module answers without a backend,
+ *  and the number is part of what it is imitating. */
+const DEFAULT_ACTIVITY_PAGE = 200;
+
+/**
+ * The fixture feed, cut into pages the way the service cuts the durable
+ * record (issue #730).
+ *
+ * It pages for real rather than answering every request with the whole
+ * array, because a mock that ignores the cursor makes "load older" look
+ * finished the moment it is written: the control would append the same
+ * twelve events again and nothing would say the cursor was never read.
+ *
+ * The cursor is an event id here and an ordering key on the wire, and
+ * both are opaque to every caller, which is the property that lets the
+ * two differ. A cursor this feed did not issue reads as no cursor at all,
+ * matching the service's own handling of a stale bookmark.
+ */
+function activityPageOf(all: ActivityEvent[], query?: ActivityQuery): ActivityFeedPage {
+  const limit = query?.limit && query.limit > 0 ? query.limit : DEFAULT_ACTIVITY_PAGE;
+  const from = query?.before ? all.findIndex((e) => e.id === query.before) + 1 : 0;
+  const events = all.slice(from, from + limit);
+  // A full page may have more behind it; a short one is the end of the
+  // record. Same rule, and the same "may", as the service's.
+  return events.length === limit && events.length > 0
+    ? { events, nextCursor: events[events.length - 1].id }
+    : { events };
+}
 
 const HEALTH: SystemHealth = {
   generatedAt: "2026-08-29T06:00:00+02:00",
@@ -1943,7 +1975,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     },
 
     listOperations: () => delay(empty ? [] : OPERATIONS),
-    listActivity: () =>
+    listActivity: (query) =>
       activityUnreadable
         ? delay(null).then(() => {
             // Thrown, not rejected with a BackupManagerError: the whole
@@ -1954,7 +1986,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             // the classifier has to cope with the harder case.
             throw new SyntaxError("Unexpected token '<', \"<!doctype \"... is not valid JSON");
           })
-        : delay(empty ? [] : ACTIVITY),
+        : delay(activityPageOf(empty ? [] : ACTIVITY, query)),
     getLiveActivity: (options) =>
       delay({
         observedAt: "2026-08-29T02:01:20+02:00",

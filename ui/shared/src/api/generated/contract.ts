@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "bb45f33fb55cfb08530f2ea09af19ce89036701e9e94ee04a2102ea09164da12";
+export const CONTRACT_SHA256 = "9ce07b46ad846a5db0bf159bda67480b5fdbb09827828f67c4c7be0b7cac356d";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1888,6 +1888,7 @@ export interface WireImportStorageCredentialsResponse {
 /** GET /activity, newest first. */
 export interface WireListActivityResponse {
   events: WireActivityEvent[];
+  next_cursor?: string;
 }
 
 /** GET /backups and GET /quarantine. An object with one array field,

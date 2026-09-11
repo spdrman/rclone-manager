@@ -140,6 +140,12 @@ func TestRecentActivity_RefusesANonPositiveLimit(t *testing.T) {
 		if !strings.Contains(err.Error(), "limit must be positive") {
 			t.Errorf("RecentActivity(%d) error = %v, want it to name the limit", limit, err)
 		}
+		// The paging read is the same read with a cursor in front of it,
+		// and the bound on how much of an ever-growing table one call may
+		// return cannot be the thing a cursor makes optional.
+		if _, err := j.RecentActivityBefore(ctx, 0, limit); err == nil {
+			t.Errorf("RecentActivityBefore(0, %d) returned no error; the cursor read is bounded by the same number", limit)
+		}
 	}
 }
 
@@ -152,6 +158,72 @@ func TestRecentActivity_OnAnEmptyJournalIsEmptyNotAnError(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("len = %d, want 0 on a journal nothing has happened in yet", len(got))
+	}
+}
+
+// TestRecentActivityBefore_PagesOlderThanTheCursor is the read behind GET
+// /api/v1/activity?before=: a client that has rendered the newest page has
+// to be able to ask for the one behind it, and the only alternative this
+// table offers is raising the limit until the whole deployment's history
+// arrives in one response.
+//
+// The assertion that matters is the absence of an overlap and the absence
+// of a gap: the second page must start at exactly the row after the first
+// one ended, because a feed that repeats a row looks like a duplicate
+// event and one that skips a row loses history nothing else records.
+func TestRecentActivityBefore_PagesOlderThanTheCursor(t *testing.T) {
+	j, _ := openJournal(t)
+	ctx := context.Background()
+
+	// Discover writes ""->DISCOVERED, so five rows in all.
+	discoverAndAdvance(t, j, "backup-a.dump", "TRANSFERRING", "TRANSFERRED", "VERIFIED", "COMMITTED")
+
+	all, err := j.RecentActivity(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentActivity: %v", err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("len = %d, want 5; the paging assertions below need a log longer than one page", len(all))
+	}
+	for i, rec := range all {
+		if rec.ID <= 0 {
+			t.Fatalf("all[%d].ID = %d, want the transition's own ordering key; a cursor cannot be built without it", i, rec.ID)
+		}
+		if i > 0 && all[i-1].ID <= rec.ID {
+			t.Fatalf("ID is not strictly descending at %d (%d then %d), so it does not order the feed it is the cursor for", i, all[i-1].ID, rec.ID)
+		}
+	}
+
+	first, err := j.RecentActivityBefore(ctx, 0, 2)
+	if err != nil {
+		t.Fatalf("RecentActivityBefore(0, 2): %v", err)
+	}
+	if len(first) != 2 || first[0].ID != all[0].ID || first[1].ID != all[1].ID {
+		t.Fatalf("first page = %+v, want the newest two rows; a zero cursor means start at the newest", first)
+	}
+
+	second, err := j.RecentActivityBefore(ctx, first[len(first)-1].ID, 2)
+	if err != nil {
+		t.Fatalf("RecentActivityBefore(second page): %v", err)
+	}
+	if len(second) != 2 || second[0].ID != all[2].ID || second[1].ID != all[3].ID {
+		t.Fatalf("second page = %+v, want rows 3 and 4 of %+v: no overlap with the first page and no gap after it", second, all)
+	}
+
+	third, err := j.RecentActivityBefore(ctx, second[len(second)-1].ID, 2)
+	if err != nil {
+		t.Fatalf("RecentActivityBefore(third page): %v", err)
+	}
+	if len(third) != 1 || third[0].ID != all[4].ID {
+		t.Fatalf("third page = %+v, want the single oldest row", third)
+	}
+
+	exhausted, err := j.RecentActivityBefore(ctx, all[len(all)-1].ID, 10)
+	if err != nil {
+		t.Fatalf("RecentActivityBefore(oldest): %v", err)
+	}
+	if len(exhausted) != 0 {
+		t.Fatalf("len = %d, want 0: a cursor naming the oldest row has nothing behind it", len(exhausted))
 	}
 }
 

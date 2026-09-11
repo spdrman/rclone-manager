@@ -37,7 +37,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "bb45f33fb55cfb08530f2ea09af19ce89036701e9e94ee04a2102ea09164da12"
+const ContractSHA256 = "9ce07b46ad846a5db0bf159bda67480b5fdbb09827828f67c4c7be0b7cac356d"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1465,7 +1465,8 @@ type ImportStorageCredentialsResponse struct {
 
 // ListActivityResponse is GET /activity, newest first.
 type ListActivityResponse struct {
-	Events []ActivityEvent `json:"events"`
+	Events     []ActivityEvent `json:"events"`
+	NextCursor string          `json:"next_cursor,omitempty"`
 }
 
 // ListArtifactsResponse is GET /backups and GET /quarantine. An object with one array field,
