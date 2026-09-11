@@ -465,14 +465,20 @@ type BackupSet struct {
 	// walked-then-discarded; a filter that only cleaned up the result set
 	// would return the same answer in the same unusable time.
 	//
-	// Each entry is a literal relative directory path, not a pattern.
-	// Validate refuses "/"-rooted and "."/".." traversal, and refuses
-	// glob metacharacters as well: rclone's filter syntax would give
-	// them meaning, and a field named for paths that silently accepted
-	// half a pattern language is exactly the kind of ambiguity an
-	// operator discovers by having excluded the wrong thing. A leading or
-	// trailing "/" is accepted and means the same directory, because both
-	// are how people write one.
+	// Each entry is a literal directory path, not a pattern, and it is
+	// root-anchored under RemotePath: "tiles" names RemotePath/tiles and
+	// nothing else. An optional leading or trailing "/" is tolerated and
+	// ignored, because "tiles", "tiles/" and "/tiles" are three ways
+	// people write one directory; that slash does NOT make the value
+	// filesystem-absolute, and no entry can name anything outside
+	// RemotePath. Validate refuses "."/".." traversal, a backslash,
+	// leading or trailing whitespace on the entry or any of its
+	// segments, and glob metacharacters: rclone's filter syntax would
+	// give the metacharacters meaning, and a field named for paths that
+	// silently accepted half a pattern language is exactly the kind of
+	// ambiguity an operator discovers by having excluded the wrong
+	// thing. These are paths, and they are not FR-5's basename include
+	// patterns: the two fields do not share a syntax.
 	//
 	// omitempty, like every other key this schema has gained, so a
 	// deployment that excludes nothing never writes a file an older build

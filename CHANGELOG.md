@@ -21,9 +21,13 @@
   and a pass that did not finish. An entry becomes an rclone directory
   filter, so the walk declines to descend rather than walking and discarding:
   the excluded directories are never listed at all. Each entry is a literal
-  relative path (a leading or trailing `/` is fine); a traversal segment or a
-  glob metacharacter is refused rather than half-honoured. Writing none of
-  them is every configuration that exists today, unchanged.
+  relative path, root-anchored under `remote_path` (an optional leading or
+  trailing `/` is tolerated and ignored, and does not make the value
+  filesystem-absolute); a traversal segment, a backslash, surrounding
+  whitespace or a glob metacharacter is refused rather than half-honoured — a
+  `tiles ` would become a filter matching nothing and quietly resume the full
+  walk. Writing none of them is every configuration that exists today,
+  unchanged.
 
 ## [0.4.0] - 2026-09-09
 

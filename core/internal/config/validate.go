@@ -612,7 +612,7 @@ func (v *validator) validatePassphrase(path string, p *Passphrase) {
 // nested one is written at all. BackupSet.ExcludePaths has the whole
 // argument for why these are two fields.
 //
-// Three shapes are refused and each refusal buys something.
+// Four shapes are refused and each refusal buys something.
 //
 // A "." or ".." segment, because this is resolved against the set's
 // remote_path by the transport, and a path that could climb out of it is
@@ -633,6 +633,15 @@ func (v *validator) validatePassphrase(path string, p *Passphrase) {
 // literal directory whose name really does contain one of those
 // characters is refused rather than mismatched, which at least says so.
 //
+// And whitespace at either end of the entry or of any segment in it, for
+// the same reason as the backslash: the entry becomes an rclone directory
+// filter verbatim, so `tiles ` becomes `/tiles /**`, which matches no
+// directory any operator meant, prunes nothing, and silently resumes the
+// full recursive walk this field exists to stop. A trailing space in a
+// config file is invisible in every editor, so the one thing that must
+// not happen is accepting it. An all-whitespace entry is the same
+// mistake with nothing left of the path.
+//
 // A leading or trailing "/" is accepted and normalized by the transport,
 // because "tiles", "tiles/" and "/tiles" are three ways operators write
 // one directory and none of them is wrong.
@@ -647,6 +656,8 @@ func (v *validator) validateExcludePaths(path string, excludes []string) {
 			v.addf("%s: %q must be a slash-separated path relative to remote_path", excPath, dir)
 		case strings.ContainsAny(dir, `*?[]{}`):
 			v.addf("%s: %q must be a literal directory path, not a pattern; per-artifact filtering is what include patterns are for", excPath, dir)
+		case strings.TrimSpace(dir) != dir:
+			v.addf("%s: %q must not begin or end with whitespace; the directory filter it becomes would match nothing and discovery would walk the whole tree again", excPath, dir)
 		default:
 			for _, seg := range strings.Split(trimmed, "/") {
 				if seg == "" {
@@ -655,6 +666,10 @@ func (v *validator) validateExcludePaths(path string, excludes []string) {
 				}
 				if seg == "." || seg == ".." {
 					v.addf("%s: %q must be a path under remote_path, with no %q segment", excPath, dir, seg)
+					break
+				}
+				if strings.TrimSpace(seg) != seg {
+					v.addf("%s: %q must not have a path segment beginning or ending with whitespace; the directory filter it becomes would match nothing and discovery would walk the whole tree again", excPath, dir)
 					break
 				}
 			}

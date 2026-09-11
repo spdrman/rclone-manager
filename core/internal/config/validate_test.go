@@ -1243,6 +1243,10 @@ func TestExcludePathValidation(t *testing.T) {
 		{"a current-directory segment", "uploads/./tiles", false},
 		{"a glob pattern, which this field is not", "uploads/*", false},
 		{"a character class, which this field is not", "uploads/[ab]", false},
+		{"a trailing space, which would filter nothing", "tiles ", false},
+		{"a leading space, which would filter nothing", " tiles", false},
+		{"a space inside a nested segment", "uploads/ tiles", false},
+		{"all whitespace", "  ", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validConfig()
