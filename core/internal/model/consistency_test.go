@@ -227,10 +227,12 @@ func TestMTimePrecisionResolvesToADuration(t *testing.T) {
 		ok   bool
 	}{
 		{MTimeNanosecond, time.Nanosecond, true},
+		{MTimeMillisecond, time.Millisecond, true},
 		{MTimeSecond, time.Second, true},
 		{MTimeTwoSecond, 2 * time.Second, true},
 		{MTimePrecisionUnknown, 0, false},
 		{MTimePrecision("1h"), 0, false},
+		{MTimePrecision("1us"), 0, false},
 	} {
 		got, ok := tc.p.Resolution()
 		if ok != tc.ok || got != tc.want {

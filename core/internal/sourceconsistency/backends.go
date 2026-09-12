@@ -22,22 +22,41 @@ import "github.com/backupdproject/backupd/core/internal/model"
 // no hashes here even though rclone advertises md5 and sha1 for both.
 var BundledSourceSignals = map[string]model.SourceSignals{
 	// A local filesystem: the richest metadata of the three and no content
-	// evidence at all. Nanosecond timestamps on every filesystem this
-	// product ships on (APFS, ext4, XFS, btrfs, ZFS), sizes that mean what
-	// they say, and full ownership and mode. What it cannot do is answer
-	// "has this content changed" without being read, which is why the
-	// richest metadata in the set still classifies weak.
+	// evidence at all. Sizes that mean what they say, full ownership and
+	// mode, and what it cannot do is answer "has this content changed"
+	// without being read - which is why the richest metadata in the set
+	// still classifies weak.
+	//
+	// The timestamp is recorded as one SECOND and that is not what the
+	// filesystem carries. Every filesystem this product ships on (APFS,
+	// ext4, XFS, btrfs, ZFS) keeps nanoseconds, and the backend capability
+	// matrix says 1ns because the matrix describes the BACKEND. This table
+	// describes what survives into this manager, and
+	// transport.RemoteArtifact.ModTime is unix SECONDS on every path into it
+	// (transport.go:152), so the sub-second half is truncated before any
+	// comparison here can see it. Recording 1ns would be claiming a
+	// resolution this engine discards - the precise shape of unproven
+	// metadata assumption this table exists to refuse.
+	//
+	// It does not change the class: a settable timestamp is weak evidence at
+	// any resolution. It changes how wide the blind window is, from a
+	// nanosecond to a second, which is the number a reason string quotes to
+	// an operator. A transport that carried nanoseconds would move this row,
+	// deliberately, with the test below moving too.
 	"local_volume": {
-		MTimePrecision:  model.MTimeNanosecond,
+		MTimePrecision:  model.MTimeSecond,
 		StableSize:      true,
 		MetadataSupport: model.MetadataFull,
 	},
 
 	// An object store. The one strong source in the set, and strong for the
-	// version identifier rather than for the timestamp: LastModified is
-	// second-resolution unless the object was written by a tool that stores
-	// its own mtime in metadata, which a source this product did not write
-	// generally was not.
+	// version identifier rather than for the timestamp.
+	//
+	// The millisecond resolution is the capability matrix's measured answer
+	// for this backend; this manager's own seconds truncation applies to it
+	// as well, and it is recorded as declared here because the class does
+	// not rest on the timestamp at all - the generation identifier settles
+	// every comparison before a timestamp is consulted.
 	//
 	// The md5 entry is the ETag, and it is honest about a caveat rather than
 	// omitting it: an object uploaded in multiple parts has an ETag that is
@@ -46,7 +65,7 @@ var BundledSourceSignals = map[string]model.SourceSignals{
 	// Decide is what closes it: a policy whose premise is a remote hash,
 	// applied to an object that has none, reads the object.
 	"s3": {
-		MTimePrecision:       model.MTimeSecond,
+		MTimePrecision:       model.MTimeMillisecond,
 		StableSize:           true,
 		RemoteHashAlgorithms: []string{"md5"},
 		ObjectGeneration:     true,
@@ -56,18 +75,25 @@ var BundledSourceSignals = map[string]model.SourceSignals{
 	// SFTP. Second-resolution timestamps, because the protocol's attribute
 	// structure carries mtime as a count of seconds (RFC draft-ietf-secsh-
 	// filexfer, version 3, which is what rclone's sftp backend negotiates),
-	// so there is no sub-second information to have.
+	// so there is no sub-second information to have in the first place.
+	//
+	// Metadata support is partial rather than full, matching the capability
+	// matrix: ownership and mode come back as the far host's numeric ids
+	// with no way to resolve them, and extended attributes do not come back
+	// at all.
 	//
 	// And no hash, for the reason model/identity.go already wrote down about
 	// the delete path: rclone computes an sftp remote hash by running
 	// sha1sum or md5sum over the SSH session, which requires a shell, and
 	// this project's own recommended posture is a shell-less, forced-
-	// subsystem account. A hash recorded here would be a capability the
-	// documented deployment does not have.
+	// subsystem account. The capability matrix reports the same empty list
+	// for the same reason - hash availability there is a property of
+	// somebody else's PATH - so this is one row where the narrowing and the
+	// matrix happen to agree.
 	"sftp": {
 		MTimePrecision:  model.MTimeSecond,
 		StableSize:      true,
-		MetadataSupport: model.MetadataFull,
+		MetadataSupport: model.MetadataPartial,
 	},
 }
 

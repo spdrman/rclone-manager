@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/backupdproject/backupd/core/internal/model"
@@ -146,6 +147,66 @@ func TestLocalAndSftpAreWeakBecauseNoHashArrivesWithoutReading(t *testing.T) {
 		if !sig.StableSize {
 			t.Errorf("%s claims unstable sizes, which would make it unknown rather than weak", id)
 		}
+	}
+}
+
+// The row that is deliberately NOT the backend's own answer. A local
+// filesystem keeps nanosecond timestamps and the backend capability matrix
+// says so, because the matrix describes the backend. This table describes
+// what survives into this manager, and transport.RemoteArtifact.ModTime is
+// unix SECONDS on every path into it (core/internal/transport/
+// transport.go:152), so the sub-second half is discarded before any
+// comparison here can see it.
+//
+// Recording 1ns would be claiming a resolution this engine throws away,
+// which is exactly the unproven metadata assumption this whole table exists
+// to refuse. The class does not move either way - a settable timestamp is
+// weak evidence at any resolution - but the WIDTH of the blind window is
+// the number an operator is quoted, so it has to be the real one.
+//
+// The reason string is asserted, not just the field, because the reason is
+// what reaches the operator. A transport that carried nanoseconds would
+// move this test and the row together, on purpose.
+func TestLocalVolumeRecordsTheResolutionThisEngineKeepsNotTheOneTheDiskHas(t *testing.T) {
+	sig, ok := SourceSignalsFor("local_volume")
+	if !ok {
+		t.Fatal("no signals for local_volume")
+	}
+
+	if sig.MTimePrecision != model.MTimeSecond {
+		t.Fatalf("local_volume declares %q; this engine truncates modification times to unix seconds, so anything finer is a resolution it does not keep", sig.MTimePrecision)
+	}
+
+	trust, ok := TrustForBackend("local_volume")
+	if !ok {
+		t.Fatal("no trust classification for local_volume")
+	}
+	if !strings.Contains(trust.Reason, "1s") {
+		t.Errorf("the reason quotes no blind window an operator can act on: %q", trust.Reason)
+	}
+}
+
+// The one row whose resolution comes back finer than a second, kept in the
+// vocabulary the capability matrix uses so a value can travel from a
+// manifest to here without translation. It is recorded as declared and it
+// decides nothing: s3 is strong on its generation identifier, which settles
+// every comparison before a timestamp is consulted.
+func TestS3DeclaresTheMatrixResolutionAndDoesNotRestOnIt(t *testing.T) {
+	sig, ok := SourceSignalsFor("s3")
+	if !ok {
+		t.Fatal("no signals for s3")
+	}
+
+	if sig.MTimePrecision != model.MTimeMillisecond {
+		t.Errorf("s3 declares %q, want %q from the capability matrix", sig.MTimePrecision, model.MTimeMillisecond)
+	}
+
+	// Strip the timestamp entirely and the class must not budge, which is
+	// what "does not rest on it" means as a property rather than a comment.
+	withoutTime := sig
+	withoutTime.MTimePrecision = model.MTimePrecisionUnknown
+	if got := model.ClassifyMetadataTrust(withoutTime).Class; got != model.TrustStrong {
+		t.Errorf("without its timestamp s3 classifies %q; the generation identifier was supposed to be doing this work", got)
 	}
 }
 

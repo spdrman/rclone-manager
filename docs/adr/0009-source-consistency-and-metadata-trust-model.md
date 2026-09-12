@@ -76,8 +76,25 @@ agreeing reaches `ConfidenceWeak` and never confirms a match.
 
 And the resolutions available are not fine. SFTP carries mtime as a count
 of seconds in its attribute structure, so there is no sub-second
-information to have; an s3 object's `LastModified` is second-resolution
-unless whatever wrote it stored its own mtime in object metadata.
+information to have; the capability matrix's measured answer for s3 is a
+millisecond.
+
+A local filesystem is the exception and it is the interesting one, because
+the resolution the disk keeps is not the resolution that arrives here.
+APFS, ext4, XFS, btrfs and ZFS all keep nanoseconds and the capability
+matrix says `1ns`, because the matrix describes the BACKEND. But
+`transport.RemoteArtifact.ModTime` is unix **seconds** on every path into
+this engine (`core/internal/transport/transport.go:152`), so the sub-second
+half is discarded before any comparison in this design can see it. The
+matrix describes the backend; the truncation is ours. This ADR's table
+therefore records `1s` for `local_volume`, and
+`TestLocalVolumeRecordsTheResolutionThisEngineKeepsNotTheOneTheDiskHas`
+holds it there with the reason string an operator is quoted. Recording
+`1ns` would be claiming a resolution this engine throws away, which is
+precisely the unproven metadata assumption the classification exists to
+refuse. (Widening the transport to nanoseconds is a separate change, and it
+would move that row on purpose; the pre-existing truncation is written down
+in ADR 0008.)
 
 ### Why two axes and not one
 
@@ -165,11 +182,11 @@ reviewed as a diff. `TestEveryBundledBackendHasSourceSignals` reads the
 shipped manifests rather than a list in the test, so a fourth backend
 cannot be shipped without a classification.
 
-| Backend | mtime precision | stable size | backend hash (no read) | generation id | Class |
-| --- | --- | --- | --- | --- | --- |
-| `local_volume` | 1ns | yes | none | no | **weak** |
-| `s3` | 1s | yes | md5 (ETag, single-part only) | yes | **strong** |
-| `sftp` | 1s | yes | none | no | **weak** |
+| Backend | mtime precision (as kept here) | stable size | backend hash (no read) | generation id | metadata | Class |
+| --- | --- | --- | --- | --- | --- | --- |
+| `local_volume` | 1s (disk keeps 1ns; see above) | yes | none | no | full | **weak** |
+| `s3` | 1ms | yes | md5 (ETag, single-part only) | yes | partial | **strong** |
+| `sftp` | 1s | yes | none | no | partial | **weak** |
 
 s3's md5 is the ETag, and the caveat is recorded rather than omitted: a
 multipart-uploaded object's ETag is a hash of hashes, not a content hash,
@@ -177,6 +194,30 @@ so such an object reports no usable md5. That is a **per-object** gap in a
 per-backend capability, and `Decide` closes it - a policy whose premise is
 a remote hash, applied to an object that has none, reads the object
 (`TestRemoteHashPolicyRestsOnEvidenceAndReadsWhenThereIsNone`).
+
+Two of these rows deliberately disagree with the backend capability matrix
+(ADR 0008), and both disagreements are the narrowing this ADR argues for
+rather than a stale copy:
+
+- **`local_volume` mtime is `1s` here and `1ns` there.** The matrix
+  describes the backend; this table describes what survives the transport's
+  seconds truncation. Explained above.
+- **`local_volume` hash is `none` here and `[md5, sha1, sha256]` there.**
+  All three are computed by reading the entire file. The matrix is right
+  about what rclone can produce; this table is about what arrives without a
+  read, and a hash that costs a full read is the read.
+
+`sftp`'s empty hash list is the one row where the two agree, for the same
+underlying reason from two directions: the matrix reports empty because
+hash availability there is a property of somebody else's `PATH`, and this
+table reports none because the account this project recommends has no shell
+to run `sha1sum` in.
+
+The matrix's "silence is an explicit refusal, never a default" rule is
+honoured on this side too, and it lands on `unknown` rather than on the
+middle class: `SourceSignalsFor` returns false for an unknown backend, and
+the zero `SourceSignals` classifies `unknown`, whose policy is to read and
+hash everything under either preset.
 
 ### 4. The content-verification policy an operator chooses
 
@@ -320,13 +361,24 @@ where it buys something.
   it. It cannot refuse a source whose claim is false, and it will not
   detect a false claim at all if nothing happens to change during the run.
 - **`BundledSourceSignals` is a second place backend facts live**, beside
-  the capability matrix in `core/internal/backend`. Phase 0 keeps them
-  separate deliberately (the matrix is landing on its own branch, and a
-  Phase 0 gate that could not be evaluated until two spikes merged would
-  not be a gate), and the narrowing of `hash_support` documented above
-  means the two are not a copy in any case. Phase 1 should make
-  `SourceSignalsFor` read the manifest's capabilities and keep the
-  narrowing as an explicit projection, not delete it.
+  the capability matrix in `core/internal/backend` (ADR 0008). Phase 0
+  keeps them separate deliberately: the matrix landed on its own branch,
+  and a Phase 0 gate that could not be evaluated until two spikes merged
+  would not be a gate. The cost is real and it has already been paid once -
+  the matrix's honest values arrived after this table was written and moved
+  three of the five fields in it (`local_volume` mtime, `s3` mtime, `sftp`
+  metadata support), which is exactly the drift a second home for the same
+  facts produces.
+
+  It is still not a copy, and Phase 1 must not make it one by deleting this
+  table: two of the three shipped rows' hash lists differ from the matrix
+  ON PURPOSE, for the reasons in section 3. `SourceSignalsFor` should read
+  the manifest's capabilities and apply the narrowing as an explicit,
+  named projection - `hash_support` filtered to hashes obtainable without a
+  read, and `mtime_precision` floored at whatever the transport actually
+  carries - with a test per shipped backend asserting the projected value
+  rather than the declared one. A straight copy would classify a local disk
+  `strong` on the strength of three hashes that each cost a full read.
 - **`OSSource` does not resolve symlinks.** The containment check is
   lexical. Whether a symlink is stored, followed or skipped is the
   capability matrix's `symlink_semantics` decision, and a reader that

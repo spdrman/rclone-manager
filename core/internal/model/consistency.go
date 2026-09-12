@@ -193,9 +193,10 @@ func (c TrustClass) String() string { return string(c) }
 type MTimePrecision string
 
 const (
-	MTimeNanosecond MTimePrecision = "1ns"
-	MTimeSecond     MTimePrecision = "1s"
-	MTimeTwoSecond  MTimePrecision = "2s"
+	MTimeNanosecond  MTimePrecision = "1ns"
+	MTimeMillisecond MTimePrecision = "1ms"
+	MTimeSecond      MTimePrecision = "1s"
+	MTimeTwoSecond   MTimePrecision = "2s"
 
 	// MTimePrecisionUnknown is an honest admission and a legitimate value.
 	// It classifies as TrustUnknown, which is the point: a backend nobody
@@ -213,6 +214,8 @@ func (p MTimePrecision) Resolution() (time.Duration, bool) {
 	switch p {
 	case MTimeNanosecond:
 		return time.Nanosecond, true
+	case MTimeMillisecond:
+		return time.Millisecond, true
 	case MTimeSecond:
 		return time.Second, true
 	case MTimeTwoSecond:
