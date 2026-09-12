@@ -4,6 +4,20 @@
   "summary": "A directory on a disk this NAS can see. A second internal drive, a USB disk, or an already-mounted network share.",
   "role": "local_volume",
   "rclone_backend": "local",
+  "capabilities": {
+    "bounded_listing": true,
+    "recursive_listing": false,
+    "streaming_open": true,
+    "range_open": true,
+    "mtime_precision": "1ns",
+    "hash_support": ["md5", "sha1", "sha256"],
+    "stable_size": true,
+    "symlink_semantics": "skip",
+    "metadata_support": "full",
+    "case_sensitivity": "unknown",
+    "case_preservation": "unknown",
+    "generation_identity": "none"
+  },
   "fields": [
     {
       "id": "path",

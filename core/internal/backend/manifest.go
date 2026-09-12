@@ -184,6 +184,19 @@ type Manifest struct {
 	// configure yet".
 	Configurable *bool `json:"configurable,omitempty"`
 
+	// Capabilities is what an instance of this backend can be asked to
+	// DO, as opposed to what an operator configures about one (Fields)
+	// or what a connection test proves about one (Probe). See
+	// capability.go, which owns the vocabulary and the two reasons this
+	// is a pointer: absent means UNQUALIFIED rather than "all false",
+	// and a block that is present has to answer the whole vocabulary.
+	//
+	// Read it through DeclaredCapabilities, never directly: that
+	// function's zero-value answer is the least capable backend
+	// describable, so a caller that forgets to check ok still gets the
+	// conservative reading.
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
+
 	Fields []Field `json:"fields"`
 	Probe  Probe   `json:"probe"`
 }
