@@ -949,12 +949,12 @@ func TestComposeStack_WebUIProxiesToTheEngineEndToEnd(t *testing.T) {
 	}
 	var csrf string
 	for _, c := range jar.Cookies(baseURL) {
-		if c.Name == "bm_csrf" {
+		if c.Name == "backupd_csrf" {
 			csrf = c.Value
 		}
 	}
 	if csrf == "" {
-		t.Fatal("no bm_csrf cookie present after seeding GET / through web-ui")
+		t.Fatal("no backupd_csrf cookie present after seeding GET / through web-ui")
 	}
 
 	engineID := project.containerID(t, "backupd")

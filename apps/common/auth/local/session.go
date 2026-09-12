@@ -33,7 +33,31 @@ import (
 // SessionCookieName is the HTTP-only session cookie this package issues
 // on a successful login or enrollment, and reads on every subsequent
 // authenticated request (via sessionAuthenticator, authenticator.go).
-const SessionCookieName = "bm_session"
+const SessionCookieName = "backupd_session"
+
+// LegacySessionCookieName is the name SessionCookieName had before the
+// project was renamed to backupd (#794). It is READ and never WRITTEN:
+// every response this package sets a session cookie on sets only
+// SessionCookieName, while every read accepts either name (newest
+// first, sessionCookieNames below).
+//
+// That asymmetry is the whole point of the compat window. An operator
+// upgrading in place has browsers and API clients in the field already
+// holding the old cookie, and a rename that only changed the written
+// name would present them all with a signed-out console on the first
+// request after the upgrade - a rename is not a reason to invalidate a
+// credential. Because nothing writes it, the old name disappears from
+// the wire on its own as each caller is issued the new one, so this
+// constant is removable one release after #794 ships without any
+// further migration step.
+const LegacySessionCookieName = "bm_session"
+
+// sessionCookieNames are the cookie names a read accepts, in precedence
+// order: the current name wins whenever it carries a value, so a caller
+// that still has a stale old-name cookie alongside a freshly issued new
+// one is authenticated by the new one. Package-level so a read does not
+// allocate to iterate it.
+var sessionCookieNames = []string{SessionCookieName, LegacySessionCookieName}
 
 // sessionTTL is a fixed lifetime from creation, not a sliding one: simple
 // to reason about, and 24h is generous for a single-administrator admin
@@ -153,13 +177,21 @@ func (m *sessionManager) rotateSession(username string) (token string, expiresAt
 // (the HTTP handlers in handler.go use this); sessionAuthenticator
 // (authenticator.go) reads the same cookie out of a raw header string
 // instead, since capabilities.AuthRequest carries only headers, not a
-// *http.Request.
+// *http.Request - and funnels back through here so both read paths
+// accept exactly the same set of names.
+//
+// Either name is accepted (sessionCookieNames), newest first, for the
+// one-release compat window LegacySessionCookieName documents. An empty
+// value counts as absent: that is what a cleared cookie a client keeps
+// echoing back looks like, and it must not shadow a name further down
+// the list.
 func tokenFromRequest(r *http.Request) string {
-	c, err := r.Cookie(SessionCookieName)
-	if err != nil {
-		return ""
+	for _, name := range sessionCookieNames {
+		if c, err := r.Cookie(name); err == nil && c.Value != "" {
+			return c.Value
+		}
 	}
-	return c.Value
+	return ""
 }
 
 // setSessionCookie writes token as this package's session cookie:

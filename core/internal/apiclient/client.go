@@ -35,10 +35,19 @@ import (
 // comparison covers it and so a reader can see the whole credential set in
 // one place.
 const (
-	sessionCookieName = "bm_session"
-	csrfCookieName    = "bm_csrf"
+	sessionCookieName = "backupd_session"
+	csrfCookieName    = "backupd_csrf"
 	csrfHeaderName    = "X-CSRF-Token"
 )
+
+// This client reads only the current names, with no legacy fallback, and
+// that asymmetry with the server (which reads both for one release after
+// #794) is deliberate rather than an omission. The compat window exists
+// for credentials already in a jar that outlives the upgrade; this
+// client's jar is per-process and per-invocation, so every token it ever
+// compares was issued by the engine it is talking to, in the same run,
+// under the current name. A fallback here would only add a name nothing
+// can produce.
 
 // defaultTimeout bounds one request, not one command. Every operation this
 // package reaches is a configuration read or write against a local

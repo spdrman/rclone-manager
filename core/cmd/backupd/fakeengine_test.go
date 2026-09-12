@@ -199,19 +199,19 @@ func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // caller already carries so a second request echoes a value this engine
 // still recognises.
 func (e *fakeEngine) issueCSRF(w http.ResponseWriter, r *http.Request) string {
-	if cookie, err := r.Cookie("bm_csrf"); err == nil && cookie.Value != "" {
+	if cookie, err := r.Cookie("backupd_csrf"); err == nil && cookie.Value != "" {
 		return cookie.Value
 	}
 	token := "csrf-" + time.Now().Format("150405.000000000")
 	e.mu.Lock()
 	e.csrf[token] = true
 	e.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "bm_csrf", Value: token, Path: "/"})
+	http.SetCookie(w, &http.Cookie{Name: "backupd_csrf", Value: token, Path: "/"})
 	return token
 }
 
 func (e *fakeEngine) signedIn(r *http.Request) bool {
-	cookie, err := r.Cookie("bm_session")
+	cookie, err := r.Cookie("backupd_session")
 	if err != nil || cookie.Value == "" {
 		return false
 	}
@@ -252,7 +252,7 @@ func (e *fakeEngine) login(w http.ResponseWriter, r *http.Request) {
 	e.mu.Lock()
 	e.sessions[token] = true
 	e.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "bm_session", Value: token, Path: "/"})
+	http.SetCookie(w, &http.Cookie{Name: "backupd_session", Value: token, Path: "/"})
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -368,7 +368,7 @@ func round3(v float64) float64 {
 }
 
 const (
-	csrfCookie = "bm_csrf"
+	csrfCookie = "backupd_csrf"
 	csrfHeader = "X-CSRF-Token"
 )
 

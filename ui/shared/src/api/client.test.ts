@@ -24,10 +24,14 @@ import type { ApiErrorCode } from "./contracts";
 import { progressPercent } from "@shared/types/operation";
 
 /** Sets document.cookie the way a browser would after the server issued
- *  a Set-Cookie header for bm_csrf — jsdom's document.cookie setter
+ *  a Set-Cookie header for backupd_csrf — jsdom's document.cookie setter
  *  accepts the same "name=value" assignment form. */
-function setCsrfCookie(value: string) {
-  document.cookie = "bm_csrf=" + value;
+function setCsrfCookie(value: string, name = "backupd_csrf") {
+  document.cookie = name + "=" + value;
+}
+
+function clearCookie(name: string) {
+  document.cookie = name + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
 }
 
 function mockFetchOk(body: unknown = undefined, status = 200) {
@@ -42,7 +46,8 @@ function mockFetchOk(body: unknown = undefined, status = 200) {
 describe("httpApi CSRF/bootstrap-token wiring", () => {
   beforeEach(() => {
     // Clear any cookie a previous test left behind.
-    document.cookie = "bm_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+    clearCookie("backupd_csrf");
+    clearCookie("bm_csrf");
     window.history.pushState({}, "", "/");
   });
 
@@ -61,6 +66,42 @@ describe("httpApi CSRF/bootstrap-token wiring", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = init.headers as Record<string, string>;
     expect(headers["X-CSRF-Token"]).toBe("csrf-value-123");
+
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * #794's read-compat window. A bundle this browser had cached from
+   * before the cookie was renamed leaves a bm_csrf cookie behind, and the
+   * upgraded runtime still accepts that token (csrf.LegacyCookieName) —
+   * so a client that finds only the old name has to echo it rather than
+   * send no header at all and take a 403.
+   */
+  it("falls back to the legacy bm_csrf cookie when only that one is set", async () => {
+    setCsrfCookie("legacy-csrf-value", "bm_csrf");
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.login("bm-admin", "hunter22222222");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers["X-CSRF-Token"]).toBe("legacy-csrf-value");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("prefers the current cookie name over the legacy one", async () => {
+    setCsrfCookie("legacy-csrf-value", "bm_csrf");
+    setCsrfCookie("current-csrf-value");
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.login("bm-admin", "hunter22222222");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers["X-CSRF-Token"]).toBe("current-csrf-value");
 
     vi.unstubAllGlobals();
   });
