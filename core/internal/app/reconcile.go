@@ -77,6 +77,25 @@ func (s *Service) ReconcileAll(ctx context.Context) []ReconcileSetReport {
 				out = append(out, ReconcileSetReport{Set: bs.ID, Err: err})
 				return out
 			}
+
+			// EPIC K (#780): an incremental set is skipped here with its
+			// own row's Err, never an early return, because FR-1's rule
+			// is that one set's problem does not stop the others and
+			// this function is where that rule is applied to
+			// reconciliation.
+			//
+			// Reconciliation reads the remote to settle what the journal
+			// already believes about this set's artifacts, and an
+			// incremental set has no artifacts and cannot acquire any
+			// (the cycle and Fetch both refuse it before discovery). So
+			// this is a walk of a source TREE that can only ever confirm
+			// that the journal knows nothing, and reporting the refusal
+			// says so instead of spending the round trips to find out.
+			if err := unrunnableEngine(bs.Engine); err != nil {
+				out = append(out, ReconcileSetReport{Set: bs.ID, Err: err})
+
+				continue
+			}
 			source := sourceFor(s.Config, src, bs)
 			rep, err := s.reconcileOne(ctx, source, bs.ID)
 			out = append(out, ReconcileSetReport{Set: bs.ID, Report: rep, Err: err})
