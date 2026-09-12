@@ -119,11 +119,18 @@ func (a *Adapter) OpenRepository(ctx context.Context, loc backupengine.Repositor
 		return nil, err
 	}
 
-	// Connect writes our connection parameters to loc.ConfigPath and
-	// verifies them by opening and closing the repository, so a bad
-	// passphrase fails here rather than on first use. The storage handle is
-	// only needed to read the format blob; the repository opened below
-	// builds its own from the config file.
+	// Connect is unconditional, and that is the whole of it: it writes our
+	// connection parameters to loc.ConfigPath from the storage the caller
+	// asked for, and verifies them by opening and closing the repository, so
+	// a bad passphrase fails here rather than on first use. Reusing an
+	// existing config file because one happens to be there is the version of
+	// this code that hands back a repository nobody asked for -- the config
+	// records which storage it is connected to, and a caller that changed
+	// RepositoryLocation.Path would keep writing snapshots into the old one,
+	// successfully and silently, while the new location stayed empty.
+	//
+	// The storage handle is only needed to read the format blob; the
+	// repository opened below builds its own from the config file.
 	connectErr := repo.Connect(ctx, loc.ConfigPath, st, loc.Passphrase, connectOptions(loc))
 
 	if err := st.Close(ctx); err != nil {
@@ -152,6 +159,20 @@ func (a *Adapter) OpenRepository(ctx context.Context, loc backupengine.Repositor
 		}
 
 		return nil, errors.New("kopia: repository was opened without direct storage access, which maintenance requires")
+	}
+
+	// And the config file that was just written is read back through the
+	// opened repository, because "we wrote the right thing" and "we are
+	// talking to the right storage" are two different claims and only the
+	// second one matters. One comparison turns the worst outcome available
+	// to this adapter -- a snapshot successfully stored in the wrong
+	// repository -- into a refusal at open time.
+	if err := checkStorageIdentity(direct, loc); err != nil {
+		if cerr := rep.Close(ctx); cerr != nil {
+			return nil, fmt.Errorf("%w; closing it also failed: %w", err, cerr)
+		}
+
+		return nil, err
 	}
 
 	return &repository{rep: rep, direct: direct}, nil
@@ -287,13 +308,25 @@ func (r *repository) Verify(ctx context.Context, id backupengine.SnapshotID) (ba
 		Errors:          result.ErrorStrings,
 	}
 
-	// A walk that found damage returns both partial stats and a non-nil
-	// error. Those findings are the answer, not a failure to produce one, so
-	// they are reported through VerifyReport.Errors with a nil error; see the
-	// VerifyReport doc. Only an error with nothing recorded means
-	// verification could not run.
-	if verifyErr != nil && len(report.Errors) == 0 {
-		return report, fmt.Errorf("verifying snapshot: %w", verifyErr)
+	// A walk that found damage and a walk that was torn down both come back
+	// with partial stats, a populated error list and a non-nil error, and
+	// they are not the same outcome: the first is an answer, the second is
+	// an absence of one. Deciding between them by counting findings is what
+	// this code used to do, and a cancelled verification then looked like a
+	// completed one that found two problems -- the two problems being the
+	// cancellation, reported once per object the walker abandoned.
+	//
+	// So the error is passed through whenever the walk did not complete,
+	// alongside the report of what it did manage to read. ctx.Err() takes
+	// precedence when it is set, because a torn-down read reports whatever
+	// the layer below felt like reporting and the caller who cancelled
+	// needs errors.Is(err, context.Canceled) to hold.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return report, fmt.Errorf("verifying snapshot %s: %w", id, ctxErr)
+	}
+
+	if verifyErr != nil {
+		return report, fmt.Errorf("verifying snapshot %s: %w", id, verifyErr)
 	}
 
 	return report, nil
@@ -526,6 +559,69 @@ func openStorage(ctx context.Context, loc backupengine.RepositoryLocation, creat
 	}
 
 	return st, nil
+}
+
+// checkStorageIdentity refuses an open whose repository is not the storage
+// the caller named.
+//
+// It reads the identity back out of the opened repository rather than
+// trusting the config file this process just wrote, because the failure it
+// exists to catch is precisely the one where the config file says something
+// other than what was asked for.
+func checkStorageIdentity(direct repo.DirectRepository, loc backupengine.RepositoryLocation) error {
+	want, err := filepath.Abs(loc.Path)
+	if err != nil {
+		return fmt.Errorf("resolving repository path %s: %w", loc.Path, err)
+	}
+
+	ci := direct.BlobReader().ConnectionInfo()
+
+	got, ok := filesystemPath(ci)
+	if !ok {
+		return fmt.Errorf(
+			"kopia: config %s is connected to %q storage; this adapter registers only the filesystem backend",
+			loc.ConfigPath, ci.Type)
+	}
+
+	if samePath(got, want) {
+		return nil
+	}
+
+	return fmt.Errorf("kopia: config %s is connected to the repository at %s, not the requested %s",
+		loc.ConfigPath, got, want)
+}
+
+// filesystemPath reports the directory behind a filesystem storage's
+// connection info, and whether it was a filesystem storage at all.
+func filesystemPath(ci blob.ConnectionInfo) (string, bool) {
+	switch cfg := ci.Config.(type) {
+	case *filesystem.Options:
+		return cfg.Path, true
+	case filesystem.Options:
+		return cfg.Path, true
+	default:
+		return "", false
+	}
+}
+
+// samePath compares two directories as identities rather than as strings.
+//
+// The symlink resolution is not decoration: on darwin every temporary
+// directory is reached through /var -> private/var, so two spellings of one
+// directory are the normal case and not an exotic one.
+func samePath(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+
+	ra, aerr := filepath.EvalSymlinks(a)
+	rb, berr := filepath.EvalSymlinks(b)
+
+	if aerr != nil || berr != nil {
+		return false
+	}
+
+	return ra == rb
 }
 
 func connectOptions(loc backupengine.RepositoryLocation) *repo.ConnectOptions {
