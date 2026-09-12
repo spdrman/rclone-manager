@@ -17,7 +17,7 @@ import (
 // which was deliberately given only headers and a remote address so that
 // the contract does not drag net/http's whole request type across the
 // provider seam. The cost of that narrowing is paid here, once, in
-// cookieValue.
+// sessionTokenFromCookieHeader.
 //
 // Nothing in this file can create or extend a session, only recognise one.
 // That is what lets webhost consult it on every single /api/v1 request
@@ -35,7 +35,7 @@ type sessionAuthenticator struct {
 
 // Authenticate implements capabilities.Authenticator.
 func (a sessionAuthenticator) Authenticate(_ context.Context, r capabilities.AuthRequest) (capabilities.AuthContext, error) {
-	token := cookieValue(r.Headers.Get("Cookie"), SessionCookieName)
+	token := sessionTokenFromCookieHeader(r.Headers.Get("Cookie"))
 	username, ok := a.sessions.lookup(token)
 	if !ok {
 		return capabilities.AuthContext{}, nil
@@ -47,21 +47,20 @@ func (a sessionAuthenticator) Authenticate(_ context.Context, r capabilities.Aut
 	}, nil
 }
 
-// cookieValue parses name's value out of a raw Cookie header string.
-// capabilities.AuthRequest carries only http.Header (not a
-// *http.Request), so this can't call (*http.Request).Cookie directly;
-// building a throwaway *http.Request around just that one header lets
-// this reuse net/http's own cookie-parsing logic (quoting, multiple
-// cookies, etc.) instead of re-implementing it.
-func cookieValue(cookieHeader, name string) string {
+// sessionTokenFromCookieHeader parses this package's session token out of
+// a raw Cookie header string. capabilities.AuthRequest carries only
+// http.Header (not a *http.Request), so this can't call
+// (*http.Request).Cookie directly; building a throwaway *http.Request
+// around just that one header lets this reuse net/http's own
+// cookie-parsing logic (quoting, multiple cookies, etc.) instead of
+// re-implementing it - and lets the actual name selection stay in
+// tokenFromRequest (session.go), so this read path and the handlers'
+// accept the same names, including the legacy one, without two lists to
+// keep in step.
+func sessionTokenFromCookieHeader(cookieHeader string) string {
 	header := http.Header{}
 	if cookieHeader != "" {
 		header.Set("Cookie", cookieHeader)
 	}
-	req := &http.Request{Header: header}
-	c, err := req.Cookie(name)
-	if err != nil {
-		return ""
-	}
-	return c.Value
+	return tokenFromRequest(&http.Request{Header: header})
 }

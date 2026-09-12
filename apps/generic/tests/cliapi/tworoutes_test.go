@@ -460,7 +460,7 @@ const newSetID = "api/postgres"
 // with a published port at all, so it is what a NAS shell reaches; that
 // path adds StripUntrustedIdentity, SecurityHeaders, a reverse proxy and a
 // SECOND EnsureCSRFCookie in front of the engine's own, and a cold request
-// through it carries two Set-Cookie: bm_csrf headers on one response. PR
+// through it carries two Set-Cookie: backupd_csrf headers on one response. PR
 // #546's review flagged that as untested and unreachable from where the
 // client lives. It is reachable from here.
 //

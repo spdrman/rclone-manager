@@ -35,9 +35,47 @@ import (
 // the whole pattern requires client-side JavaScript to read the cookie
 // so it can echo it back as HeaderName.
 const (
-	CookieName = "bm_csrf"
+	CookieName = "backupd_csrf"
 	HeaderName = "X-CSRF-Token"
 )
+
+// LegacyCookieName is the name CookieName had before the project was
+// renamed to backupd (#794), kept readable for one release.
+//
+// Unlike the session cookie, where the compat window only spares a
+// credential, here it is load bearing for a live page. The client half
+// of this pattern is JavaScript that READS the cookie by name
+// (ui/shared/src/api/client.ts), so an upgrade is guaranteed to have
+// already-loaded and cached bundles in the field echoing whatever value
+// they found under the old name. Issuing a fresh token under the new
+// name only, and comparing against that, would reject every one of
+// those requests with 403 CSRF_TOKEN_MISMATCH until each browser
+// happened to reload - a rename presenting as the exact failure this
+// package exists to produce for an attack.
+//
+// So EnsureCookie carries an existing old-name token FORWARD onto the
+// new name rather than minting a second, different one (below), and
+// Verify accepts either name. Both halves then see the same value under
+// the name each knows, and the old name leaves the wire on its own as
+// each client's session cookie jar turns over.
+const LegacyCookieName = "bm_csrf"
+
+// cookieNames are the names a read accepts, in precedence order: the
+// current name wins whenever it carries a value. Package-level so a read
+// does not allocate to iterate it.
+var cookieNames = []string{CookieName, LegacyCookieName}
+
+// readToken returns the double-submit token r carries under any accepted
+// name, or "" for none. An empty value counts as absent so a cleared
+// cookie cannot shadow a name further down the list.
+func readToken(r *http.Request) string {
+	for _, name := range cookieNames {
+		if c, err := r.Cookie(name); err == nil && c.Value != "" {
+			return c.Value
+		}
+	}
+	return ""
+}
 
 // ErrMissingCookie means the request carried no CSRF cookie at all (or an
 // empty one) - most commonly a client that never loaded a page from this
@@ -56,6 +94,15 @@ var ErrHeaderMismatch = errors.New("csrf: missing or mismatched header")
 // state-changing request a fresh browser session makes is what will need
 // to echo it.
 //
+// "Already carries one" spans both accepted names for the compat window
+// (LegacyCookieName), and a request that carries only the old name has
+// that exact value re-issued under the current one instead of a fresh
+// token. Minting a new value there would leave the two names holding two
+// different tokens, and a cached client still echoing the old name's
+// value would then fail Verify - which prefers the current name - on
+// every mutating request. Carrying the value forward makes both halves
+// agree no matter which name either side reads.
+//
 // secure decides the issued cookie's own Secure flag, given the request
 // that triggered issuance: a plain `func(r *http.Request) bool { return
 // r.TLS != nil }` for a handler that terminates TLS itself (or never
@@ -67,16 +114,12 @@ var ErrHeaderMismatch = errors.New("csrf: missing or mismatched header")
 func EnsureCookie(secure func(*http.Request) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if _, err := r.Cookie(CookieName); err != nil {
-				if token, genErr := randomToken(32); genErr == nil {
-					http.SetCookie(w, &http.Cookie{
-						Name:     CookieName,
-						Value:    token,
-						Path:     "/",
-						Secure:   secure(r),
-						SameSite: http.SameSiteStrictMode,
-					})
+			if existing := readToken(r); existing == "" {
+				if fresh, genErr := randomToken(32); genErr == nil {
+					setCookie(w, r, fresh, secure)
 				}
+			} else if _, err := r.Cookie(CookieName); err != nil {
+				setCookie(w, r, existing, secure)
 			}
 			next.ServeHTTP(w, r)
 		})
@@ -84,23 +127,36 @@ func EnsureCookie(secure func(*http.Request) bool) func(http.Handler) http.Handl
 }
 
 // Verify reports whether r carries a valid double-submit CSRF token: its
-// HeaderName header matches its CookieName cookie, byte-for-byte, in
-// constant time. A non-nil return is always ErrMissingCookie or
-// ErrHeaderMismatch (check with errors.Is), letting each caller choose
-// its own error response shape/code for the two cases -
-// apps/common/auth/local and apps/common/webhost each have their own,
-// incompatible error body conventions, and this package doesn't referee
-// between them.
+// HeaderName header matches its CSRF cookie, byte-for-byte, in constant
+// time. Either accepted cookie name counts (CookieName first, then
+// LegacyCookieName - see that constant for the window). A non-nil return
+// is always ErrMissingCookie or ErrHeaderMismatch (check with
+// errors.Is), letting each caller choose its own error response shape/
+// code for the two cases - apps/common/auth/local and
+// apps/common/webhost each have their own, incompatible error body
+// conventions, and this package doesn't referee between them.
 func Verify(r *http.Request) error {
-	cookie, err := r.Cookie(CookieName)
-	if err != nil || cookie.Value == "" {
+	cookie := readToken(r)
+	if cookie == "" {
 		return ErrMissingCookie
 	}
 	header := r.Header.Get(HeaderName)
-	if header == "" || subtle.ConstantTimeCompare([]byte(header), []byte(cookie.Value)) != 1 {
+	if header == "" || subtle.ConstantTimeCompare([]byte(header), []byte(cookie)) != 1 {
 		return ErrHeaderMismatch
 	}
 	return nil
+}
+
+// setCookie writes value under the current CookieName. Not HttpOnly: the
+// double-submit pattern requires the page's own JavaScript to read it.
+func setCookie(w http.ResponseWriter, r *http.Request, value string, secure func(*http.Request) bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     CookieName,
+		Value:    value,
+		Path:     "/",
+		Secure:   secure(r),
+		SameSite: http.SameSiteStrictMode,
+	})
 }
 
 // randomToken returns n bytes of crypto/rand, base64url encoded. Callers

@@ -17,20 +17,20 @@
       "session": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "bm_session",
-        "description": "The authenticated session. For the generic runtime profile this is apps/common/auth/local's own HTTP-only cookie; a runtime profile with a native gateway (native_auth) establishes the same session from provider identity headers accepted only from a trusted peer. Which mechanism established it is a profile concern; that a caller of a secured operation has one is not."
+        "name": "backupd_session",
+        "description": "The authenticated session. For the generic runtime profile this is apps/common/auth/local's own HTTP-only cookie; a runtime profile with a native gateway (native_auth) establishes the same session from provider identity headers accepted only from a trusted peer. Which mechanism established it is a profile concern; that a caller of a secured operation has one is not. This cookie was named bm_session before the project was renamed to backupd (#794); the runtime still ACCEPTS that name on a read for one release so an in-place upgrade does not sign every caller out, but issues only the name declared here, and a client should carry back whatever the runtime set."
       },
       "csrf": {
         "type": "apiKey",
         "in": "header",
         "name": "X-CSRF-Token",
-        "description": "The double-submit CSRF token (apps/common/csrf). Required on every operation this API serves with a mutating verb, with no exception: that includes test-connection and host-key-probe, whose effect is read-only but which each open an outbound connection to a caller-supplied host, and a request that reaches the network is exactly what a cross-site form must not be able to make. It is never a value an operator configures or a client is issued out of band. The runtime mints it, delivers it in the bm_csrf cookie below, and a caller echoes that value back here unchanged; a generator that renders this as a user-supplied API key has read it wrongly. Whether an operation needs it is stated twice, in that operation's own security block and in its x-csrf-required, and scripts/api/check-contract-drift.sh fails when the two disagree."
+        "description": "The double-submit CSRF token (apps/common/csrf). Required on every operation this API serves with a mutating verb, with no exception: that includes test-connection and host-key-probe, whose effect is read-only but which each open an outbound connection to a caller-supplied host, and a request that reaches the network is exactly what a cross-site form must not be able to make. It is never a value an operator configures or a client is issued out of band. The runtime mints it, delivers it in the backupd_csrf cookie below, and a caller echoes that value back here unchanged; a generator that renders this as a user-supplied API key has read it wrongly. Whether an operation needs it is stated twice, in that operation's own security block and in its x-csrf-required, and scripts/api/check-contract-drift.sh fails when the two disagree."
       },
       "csrfCookie": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "bm_csrf",
-        "description": "The other half of the double-submit pair above, and the half a client has to READ. The runtime issues this cookie on any response that does not already carry one, and a caller echoes its value back in X-CSRF-Token; the two are compared byte for byte. It is declared here because a client cannot implement the csrf requirement from this document without knowing which cookie to echo, and until it was, the only place that name existed was the two implementations."
+        "name": "backupd_csrf",
+        "description": "The other half of the double-submit pair above, and the half a client has to READ. The runtime issues this cookie on any response that does not already carry one, and a caller echoes its value back in X-CSRF-Token; the two are compared byte for byte. It is declared here because a client cannot implement the csrf requirement from this document without knowing which cookie to echo, and until it was, the only place that name existed was the two implementations. This cookie was named bm_csrf before the project was renamed to backupd (#794). For one release the runtime accepts either name on a read, and a request arriving with only the old one has that same token re-issued under the name declared here rather than being given a second, different one - so a client that echoes the value it found under either name is accepted, and a client written against this document reads the current name and finds it."
       },
       "bootstrapToken": {
         "type": "apiKey",

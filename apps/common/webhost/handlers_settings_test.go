@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/backupdproject/backupd/apps/common/csrf"
 	"github.com/backupdproject/backupd/core/service"
 )
 
@@ -452,8 +453,8 @@ func TestPatchSettings_MissingCSRFTokenReturns403(t *testing.T) {
 		{
 			name: "a cookie whose value the header does not echo",
 			prepare: func(r *http.Request) {
-				r.AddCookie(&http.Cookie{Name: "bm_csrf", Value: testCSRFToken})
-				r.Header.Set("X-CSRF-Token", "not-the-cookie-value")
+				r.AddCookie(&http.Cookie{Name: csrf.CookieName, Value: testCSRFToken})
+				r.Header.Set(csrf.HeaderName, "not-the-cookie-value")
 			},
 			wantCode: "CSRF_TOKEN_MISMATCH",
 		},
