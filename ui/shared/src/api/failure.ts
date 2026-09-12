@@ -1,5 +1,5 @@
 import { BackupdError, RequestFailure, describeException } from "./contracts";
-import type { ApiError } from "./contracts";
+import type { ApiError, FailureOrigin } from "./contracts";
 import { API_BASE_PATH, API_VERSION } from "./generated/contract";
 
 /**
@@ -67,6 +67,14 @@ export interface OperatorFailure {
    *  that threw indistinguishable from each other on screen. Never a stack
    *  trace and never a source path (§37). */
   detail?: string;
+  /** Which of the five things this failure IS (#795's review). Set by
+   *  every branch of `describeFailure` and by nothing else, because that
+   *  function is where the question is answered; absent on the handful of
+   *  failures a page writes by hand for a code it handles itself, where
+   *  the page already knows. The one consumer is App.tsx's unreachable
+   *  gate, through `asApiError` and `isServiceUnreachable`: a surface that
+   *  says "Backupd is not answering" has to be sure that it did not. */
+  origin?: FailureOrigin;
 }
 
 /** The path in the form an operator reads it, which is the one they can
@@ -121,6 +129,7 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
         message: "Backupd answered, and this page could not read the answer.",
         remediation:
           "The service replied, so it is running, but what came back was not what this page expected. That is usually something between the browser and the service rewriting the response, or a version of the app older than the service it is talking to.",
+        origin: "unreadable-body",
         detail: detailOf(describeException(e), buildLine())
       };
     }
@@ -146,24 +155,34 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
       // way.
       remediation:
         "This failure did not come out of the service, so it has no id in any log. Check that the Backupd service is still running, then try again.",
+      // Provenance genuinely not established: this exception came from
+      // neither the service nor the transport, so nothing here may name a
+      // hop, and App.tsx's unreachable gate must not fire on it.
+      origin: "unknown",
       detail: detailOf(describeException(e), buildLine())
     };
   }
 
-  // Issue #795. A refusal with a gateway status and no typed envelope in
-  // it did not come from the service: it came from something answering
-  // ON the service's behalf, which in this product is serve-ui's own
-  // reverse proxy failing to reach the engine (a bodyless 502 from
-  // apps/common/webhost/serve/ui.go's ErrorHandler). Read before the
-  // code switch below, because the code on one of those is `unknown` by
-  // construction and `unknown` falls to the default arm, which shows the
-  // client's own "the backup service returned an unexpected response" —
-  // the one machine in the deployment that had not answered at all.
+  // Issue #795. A refusal that came from something answering ON the
+  // service's behalf — serve-ui's own reverse proxy, failing to reach the
+  // engine — rather than from the service. Read before the code switch
+  // below, because the code on one of those is `unknown` by construction
+  // and `unknown` falls to the default arm, which shows the client's own
+  // "the backup service returned an unexpected response" — the one
+  // machine in the deployment that had not answered at all.
   //
-  // Gated on there being no recognised code, so this never speaks over a
-  // service that answered a 503 WITH a reason: its own sentence says
-  // more than anything written here could.
+  // Decided on recorded provenance, never on the status or the code, so
+  // this can never speak over a service that answered a 503 WITH a
+  // reason: its own sentence says more than anything written here could.
   if (isGatewayRefusal(api)) return describeGatewayRefusal(api);
+
+  // Everything from here down is the service refusing in its own
+  // vocabulary. Where provenance says otherwise (an untyped non-gateway
+  // response, say a 403 from a proxy with an HTML page on it), it is
+  // carried through as it was recorded rather than upgraded to
+  // "service": the sentence below may be this module's fallback, and a
+  // surface that asks "did the service answer this" gets the truth.
+  const origin = api.origin;
 
   const correlationId = api.correlationId;
   switch (api.code) {
@@ -171,14 +190,16 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
       return {
         message: "Too many attempts from this address.",
         remediation: "Backupd is refusing further attempts for the moment. Wait a minute, then try again.",
-        correlationId
+        correlationId,
+        origin
       };
     case "CSRF_TOKEN_MISSING":
     case "CSRF_TOKEN_MISMATCH":
       return {
         message: "This page's security token is missing or out of date.",
         remediation: "Reload the page and enter the details again. Nothing was changed.",
-        correlationId
+        correlationId,
+        origin
       };
     case "INTERNAL":
     case "INTERNAL_ERROR":
@@ -186,10 +207,11 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
         message: fallbackMessage,
         remediation:
           "Backupd reported an internal error rather than a reason it could name. Its own log holds the detail, under this correlation id.",
-        correlationId
+        correlationId,
+        origin
       };
     default:
-      return { message: api.message || fallbackMessage, correlationId };
+      return { message: api.message || fallbackMessage, correlationId, origin };
   }
 }
 
@@ -206,14 +228,49 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
  * service had returned something unexpected. It had returned nothing; it
  * had never been spoken to. The next step for that fault is in the OTHER
  * container, and the sentence on screen pointed away from it.
+ *
+ * What this reads is PROVENANCE, recorded by the code that held the
+ * response (api/transport.ts), and never the status or the code (#795's
+ * review). The first draft asked `code === "unknown" && status is a
+ * gateway status`, and both halves of that are wrong in the same
+ * direction: `unknown` is also what `toApiErrorCode` returns for a valid
+ * code this BUNDLE has not heard of, and a gateway status is something a
+ * service may answer with itself. Between them they took a typed 503 from
+ * a service one version newer than this bundle — carrying an actionable
+ * sentence of its own — and rewrote it as a proxy that could not reach
+ * the engine. The service's own words are always worth more than
+ * anything written here.
  */
 function isGatewayRefusal(api: ApiError): boolean {
-  // `unknown` is what toApiErrorCode produces for a body that was not a
-  // typed envelope, which a bodyless 502 always is. A recognised code
-  // means the service itself refused and named the reason, whatever the
-  // status was carried on.
-  if (api.code !== "unknown") return false;
+  // serve-ui said so on the response itself, which is the only positive
+  // identification there is.
+  if (api.origin === "gateway") return true;
+  // A typed envelope, or a provenance nothing established: in neither
+  // case may this name a hop. "service" is the service refusing in its
+  // own words; absent is a hand-built ApiError, a mock, or a page's own
+  // state, and inventing a topology for one of those is guessing.
+  if (api.origin !== "unknown") return false;
+  // An untyped response, unmarked, with a gateway status. That is either
+  // serve-ui too old to mark its own proxy errors — this marker is newer
+  // than the fix — or another proxy between the browser and the service
+  // doing the same job; the wording below fits both, because in both
+  // cases nothing in the response came from the service.
   return api.status === 502 || api.status === 503 || api.status === 504;
+}
+
+/**
+ * Whether NOTHING from the service reached this browser.
+ *
+ * Exported for App.tsx, which has one gate to decide with it (#795's
+ * review): the "Backupd is not answering" surface replaces the sign-in
+ * form, and it may only do that for a failure where that sentence is
+ * true. A 200 with an unreadable body, a typed refusal, a 403 from
+ * something between the browser and the service — those are all Backupd
+ * answering, and a heading saying otherwise above an ErrorState saying so
+ * is a page contradicting itself.
+ */
+export function isServiceUnreachable(api: ApiError | null | undefined): boolean {
+  return api?.origin === "no-response" || api?.origin === "gateway";
 }
 
 function describeGatewayRefusal(api: ApiError): OperatorFailure {
@@ -229,6 +286,11 @@ function describeGatewayRefusal(api: ApiError): OperatorFailure {
     // and it wrote this same id into its own log line for the failure
     // (webhost's proxy_error event).
     correlationId: api.correlationId,
+    // Restated rather than copied from `api`: this branch is reached
+    // both from serve-ui's own marker and from an unmarked, untyped
+    // gateway status, and what the surfaces above need to know is the
+    // conclusion — nothing in this response came from the service.
+    origin: "gateway",
     detail: detailOf(api.status === undefined ? undefined : "status " + api.status, buildLine())
   };
 }
@@ -250,6 +312,7 @@ function describeRequestFailure(e: RequestFailure): OperatorFailure {
         "The request got no reply at all, so whether it was carried out is unknown. Check that the Backupd service is still running, then try again.",
       // No response, so no id. apiErrorOf's own rule, one failure over: an
       // id that matches nothing in any log is a false lead.
+      origin: "no-response",
       detail: detailOf(requestedPath(e.path), describeException(e.cause), buildLine())
     };
   }
@@ -258,6 +321,7 @@ function describeRequestFailure(e: RequestFailure): OperatorFailure {
     remediation:
       "The service replied, so it is running, but what came back was not what this page expected. That is usually something between the browser and the service rewriting the response, or a version of the app older than the service it is talking to.",
     correlationId: e.correlationId,
+    origin: "unreadable-body",
     detail: detailOf(
       requestedPath(e.path),
       e.status === undefined ? undefined : "status " + e.status,
@@ -290,6 +354,11 @@ export function asApiError(e: unknown): ApiError {
     message: failure.message,
     remediation: failure.remediation,
     correlationId: failure.correlationId,
+    // The RESOLVED provenance, which is the whole reason it is on this
+    // shape: App.tsx's unreachable gate reads an ApiError, not an
+    // OperatorFailure, and `describeFailure` above is the one place that
+    // decides which of the five things a failure is.
+    origin: failure.origin,
     detail: failure.detail
   };
 }

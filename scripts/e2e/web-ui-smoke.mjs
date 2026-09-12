@@ -28,7 +28,7 @@
 // config, a config would want a baseURL, and this file would then be
 // asserting things about the configuration it was handed rather than about
 // the stack. It reads four environment variables and nothing else.
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium, expect } from "@playwright/test";
 
@@ -79,13 +79,21 @@ function log(msg) {
 //   actually needed would render empty, and every step already requires
 //   something specific to be on the screen.
 //
-//   ANYTHING, WHILE THE ENGINE IS DELIBERATELY DOWN (#795). --break-engine
-//   takes the engine away on purpose, so the 502s, the failed requests and
-//   the console errors during that window are the fault this run ASKED
-//   for. Counting them would make the mode unable to pass; not counting
-//   them is safe because the window is bounded by two explicit calls and
-//   because the assertions inside it are stricter than the ones outside:
-//   a page that went blank instead of complaining fails there.
+//   THE FAILURES A DELIBERATE OUTAGE CAUSES (#795). --break-engine takes
+//   the engine away on purpose, so the 502s, the failed requests and the
+//   console errors during that window are the fault this run ASKED for.
+//   Counting them would make the mode unable to pass; not counting them is
+//   safe because the window is bounded by two explicit calls and because
+//   the assertions inside it are stricter than the ones outside: a page
+//   that went blank instead of complaining fails there.
+//
+//   What the window does NOT excuse is an uncaught exception (#795's
+//   review). The guard used to read `!engineDown && (alwaysCounts || ...)`,
+//   so `engineDown` overrode the one kind that is never acceptable, and a
+//   React render crashing during the outage — the precise defect this
+//   whole reproduction exists to find, one surface along — was recorded and
+//   then excused. An unreachable engine is a reason for a 502; it is not a
+//   reason for this bundle to throw.
 //
 // Everything else counts, and an uncaught exception counts unconditionally.
 const complaints = [];
@@ -98,7 +106,11 @@ function record(kind, text, { alwaysCounts = false } = {}) {
   complaints.push({
     kind,
     text,
-    counts: !engineDown && (alwaysCounts || !(abort || unauthorisedWhileSignedOut))
+    // Recorded, so a complaint that counts can say WHEN it happened: an
+    // uncaught exception thrown during the outage and one thrown after
+    // the heal are different findings and get different sentences.
+    engineDown,
+    counts: alwaysCounts || !(engineDown || abort || unauthorisedWhileSignedOut)
   });
 }
 
@@ -107,26 +119,47 @@ function record(kind, text, { alwaysCounts = false } = {}) {
  *
  * This container has no Docker socket on purpose — a browser that can
  * stop containers is not the browser under test — so the engine is taken
- * away by asking the harness on the host for it. Four empty files, and
- * the ack is only written once the work has finished (for "start", once
- * the engine's own healthcheck passes), which is the whole reason to
- * wait for one rather than sleeping.
+ * away by asking the harness on the host for it. Files in a directory,
+ * and the success ack is only written once the work has finished and been
+ * VERIFIED (for "start", once the engine's own healthcheck passes), which
+ * is the whole reason to wait for one rather than sleeping.
  *
- * The ack about to be waited for is removed BEFORE the request goes out.
- * Otherwise the leavings of the previous cycle answer this one instantly
- * and the run continues against a stack in the opposite state to the one
- * it believes it is in.
+ * Both acks are removed BEFORE the request goes out. Otherwise the
+ * leavings of the previous cycle answer this one instantly and the run
+ * continues against a stack in the opposite state to the one it believes
+ * it is in.
+ *
+ * "stop-failed" / "start-failed" is the harness saying it could NOT reach
+ * the state (#795's review). It matters that this is louder than the
+ * timeout it replaces: a rig that cannot stop the engine leaves the
+ * browser asserting an outage against a healthy stack, and a start whose
+ * healthcheck never came good leaves every assertion after it reading a
+ * half-open engine. Both used to arrive here as a success ack.
  */
 async function engine(action, budgetMs) {
   const ack = `${engineControl}/${action === "stop" ? "stopped" : "started"}`;
+  const failedAck = `${engineControl}/${action}-failed`;
   rmSync(ack, { force: true });
+  rmSync(failedAck, { force: true });
   writeFileSync(`${engineControl}/${action}`, "");
   const deadline = Date.now() + budgetMs;
-  while (!existsSync(ack)) {
+  for (;;) {
+    if (existsSync(ack)) break;
+    if (existsSync(failedAck)) {
+      // The reason the harness wrote, quoted rather than summarised: it
+      // is docker's own words about the container, and this file is not
+      // in a position to improve on them.
+      const reason = readFileSync(failedAck, "utf8").trim();
+      throw new Error(
+        `the harness could not "${action}" the engine: ${reason || "it gave no reason"}. ` +
+          `That is a failure of the rig, not of the product: nothing below this line ran.`
+      );
+    }
     if (Date.now() > deadline) {
       throw new Error(
         `the harness did not acknowledge "${action}" within ${budgetMs}ms: ` +
-          `nothing appeared at ${ack}. The watcher in scripts/e2e/three-machine-web-ui.sh is what writes it.`
+          `nothing appeared at ${ack} and nothing at ${failedAck}. ` +
+          `The watcher in scripts/e2e/three-machine-web-ui.sh is what writes both.`
       );
     }
     await sleep(200);
@@ -306,21 +339,91 @@ try {
 
     // ------------------------------------------------ and it recovers
     await engine("start", 180_000);
-    await nav.getByRole("link", { name: /Activity/i }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible({ timeout: 20_000 });
+
+    // The restart ENDS the session, sometimes. The engine keeps its
+    // sessions in its own process (apps/common/auth/local), so the
+    // container that went away took them with it, and whether this
+    // browser is still signed in afterwards depends on nothing this file
+    // controls. BOTH outcomes are correct, and the recovery is only
+    // proven by following whichever one happened.
+    //
+    // Which is the bug in what this block used to do (#795's review). It
+    // waited for the Activity heading and for the banner to clear, and a
+    // dead session satisfies both by rendering the LOGIN page: no
+    // Activity feed, no error alert, and a green recovery with the
+    // operator sitting on a sign-in form. So the transition is followed
+    // here, and what is asserted at the end of it is a real feed.
+    const signInHeading = page.getByRole("heading", { name: "Sign in" });
+    const activityHeading = page.getByRole("heading", { level: 1, name: "Activity" });
+    if (await nav.isVisible()) {
+      await nav.getByRole("link", { name: /Activity/i }).click();
+    }
+    // Whichever arrives first. `.or` is a locator, not a race between two
+    // awaits, so neither outcome is a timeout that has to be caught.
+    await expect(activityHeading.or(signInHeading).first()).toBeVisible({ timeout: 60_000 });
+
+    if (await signInHeading.isVisible()) {
+      // The session died with the container, which is the common case and
+      // the one the container run found this product handling badly: what
+      // the operator got was an in-panel "authentication required" with a
+      // Try again beside it, and re-issuing a read cannot mend a session
+      // that no longer exists. Reaching this form IS the fix working.
+      log("the restart ended the session, and the app offered the sign-in form rather than a dead retry");
+      // Back to signed-out for the recorder's own rule about 401s: the app
+      // is about to ask /auth/session again with no session to show.
+      signedIn = false;
+      await page.getByLabel("Username").fill(username);
+      await page.getByLabel("Password", { exact: true }).fill(password);
+      await page.getByRole("button", { name: "Sign in" }).click();
+      await expect(page.getByRole("navigation", { name: "Sections" })).toBeVisible({ timeout: 30_000 });
+      signedIn = true;
+      await nav.getByRole("link", { name: /Activity/i }).click();
+    } else {
+      log("the session survived the restart, and the app went straight back to the feed");
+    }
+
+    await expect(activityHeading).toBeVisible({ timeout: 30_000 });
     // A banner that never goes away is its own defect: an operator who
     // fixed the deployment has to be able to see that they fixed it.
     await expect(surfaced).toHaveCount(0, { timeout: 30_000 });
-    log("the engine came back and the Activity page went back to rendering the feed");
+    // And no error alert of ANY wording, which is the stronger statement:
+    // `surfaced` only matches the two #795 sentences, so a page that
+    // recovered into a different failure (an UNAUTHENTICATED read, a
+    // half-open database) would have passed the line above.
+    await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0, { timeout: 30_000 });
 
-    // Nothing may have gone wrong AFTER the break was healed. Complaints
-    // recorded during the window were excused at the moment they were
-    // recorded, so anything counted here happened on a working stack.
-    const afterBreak = complaints.filter((c) => c.counts);
-    if (afterBreak.length > 0) {
+    // The feed itself, because "no error" is not the same fact as
+    // "reading again". Either rows out of the journal — the seeded cycle
+    // put some there and the restart did not empty the database, it is on
+    // a volume — or the healthy empty state that says so in words. Never
+    // neither, which is what a page that rendered nothing at all looks
+    // like, and that is the shape of the original report.
+    const rows = page.getByRole("main").getByRole("listitem");
+    const emptyFeed = page.getByText("No matching events");
+    if ((await rows.count()) === 0 && (await emptyFeed.count()) === 0) {
       throw new Error(
-        "the browser complained on a stack that was working again, so the recovery is not clean:\n" +
-          afterBreak.map((c) => `      ${c.kind}: ${c.text}`).join("\n")
+        "the Activity page recovered into neither a feed nor its empty state, so nothing " +
+          "on screen says the read worked: this is the blank page #795 was reported as, " +
+          "arrived at from the other direction."
+      );
+    }
+    log(
+      `the engine came back and the Activity page read the journal again (${await rows.count()} events on screen)`
+    );
+
+    // Nothing may have gone wrong AFTER the break was healed, and nothing
+    // may have THROWN during it: complaints recorded inside the window
+    // were excused as they were recorded, except the uncaught ones, which
+    // are never excused (see record above).
+    const counting = complaints.filter((c) => c.counts);
+    if (counting.length > 0) {
+      const duringOutage = counting.filter((c) => c.engineDown);
+      throw new Error(
+        (duringOutage.length > 0
+          ? "the browser threw while the engine was deliberately down, which this mode does not excuse: " +
+            "a 502 is the fault it asked for and an uncaught exception is not:\n"
+          : "the browser complained on a stack that was working again, so the recovery is not clean:\n") +
+          counting.map((c) => `      ${c.kind}: ${c.text}`).join("\n")
       );
     }
   }

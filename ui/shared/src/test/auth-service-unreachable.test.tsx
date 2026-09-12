@@ -68,6 +68,32 @@ function signedIn(username = "e2e-operator") {
   };
 }
 
+/** A policy denial: something between the browser and the service refused
+ *  the request outright, which no amount of signing in changes. A gateway
+ *  rule, a proxy requiring a header this browser does not send, an
+ *  authorisation decision made above the session. */
+function policyDenied(message = "this deployment does not allow session checks from here") {
+  return {
+    ok: false,
+    status: 403,
+    headers: new Headers({ "x-correlation-id": "cid_denied403" }),
+    json: async () => ({ error: { code: "FORBIDDEN", message } })
+  };
+}
+
+/** A 200 whose body is not JSON: #598's other half, reached on the
+ *  session route. Backupd ANSWERED, which is the fact that matters here. */
+function unreadableSession() {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "content-type": "text/html", "x-correlation-id": "cid_html200" }),
+    json: async () => {
+      throw new SyntaxError("Unexpected token '<'");
+    }
+  };
+}
+
 describe("the session read answers only what it was actually told", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -115,6 +141,44 @@ describe("the session read answers only what it was actually told", () => {
     expect(failure).toBeInstanceOf(RequestFailure);
     expect((failure as RequestFailure).kind).toBe("no-response");
     expect((failure as RequestFailure).path).toBe("/auth/session");
+  });
+
+  it("does not call a 403 a signed-out browser: no sign-in fixes a policy denial", async () => {
+    // #795's review. 401 and 403 both used to resolve signed-out, and
+    // only one of them is a statement about this session: the route's
+    // contract is 401 for one that is absent or expired. A 403 is a
+    // decision made above it — a gateway rule, a proxy demanding a header
+    // this browser does not send — and sending the operator to the login
+    // form for one is the same defect as the 502 above, with the one
+    // action that cannot help it under it.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(policyDenied()));
+    const failure = await readLocalAccountSession().then(
+      (ctx) => ctx,
+      (e: unknown) => e
+    );
+    expect(failure).toBeInstanceOf(BackupdError);
+    expect((failure as BackupdError).api.status).toBe(403);
+    // The service's own words, kept: this is the most specific thing
+    // anybody has about a refusal nothing else can classify.
+    expect((failure as BackupdError).api.message).toContain("does not allow session checks");
+    expect((failure as BackupdError).api.correlationId).toBe("cid_denied403");
+  });
+
+  it("names its attempt on the way out, like every other request this bundle makes", async () => {
+    // The session read is the FIRST call the app makes and the one #795
+    // was reported through, and it used to go out anonymously: a request
+    // that gets no response carries no correlation id back, so without
+    // this header there is nothing at all to match the browser's failure
+    // against the server's own line for it (#730's mechanism, #795's
+    // review for the omission). Shared with api/client.ts through
+    // api/transport.ts rather than copied.
+    const fetchMock = vi.fn().mockResolvedValue(signedIn());
+    vi.stubGlobal("fetch", fetchMock);
+    await readLocalAccountSession();
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const headers = init.headers as Record<string, string>;
+    expect(headers["X-Client-Attempt-Id"]).toMatch(/^[0-9a-f]{16}$/);
   });
 
   // The sweep that proves all six local-account bridges really read
@@ -167,6 +231,46 @@ describe("an app that could not ask does not claim the operator is signed out", 
     // first draft, and the container run is what caught it.
     expect(document.body.textContent).not.toMatch(/have not been signed out/i);
     expect(document.body.textContent).not.toContain("unavailable");
+  });
+
+  it("says Backupd is not answering only when it did not answer", async () => {
+    // #795's review: every rejection used to land on that heading, and
+    // two of the four rejections this gate sees are Backupd ANSWERING.
+    // A 403 is one of them. The heading claimed silence directly above an
+    // ErrorState quoting what was said, which is a page an operator
+    // cannot act on because it disagrees with itself.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(policyDenied()));
+    renderApp(genericBridge);
+    await act(async () => {});
+
+    // Still not the sign-in form: re-signing-in cannot lift a policy
+    // denial, and offering it is what #795 is about.
+    expect(screen.queryByRole("heading", { name: "Sign in" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Backupd could not check your session" })).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/is not answering|did not answer/i);
+    // The service's own sentence, verbatim, because on this path it is
+    // the most specific thing anybody has.
+    expect(screen.getByRole("alert").textContent).toContain("does not allow session checks from here");
+    expect(screen.getByRole("alert").textContent).toContain("cid_denied403");
+    // And it does not name a hop: which machine refused is exactly what
+    // is NOT established here.
+    expect(document.body.textContent).not.toContain("could not reach the Backupd service");
+  });
+
+  it("does not claim silence for a 200 whose body could not be read", async () => {
+    // The other answered-but-unusable case, and the one that made the
+    // contradiction unmissable: the ErrorState's own first line is
+    // "Backupd answered, and this page could not read the answer", under
+    // a heading that used to say nothing answered at all.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(unreadableSession()));
+    renderApp(genericBridge);
+    await act(async () => {});
+
+    expect(screen.queryByRole("heading", { name: "Sign in" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Backupd could not check your session" })).toBeTruthy();
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("could not read the answer");
+    expect(document.body.textContent).not.toMatch(/is not answering/i);
   });
 
   it("names the hop when serve-ui answered 502 for an engine it could not reach", async () => {

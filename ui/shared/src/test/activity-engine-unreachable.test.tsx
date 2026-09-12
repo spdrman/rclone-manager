@@ -333,4 +333,88 @@ describe("a bodyless 502 from serve-ui names the hop that failed", () => {
     expect(alert.textContent).toContain("the scheduler is restarting");
     expect(alert.textContent).not.toContain("could not reach the Backupd service");
   });
+
+  it("keeps a typed 5xx's own words even for a code this bundle has never heard of", async () => {
+    // #795's review, and the sharper half of the case above. The first
+    // draft asked `code === "unknown" && gateway status`, and `unknown`
+    // is ALSO what toApiErrorCode returns for a perfectly valid code
+    // this build does not know — so a service one version newer,
+    // refusing with an actionable sentence, was rewritten as a proxy
+    // that could not reach it. Provenance ("a typed envelope was
+    // parsed") is a different fact from "the code is recognised", and
+    // this is the case that tells them apart.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        headers: new Headers({ "x-correlation-id": "cid_typed503" }),
+        json: async () => ({
+          error: {
+            code: "SCHEDULER_MAINTENANCE",
+            message: "Backupd is in a maintenance window until 04:00 and is not reading the journal."
+          }
+        })
+      })
+    );
+    withProviders(httpApi, "activity");
+    await act(async () => {});
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("maintenance window until 04:00");
+    expect(alert.textContent).not.toContain("could not reach the Backupd service");
+    expect(alert.textContent).toContain("cid_typed503");
+  });
+
+  it("believes serve-ui's own marker rather than reading topology off a status", async () => {
+    // The other direction: a refusal this proxy wrote, on a status that
+    // is not one of the three gateway ones. serve-ui marks its own
+    // proxy errors now (webhost/serve's ProxyErrorHeader, deleted from
+    // any upstream response), so "nothing in this came from the
+    // service" is a stated fact rather than an inference from 502.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        headers: new Headers({
+          "x-correlation-id": "cid_marked500",
+          "x-backupd-proxy-error": "upstream-unreachable"
+        }),
+        json: async () => {
+          throw new SyntaxError("Unexpected end of JSON input");
+        }
+      })
+    );
+    withProviders(httpApi, "activity");
+    await act(async () => {});
+
+    expect(screen.getByRole("alert").textContent).toContain("could not reach the Backupd service");
+  });
+
+  it("names no hop for an untyped refusal that nothing identified", async () => {
+    // An untyped 500 with no marker: the engine answered something
+    // unreadable, a front proxy nobody configured answered for it, or
+    // something else again. Provenance is not established, so the
+    // wording that names a hop must not appear — this frontend saying
+    // "the web interface could not reach the service" about a refusal it
+    // cannot place is the same guess, made in the opposite direction.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        headers: new Headers({ "x-correlation-id": "cid_untyped500" }),
+        json: async () => {
+          throw new SyntaxError("Unexpected end of JSON input");
+        }
+      })
+    );
+    withProviders(httpApi, "activity");
+    await act(async () => {});
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).not.toContain("could not reach the Backupd service");
+    expect(alert.textContent).toContain("cid_untyped500");
+  });
 });

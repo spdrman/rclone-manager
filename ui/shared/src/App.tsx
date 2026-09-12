@@ -50,7 +50,8 @@ import { CatalogRecoveryPage } from "@shared/pages/CatalogRecoveryPage";
 import { ConfigurationSavedPage } from "@shared/pages/ConfigurationSavedPage";
 import { LoginPage } from "@shared/auth/LoginPage";
 import { EnrollmentPage } from "@shared/auth/EnrollmentPage";
-import { ServiceUnreachablePage } from "@shared/pages/ServiceUnreachablePage";
+import { ServiceUnreachablePage, SessionCheckFailedPage } from "@shared/pages/SessionCheckFailure";
+import { isServiceUnreachable } from "@shared/api/failure";
 
 const THEME_KEY = "backupd.theme";
 
@@ -168,7 +169,22 @@ export function App() {
   // authError is set only when the check failed for a reason that is
   // not an answer about the session (PlatformContext.refetchAuth); a
   // 401 still lands on the login page below, as it must.
-  if (authError) return <ServiceUnreachablePage error={authError} onRetry={refreshAuth} />;
+  //
+  // Which of the two surfaces is decided on the failure's recorded
+  // PROVENANCE, not on the fact that there was one (#795's review). "Not
+  // answering" is only true for a request that got no reply and for a
+  // refusal written by the proxy in front of the service; the other
+  // rejections this gate sees — an unreadable body, a typed refusal that
+  // is not about the session — are Backupd answering, and putting that
+  // heading over them contradicted the ErrorState directly underneath
+  // it.
+  if (authError) {
+    return isServiceUnreachable(authError) ? (
+      <ServiceUnreachablePage error={authError} onRetry={refreshAuth} />
+    ) : (
+      <SessionCheckFailedPage error={authError} onRetry={refreshAuth} />
+    );
+  }
 
   if (!auth?.authenticated) {
     return (

@@ -163,13 +163,26 @@
 #
 #                     and a watcher on THIS host owns the docker socket
 #                     the client deliberately does not have. The protocol
-#                     is four empty files in that directory:
+#                     is files in that directory:
 #
 #                       write "stop"    -> the engine container is stopped
-#                                          and "stopped" appears
+#                                          and "stopped" appears, or
+#                                          "stop-failed" does
 #                       write "start"   -> it is started, and "started"
 #                                          appears only once its own
-#                                          healthcheck passes
+#                                          healthcheck passes, or
+#                                          "start-failed" does
+#
+#                     Exactly one ack appears per request, and a success
+#                     ack means the state was VERIFIED: "stopped" only
+#                     after Docker reports the container not running,
+#                     "started" only after `docker start` succeeded and
+#                     the engine's own healthcheck passed. Anything else
+#                     is a failure ack carrying a one-line reason, which
+#                     the suite quotes rather than reporting its own
+#                     timeout. A suite that reads a success ack as proof
+#                     of the state is reading it correctly, which is why
+#                     one is never written on a guess (#795).
 #
 #                     A request file is removed as it is picked up, so one
 #                     request is never acknowledged by the leavings of the
@@ -177,6 +190,12 @@
 #                     running is a no-op that still acknowledges. A suite
 #                     that deletes an ack before asking again is doing the
 #                     right thing and is expected to.
+#
+#                     Not combinable with --keep-up: the watcher is a
+#                     process of THIS script, so a kept-up stack has
+#                     nobody acking. The two variables are then left off
+#                     the printed command on purpose, and the manual
+#                     equivalent is printed instead.
 #
 #                     Before handing over, the break is REHEARSED: the
 #                     engine is stopped, the edge network is asked for
@@ -345,7 +364,7 @@ run_dir="$tmp_root/$run_id"
 # already bind-mounted into the client container, and the client must not
 # be given anything else. A suite that could reach the Docker socket could
 # stop the engine itself, and would then be a suite that can do anything
-# to this host; four empty files in a directory it already has is the
+# to this host; a few small files in a directory it already has is the
 # whole capability it needs.
 engine_control="$artifacts_dir/engine-control"
 engine_control_in_client="/artifacts/engine-control"
@@ -535,10 +554,47 @@ engine_is_live() {
   docker exec "$c_engine" /backupd-web healthcheck --url http://127.0.0.1:8080/health/live >/dev/null 2>&1
 }
 
+# The health budget one "start" request is given, in seconds.
+#
+# 175 rather than the 120 this used to allow, because the number the
+# suite waits is 180 (backupd-tests' startEngine) and a watcher that
+# gives up at 120 reports a failure for an engine that would have been
+# serving at 130 with a minute of the reader's patience left unspent.
+# 175 and not 180 for the other end of the same arithmetic: the ack has
+# to LAND inside the suite's budget to be read at all, so the few seconds
+# this loop spends picking the request up and running `docker start` are
+# left for the failure ack to be written in rather than raced against.
+engine_start_health_budget=175
+
+# The opposite fact from engine_is_live, and asked of Docker rather than
+# of the engine: "docker stop returned 0" includes a container that was
+# not there to stop and a daemon that accepted the request, so the state
+# is read back before anything is acknowledged.
+engine_is_stopped() {
+  [ "$(docker inspect -f '{{.State.Running}}' "$c_engine" 2>/dev/null)" = "false" ]
+}
+
+# engine_ack <name> [reason]
+#
+# Written to a dotfile beside the ack and moved into place, so a reader
+# polling for the name can never see half of a reason: rename within one
+# directory is atomic, and the suite reads these files the instant they
+# appear.
+engine_ack() {
+  local name="$1"
+  # One line, and bounded. This string is quoted verbatim into the
+  # exception the suite throws, and a page of docker output in a test
+  # report is a page nobody reads to the end of.
+  local reason
+  reason="$(printf '%s' "${2:-}" | tr '\n\t' '  ' | cut -c1-200)"
+  printf '%s\n' "$reason" > "$engine_control/.$name.tmp"
+  mv -f "$engine_control/.$name.tmp" "$engine_control/$name"
+}
+
 # engine_watcher_loop is what the client container cannot do for itself.
 # It has no Docker socket, deliberately: the thing under test is a browser
 # on an edge network, and a browser that can stop containers is not one.
-# So the capability is held here and exposed as four empty files.
+# So the capability is held here and exposed as a directory of files.
 #
 # Ordering inside each branch is the contract, not tidiness. The request
 # file is removed BEFORE the work, so a second request can never be
@@ -547,29 +603,64 @@ engine_is_live() {
 # `docker start` against a running container is a no-op that exits 0,
 # which makes a redundant heal (a test that heals mid-run and again in a
 # finally) acknowledge rather than fail.
+#
+# And an ack is only ever written for a state this watcher WATCHED the
+# stack reach (#795's review, all four reviewers). Both branches used to
+# `|| true` the docker command and write the success ack regardless, and
+# the start branch wrote "started" even when the health loop had timed
+# out. The suite across the repository boundary reads these files as
+# proof: a discarded `docker stop` failure reads there as "the engine is
+# unreachable" and runs the outage assertions against a healthy engine,
+# and a timed-out start reads as "healthy" and runs the recovery
+# assertions against an engine that never came back. Both then fail as
+# product defects. So the exit status is kept, the state is read back,
+# and a failure is acknowledged AS a failure: "stop-failed" /
+# "start-failed", carrying a one-line reason the suite quotes. The
+# contract is the same either way - exactly one file appears per request
+# - which is what lets the suite stop inferring a rig fault from its own
+# timeout.
 engine_watcher_loop() {
   while :; do
     if [ -e "$engine_control/stop" ]; then
       rm -f "$engine_control/stop"
-      docker stop "$c_engine" >/dev/null 2>&1 || true
-      rm -f "$engine_control/started"
-      : > "$engine_control/stopped"
+      local out=""
+      if out="$(docker stop "$c_engine" 2>&1)" && engine_is_stopped; then
+        rm -f "$engine_control/started" "$engine_control/stop-failed" "$engine_control/start-failed"
+        engine_ack stopped
+      else
+        # Not "stopped", and not silence either. The engine is still up,
+        # or Docker would not say, and the browser is about to be asked
+        # to prove an outage that never happened.
+        rm -f "$engine_control/stopped"
+        engine_ack stop-failed "docker stop did not leave the engine stopped: ${out:-no output}"
+      fi
     elif [ -e "$engine_control/start" ]; then
       rm -f "$engine_control/start"
-      docker start "$c_engine" >/dev/null 2>&1 || true
-      # Bounded, and it gives up rather than hanging: a watcher that
-      # never acknowledges is read by the suite as its own 180s timeout,
-      # which is a worse message than the ack arriving against an engine
-      # that is still coming up. The engine's own startup wait above
-      # allows 180s from cold; this allows 120s from an image and a
-      # database that are already warm.
-      local waited=0
-      while [ "$waited" -lt 120 ] && ! engine_is_live; do
-        sleep 1
-        waited=$(( waited + 1 ))
-      done
-      rm -f "$engine_control/stopped"
-      : > "$engine_control/started"
+      local out=""
+      if ! out="$(docker start "$c_engine" 2>&1)"; then
+        rm -f "$engine_control/started"
+        engine_ack start-failed "docker start refused: ${out:-no output}"
+      else
+        # Bounded, and it gives up out loud rather than hanging or
+        # lying. A container that is running but has not opened its
+        # database yet answers the proxy with a refusal, so "started" is
+        # withheld until the engine's own healthcheck passes, and a
+        # budget that runs out is a start-failed rather than a "started"
+        # the suite would read as a recovered stack.
+        local waited=0 live=0
+        while [ "$waited" -lt "$engine_start_health_budget" ]; do
+          if engine_is_live; then live=1; break; fi
+          sleep 1
+          waited=$(( waited + 1 ))
+        done
+        if [ "$live" = 1 ]; then
+          rm -f "$engine_control/stopped" "$engine_control/start-failed" "$engine_control/stop-failed"
+          engine_ack started
+        else
+          rm -f "$engine_control/started"
+          engine_ack start-failed "the engine container started but its own healthcheck did not pass within ${engine_start_health_budget}s"
+        fi
+      fi
     fi
     sleep 0.25
   done
@@ -579,9 +670,13 @@ start_engine_watcher() {
   mkdir -p "$engine_control"
   # The state the stack is actually in when the suite is handed it. The
   # suite is not expected to read it before asking for anything - it
-  # removes the ack it is about to wait for first - but a directory whose
+  # removes the acks it is about to wait for first - but a directory whose
   # contents describe the world is easier to debug than an empty one.
-  rm -f "$engine_control/stop" "$engine_control/start" "$engine_control/stopped"
+  # The two failure acks are cleared for a sharper reason: one left behind
+  # by an earlier run against the same artifacts directory would be read
+  # by the first request of this one as its own answer.
+  rm -f "$engine_control/stop" "$engine_control/start" "$engine_control/stopped" \
+        "$engine_control/stop-failed" "$engine_control/start-failed"
   : > "$engine_control/started"
   engine_watcher_loop &
   engine_watcher_pid=$!
@@ -1129,7 +1224,18 @@ fi
 # above, and for the same reason: off, neither variable exists at all, so
 # a spec that reads RM_ENGINE_UNREACHABLE gets undefined and asserts the
 # healthy feed.
-if [ "$break_engine" = 1 ]; then
+#
+# And NOT under --keep-up, which is the other half of that same rule
+# (#795's review). The watcher that acks these requests is a background
+# process of this script, and the --keep-up exit tears it down, so a
+# command carrying these two variables would hand a suite a control
+# channel with nobody on the other end: every engine-unreachable case
+# would sit out its full timeout and then report a rig failure as a
+# product one. Left off, RM_ENGINE_UNREACHABLE is simply undefined in
+# that command and those cases skip themselves, which is the honest
+# answer. The block printed with the command says so and gives the
+# by-hand equivalent.
+if [ "$break_engine" = 1 ] && [ "$keep_up" != 1 ]; then
   client_env+=(-e "RM_ENGINE_UNREACHABLE=1" -e "RM_ENGINE_CONTROL=$engine_control_in_client")
   note "RM_ENGINE_UNREACHABLE 1"
   note "RM_ENGINE_CONTROL     $engine_control_in_client, watched on this host at $engine_control"
@@ -1198,11 +1304,25 @@ if [ "$keep_up" = 1 ]; then
   if [ "$break_engine" = 1 ]; then
     echo ""
     echo "    --break-engine's watcher is NOT left running: it holds this host's Docker socket,"
-    echo "    and a loop outliving the script that started it is a loop nobody owns. Break the"
-    echo "    engine by hand instead, which is all the watcher does:"
+    echo "    and a loop outliving the script that started it is a loop nobody owns. So"
+    echo "    RM_ENGINE_UNREACHABLE and RM_ENGINE_CONTROL are deliberately NOT in the command"
+    echo "    above: with them set, every engine-unreachable case would write a request into a"
+    echo "    directory nobody is watching, wait out its whole timeout, and report the rig's"
+    echo "    silence as a product failure. Without them those cases skip themselves and the"
+    echo "    rest of the suite runs against a healthy stack."
+    echo ""
+    echo "    Break the engine by hand, which is all the watcher does:"
     echo ""
     echo "        docker stop $c_engine     # serve-ui stays up and answers 502"
     echo "        docker start $c_engine    # and the pages recover"
+    echo ""
+    echo "    To drive the engine-unreachable cases against this stack, either re-run without"
+    echo "    --keep-up, or export the two variables into your own suite run and ack the"
+    echo "    requests yourself, in the watcher's own order (request file first, then the ack):"
+    echo ""
+    echo "        RM_ENGINE_UNREACHABLE=1 RM_ENGINE_CONTROL=$engine_control_in_client"
+    echo "        rm -f $engine_control/stop  && docker stop  $c_engine && : > $engine_control/stopped"
+    echo "        rm -f $engine_control/start && docker start $c_engine && : > $engine_control/started"
   fi
   exit 0
 fi

@@ -30,12 +30,12 @@
  * service saying something this build has never heard of should draw
  * nothing, not draw the wrong thing confidently.
  */
-import { BackupdError, RequestFailure, toApiErrorCode } from "./contracts";
 // Issue #730's diagnostics, opt-in and silent unless an operator turns
-// them on. Imported rather than inlined because the gate, the console
-// format and the non-browser guards belong to one module, not to the
-// three catch blocks below.
-import { debugEnvironment, debugLog, describeError, isDebugEnabled } from "./debug";
+// them on, and #795's shared transport: the attempt header, the two
+// non-refusal failure labels and the envelope-and-provenance reader that
+// platform/localSession.ts reads the session with as well.
+import { debugLog, isDebugEnabled } from "./debug";
+import { apiErrorFromResponse, nameAttempt, noResponse, refusal, unreadableBody } from "./transport";
 // The wire shapes below are GENERATED from api/v1/openapi.json, not
 // declared here. Before issue #166 this file carried its own hand-written
 // copy of every snake_case response body, transcribed from the Go
@@ -97,7 +97,6 @@ import type {
   WireVersionResponse
 } from "./generated/contract";
 import type {
-  ApiError,
   AppSettings,
   BackendManifest,
   BackupdApi,
@@ -200,36 +199,20 @@ export function bootstrapTokenFromLocation(): string | null {
 }
 
 /**
- * The header carrying this browser's own name for one attempt, and the
- * generator for it (issue #730's review).
+ * The attempt header, the two non-refusal failure labels and the
+ * envelope-and-provenance reader all live in api/transport.ts now
+ * (#795's review): `/auth/session` is read by platform/localSession.ts
+ * rather than through `request()` — a 401 there is an answer, not a
+ * refusal — and it was doing all four of those things in its own second
+ * copy, minus the diagnostics. One implementation, two call sites, and
+ * the policy stays where it belongs at each of them.
  *
- * Why it exists at all: a correlation id travels on a RESPONSE, and the
- * fault this whole diagnostic was built for is a request that gets no
- * response. So the browser names the attempt on the way out, the server
- * writes that name into its line for the request
- * (apps/common/webhost/requestscope.go), and a console screenshot
- * showing `request.no-response` can then be matched against a server log
- * that proves the request arrived and what was sent back - which is
- * exactly the question "TypeError: Failed to fetch" leaves open.
- *
- * Bounded to sixteen hex characters, in the character set the server is
- * willing to write down (it drops anything longer or stranger rather
- * than truncating it), so this header can never be the reason a log line
- * is unreadable. `getRandomValues` where the browser has it and
- * `Math.random` where it does not: a NAS is reached over plain HTTP on a
- * local network, where parts of WebCrypto are unavailable, and a
- * diagnostic id is not a secret - uniqueness among a handful of
- * in-flight requests is the entire requirement.
+ * The fetch itself deliberately does NOT move: the CSRF, bootstrap-token
+ * and idempotency rules are this file's, and
+ * scripts/api/check-client-paths.sh requires the single `fetch()` here to
+ * read `fetch(BASE + path` literally so it can prove which URLs this
+ * bundle is able to request.
  */
-const CLIENT_ATTEMPT_HEADER = "X-Client-Attempt-Id";
-
-function newClientAttemptId(): string {
-  const bytes = new Uint8Array(8);
-  const c = globalThis.crypto;
-  if (c && typeof c.getRandomValues === "function") c.getRandomValues(bytes);
-  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
@@ -251,17 +234,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (bootstrapToken) headers[BOOTSTRAP_TOKEN_HEADER] = bootstrapToken;
   }
 
-  // Issue #730's review. The one identifier that still exists for a
-  // request that gets NO response at all: there is no response to carry
-  // a correlation id back on, so the browser has to name the attempt
-  // itself and the server has to write that name down (webhost's
-  // requestscope.go reads this header, bounded and validated). Minted
-  // per ATTEMPT, deliberately unlike Idempotency-Key above, which is
-  // per logical submission and is reused across retries: what this
-  // answers is "which of my three tries is the line in your log", and a
-  // value shared by all three cannot.
-  const attemptId = newClientAttemptId();
-  headers[CLIENT_ATTEMPT_HEADER] = attemptId;
+  // Issue #730's review, in api/transport.ts: the one identifier that
+  // still exists for a request that gets NO response at all. There is no
+  // response to carry a correlation id back on, so the browser names the
+  // attempt itself and the server writes that name down (webhost's
+  // requestscope.go reads the header, bounded and validated).
+  const attemptId = nameAttempt(headers);
 
   // Issue #598. Everything from here down is the one place that can tell
   // this API's three failures apart, so it is the one place that labels
@@ -308,106 +286,38 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     //
     // This is #730's exact site: one deployment's Activity page reaches
     // here with `TypeError: Failed to fetch` while curl to the same route
-    // answers 401. The typed failure below is all an operator sees; the
-    // line above it is everything the browser knew and could not put in
-    // it, and it is written only when diagnostics were asked for.
-    debugLog(
-      "request.no-response",
-      () => ({
-        path,
-        url: BASE + path,
-        method,
-        attemptId,
-        cause: describeError(cause),
-        ...debugEnvironment(),
-        elapsedMs: Math.round(performance.now() - startedAt)
-      }),
-      "error"
-    );
-    throw new RequestFailure({ kind: "no-response", path, cause });
+    // answers 401. The typed failure is all an operator sees; the debug
+    // line inside `noResponse` is everything the browser knew and could
+    // not put in it, and it is written only when diagnostics were asked
+    // for.
+    throw noResponse({
+      path,
+      url: BASE + path,
+      method,
+      attemptId,
+      cause,
+      startedAt: debug ? startedAt : undefined
+    });
   }
 
   if (!res.ok) {
-    // The service always returns a typed error envelope, but not always
-    // the SAME shape: apps/common/auth/local's own routes (login, enroll,
-    // password rotation, logout) answer flat — { code, message,
-    // correlationId } all at the top level (see client.test.ts's own
-    // ApiErrorCode coverage test for that package's exact vocabulary) —
-    // while apps/common/webhost's routes (issue #146's backup-sets/
-    // ssh-keys/ssh endpoints, and every future one built the same way)
-    // nest code/message under an "error" key and carry the correlation
-    // id only in the X-Correlation-Id response header, never the body
-    // (see that package's errors.go). Both are read here, rather than
-    // this file picking one shape and getting the other's errors back
-    // as silently-undefined fields.
-    let api: ApiError;
-    // Issue #795. The status travels with every refusal from here on.
-    // It is the only fact that separates a service that refused from
-    // something in FRONT of the service answering on its behalf: when
-    // serve-ui's reverse proxy cannot reach the engine it writes a
-    // bodyless 502 (apps/common/webhost/serve/ui.go's ErrorHandler),
-    // which lands in the catch below and used to arrive on screen as
-    // "the backup service returned an unexpected response" — naming the
-    // one machine that had not answered at all, with no next step under
-    // it. api/failure.ts reads this and says which hop failed.
-    try {
-      const body = (await res.json()) as Record<string, unknown>;
-      const headerCorrelationId = res.headers.get("x-correlation-id") ?? undefined;
-      const nested = body.error;
-      if (nested && typeof nested === "object") {
-        const err = nested as Record<string, unknown>;
-        api = {
-          code: toApiErrorCode(err.code),
-          message: err.message as string,
-          correlationId: headerCorrelationId,
-          status: res.status
-        };
-      } else {
-        api = {
-          code: toApiErrorCode(body.code),
-          message: body.message as string,
-          correlationId: (body.correlationId as string) ?? headerCorrelationId,
-          status: res.status
-        };
-      }
-    } catch {
-      api = {
-        code: "unknown",
-        message: "The backup service returned an unexpected response.",
-        correlationId: res.headers.get("x-correlation-id") ?? undefined,
-        status: res.status
-      };
-    }
-    // #730: the correlation id is the one string that joins this refusal
-    // to the server's own log line for it, and until now it only ever
-    // reached the screen. A refusal that renders as "Failed to fetch" in
-    // a bug report is one nobody can match up; a logged id is.
-    debugLog(
-      "request.error-status",
-      () => ({ path, status: res.status, code: api.code, correlationId: api.correlationId, attemptId }),
-      "error"
+    // Both envelope shapes, the correlation id, the status and the
+    // PROVENANCE, read in api/transport.ts because the session reader
+    // needs exactly the same four facts off exactly the same kind of
+    // response (#795's review). The fallback sentence stays here: it is
+    // the one part that is about this call site, and it is the wording an
+    // operator sees for a refusal with nothing readable in it at all.
+    throw refusal(
+      await apiErrorFromResponse(res, "The backup service returned an unexpected response."),
+      { path, attemptId }
     );
-    throw new BackupdError(api);
   }
 
   if (res.status === 204) return undefined as T;
   try {
     return (await res.json()) as T;
   } catch (cause) {
-    // The response arrived and this build could not read it. The status
-    // and the content type are what separate a proxy's HTML error page
-    // from a body that was cut off mid-transfer, and the correlation id is
-    // read here on the SUCCESS path as well as on a refusal (#598) so a
-    // body that fails to parse can still name the response it came from.
-    const status = res.status;
-    const contentType = res.headers.get("content-type") ?? undefined;
-    const correlationId = res.headers.get("x-correlation-id") ?? undefined;
-    debugLog(
-      "request.unreadable-body",
-      () => ({ path, status, contentType, correlationId, attemptId, cause: describeError(cause) }),
-      "error"
-    );
-    throw new RequestFailure({ kind: "unreadable-body", path, status, contentType, correlationId, cause });
+    throw unreadableBody({ path, res, attemptId, cause });
   }
 }
 

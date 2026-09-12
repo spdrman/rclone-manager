@@ -161,13 +161,26 @@ get away from.
 
                     and a watcher on THIS host owns the docker socket
                     the client deliberately does not have. The protocol
-                    is four empty files in that directory:
+                    is files in that directory:
 
                       write "stop"    -> the engine container is stopped
-                                         and "stopped" appears
+                                         and "stopped" appears, or
+                                         "stop-failed" does
                       write "start"   -> it is started, and "started"
                                          appears only once its own
-                                         healthcheck passes
+                                         healthcheck passes, or
+                                         "start-failed" does
+
+                    Exactly one ack appears per request, and a success
+                    ack means the state was VERIFIED: "stopped" only
+                    after Docker reports the container not running,
+                    "started" only after `docker start` succeeded and
+                    the engine's own healthcheck passed. Anything else
+                    is a failure ack carrying a one-line reason, which
+                    the suite quotes rather than reporting its own
+                    timeout. A suite that reads a success ack as proof
+                    of the state is reading it correctly, which is why
+                    one is never written on a guess (#795).
 
                     A request file is removed as it is picked up, so one
                     request is never acknowledged by the leavings of the
@@ -175,6 +188,12 @@ get away from.
                     running is a no-op that still acknowledges. A suite
                     that deletes an ack before asking again is doing the
                     right thing and is expected to.
+
+                    Not combinable with --keep-up: the watcher is a
+                    process of THIS script, so a kept-up stack has
+                    nobody acking. The two variables are then left off
+                    the printed command on purpose, and the manual
+                    equivalent is printed instead.
 
                     Before handing over, the break is REHEARSED: the
                     engine is stopped, the edge network is asked for

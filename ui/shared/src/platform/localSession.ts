@@ -23,19 +23,33 @@
  * different fact, with the sign-in form as the only thing offered and
  * signing in again as the one action guaranteed not to work.
  *
- * So: 401 and 403 are the answers that mean "not signed in", because they
- * are the answers the service gives when it has looked. Everything else
+ * So: 401 is the answer that means "not signed in", and everything else
  * throws, labelled the way api/client.ts labels it, so PlatformContext
- * can hold onto the failure and App.tsx can say the service did not
- * answer rather than inventing a verdict about the operator's session.
+ * can hold onto the failure and App.tsx can say what is actually known
+ * rather than inventing a verdict about the operator's session.
+ *
+ * # 401, and deliberately not 403 (#795's review)
+ *
+ * Both used to resolve signed-out, and 403 does not belong there. The
+ * route's contract is 401 for an absent or expired session
+ * (apps/common/auth/local), which is precisely the refusal a sign-in
+ * fixes. A 403 is a policy denial — a gateway rule, a proxy that requires
+ * a header the browser does not send, an authorisation decision made
+ * above the session — and re-signing-in cannot fix any of them. Sending
+ * an operator to the login form for one is #795's own shape again: a
+ * failure rendered as a different fact, under the one action that cannot
+ * address it. It goes down the typed path with every other refusal, where
+ * the service's own words are shown.
  */
-import { BackupdError, RequestFailure, toApiErrorCode } from "@shared/api/contracts";
+import { apiErrorFromResponse, nameAttempt, noResponse, refusal, unreadableBody } from "@shared/api/transport";
 import type { AuthContext } from "@shared/types/platform";
 
 /** The route, spelled once. `request()` in api/client.ts does not expose a
  *  session call (the shape a bridge needs is not the shape the wire
  *  answers with), so this is the one other place in the frontend that
- *  talks to /api/v1 directly, and it labels its failures identically. */
+ *  talks to /api/v1 directly. Everything about HOW it talks is shared
+ *  with `request()` through api/transport.ts, which is what makes the two
+ *  label their failures identically instead of nearly identically. */
 const SESSION_PATH = "/auth/session";
 const SESSION_URL = "/api/v1" + SESSION_PATH;
 
@@ -51,42 +65,48 @@ const SIGNED_OUT: AuthContext = { authenticated: false, username: null, mode: "l
  * sentences an operator already reads elsewhere.
  */
 export async function readLocalAccountSession(): Promise<AuthContext> {
+  // The attempt header, named the same way every other request in this
+  // bundle names one. This call is the FIRST the app makes and the one
+  // #795 was reported through, and it was the only one that went out
+  // anonymously: a request that gets no response has no correlation id
+  // to quote, so without this there was nothing at all to match the
+  // browser's failure against the server's own line for it.
+  const headers: Record<string, string> = {};
+  const attemptId = nameAttempt(headers);
+
   let res: Response;
   try {
-    res = await fetch(SESSION_URL, { credentials: "same-origin" });
+    res = await fetch(SESSION_URL, { credentials: "same-origin", headers });
   } catch (cause) {
     // Nothing answered. Whether there is a session is simply unknown,
     // and answering the question anyway is the bug this file exists for.
-    throw new RequestFailure({ kind: "no-response", path: SESSION_PATH, cause });
+    throw noResponse({
+      path: SESSION_PATH,
+      url: SESSION_URL,
+      method: "GET",
+      attemptId,
+      cause
+    });
   }
 
   // The service looked and said no. This is the ONLY refusal that means
   // the operator is not signed in.
-  if (res.status === 401 || res.status === 403) return SIGNED_OUT;
+  if (res.status === 401) return SIGNED_OUT;
 
   if (!res.ok) {
-    // A refusal that is not about this session: the proxy could not
-    // reach the engine (502), the engine is restarting (503), or the
-    // engine broke (500). The status travels so api/failure.ts can tell
-    // the gateway ones apart and name the hop that failed.
-    let code: unknown;
-    let message: unknown;
-    try {
-      const body = (await res.json()) as Record<string, unknown>;
-      const nested = body.error;
-      const from = nested && typeof nested === "object" ? (nested as Record<string, unknown>) : body;
-      code = from.code;
-      message = from.message;
-    } catch {
-      // A bodyless 502 from serve-ui's ErrorHandler is exactly this, and
-      // it is the reported case.
-    }
-    throw new BackupdError({
-      code: toApiErrorCode(code),
-      message: typeof message === "string" ? message : "Backupd could not answer whether this browser is signed in.",
-      correlationId: res.headers.get("x-correlation-id") ?? undefined,
-      status: res.status
-    });
+    // A refusal that is not an answer about this session: the proxy could
+    // not reach the engine (502, and it marks its own responses now), the
+    // engine is restarting (503), the engine broke (500), or something
+    // between the two denied the request outright (403). The provenance
+    // travels with it, so api/failure.ts names the hop that failed only
+    // where it really is the hop that failed.
+    throw refusal(
+      await apiErrorFromResponse(
+        res,
+        "Backupd could not answer whether this browser is signed in."
+      ),
+      { path: SESSION_PATH, attemptId }
+    );
   }
 
   try {
@@ -95,13 +115,6 @@ export async function readLocalAccountSession(): Promise<AuthContext> {
   } catch (cause) {
     // A 200 whose body will not parse is #598's other half, and it is no
     // more evidence of being signed out than a 502 is.
-    throw new RequestFailure({
-      kind: "unreadable-body",
-      path: SESSION_PATH,
-      status: res.status,
-      contentType: res.headers.get("content-type") ?? undefined,
-      correlationId: res.headers.get("x-correlation-id") ?? undefined,
-      cause
-    });
+    throw unreadableBody({ path: SESSION_PATH, res, attemptId, cause });
   }
 }

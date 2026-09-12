@@ -187,6 +187,74 @@ func TestUI_UnreachableUpstreamAnswersWithCorrelationID(t *testing.T) {
 	if got := res.Header.Values(webhost.CorrelationHeader); len(got) != 1 {
 		t.Errorf("%s appeared %d times (%v), want exactly 1", webhost.CorrelationHeader, len(got), got)
 	}
+	// Issue #795's review: the same response has to SAY which hop wrote
+	// it. Without this the frontend is left inferring topology from a
+	// status code, which cannot distinguish this proxy's bodyless 502
+	// from a service that answered 502 with a typed reason of its own -
+	// and it guessed wrong in exactly the direction that costs the
+	// operator the service's own words.
+	if got := res.Header.Get(serve.ProxyErrorHeader); got != serve.ProxyErrorUpstreamUnreachable {
+		t.Errorf("%s = %q, want %q: the browser cannot tell this refusal was written by the proxy rather than by the service",
+			serve.ProxyErrorHeader, got, serve.ProxyErrorUpstreamUnreachable)
+	}
+}
+
+// TestUI_ProxyErrorMarkerIsOnlyEverThisHops is the other half of the
+// marker being worth reading at all.
+//
+// It states "the response you are holding was written by the proxy in
+// front of the service, and nothing in it came from the service". An
+// upstream that could set it would be making a claim about a hop it is
+// not on, and the frontend would then apply "the web interface could not
+// reach the service" wording to a refusal the service itself typed -
+// which is the misattribution this whole header exists to end, arrived at
+// from the other direction.
+//
+// Two responses, because ReverseProxy ADDS the upstream's headers to the
+// ones already set here: a 200 (nothing has set the marker on this side)
+// and a 502 the SERVICE answered with (the collision case, where a naive
+// status check would agree with the forged marker).
+func TestUI_ProxyErrorMarkerIsOnlyEverThisHops(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{"a 200 the service answered", http.StatusOK},
+		{"a 502 the service answered itself", http.StatusBadGateway},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set(serve.ProxyErrorHeader, serve.ProxyErrorUpstreamUnreachable)
+				w.WriteHeader(tc.status)
+			}))
+			t.Cleanup(upstream.Close)
+			upstreamURL, err := url.Parse(upstream.URL)
+			if err != nil {
+				t.Fatalf("parsing upstream URL: %v", err)
+			}
+
+			ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
+				Upstream: upstreamURL,
+				StaticFS: uiShell(),
+				Logger:   &recordingLogger{},
+			}))
+			t.Cleanup(ui.Close)
+
+			res, err := http.Get(ui.URL + "/api/v1/activity")
+			if err != nil {
+				t.Fatalf("GET through the proxy: %v", err)
+			}
+			defer res.Body.Close()
+
+			if res.StatusCode != tc.status {
+				t.Fatalf("status = %d, want %d", res.StatusCode, tc.status)
+			}
+			if got := res.Header.Values(serve.ProxyErrorHeader); len(got) != 0 {
+				t.Errorf("%s survived from the upstream (%v): a response that reached ModifyResponse came FROM the service, so this marker on it is a false claim about which hop failed",
+					serve.ProxyErrorHeader, got)
+			}
+		})
+	}
 }
 
 // TestUI_UpstreamTraceIsSilentByDefault is the opt-in half. A deployment

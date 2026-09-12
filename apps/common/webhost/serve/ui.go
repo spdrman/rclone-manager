@@ -144,6 +144,32 @@ type UIConfig struct {
 // request).
 const defaultProxyResponseHeaderTimeout = 5 * time.Second
 
+// ProxyErrorHeader names the one fact only this container can state: the
+// refusal a browser is holding was written HERE, because the engine
+// behind this proxy could not be reached, and nothing in it came from the
+// service (#795).
+//
+// It exists because the frontend was inferring that from the status code,
+// and a status code cannot carry it. A bodyless 502 is what this proxy
+// writes when the engine is gone, and it is also what a service can
+// legitimately answer with a typed envelope of its own - so a client
+// reading topology out of "502" either misattributes the service's own
+// 502 to this hop or misses this hop's. One header, set at the one place
+// that knows, and the client stops guessing (api/failure.ts reads it).
+//
+// Response-only, and deleted from any upstream response by ModifyResponse
+// below: a marker that an upstream could set would be a marker that says
+// nothing.
+const (
+	ProxyErrorHeader = "X-Backupd-Proxy-Error"
+
+	// The one value, and the only one this proxy can honestly report:
+	// ErrorHandler fires when no response was produced at all, which for
+	// this topology means the engine was not reachable (or did not send
+	// headers within ProxyResponseHeaderTimeout).
+	ProxyErrorUpstreamUnreachable = "upstream-unreachable"
+)
+
 // NewUI composes cfg into the UI-host container's whole HTTP surface: the
 // shared static UI, plus a reverse proxy forwarding /health/* and
 // /api/v1/* to the engine unchanged (same path, same method, same body) -
@@ -259,6 +285,14 @@ func NewUI(cfg UIConfig) http.Handler {
 			// The status net/http's own default ErrorHandler writes,
 			// unchanged: this exists to record the failure, not to
 			// change what a client sees.
+			//
+			// The marker beside it is the one thing that DOES change,
+			// and it is additive (#795's review): the browser holding
+			// this response can now be told, rather than having to
+			// infer from a status code, that nothing in it came from
+			// the service. Set BEFORE WriteHeader, which is the only
+			// place it can be set at all.
+			w.Header().Set(ProxyErrorHeader, ProxyErrorUpstreamUnreachable)
 			w.WriteHeader(http.StatusBadGateway)
 		},
 		// The engine sets the same browser response headers this
@@ -280,6 +314,14 @@ func NewUI(cfg UIConfig) http.Handler {
 			// ADDS the upstream's headers to the ones already set here.
 			// One authority for what the browser is told.
 			res.Header.Del(webhost.CorrelationHeader)
+			// And the marker, which is the sharpest case of the same
+			// rule: it means "this refusal was written by the proxy in
+			// front of the service", so an upstream that set it would
+			// be making a claim about a hop it is not on. Only the
+			// ErrorHandler above may ever put this on a response, and
+			// a response that reached ModifyResponse came from the
+			// engine by definition.
+			res.Header.Del(ProxyErrorHeader)
 			return nil
 		},
 	}
