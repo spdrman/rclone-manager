@@ -391,8 +391,9 @@ func openConfigWriteRoute(ctx context.Context, configPath string) (configWriteRo
 // and shipping, exactly as internal/obs's package doc describes.
 //
 // The level is the environment's (obs.LevelFromEnv: LOG_LEVEL, or
-// RM_DEBUG=1 as the shortcut), the same knob service.Open reads and the
-// same one the web host's own surfaces read. Unset is INFO, unchanged.
+// BACKUPD_DEBUG=1 as the shortcut - RM_DEBUG=1 is the deprecated alias
+// of that shortcut), the same knob service.Open reads and the same one
+// the web host's own surfaces read. Unset is INFO, unchanged.
 // `backupd daemon` is a documented deployment shape of its own
 // (container/compose.yaml names it as a command override), so a
 // hard-coded level here would mean the one engine an operator can run

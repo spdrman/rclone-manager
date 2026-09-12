@@ -23,6 +23,7 @@ import (
 // this router produces. A header on the refusals alone is what the
 // previous arrangement had.
 func TestEveryResponseCarriesACorrelationId(t *testing.T) {
+	t.Setenv("BACKUPD_DEBUG", "")
 	t.Setenv("RM_DEBUG", "")
 	t.Setenv("LOG_LEVEL", "")
 

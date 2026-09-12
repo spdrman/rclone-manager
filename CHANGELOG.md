@@ -54,7 +54,7 @@
   `LOG_LEVEL` to BOTH services — with `container/.env.example`, the provider
   adapters and the Portainer template carrying it too — because the two halves
   of one request are recorded in two containers and one of them at `debug`
-  gives half of every story. `RM_DEBUG=1` stays as the shortcut, and
+  gives half of every story. `BACKUPD_DEBUG=1` stays as the shortcut, and
   `docs/deployment.md`'s new "Turning on diagnostics" covers all three
   switches, the browser's `?debug=1`/`?debug=0` included.
 
@@ -81,6 +81,25 @@
   line, which the server writes down (bounded and validated) — so a console
   screenshot of a failed `fetch` can still be matched to the server's record of
   the same request.
+
+### Changed
+
+- **The debug shortcut is `BACKUPD_DEBUG`, and `RM_DEBUG` is deprecated**
+  (#794). The one-variable diagnostics switch still carried the project's
+  old `RM_` prefix, from before the rename to backupd, which is the wrong
+  name to read out over the phone call this knob exists for. The engine
+  (`obs.LevelFromEnv`) and the web host (`webhost.envLogLevel`) now both
+  accept `BACKUPD_DEBUG=1`, and `container/compose.yaml`,
+  `container/.env.example`, every provider adapter's compose file and
+  `docs/deployment.md` name that spelling.
+
+  `RM_DEBUG=1` keeps working, as a deprecated alias, for one release. The
+  two are OR'd rather than ranked because neither has ever had an "off"
+  value — only the documented `1` means anything — so a deployment that
+  upgrades one container before the other, or that still has the old name
+  in a compose file nobody re-derived, does not go quiet in the middle of
+  a diagnosis. Set `BACKUPD_DEBUG` on new deployments; `RM_DEBUG` will be
+  removed a release after this one.
 
 ### Fixed
 

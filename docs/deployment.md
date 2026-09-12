@@ -621,10 +621,19 @@ docker compose -f container/compose.yaml up -d
 docker compose -f container/compose.yaml logs -f
 ```
 
-`RM_DEBUG=1` is the same switch under a shorter name, kept because it is the one
-an operator can be given over a phone call; it wins if both are set. An
+`BACKUPD_DEBUG=1` is the same switch under a shorter name, kept because it is
+the one an operator can be given over a phone call; it wins if both are set. An
 unparseable value falls back to `info` rather than refusing to start — a typo in a
 diagnostic knob must never take a backup host down.
+
+`RM_DEBUG=1` is that shortcut's deprecated old name, from before this project was
+renamed to backupd (issue #794). It is still honoured, so a deployment upgraded
+without its compose file being re-derived does not go quiet in the middle of a
+diagnosis, and it will be removed a release after `BACKUPD_DEBUG`. Either
+spelling alone turns diagnostics on — neither has ever had an "off" value, only
+the documented `1` means anything — so the two containers of one deployment
+cannot end up disagreeing about how loud they are while an upgrade is half done.
+New deployments should set `BACKUPD_DEBUG`.
 
 **Set it on both services or neither.** The engine records what it built and
 served; `web-ui` records what the engine answered, what framing the body arrived

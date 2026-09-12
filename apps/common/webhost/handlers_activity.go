@@ -117,8 +117,9 @@ func (h *handlers) listActivity(w http.ResponseWriter, r *http.Request) {
 // deployment, what this handler actually produced for the request the
 // browser could not read.
 //
-// Everything here is behind h.debug (LOG_LEVEL=debug, or RM_DEBUG=1 as
-// the shortcut), and a default INFO deployment encodes the response
+// Everything here is behind h.debug (LOG_LEVEL=debug, or
+// BACKUPD_DEBUG=1 as the shortcut - RM_DEBUG=1 is its deprecated
+// alias), and a default INFO deployment encodes the response
 // exactly once and writes no extra line. What it does NOT gate anymore
 // is the correlation id: every response this package produces carries
 // one, minted at the edge (requestscope.go), because the browser-side
