@@ -185,7 +185,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # produces the same platform-independent static output (HTML/CSS/JS)
 # regardless of which architecture ran `npm run build`, so there is no
 # cross-compilation concern here to justify pinning a build platform.
-FROM node@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d AS frontend-build
+FROM node@sha256:e961046fec20896e8904f2b4a8b4c7e5ca91826d84d8d33d83dbaa61f942069e AS frontend-build
 
 # WORKDIR /src (not /src/ui/shared): ui/shared/vite.config.ts resolves its
 # "@platform-entry" alias, and some of ui/shared's own test files

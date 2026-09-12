@@ -81,7 +81,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "26"
 
       # The app under test is this repository's ui/shared, so its own
       # dependencies are what the dev server runs.

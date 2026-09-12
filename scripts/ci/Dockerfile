@@ -34,8 +34,8 @@ ARG GOLANGCI_LINT_VERSION=v2.13.2
 # node and npm copied out of the official image rather than installed
 # from a distribution repository, so this and CI are the same build and
 # not merely the same version number.
-COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
-COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=node:26-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:26-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 # The client and the two plugins the gate invokes. No daemon, no dind.
 COPY --from=docker:28-cli /usr/local/bin/docker /usr/local/bin/docker
