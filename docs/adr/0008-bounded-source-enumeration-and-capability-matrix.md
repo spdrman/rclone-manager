@@ -59,20 +59,59 @@ directory reader):
 
 | entries   | peak heap | max RSS delta | total  | time to first entry | goroutines left behind | directory handles held |
 | --------- | --------- | ------------- | ------ | ------------------- | ---------------------- | ---------------------- |
-| 100,000   | 4.5 MiB   | 4.8 MiB       | 58 ms  | 699 µs              | 0                      | 1                      |
-| 1,000,000 | 5.4 MiB   | 1.7 MiB       | 486 ms | 865 µs              | 0                      | 1                      |
+| 100,000   | 3.7 MiB   | 4.6 MiB       | 30 ms  | 702 µs              | 0                      | 1                      |
+| 1,000,000 | 4.9 MiB   | 1.8 MiB       | 286 ms | 596 µs              | 0                      | 1                      |
 
-Ten times the entries, 1.2× the memory. (The RSS delta is smaller at
+Ten times the entries, 1.3× the memory. (The RSS delta is smaller at
 1,000,000 than at 100,000 because `Maxrss` is a per-process high-water
 mark and the smaller run went first: the larger run needed nothing new,
 which is the point being made.)
 
+### The other axis: a tree that is mostly directories
+
+A flat directory is only half the question, and the half that is easier
+to get right. The deployments this product runs against (FR-8) put one
+directory per producer run under a source root, so a source that has been
+backing up for two years is a directory holding *tens of thousands of
+subdirectories*, not files — and a walk can be perfectly bounded in how
+it reads entries while retaining one path for every directory it has not
+descended into yet.
+
+That is exactly what the first version of this enumerator did: read a
+directory to its end, collect its children, push them on a stack. Same
+synthetic harness, this time a root holding N subdirectories with one
+file each (`TestEnumerationMemoryDoesNotScaleWithDirectoryCount`):
+
+| subdirectories | walk                        | peak heap | max RSS delta | total  | time to first entry |
+| -------------- | --------------------------- | --------- | ------------- | ------ | ------------------- |
+| 100,000        | stack of pending paths      | 8.4 MiB   | 11.4 MiB      | 27 ms  | 9.06 ms             |
+| 1,000,000      | stack of pending paths      | 63.1 MiB  | 82.5 MiB      | 260 ms | 87.26 ms            |
+| 100,000        | resumable directory frames  | 3.5 MiB   | 0.3 MiB       | 47 ms  | 443 µs              |
+| 1,000,000      | resumable directory frames  | 3.8 MiB   | 0.2 MiB       | 358 ms | 431 µs              |
+
+Ten times the directories was ten times the memory, and the first entry
+arrived only after the whole root had been read — 87 ms on a synthetic
+reader with no disk under it, which on a real NAS is where the "time to
+first entry" win disappears entirely. With frames it is 1.1× the memory
+and the first entry arrives immediately, because the walk descends out of
+the middle of a chunk instead of finishing the directory first.
+
+The fix is to make a directory a FRAME - its open handle, the chunk last
+read from it, and how far through that chunk the walk has got - and
+descend the moment a subdirectory is seen. `(*os.File).ReadDir(n)`
+resumes from the directory offset the handle already holds, so the parent
+needs nothing remembered about it beyond the handle itself. What is
+retained is one chunk per LEVEL of the tree; what it costs is one open
+file descriptor per level, which is bounded by the filesystem's own path
+limit and by the Go runtime raising this process's descriptor limit to
+the hard maximum at startup.
+
 Open connections do not appear in either table because for a local source
-there are none, and the handle count is the local analogue: one, held
-depth-first, versus rclone's walk which opens one goroutine per
-`--checkers` over a backend with no native recursive listing (already
-pinned to 1 by `oneConnectionAtATime`, for the connection-cap reasons in
-its own doc).
+there are none, and the handle count is the local analogue: one per level
+of the tree, held depth-first, versus rclone's walk which opens one
+goroutine per `--checkers` over a backend with no native recursive
+listing (already pinned to 1 by `oneConnectionAtATime`, for the
+connection-cap reasons in its own doc).
 
 ### The finding that shaped the decision
 
@@ -115,36 +154,41 @@ is a refusal.**
 
 ### 1. A backend capability matrix, owned by backupd, where silence means unqualified
 
-`core/internal/backend/capability.go` declares ten keys, closed in Go
-(`CapabilityKeys`) and declared as data in each `bundled/*.json`:
+`core/internal/backend/capability.go` declares twelve keys, closed in Go
+(`CapabilityKeys()`, which returns a copy - a vocabulary an importer
+could edit is not a vocabulary) and declared as data in each
+`bundled/*.json`:
 
 `bounded_listing`, `recursive_listing`, `streaming_open`, `range_open`,
 `mtime_precision`, `hash_support`, `stable_size`, `symlink_semantics`,
-`metadata_support`, `case_sensitivity`.
+`metadata_support`, `case_sensitivity`, `case_preservation`,
+`generation_identity`.
 
 The shipped values:
 
-| key                 | local_volume           | s3            | sftp        |
-| ------------------- | ---------------------- | ------------- | ----------- |
-| `bounded_listing`   | true                   | true          | **false**   |
-| `recursive_listing` | false                  | true          | false       |
-| `streaming_open`    | true                   | true          | true        |
-| `range_open`        | true                   | true          | true        |
-| `mtime_precision`   | 1ns                    | 1ms           | 1s          |
-| `hash_support`      | md5, sha1, sha256      | md5           | *(none)*    |
-| `stable_size`       | true                   | true          | true        |
-| `symlink_semantics` | skip                   | unsupported   | skip        |
-| `metadata_support`  | full                   | partial       | partial     |
-| `case_sensitivity`  | **unknown**            | sensitive     | **unknown** |
+| key                   | local_volume      | s3          | sftp        |
+| --------------------- | ----------------- | ----------- | ----------- |
+| `bounded_listing`     | true              | true        | **false**   |
+| `recursive_listing`   | false             | true        | false       |
+| `streaming_open`      | true              | true        | true        |
+| `range_open`          | true              | true        | true        |
+| `mtime_precision`     | 1ns               | 1ms         | 1s          |
+| `hash_support`        | md5, sha1, sha256 | md5         | *(none)*    |
+| `stable_size`         | true              | true        | true        |
+| `symlink_semantics`   | skip              | unsupported | skip        |
+| `metadata_support`    | full              | partial     | partial     |
+| `case_sensitivity`    | **unknown**       | sensitive   | **unknown** |
+| `case_preservation`   | **unknown**       | preserved   | **unknown** |
+| `generation_identity` | none              | versioned   | none        |
 
-The four entries worth arguing about:
+The entries worth arguing about:
 
 - **`bounded_listing` is a claim about the whole path**, protocol up to
   this process — not about the protocol alone. local is true *because*
   this repository now has an enumerator that uses `ReadDir(n)`. Before
   this issue it would have been false.
 - **sftp is false**, for the reason in the finding above, and that is
-  what makes a refusal the only honest third option.
+  what makes a refusal the only honest answer for it.
 - **`recursive_listing` means NATIVE recursive listing**, which is
   exactly rclone's `fs.Features().ListR`, not "can this engine recurse"
   (it always can, by walking). It is the difference between one round
@@ -174,7 +218,42 @@ The four entries worth arguing about:
   capabilities through it (with an mtime floor at what the transport
   actually carries) rather than copying them. Neither row is wrong; they
   answer different questions, and the one thing that would be wrong is a
-  future reader "fixing" one to match the other.
+  future reader "fixing" one to match the other. The algorithm names are
+  a closed Go vocabulary (`HashAlgorithm`: md5, sha1, sha256, sha512,
+  crc32), because `"sha-256"` in a JSON file is otherwise a claim that
+  silently matches nothing any consumer looks for. Provider-proprietary
+  digests are deliberately not in it: a name this engine cannot ask any
+  backend for is a claim nothing can act on, and adding one is a reviewed
+  diff in Go rather than a string in a manifest.
+- **`case_preservation` is a separate key from `case_sensitivity`**, and
+  it is separate because the first version conflated them: `preserving`
+  was a VALUE of `case_sensitivity`, sitting alongside `sensitive` and
+  `insensitive` as though "are two cases two names" and "does the name
+  come back spelled the way it went in" were one question. They are two,
+  a case-insensitive filesystem usually answers them differently, and the
+  one a restore notices is the second: `Invoices` written back as
+  `invoices` is a correct restore of the wrong name and nothing in a
+  listing comparison flags it. The old spelling is now refused by
+  validation rather than accepted as a sensitivity it never described.
+- **`generation_identity` distinguishes content identity from a slot
+  id**, and it exists because #824's trust classifier needs one authority
+  for it. A path is a slot: it survives an overwrite, so it says nothing
+  about whether the bytes changed. A generation, an S3 `versionId` or an
+  ETag is a content identity: it changes when the content changes, which
+  is what lets a consumer decide "unchanged" without reading the object.
+  s3 is `versioned` — the protocol assigns and returns a per-write
+  identifier, and whether prior versions are RETAINED is a bucket setting
+  and therefore an instance's configuration, so this key answers identity
+  and not retention (on an unversioned bucket the identity available in a
+  listing is the ETag, which still changes on every overwrite). local and
+  sftp are `none`: a POSIX path is a slot and nothing more, which is
+  exactly why #793's classification for those two has to fall back to
+  size and mtime. The fourth value, `etag`, exists for a backend that has
+  a content validator and no version concept; nothing shipped declares it
+  yet, and a vocabulary that forced such a backend to answer `versioned`
+  or `none` would make it lie either way. Phase 1 derives
+  `SourceSignals` from this key and retires the duplicated
+  `BundledSourceSignals` (ADR 0009).
 
 Silence is **unqualified, not a default**. A manifest with no
 capabilities block describes a backend `Manifest.PlanEnumeration` refuses
@@ -185,39 +264,60 @@ asymmetry is the decision: there is no ordinary answer to "can a
 directory here be read without holding all of it", so a default would be
 a guess, and the optimistic guess is an OOM kill that only ever arrives
 in production on the first directory that got big. A block that IS
-present must answer all ten keys, because a missing key and a declared
+present must answer all twelve keys, because a missing key and a declared
 false are different statements that nothing downstream could tell apart.
 
 ### 2. A backupd-owned bounded enumerator, plus an explicit refusal where one is impossible
 
 `core/internal/transport.LocalEnumerator` streams entries to a callback:
 `(*os.File).ReadDir(n)` in chunks of `ChunkEntries` (default 4096),
-depth-first with an explicit stack of pending directory *paths*, one
-directory handle open at a time, no goroutines of its own, cancellation
-checked per chunk, `Source.ExcludePaths` pruned before a directory is
-ever opened. It is stdlib-only and deliberately NOT routed through
-rclone, because routing it there would materialise the slice it exists to
-avoid — which is why it lives in `transport` (the boundary that owns what
-a `Source` is) and not in `transport/rclone` (which owns dialing
-protocols).
+depth-first over resumable directory frames (one open handle per level of
+the tree, one chunk live per frame — see "the other axis" above for why a
+stack of pending paths was not bounded at all), no goroutines of its own,
+cancellation checked per chunk, `Source.ExcludePaths` pruned before a
+directory is ever opened. It is stdlib-only and deliberately NOT routed
+through rclone, because routing it there would materialise the slice it
+exists to avoid — which is why it lives in `transport` (the boundary that
+owns what a `Source` is) and not in `transport/rclone` (which owns
+dialing protocols).
 
 `Adapter.Enumerate` is the dispatch, and it takes its decision from the
-matrix rather than inventing one:
+matrix rather than inventing one. Two outcomes:
 
 1. `bounded_listing` → chunked enumeration.
-2. not `bounded_listing`, ceiling configured → rclone's walk, streaming
-   per directory, refusing any directory above the ceiling with
-   `transport.ErrDirectoryTooLarge` (category `Configuration`: a retry
-   re-reads the same directory; what changes the outcome is a bigger
-   ceiling or a smaller directory, both a person's decision).
-3. not `bounded_listing`, no ceiling → `backend.ErrUnboundedListing`,
-   **before anything is dialed**. Fail closed.
+2. not `bounded_listing` → `backend.ErrUnboundedListing`, **before
+   anything is dialed, opened or allocated**. Fail closed.
 
-"Before anything is dialed" is load-bearing, and
+"Before anything is dialed" is load-bearing.
 `TestEnumeratingAnSftpSourceIsRefusedBeforeAnythingIsDialed` asserts it
-by timing: a refusal that arrived after the connection would also have
-arrived after the directory was read into memory, which is the failure it
-exists to prevent.
+three ways — the sentinel, the elapsed time, and the fact that the
+message does NOT mention the source's key file, because a refusal raised
+while resolving credentials is a refusal raised on the way to a dial.
+
+#### The outcome that was removed, and why it is recorded here
+
+There was a third outcome between those two: *not `bounded_listing`, but
+an operator has configured a maximum directory size* → walk it with
+rclone and refuse any directory holding more entries than that. It was
+implemented, it was tested, and adversarial review of this PR was right
+that it had to go.
+
+`len()` needs the slice. On a backend with no cursor the entire directory
+is materialised by rclone — and by `pkg/sftp` underneath it — before any
+code above can count it, so the check fired *after* the allocation it
+claimed to prevent. On the directory that actually mattered, the one that
+OOMs the daemon, the refusal never arrives at all: the process is already
+dead. The number read like a memory bound in a configuration file and was
+an epitaph.
+
+So a configured ceiling can no longer talk an unbounded backend into
+being enumerated: `PlanEnumeration` takes no ceiling parameter,
+`EnumerateOptions` carries no `MaxDirectoryEntries`, and
+`transport.ErrDirectoryTooLarge` is gone. A ceiling is still a reasonable
+thing to want for a reason that is not memory (a producer that wrote
+20,000,000 files is something an operator wants told about), and if it
+comes back it comes back as that, on the bounded path, where a count is
+cheap because the entries were never all held.
 
 ## Alternatives considered
 
@@ -275,6 +375,12 @@ like a fix in a code review and is not one: by the time anything can
 count the slice, the memory is spent. It is a message printed over the
 OOM it failed to prevent.
 
+This one is not hypothetical: the first version of this PR shipped it, in
+the shape of an operator-configured `MaxDirectoryEntries` that made an
+unbounded backend enumerable. It is removed, and "the outcome that was
+removed" above records why, because a ceiling is the fix a reviewer will
+propose again.
+
 ### Discover capabilities by probing instead of declaring them
 
 Ask the backend at runtime — list a directory and see, `Features()`,
@@ -292,9 +398,11 @@ future per-path probe is the right way to resolve exactly that key.
 
 ### What we get
 
-- A million-entry flat directory is enumerable in 4.2 MiB instead of 493
-  MiB, with the first entry delivered in 12 ms instead of 102 seconds,
+- A million-entry flat directory is enumerable in 4.9 MiB instead of 493
+  MiB, with the first entry delivered in 596 µs instead of 102 seconds,
   and a cancellation that takes effect within one chunk.
+- A million-SUBDIRECTORY tree costs the same 3.8 MiB, because the walk
+  retains one chunk per level of the tree and nothing per directory.
 - Enumeration a Kopia-style uploader can actually be fed from: it wants
   entries as it walks, not a slice it has to wait for.
 - A capability matrix that answers questions the rest of Phase 0 needs:
@@ -320,20 +428,45 @@ future per-path probe is the right way to resolve exactly that key.
   directory of a million entries is precisely where sorting one directory
   is this whole problem again. A bounded external merge (sorted runs of
   `ChunkEntries`, merged on the way out) is the known answer and is
-  deliberately not built here; Phase 1 owns it, and it is the one thing a
-  caller of `Enumerate` could be surprised by today.
-- **The sftp path is bounded by a number, not by a buffer.** With a
-  ceiling configured, the peak is still the largest directory. The
-  refusal arrives after that directory has been read, because "not
-  bounded" is what that means. It is a late refusal by design and it is
-  better than no refusal; it is not the same thing as bounded, and the
-  matrix says so rather than the code implying otherwise.
-- **Two listing paths now exist.** `List` is unchanged and still used by
-  everything in the daemon; `Enumerate` is additive and has no production
-  caller yet. That is deliberate for a gate (the `backend` package
-  shipped the same way, "nothing reads this yet"), and it is a real cost
-  until Phase 1 migrates discovery: for now, a reader has to know which
-  one they are looking at.
+  deliberately not built here; Phase 1 owns it as a named requirement -
+  a bounded AND per-directory-name-ordered feed - and it is the one thing
+  a caller of `Enumerate` could be surprised by today. Frames made the
+  order one step less tidy on purpose: a subtree's entries now arrive in
+  the middle of its parent's, because descending immediately is what
+  keeps the walk from retaining the parent's child list. Interleaved and
+  bounded beats grouped and linear, and the ordering Phase 1 needs has to
+  be built deliberately either way.
+- **sftp sources are refused by `Enumerate`, not slowed down by it.**
+  There is no configuration that makes an sftp source enumerable through
+  this path, because there is no bounded read anywhere in that stack to
+  configure. That is a capability this product does not have and now says
+  it does not have, rather than a number in a config file that reads like
+  it bought something.
+- **The refusal is live on the enumeration path; the migration of the
+  production listing path is Phase 1, and that is scoped rather than
+  assumed.** `Transport.List` is unchanged and is still what
+  `internal/discovery` and `internal/app/fetch` call, so today a source
+  on ANY backend - including sftp - is still listed the old, unbounded
+  way by the daemon. Wiring `PlanEnumeration` into `Adapter.List` was
+  considered for this PR and rejected on the facts: sftp is the protocol
+  a backup source is read over in this product, so a gate there would
+  refuse to list every sftp source in existing deployments, which is a
+  product decision and not a spike's to take unannounced. What Phase 1
+  (#780/#782/#783) has to do is therefore explicit:
+  1. migrate `discovery` and `fetch` from `Transport.List` to
+     `transport.Enumerator`;
+  2. at that moment the matrix starts refusing sftp sources, so Phase 1
+     must first decide between a bounded sftp reader (which means a
+     second SSH client, rejected above) and telling operators that an
+     sftp source is enumerated the unbounded way with the cost named;
+  3. until (1) lands, `bounded_listing` protects the new path only, and
+     this ADR does not claim otherwise.
+  What IS live and asserted today: `Adapter.Enumerate` - the real adapter,
+  no test seam - refuses a real sftp `Source` before dialing
+  (`TestEnumeratingAnSftpSourceIsRefusedBeforeAnythingIsDialed`), and
+  `backend.Manifest.PlanEnumeration` refuses it with no argument that
+  could change the answer
+  (`TestABackendThatCannotStreamIsRefusedOutright`).
 - **`Enumerate` is not on the `Transport` interface.** It is a separate
   `transport.Enumerator`, because `Transport` is implemented by fakes and
   decorators across this repo (`core/tests/classifytransport`,
@@ -369,16 +502,18 @@ future per-path probe is the right way to resolve exactly that key.
   dispatch to read the matrix. It is the safe direction (`backend`
   imports nothing but the standard library, which is what `backend/doc.go`
   exists to keep true) and the same edge `backends_test.go` already has.
-  `transport` itself does not import `backend`: `EnumerationPlan` is two
-  plain fields precisely so that the capability owner does not have to
+  `transport` itself does not import `backend`: `EnumerationPlan` is one
+  plain field precisely so that the capability owner does not have to
   name a transport type.
 
 ### The measurement harnesses stay
 
 `TestEnumerationMemoryDoesNotScaleWithEntryCount` (synthetic, 100k and
-1M, bounded-peak assertion),
-`TestCancellingMidEnumerationStopsPromptlyAndLeaksNothing`,
-`TestADirectoryOverTheConfiguredCeilingIsRefusedByName` and
+1M entries in one directory, bounded-peak assertion),
+`TestEnumerationMemoryDoesNotScaleWithDirectoryCount` (the same at 100k
+and 1M SUBdirectories, which is the shape FR-8 produces and the one the
+first version of this walk failed),
+`TestCancellingMidEnumerationStopsPromptlyAndLeaksNothing` and
 `TestStreamingCostsFarLessThanListAtScale` are compatibility smoke tests,
 not product code. They are what makes a future rclone bump, or a future
 change to the chunking, fail loudly instead of quietly costing 490 MiB
