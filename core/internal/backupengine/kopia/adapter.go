@@ -7,15 +7,22 @@
 // embed it" is a claim that decays into "we shell out to it" one convenient
 // shortcut at a time.
 //
-// Exactly one storage backend is registered, filesystem, and that is a
-// decision rather than an import line, the same way internal/transport/rclone
-// treats its backend set. Every additional backend is a dependency, an
-// authentication surface and a failure mode; a repository on a mounted NAS
-// share is a filesystem repository, which is the case this product has.
+// Two storage backends are registered, filesystem and native s3, and that
+// is a decision rather than an import line, the same way
+// internal/transport/rclone treats its backend set. Every additional
+// backend is a dependency, an authentication surface and a failure mode.
+// A repository on a mounted NAS share is a filesystem repository, which is
+// the case this product started with; a repository in a bucket is the
+// case #781 added, natively, without the rclone-backed provider that
+// would have made the whole list available for one import line. The
+// argument for that refusal is in repository.go, which owns everything
+// about a repository's storage and lifecycle; this file owns what happens
+// inside an open one.
 //
 // The Kopia version is pinned in core/go.mod and bumping it is a project
 // event, not a background update. See
-// docs/adr/0006-embed-kopia-behind-backupengine-adapter.md.
+// docs/adr/0006-embed-kopia-behind-backupengine-adapter.md and
+// docs/adr/0011-kopia-repository-adapter.md.
 package kopia
 
 import (
@@ -27,13 +34,10 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/kopia/kopia/fs/localfs"
 	"github.com/kopia/kopia/repo"
-	"github.com/kopia/kopia/repo/blob"
-	"github.com/kopia/kopia/repo/blob/filesystem"
-	"github.com/kopia/kopia/repo/content"
-	"github.com/kopia/kopia/repo/format"
 	"github.com/kopia/kopia/repo/maintenance"
 	"github.com/kopia/kopia/repo/manifest"
 	"github.com/kopia/kopia/snapshot"
@@ -60,14 +64,28 @@ const verifyErrorBudget = 1000
 
 // Adapter implements backupengine.Engine over embedded Kopia packages.
 //
-// It is empty, and like the rclone adapter that is load-bearing: every
-// repository handle it hands out owns its own Kopia repository object and its
-// own config file path, so two backupd operations against two repositories
-// share no cached connection, no cached format blob and no cached credential.
-type Adapter struct{}
+// It holds no repository state, and like the rclone adapter that is
+// load-bearing: every repository handle it hands out owns its own Kopia
+// repository object and its own config file path, so two backupd
+// operations against two repositories share no cached connection, no
+// cached format blob and no cached credential.
+//
+// The one field is a clock, which exists because the clock-skew health
+// check cannot be tested against a clock that agrees. See WithClock.
+type Adapter struct {
+	now func() time.Time
+}
 
 // New returns an adapter. It takes no Kopia types, by design.
-func New() *Adapter { return &Adapter{} }
+func New(opts ...Option) *Adapter {
+	a := &Adapter{now: time.Now}
+
+	for _, opt := range opts {
+		opt(a)
+	}
+
+	return a
+}
 
 // The compile-time assertions that this package really satisfies the
 // boundary. Production wiring passes kopia.New() to a constructor that
@@ -78,110 +96,22 @@ var (
 	_ backupengine.Repository = (*repository)(nil)
 )
 
-// CreateRepository implements backupengine.Engine.
-func (a *Adapter) CreateRepository(ctx context.Context, loc backupengine.RepositoryLocation) error {
-	if err := validate(loc); err != nil {
-		return err
-	}
-
-	st, err := openStorage(ctx, loc, true)
-	if err != nil {
-		return err
-	}
-
-	defer st.Close(ctx) //nolint:errcheck
-
-	// NewRepositoryOptions is left at its defaults on purpose. Content
-	// format, hash, encryption and splitter defaults are Kopia's own
-	// recommended set and they move forward with the pin; overriding them
-	// here would freeze this repository's format at whatever looked good on
-	// the day this was written, and "it was the default at creation time" is
-	// a better answer to a future format question than a stale opinion.
-	if err := repo.Initialize(ctx, st, &repo.NewRepositoryOptions{}, loc.Passphrase); err != nil {
-		if errors.Is(err, format.ErrAlreadyInitialized) {
-			return backupengine.ErrRepositoryExists
-		}
-
-		return fmt.Errorf("initializing repository: %w", err)
-	}
-
-	return nil
-}
-
-// OpenRepository implements backupengine.Engine.
-func (a *Adapter) OpenRepository(ctx context.Context, loc backupengine.RepositoryLocation) (backupengine.Repository, error) {
-	if err := validate(loc); err != nil {
-		return nil, err
-	}
-
-	st, err := openStorage(ctx, loc, false)
-	if err != nil {
-		return nil, err
-	}
-
-	// Connect is unconditional, and that is the whole of it: it writes our
-	// connection parameters to loc.ConfigPath from the storage the caller
-	// asked for, and verifies them by opening and closing the repository, so
-	// a bad passphrase fails here rather than on first use. Reusing an
-	// existing config file because one happens to be there is the version of
-	// this code that hands back a repository nobody asked for -- the config
-	// records which storage it is connected to, and a caller that changed
-	// RepositoryLocation.Path would keep writing snapshots into the old one,
-	// successfully and silently, while the new location stayed empty.
-	//
-	// The storage handle is only needed to read the format blob; the
-	// repository opened below builds its own from the config file.
-	connectErr := repo.Connect(ctx, loc.ConfigPath, st, loc.Passphrase, connectOptions(loc))
-
-	if err := st.Close(ctx); err != nil {
-		return nil, fmt.Errorf("closing repository storage: %w", err)
-	}
-
-	if connectErr != nil {
-		return nil, translate(connectErr, "connecting to repository")
-	}
-
-	rep, err := repo.Open(ctx, loc.ConfigPath, loc.Passphrase, &repo.Options{})
-	if err != nil {
-		return nil, translate(err, "opening repository")
-	}
-
-	// Maintenance is the one operation that needs blob-level access, so a
-	// repository that cannot provide it is refused at open time rather than
-	// at the first maintenance window, when nobody is watching. Every
-	// LocationLocal repository satisfies this; a future API-server location
-	// would not, and it should fail with this sentence rather than a nil
-	// dereference.
-	direct, ok := rep.(repo.DirectRepository)
-	if !ok {
-		if cerr := rep.Close(ctx); cerr != nil {
-			return nil, fmt.Errorf("repository does not support maintenance, and closing it failed: %w", cerr)
-		}
-
-		return nil, errors.New("kopia: repository was opened without direct storage access, which maintenance requires")
-	}
-
-	// And the config file that was just written is read back through the
-	// opened repository, because "we wrote the right thing" and "we are
-	// talking to the right storage" are two different claims and only the
-	// second one matters. One comparison turns the worst outcome available
-	// to this adapter -- a snapshot successfully stored in the wrong
-	// repository -- into a refusal at open time.
-	if err := checkStorageIdentity(direct, loc); err != nil {
-		if cerr := rep.Close(ctx); cerr != nil {
-			return nil, fmt.Errorf("%w; closing it also failed: %w", err, cerr)
-		}
-
-		return nil, err
-	}
-
-	return &repository{rep: rep, direct: direct}, nil
-}
-
 // repository is one open Kopia repository behind backupengine.Repository.
 type repository struct {
 	rep    repo.Repository
 	direct repo.DirectRepository
+
+	// loc is how this handle was opened, kept so that Health can reach
+	// the storage again without being handed the location a second time.
+	//
+	// It holds no secret material. Both credentials on it are references
+	// (secretref.Ref), which is what makes keeping it for the life of the
+	// handle a safe thing to do rather than a custody decision.
+	loc backupengine.RepositoryLocation
+
+	// adapter is the engine that opened this handle, for its clock and its
+	// storage dispatch.
+	adapter *Adapter
 
 	closeOnce sync.Once
 	closeErr  error
@@ -515,151 +445,6 @@ func runCount(ctx context.Context, dr repo.DirectRepository) (int, error) {
 	}
 
 	return n, nil
-}
-
-// validate rejects a location this adapter cannot serve, before it does any
-// filesystem work on the strength of it.
-func validate(loc backupengine.RepositoryLocation) error {
-	if loc.Kind != backupengine.LocationLocal {
-		return fmt.Errorf("kopia: unsupported repository kind %q", loc.Kind)
-	}
-
-	if loc.Path == "" {
-		return errors.New("kopia: repository location has no path")
-	}
-
-	if loc.ConfigPath == "" {
-		return errors.New("kopia: repository location has no config path")
-	}
-
-	if loc.Passphrase == "" {
-		return errors.New("kopia: repository location has no passphrase")
-	}
-
-	return nil
-}
-
-// openStorage builds the one backend this adapter registers.
-func openStorage(ctx context.Context, loc backupengine.RepositoryLocation, create bool) (blob.Storage, error) {
-	path, err := filepath.Abs(loc.Path)
-	if err != nil {
-		return nil, fmt.Errorf("resolving repository path %s: %w", loc.Path, err)
-	}
-
-	st, err := filesystem.New(ctx, &filesystem.Options{Path: path}, create)
-	if err != nil {
-		// filesystem.New refuses a path it cannot stat, which for a
-		// non-creating open is the same operator situation as a directory
-		// that holds no repository.
-		if !create && errors.Is(err, os.ErrNotExist) {
-			return nil, backupengine.ErrRepositoryNotFound
-		}
-
-		return nil, fmt.Errorf("opening repository storage at %s: %w", path, err)
-	}
-
-	return st, nil
-}
-
-// checkStorageIdentity refuses an open whose repository is not the storage
-// the caller named.
-//
-// It reads the identity back out of the opened repository rather than
-// trusting the config file this process just wrote, because the failure it
-// exists to catch is precisely the one where the config file says something
-// other than what was asked for.
-func checkStorageIdentity(direct repo.DirectRepository, loc backupengine.RepositoryLocation) error {
-	want, err := filepath.Abs(loc.Path)
-	if err != nil {
-		return fmt.Errorf("resolving repository path %s: %w", loc.Path, err)
-	}
-
-	ci := direct.BlobReader().ConnectionInfo()
-
-	got, ok := filesystemPath(ci)
-	if !ok {
-		return fmt.Errorf(
-			"kopia: config %s is connected to %q storage; this adapter registers only the filesystem backend",
-			loc.ConfigPath, ci.Type)
-	}
-
-	if samePath(got, want) {
-		return nil
-	}
-
-	return fmt.Errorf("kopia: config %s is connected to the repository at %s, not the requested %s",
-		loc.ConfigPath, got, want)
-}
-
-// filesystemPath reports the directory behind a filesystem storage's
-// connection info, and whether it was a filesystem storage at all.
-func filesystemPath(ci blob.ConnectionInfo) (string, bool) {
-	switch cfg := ci.Config.(type) {
-	case *filesystem.Options:
-		return cfg.Path, true
-	case filesystem.Options:
-		return cfg.Path, true
-	default:
-		return "", false
-	}
-}
-
-// samePath compares two directories as identities rather than as strings.
-//
-// The symlink resolution is not decoration: on darwin every temporary
-// directory is reached through /var -> private/var, so two spellings of one
-// directory are the normal case and not an exotic one.
-func samePath(a, b string) bool {
-	if filepath.Clean(a) == filepath.Clean(b) {
-		return true
-	}
-
-	ra, aerr := filepath.EvalSymlinks(a)
-	rb, berr := filepath.EvalSymlinks(b)
-
-	if aerr != nil || berr != nil {
-		return false
-	}
-
-	return ra == rb
-}
-
-func connectOptions(loc backupengine.RepositoryLocation) *repo.ConnectOptions {
-	opt := &repo.ConnectOptions{
-		ClientOptions: repo.ClientOptions{
-			Description: "backupd",
-		},
-	}
-
-	if loc.CachePath != "" {
-		// Kopia insists on an absolute cache directory and deletes it on
-		// disconnect, so a relative path here would be both rejected and,
-		// if it were not, dangerous.
-		if abs, err := filepath.Abs(loc.CachePath); err == nil {
-			opt.CachingOptions = content.CachingOptions{CacheDirectory: abs}
-		}
-	}
-
-	return opt
-}
-
-// translate maps the Kopia errors this boundary has sentinels for onto them.
-//
-// Every case matches a typed value with errors.Is, never a message, for the
-// reason internal/transport/rclone/errors.go spells out at length: upstream
-// is allowed to reword any of these on any release, and this file is the only
-// place in the repository that should need to notice.
-func translate(err error, what string) error {
-	switch {
-	case errors.Is(err, repo.ErrRepositoryNotInitialized):
-		return backupengine.ErrRepositoryNotFound
-	case errors.Is(err, repo.ErrInvalidPassword):
-		return backupengine.ErrPassphrase
-	case errors.Is(err, os.ErrNotExist):
-		return backupengine.ErrRepositoryNotFound
-	default:
-		return fmt.Errorf("%s: %w", what, err)
-	}
 }
 
 // sourceInfo converts our Source identity into Kopia's, and is the only place

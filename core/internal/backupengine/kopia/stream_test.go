@@ -50,16 +50,7 @@ func newStreamingRepository(t *testing.T) (backupengine.StreamingRepository, str
 	ctx := context.Background()
 	root := t.TempDir()
 
-	loc := backupengine.RepositoryLocation{
-		Kind:       backupengine.LocationLocal,
-		Path:       filepath.Join(root, "repo"),
-		ConfigPath: filepath.Join(root, "state", "repository.config"),
-		Passphrase: testPassphrase,
-	}
-
-	if err := os.MkdirAll(filepath.Dir(loc.ConfigPath), 0o750); err != nil {
-		t.Fatalf("creating state dir: %v", err)
-	}
+	loc := localLocation(t, root, "production")
 
 	eng := kopia.New()
 
@@ -67,10 +58,13 @@ func newStreamingRepository(t *testing.T) (backupengine.StreamingRepository, str
 		t.Fatalf("CreateRepository: %v", err)
 	}
 
-	// Content caching is left switched off (an empty CachePath, which is
-	// how "no cache" is spelled here). That is not tuning: a local cache is
-	// a second place the source's bytes could land, and the claim these
-	// tests make is that there is no such place.
+	// The repository's local state -- its connection config and its
+	// content cache -- lives outside this root (localLocation puts it in
+	// its own temp directory), so the walk below is over repository
+	// storage and nothing else. That is not tidiness: the claim these
+	// tests make is that the source's bytes never land in a local file,
+	// and a cache directory inside the walked tree would make the walk
+	// answer a different question.
 	rep, err := eng.OpenRepository(ctx, loc)
 	if err != nil {
 		t.Fatalf("OpenRepository: %v", err)
@@ -88,6 +82,20 @@ func newStreamingRepository(t *testing.T) (backupengine.StreamingRepository, str
 	}
 
 	return streaming, root
+}
+
+// streamRepoDir is where a streaming test's repository blobs live under
+// its backup root: the reserved namespace, resolved through the product's
+// own function rather than composed here a second time.
+func streamRepoDir(t *testing.T, root string) string {
+	t.Helper()
+
+	dir, err := backupengine.ReservedLocalDir(root, testDomain(t, "production"))
+	if err != nil {
+		t.Fatalf("ReservedLocalDir: %v", err)
+	}
+
+	return dir
 }
 
 // streamRequest is the request under test: one object path, one stream.
@@ -398,7 +406,7 @@ func TestSnapshotAndRestoreSmallStream(t *testing.T) {
 		t.Fatalf("restored %d bytes sha256=%s; want %d bytes sha256=%s", n, got, len(want), sha256Hex(want))
 	}
 
-	assertNothingStaged(t, root, filepath.Join(root, "repo"))
+	assertNothingStaged(t, root, streamRepoDir(t, root))
 }
 
 // TestNestedObjectNameRoundTrips is the regression for an object stored under
@@ -665,7 +673,7 @@ func TestLargeStreamIsBoundedInMemory(t *testing.T) {
 			peak, streamBytes)
 	}
 
-	assertNothingStaged(t, root, filepath.Join(root, "repo"))
+	assertNothingStaged(t, root, streamRepoDir(t, root))
 
 	// Not even the repository holds the file as a file: a pack blob is
 	// capped well below this, so a chunked stream stays under it and a
@@ -677,10 +685,10 @@ func TestLargeStreamIsBoundedInMemory(t *testing.T) {
 			biggest, where, streamBytes)
 	}
 
-	biggest, _ := largestFile(t, filepath.Join(root, "repo"))
+	biggest, _ := largestFile(t, streamRepoDir(t, root))
 	t.Logf("streamed %d bytes; peak heap %d bytes (%.1f MiB, %.2f%% of stream); repository %d bytes; largest blob %d bytes",
 		streamBytes, peak, float64(peak)/(1<<20), 100*float64(peak)/float64(streamBytes),
-		dirBytes(t, filepath.Join(root, "repo")), biggest)
+		dirBytes(t, streamRepoDir(t, root)), biggest)
 }
 
 // TestCancellationClosesTheRemoteReader is the leak criterion. Cancelling
@@ -896,7 +904,7 @@ func TestSecondUnchangedSnapshotReusesContent(t *testing.T) {
 	rep, root := newStreamingRepository(t)
 	ctx := context.Background()
 
-	repoDir := filepath.Join(root, "repo")
+	repoDir := streamRepoDir(t, root)
 	payload := patternBytes(64<<20, 0x1234567)
 
 	newSrc := func() *countingSource {

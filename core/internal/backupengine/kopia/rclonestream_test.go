@@ -75,5 +75,5 @@ func TestRcloneObjectStreamsStraightIntoTheRepository(t *testing.T) {
 	// Nothing staged the object: the only place its bytes exist locally
 	// besides the remote itself is inside the repository, in pack blobs
 	// written as they streamed past.
-	assertNothingStaged(t, root, filepath.Join(root, "repo"))
+	assertNothingStaged(t, root, streamRepoDir(t, root))
 }
