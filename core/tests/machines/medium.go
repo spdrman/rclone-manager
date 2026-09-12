@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -256,6 +257,62 @@ func (f *Medium) HasBucket(t *testing.T, bucket string) bool {
 	t.Helper()
 	_, _, err := dockerRun(dockerExecTimeout, "exec", f.containerID, "test", "-d", "/data/"+bucket)
 	return err == nil
+}
+
+// LargestObjectBytes is the size of the biggest file this medium's drive
+// holds for one bucket.
+//
+// It exists so a test can check a precondition it otherwise has to assert
+// by arithmetic: whether any object in the bucket is big enough that the
+// S3 client uploaded it in parts rather than in one PUT. A test that
+// merely writes a lot of data and says "this must have been multipart" is
+// making a claim about a client's internal threshold with nothing
+// watching it.
+//
+// Answered from the drive rather than through the S3 client, for
+// HasBucket's reason: the fixture must not depend on the client the tests
+// exist to exercise. MinIO in single-drive mode stores an object's data
+// whole, so the biggest file under the bucket's directory IS the biggest
+// object -- plus its small metadata sidecars, which cannot be the maximum.
+//
+// `ls -lR` rather than du(1) or find(1): du reports a directory's
+// CUMULATIVE size, so its maximum is always the bucket total and never an
+// object, and the MinIO image has no find, no awk and no xargs to filter
+// with. So the whole recursive listing comes back, the regular-file lines
+// are picked out here, and the maximum is taken in Go.
+func (f *Medium) LargestObjectBytes(t *testing.T, bucket string) int64 {
+	t.Helper()
+
+	stdout, errOut, err := dockerRun(dockerExecTimeout, "exec", f.containerID, "ls", "-lR", "/data/"+bucket)
+	if err != nil {
+		t.Fatalf("machines: measuring objects in %q: %v\n%s", bucket, err, errOut)
+	}
+
+	var largest int64
+
+	for _, line := range strings.Split(stdout, "\n") {
+		// A regular file's long-listing line begins with "-"; a
+		// directory's begins with "d" and its "total" line with a digit.
+		if !strings.HasPrefix(line, "-") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+
+		n, err := strconv.ParseInt(fields[4], 10, 64)
+		if err != nil {
+			continue
+		}
+
+		if n > largest {
+			largest = n
+		}
+	}
+
+	return largest
 }
 
 // ContainerID is the exact id this fixture created, for a test that needs

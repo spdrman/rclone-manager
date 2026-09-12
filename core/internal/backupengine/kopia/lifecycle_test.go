@@ -30,6 +30,7 @@ import (
 
 	"github.com/backupdproject/backupd/core/internal/backupengine"
 	"github.com/backupdproject/backupd/core/internal/backupengine/kopia"
+	"github.com/backupdproject/backupd/core/internal/secretref"
 )
 
 // bigFileSize is large enough that copying it twice is unmistakable in the
@@ -46,19 +47,13 @@ func TestInProcessLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	root := t.TempDir()
-	repoDir := filepath.Join(root, "repository")
 	srcDir := filepath.Join(root, "source")
 	restoreDir := filepath.Join(root, "restored")
 
 	writeSourceTree(t, srcDir)
 
-	loc := backupengine.RepositoryLocation{
-		Kind:       backupengine.LocationLocal,
-		Path:       repoDir,
-		ConfigPath: filepath.Join(root, "repository.config"),
-		CachePath:  filepath.Join(root, "cache"),
-		Passphrase: testPassphrase,
-	}
+	loc := localLocation(t, root, "production")
+	blobDir := repoDir(t, loc)
 
 	eng := kopia.New()
 
@@ -77,16 +72,17 @@ func TestInProcessLifecycle(t *testing.T) {
 	// --- open repository ---------------------------------------------------
 
 	wrongPass := loc
-	wrongPass.Passphrase = "definitely-not-the-passphrase"
-	wrongPass.ConfigPath = filepath.Join(root, "wrong.config")
+	wrongPass.Passphrase = secretref.Ref{File: filepath.Join(t.TempDir(), "wrong")}
+	mustWrite(t, wrongPass.Passphrase.File, []byte("definitely-not-the-passphrase"))
+	wrongPass.StateDir = filepath.Join(t.TempDir(), "wrong-state")
 
 	if _, err := eng.OpenRepository(ctx, wrongPass); !errors.Is(err, backupengine.ErrPassphrase) {
 		t.Fatalf("OpenRepository with wrong passphrase: got %v, want ErrPassphrase", err)
 	}
 
 	missing := loc
-	missing.Path = filepath.Join(root, "no-such-repository")
-	missing.ConfigPath = filepath.Join(root, "missing.config")
+	missing.Root = filepath.Join(t.TempDir(), "no-such-backup-root")
+	missing.StateDir = filepath.Join(t.TempDir(), "missing-state")
 
 	if _, err := eng.OpenRepository(ctx, missing); !errors.Is(err, backupengine.ErrRepositoryNotFound) {
 		t.Fatalf("OpenRepository on empty location: got %v, want ErrRepositoryNotFound", err)
@@ -147,7 +143,7 @@ func TestInProcessLifecycle(t *testing.T) {
 		t.Errorf("first Snapshot ended (%v) before it started (%v)", first.End, first.Start)
 	}
 
-	firstGrowth := dirBytes(t, repoDir)
+	firstGrowth := dirBytes(t, blobDir)
 
 	if firstGrowth < bigFileSize {
 		t.Fatalf("repository grew only %d bytes storing a %d byte incompressible file; "+
@@ -194,7 +190,7 @@ func TestInProcessLifecycle(t *testing.T) {
 
 	// And the same claim from the filesystem, which cannot be talked into
 	// agreeing: a second physical copy of the 8MiB file would show up here.
-	secondGrowth := dirBytes(t, repoDir) - firstGrowth
+	secondGrowth := dirBytes(t, blobDir) - firstGrowth
 
 	if secondGrowth >= firstGrowth/4 {
 		t.Errorf("repository grew %d bytes for the second snapshot after growing %d for the first; "+

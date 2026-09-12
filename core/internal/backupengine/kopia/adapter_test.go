@@ -85,7 +85,7 @@ func TestVerifyReportsDamageAsBothErrorAndFindings(t *testing.T) {
 		t.Fatalf("closing before damage: %v", err)
 	}
 
-	removeLargestBlob(t, loc.Path)
+	removeLargestBlob(t, repoDir(t, loc))
 
 	damaged, err := kopia.New().OpenRepository(ctx, loc)
 	if err != nil {
@@ -125,31 +125,35 @@ func TestVerifyReportsDamageAsBothErrorAndFindings(t *testing.T) {
 // repository B gets a handle on repository A, and the failure is silent in
 // the worst direction: the snapshot succeeds, it is just in the repository
 // nobody asked about, and B stays empty while looking configured.
+//
+// The way to reach that state now that the config path is derived from the
+// repository's id is the case an operator actually produces: the backup
+// root moved -- a new mount, a migrated NAS, a restored volume -- and the
+// repository domain id, which is what names the config file, did not.
+// Both locations then resolve to one config file, and the first one's
+// contents are sitting there when the second one is opened.
 func TestOpenRepositoryConnectsTheRequestedStorage(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
 	root := t.TempDir()
 
-	// One config path, deliberately shared by both locations: this is the
-	// state that used to be trusted instead of checked.
-	configPath := filepath.Join(root, "repository.config")
+	// One state directory, deliberately shared, which is what production
+	// looks like: /var/lib/backupd holds the connection config for every
+	// repository this manager knows about, keyed by domain id.
+	stateDir := filepath.Join(t.TempDir(), "state")
 
-	first := backupengine.RepositoryLocation{
-		Kind:       backupengine.LocationLocal,
-		Path:       filepath.Join(root, "repository-a"),
-		ConfigPath: configPath,
-		Passphrase: testPassphrase,
-	}
+	first := localLocation(t, filepath.Join(root, "old-backup-root"), "production")
+	first.StateDir = stateDir
 
 	second := first
-	second.Path = filepath.Join(root, "repository-b")
+	second.Root = filepath.Join(root, "new-backup-root")
 
 	eng := kopia.New()
 
 	for _, loc := range []backupengine.RepositoryLocation{first, second} {
 		if err := eng.CreateRepository(ctx, loc); err != nil {
-			t.Fatalf("CreateRepository at %s: %v", loc.Path, err)
+			t.Fatalf("CreateRepository under %s: %v", loc.Root, err)
 		}
 	}
 
@@ -176,7 +180,7 @@ func TestOpenRepositoryConnectsTheRequestedStorage(t *testing.T) {
 		t.Fatalf("closing A: %v", err)
 	}
 
-	sizeA := dirBytes(t, first.Path)
+	sizeA := dirBytes(t, repoDir(t, first))
 
 	// Now ask for B with A's config file still sitting there.
 	repB, err := eng.OpenRepository(ctx, second)
@@ -199,7 +203,7 @@ func TestOpenRepositoryConnectsTheRequestedStorage(t *testing.T) {
 		t.Fatalf("Snapshot into B: %v", err)
 	}
 
-	if after := dirBytes(t, first.Path); after != sizeA {
+	if after := dirBytes(t, repoDir(t, first)); after != sizeA {
 		t.Errorf("repository A grew from %d to %d bytes while the caller was writing to B", sizeA, after)
 	}
 
@@ -238,12 +242,7 @@ func singleSnapshotRepository(
 
 	mustWrite(t, filepath.Join(srcDir, "payload.bin"), payload)
 
-	loc := backupengine.RepositoryLocation{
-		Kind:       backupengine.LocationLocal,
-		Path:       filepath.Join(root, "repository"),
-		ConfigPath: filepath.Join(root, "repository.config"),
-		Passphrase: testPassphrase,
-	}
+	loc := localLocation(t, root, "production")
 
 	eng := kopia.New()
 
