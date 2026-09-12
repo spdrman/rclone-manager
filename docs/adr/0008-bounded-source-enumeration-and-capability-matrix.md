@@ -347,6 +347,20 @@ future per-path probe is the right way to resolve exactly that key.
   describes the BACKEND; the truncation is ours, it predates this issue,
   and it is written down here rather than papered over in the matrix —
   #793's metadata-trust classification is where it becomes a decision.
+  It has one concrete consequence for Phase 1, from #793's reading of the
+  pinned Kopia v0.23.1 (`metadataEquals`/`findCachedEntry`,
+  `snapshot/upload/upload.go:694-754`): Kopia decides a file's content can
+  be reused from name, mode, owner, size and mtime compared at FULL
+  NANOSECOND resolution. So an adapter that fed Kopia from
+  `RemoteArtifact.ModTime` would hand it a second-resolution timestamp and
+  widen that reuse window from nanoseconds to a second, silently, for
+  every file. `LocalEnumerator` reads `fs.FileInfo.ModTime()` and has the
+  full-resolution value in hand at `toLocalArtifact`; it truncates only
+  because the field it fills is unix seconds. Widening the field is a
+  change to a type the catalog persists and is deliberately not in this
+  diff — but a Phase 1 feed must either widen it or take its mtime from
+  the filesystem directly, and must not read the truncated one as though
+  it were what the disk said.
 - **The matrix is not served on `/api/v1/backends`.** `core/service`'s
   `projectManifest` is a longhand copy and does not carry it, so there is
   no contract change and no generated-binding churn in this diff. When a
