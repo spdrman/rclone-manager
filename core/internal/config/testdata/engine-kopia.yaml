@@ -1,0 +1,75 @@
+# A deployment that runs both engines: the artifact set it has always had,
+# and one incremental set beside it.
+#
+# It is the fixture for the schema EPIC K adds, and the reason it carries
+# BOTH kinds of set is that the interesting property is the coexistence: the
+# artifact set below says nothing about an engine, exactly as every existing
+# configuration does, and must go on meaning the artifact engine while the
+# set under it snapshots into a repository domain.
+
+poll_interval: 15m
+
+state:
+  database: /var/lib/backupd/state.db
+
+# The security boundaries, declared where an operator can see them. Every
+# domain states its isolation: co-tenancy is never inferred.
+repository_domains:
+  - id: production
+    description: Production snapshots for this deployment
+    isolation: shared
+  - id: customer-a
+    description: One customer's data, deliberately not deduplicated against anybody else's
+    isolation: isolated
+
+sources:
+  - id: production
+    backup_sets:
+      # The set that was already here. No engine key, no repository domain:
+      # an artifact set, unchanged.
+      - id: postgres-primary
+        remote:
+          type: sftp
+          host: production.example.internal
+          user: backup
+          key_file: /run/secrets/backup_ssh_key
+          known_hosts: /etc/backupd/known_hosts
+        remote_path: /backups/postgres
+        local_path: /backups/production/postgres
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h
+
+      # The incremental set. It names the engine, the domain whose
+      # boundaries it shares, what the operator arranged around the source
+      # while it is read, and how far its restore points are verified.
+      - id: uploads-tree
+        engine: kopia
+        uuid: 6f1d2b7a-1c4e-4f8b-9a2d-3e5c7b9d1f00
+        repository_domain: production
+        source_consistency: external_snapshot
+        verification_level: content_sample
+        remote:
+          type: sftp
+          host: production.example.internal
+          user: backup
+          key_file: /run/secrets/backup_ssh_key
+          known_hosts: /etc/backupd/known_hosts
+        remote_path: /snapshots/nightly/srv/uploads
+        # How this deployment reaches the source, which is not part of what
+        # the source IS: the snapshot is mounted somewhere different on
+        # every run, and the lineage must not fork when it moves.
+        source_mount_prefix: /snapshots/nightly
+        local_path: /backups/production/uploads
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h
+
+retention:
+  timezone: America/Vancouver
+  week_starts_on: monday
+  daily_days: 7
+  weekly_months: 3
+  monthly_months: 12
