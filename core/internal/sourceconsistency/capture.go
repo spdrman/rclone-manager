@@ -457,7 +457,7 @@ func (r Reader) attempt(ctx context.Context, path string, buf *[]byte) attemptRe
 		return attemptResult{outcome: attemptFailed, err: err}
 	}
 
-	if moved := describeMovement(before, after); moved != "" {
+	if moved := DescribeMovement(before, after); moved != "" {
 		return attemptResult{outcome: attemptMoved, movement: moved}
 	}
 
@@ -473,7 +473,7 @@ func (r Reader) attempt(ctx context.Context, path string, buf *[]byte) attemptRe
 		return attemptResult{outcome: attemptFailed, err: err}
 	}
 
-	if moved := describeMovement(after, current); moved != "" {
+	if moved := DescribeMovement(after, current); moved != "" {
 		return attemptResult{outcome: attemptMoved, movement: moved}
 	}
 

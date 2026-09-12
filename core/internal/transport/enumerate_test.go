@@ -715,6 +715,75 @@ func TestEnumeratingARealDirectoryTree(t *testing.T) {
 	}
 }
 
+// ReportNonRegular is what a caller with a symlink policy and a
+// special-file policy needs: the entries it has to make a decision about,
+// each SAYING what it is.
+//
+// Two claims, and both of them matter to the caller that asked for this.
+// The entries arrive, with a Kind that is not a guess - a fifo is
+// "other", a symlink is "symlink", and neither is "regular". And nothing
+// here opens or follows either one: the sizes come from the lstat the
+// directory read already performed, so the symlink's size is the length
+// of its target and not the size of the file it points at.
+func TestReportNonRegularNamesWhatItYieldsAndFollowsNothing(t *testing.T) {
+	root := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(root, "regular.dump"), make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("regular.dump", filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(root, "pipe"), 0o600); err != nil {
+		t.Skipf("mkfifo is unavailable here: %v", err)
+	}
+
+	collect := func(report bool) map[string]transport.EntryKind {
+		t.Helper()
+
+		got := map[string]transport.EntryKind{}
+		err := transport.LocalEnumerator{}.Enumerate(context.Background(),
+			transport.Source{Type: "local", Root: root},
+			transport.EnumerateOptions{ReportNonRegular: report},
+			func(a transport.RemoteArtifact) error {
+				got[a.Path] = a.Kind
+				if a.Path == "link" && a.Size == 4096 {
+					t.Error("the symlink was described with its target's size, which means something followed it")
+				}
+				return nil
+			})
+		if err != nil {
+			t.Fatalf("enumerate: %v", err)
+		}
+
+		return got
+	}
+
+	// The default is unchanged: a socket is not an artifact this
+	// product copies, and every caller predating this option expects
+	// not to hear about one.
+	if got := collect(false); len(got) != 1 || got["regular.dump"] != transport.EntryKindRegular {
+		t.Fatalf("without ReportNonRegular the walk yielded %v, want only the regular file", got)
+	}
+
+	want := map[string]transport.EntryKind{
+		"regular.dump": transport.EntryKindRegular,
+		"link":         transport.EntryKindSymlink,
+		"pipe":         transport.EntryKindOther,
+	}
+
+	got := collect(true)
+	if len(got) != len(want) {
+		t.Fatalf("the walk yielded %v, want %v", got, want)
+	}
+
+	for path, kind := range want {
+		if got[path] != kind {
+			t.Errorf("%s is reported as %q, want %q", path, got[path], kind)
+		}
+	}
+}
+
 // TestEnumeratingAMissingRootIsAClassifiedRefusal keeps the boundary's own
 // promise: a failure out of this enumerator is a transport.Error with a
 // category, the same as every other failure lifecycle code switches on

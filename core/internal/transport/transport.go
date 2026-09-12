@@ -153,6 +153,20 @@ type RemoteArtifact struct {
 	Hash    string
 	HashAlg HashAlgorithm
 	ID      string // backend-specific stable identifier, empty when unavailable
+
+	// Kind is what the source said is at this path, for the callers that
+	// may not guess: a backup source adapter has to decide whether to
+	// open a thing before it opens it, and opening a FIFO because it was
+	// assumed to be a file is a read that never returns.
+	//
+	// EntryKindUnknown is the zero value and is what every path into this
+	// type that does not answer the question produces, including
+	// transport/rclone's own listing: rclone's fs.Object is an object,
+	// and the local backend it wraps skips everything that is not one.
+	// Unknown is therefore an honest "nobody said", never "regular", and
+	// a consumer that needs the answer refuses rather than assuming it.
+	// LocalEnumerator answers it for every entry it yields.
+	Kind EntryKind
 }
 
 // TransferResult reports what a copy actually did.

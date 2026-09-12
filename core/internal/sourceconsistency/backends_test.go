@@ -17,9 +17,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/backupdproject/backupd/core/internal/backend"
 	"github.com/backupdproject/backupd/core/internal/model"
 )
 
@@ -74,7 +76,7 @@ func bundledBackendIDs(t *testing.T) []string {
 func TestEveryBundledBackendHasSourceSignals(t *testing.T) {
 	for _, id := range bundledBackendIDs(t) {
 		if _, ok := SourceSignalsFor(id); !ok {
-			t.Errorf("backend %q ships with no source signals; add a row to BundledSourceSignals with the resolution, size stability and hash availability its protocol actually gives", id)
+			t.Errorf("backend %q ships with no source signals; declare its capability matrix so the projection has something to read", id)
 		}
 	}
 }
@@ -109,7 +111,13 @@ func TestBundledBackendTrustClasses(t *testing.T) {
 // when the object is overwritten. A row that reached strong any other way
 // would be a trusted metadata assumption with nothing behind it.
 func TestNoBackendReachesStrongTrustWithoutContentEvidence(t *testing.T) {
-	for id, sig := range BundledSourceSignals {
+	for _, id := range bundledBackendIDs(t) {
+		sig, ok := SourceSignalsFor(id)
+		if !ok {
+			t.Errorf("no signals for %q", id)
+			continue
+		}
+
 		class := model.ClassifyMetadataTrust(sig).Class
 		if class != model.TrustStrong {
 			continue
@@ -186,42 +194,132 @@ func TestLocalVolumeRecordsTheResolutionThisEngineKeepsNotTheOneTheDiskHas(t *te
 	}
 }
 
-// The one row whose resolution comes back finer than a second, kept in the
-// vocabulary the capability matrix uses so a value can travel from a
-// manifest to here without translation. It is recorded as declared and it
-// decides nothing: s3 is strong on its generation identifier, which settles
-// every comparison before a timestamp is consulted.
-func TestS3DeclaresTheMatrixResolutionAndDoesNotRestOnIt(t *testing.T) {
-	sig, ok := SourceSignalsFor("s3")
+// The narrowing applied to EVERY backend, stated as the property rather
+// than one row at a time: nothing may claim a modification time finer than
+// transport.RemoteArtifact.ModTime can carry, which is unix seconds. s3's
+// matrix says 1ms and its projection says 1s, and that costs the
+// classification nothing, which is the second half of this test: s3 is
+// strong on its generation identifier, which settles every comparison
+// before a timestamp is consulted.
+func TestNoBackendClaimsAResolutionFinerThanTheTransportCarries(t *testing.T) {
+	floor, ok := transportMTimeFloor.Resolution()
+	if !ok {
+		t.Fatalf("the floor itself is unreadable: %q", transportMTimeFloor)
+	}
+
+	for _, id := range bundledBackendIDs(t) {
+		sig, ok := SourceSignalsFor(id)
+		if !ok {
+			t.Errorf("no signals for %q", id)
+			continue
+		}
+
+		res, ok := sig.MTimePrecision.Resolution()
+		if !ok {
+			// "unknown" is a legitimate value and classifies as
+			// unknown trust. An unparseable string is a typo that
+			// would silently do the same thing for the wrong reason,
+			// so the projection maps it to the honest admission and
+			// this asserts nothing further about it.
+			if sig.MTimePrecision != model.MTimePrecisionUnknown {
+				t.Errorf("%s projects mtime precision %q, which this package cannot read", id, sig.MTimePrecision)
+			}
+			continue
+		}
+		if res < floor {
+			t.Errorf("%s projects %q, finer than the %q this engine keeps", id, sig.MTimePrecision, transportMTimeFloor)
+		}
+	}
+
+	s3, ok := SourceSignalsFor("s3")
 	if !ok {
 		t.Fatal("no signals for s3")
 	}
-
-	if sig.MTimePrecision != model.MTimeMillisecond {
-		t.Errorf("s3 declares %q, want %q from the capability matrix", sig.MTimePrecision, model.MTimeMillisecond)
-	}
-
 	// Strip the timestamp entirely and the class must not budge, which is
 	// what "does not rest on it" means as a property rather than a comment.
-	withoutTime := sig
+	withoutTime := s3
 	withoutTime.MTimePrecision = model.MTimePrecisionUnknown
 	if got := model.ClassifyMetadataTrust(withoutTime).Class; got != model.TrustStrong {
 		t.Errorf("without its timestamp s3 classifies %q; the generation identifier was supposed to be doing this work", got)
 	}
 }
 
-// Every row states a resolution this package understands. "unknown" is a
-// legitimate value and classifies as unknown trust; an unparseable string
-// is a typo that would silently do the same thing for the wrong reason, and
-// would then be indistinguishable from an honest admission.
-func TestEverySignalRowStatesAResolutionThisPackageUnderstands(t *testing.T) {
-	for id, sig := range BundledSourceSignals {
-		if sig.MTimePrecision == model.MTimePrecisionUnknown {
+// The projection is a projection: what SourceSignalsFor reports for a
+// shipped backend is what SignalsFromCapabilities produces from that
+// backend's declared matrix, with nothing added on the way. This is the
+// test that would have caught the drift the hand-written table had, and it
+// is the reason the table is gone.
+func TestSignalsAreProjectedFromTheDeclaredMatrix(t *testing.T) {
+	reg, err := backend.Bundled()
+	if err != nil {
+		t.Fatalf("backend.Bundled: %v", err)
+	}
+
+	for _, id := range bundledBackendIDs(t) {
+		m, err := reg.Backend(id)
+		if err != nil {
+			t.Fatalf("registry has no %q: %v", id, err)
+		}
+		caps, declared := m.DeclaredCapabilities()
+		if !declared {
+			t.Errorf("%s declares no capability matrix", id)
 			continue
 		}
-		if _, ok := sig.MTimePrecision.Resolution(); !ok {
-			t.Errorf("%s declares mtime precision %q, which this package cannot read", id, sig.MTimePrecision)
+
+		got, ok := SourceSignalsFor(id)
+		if !ok {
+			t.Errorf("no signals for %q", id)
+			continue
 		}
+
+		want := SignalsFromCapabilities(id, caps)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s signals %+v; the projection of its declared matrix is %+v", id, got, want)
+		}
+
+		// The four keys that come straight off the matrix, checked
+		// against the matrix itself rather than against the projection,
+		// so a projection that dropped one is not compared with itself.
+		if got.StableSize != caps.StableSize {
+			t.Errorf("%s projects stable_size %v from a matrix that says %v", id, got.StableSize, caps.StableSize)
+		}
+		if wantGen := caps.GenerationIdentity == backend.GenerationVersioned; got.ObjectGeneration != wantGen {
+			t.Errorf("%s projects an object generation of %v from generation_identity %q", id, got.ObjectGeneration, caps.GenerationIdentity)
+		}
+		if string(got.MetadataSupport) != string(caps.MetadataSupport) {
+			t.Errorf("%s projects metadata support %q from a matrix that says %q", id, got.MetadataSupport, caps.MetadataSupport)
+		}
+	}
+}
+
+// hash_support is the one key that does NOT project, and this is the test
+// that keeps somebody from "fixing" that. Both local_volume and sftp
+// declare hashes in the matrix (or, for sftp, declare none for a reason of
+// its own), and neither may reach RemoteSignals as a free hash, because the
+// matrix key answers "could a hash be obtained at all" - including by
+// reading every byte - and the signal answers "does one arrive without
+// reading".
+func TestHashSupportIsNotProjectedBecauseItAnswersADifferentQuestion(t *testing.T) {
+	reg, err := backend.Bundled()
+	if err != nil {
+		t.Fatalf("backend.Bundled: %v", err)
+	}
+
+	local, err := reg.Backend("local_volume")
+	if err != nil {
+		t.Fatalf("registry has no local_volume: %v", err)
+	}
+	caps, declared := local.DeclaredCapabilities()
+	if !declared {
+		t.Fatal("local_volume declares no capability matrix")
+	}
+	if len(caps.HashSupport) == 0 {
+		t.Fatal("local_volume's matrix declares no hashes, so this test proves nothing; it exists because it declares several that all cost a full read")
+	}
+
+	sig := SignalsFromCapabilities("local_volume", caps)
+	if len(sig.RemoteHashAlgorithms) != 0 {
+		t.Errorf("local_volume projects free hashes %v out of a matrix whose hashes are computed by reading the whole file", sig.RemoteHashAlgorithms)
 	}
 }
 

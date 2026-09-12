@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/backupdproject/backupd/core/internal/backupengine"
+	src "github.com/backupdproject/backupd/core/internal/backupengine/source"
 	"github.com/backupdproject/backupd/core/internal/transport"
 	"github.com/backupdproject/backupd/core/internal/transport/rclone"
 )
@@ -43,9 +43,9 @@ func TestRcloneObjectStreamsStraightIntoTheRepository(t *testing.T) {
 	}
 
 	adapter := rclone.New()
-	source := transport.Source{ID: "spike-local", Type: "local", Root: remoteDir}
+	transportSource := transport.Source{ID: "spike-local", Type: "local", Root: remoteDir}
 
-	art, err := adapter.Stat(ctx, source, remoteName)
+	art, err := adapter.StatSource(ctx, transportSource, remoteName)
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
@@ -56,7 +56,15 @@ func TestRcloneObjectStreamsStraightIntoTheRepository(t *testing.T) {
 
 	rep, root := newStreamingRepository(t)
 
-	req := streamRequest("/"+remoteName, backupengine.NewRcloneSource(adapter, source, remoteName, art))
+	// The production source adapter's stream, not a spike's glue: the
+	// modification time is the one the backend's capability matrix
+	// entitles it to claim, which is what Profile.ModTime answers.
+	profile, err := src.ProfileFor(transportSource.Type)
+	if err != nil {
+		t.Fatalf("ProfileFor: %v", err)
+	}
+
+	req := streamRequest("/"+remoteName, src.NewObjectStream(adapter, transportSource, remoteName, profile.ModTime(art.ModTime)))
 
 	snap, err := rep.SnapshotStream(ctx, req)
 	if err != nil {

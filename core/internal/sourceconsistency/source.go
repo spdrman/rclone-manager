@@ -259,14 +259,22 @@ func kindOfMode(mode fs.FileMode) Kind {
 	}
 }
 
-// describeMovement reports, in one operator-readable sentence, what moved
+// DescribeMovement reports, in one operator-readable sentence, what moved
 // between two stats of the same file, and the empty string when nothing did.
 //
 // Identity is checked first and is decisive, because a different object at
 // the same path makes the size and timestamp comparison meaningless: two
 // different files can easily be the same length, and a careful writer's
 // rename-into-place produces exactly that.
-func describeMovement(before, after Stat) string {
+//
+// It is exported for the streaming source adapter, which cannot use this
+// package's Reader at all - a remote object read straight into the backup
+// engine's chunker is read ONCE, by definition, so there is no second pass
+// to compare digests across - and which still has to answer the same
+// question about the same two stats and say so in the same words. An
+// operator reading a run report should not be able to tell which code path
+// noticed that their file moved.
+func DescribeMovement(before, after Stat) string {
 	if before.Identity != "" && after.Identity != "" && before.Identity != after.Identity {
 		return fmt.Sprintf("the path stopped naming the object that was read (%s became %s), which is what a rename into place looks like", before.Identity, after.Identity)
 	}

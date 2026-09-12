@@ -15,7 +15,7 @@ import (
 //
 // A stat that does not carry a unix Stat_t (a synthetic os.FileInfo from a
 // test double or an in-memory filesystem) yields the empty string, which
-// describeMovement reads as "no opinion".
+// DescribeMovement reads as "no opinion".
 func fileIdentity(fi os.FileInfo) string {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {

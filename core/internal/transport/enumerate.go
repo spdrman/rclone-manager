@@ -103,6 +103,40 @@ type Enumerator interface {
 	Enumerate(ctx context.Context, src Source, opts EnumerateOptions, yield func(RemoteArtifact) error) error
 }
 
+// EntryKind is what a directory entry IS, for the one consumer that may
+// not find out by opening it.
+//
+// The set is small on purpose. A backup source adapter needs three
+// answers - read it, do not read it and it is a link, do not read it and
+// it is something else - and every finer distinction (block against
+// character device, socket against fifo) is a distinction nothing in
+// this repository branches on, so naming them here would be vocabulary
+// with no consumer. What matters is that "something else" is SAID rather
+// than inferred from the absence of a regular file: a source adapter
+// that opened a fifo because it assumed the entry was a file would block
+// in Read until the backup window ended.
+type EntryKind string
+
+const (
+	// EntryKindUnknown is the zero value: nobody answered. It is not
+	// "regular", and a consumer that needs to know refuses instead of
+	// reading it as the optimistic answer.
+	EntryKindUnknown EntryKind = ""
+
+	// EntryKindRegular is a file with content.
+	EntryKindRegular EntryKind = "regular"
+
+	// EntryKindSymlink is a symbolic link, reported as itself. Nothing in
+	// this package follows one.
+	EntryKindSymlink EntryKind = "symlink"
+
+	// EntryKindOther is a socket, a fifo, a device node, or anything else
+	// a filesystem can name that is not one of the above. Grouped because
+	// the answer for all of them is the same: there is no content here
+	// this product copies.
+	EntryKindOther EntryKind = "other"
+)
+
 // EnumerateOptions is what bounds one enumeration.
 type EnumerateOptions struct {
 	// ChunkEntries is how many entries are read, converted and delivered
@@ -118,6 +152,23 @@ type EnumerateOptions struct {
 	// Those backends are now refused by the capability matrix instead,
 	// before anything is opened (backend.Manifest.PlanEnumeration).
 	ChunkEntries int
+
+	// ReportNonRegular asks for symlinks, sockets, fifos and device nodes
+	// to be yielded with their Kind set, instead of being passed over.
+	//
+	// It defaults to false because the callers that predate it are
+	// copying artifacts and a socket is not one. It exists because the
+	// caller that does not copy - the backup source adapter, which has a
+	// symlink policy and a special-file policy to apply and a run report
+	// to fill in - cannot apply a policy to entries it is never told
+	// about. Silently dropping them makes "this backup contains your
+	// source" true only for the parts of it that happened to be regular
+	// files, and says so nowhere.
+	//
+	// A yielded non-regular entry carries the lstat's size and
+	// modification time and nothing else. Nothing here opens one, and
+	// nothing here resolves a link.
+	ReportNonRegular bool
 }
 
 func (o EnumerateOptions) chunk() int {
@@ -270,7 +321,13 @@ func (e LocalEnumerator) Enumerate(ctx context.Context, src Source, opts Enumera
 				return err
 			}
 			stack = append(stack, frame)
-		case entry.Type().IsRegular():
+		case entry.Type().IsRegular(), opts.ReportNonRegular:
+			// Everything that is not a directory reaches this arm when
+			// the caller asked for it, and only regular files otherwise.
+			// A non-regular entry is yielded with its Kind and never
+			// opened: entry.Info() is the lstat the directory read
+			// already performed, so a symlink is described as the link
+			// and not as whatever it points at.
 			artifact, ok, err := toLocalArtifact(top.rel, entry)
 			if err != nil {
 				return classifyEnumerate(err)
@@ -282,9 +339,10 @@ func (e LocalEnumerator) Enumerate(ctx context.Context, src Source, opts Enumera
 				return err
 			}
 		}
-		// Everything else - symlinks, sockets, devices - is not an
-		// artifact this product copies, and is skipped rather than
-		// reported. See above.
+		// A non-regular entry that the caller did not ask to hear about
+		// is skipped, which is what every caller predating
+		// ReportNonRegular expects: a socket is not an artifact this
+		// product copies.
 	}
 	return nil
 }
@@ -326,6 +384,7 @@ func toLocalArtifact(rel string, entry fs.DirEntry) (RemoteArtifact, bool, error
 	artifact := RemoteArtifact{
 		Path: path.Join(rel, entry.Name()),
 		Size: info.Size(),
+		Kind: entryKind(info.Mode()),
 	}
 	if t := info.ModTime(); !t.IsZero() {
 		// Unix seconds, matching what transport/rclone's toArtifact
@@ -347,6 +406,22 @@ func toLocalArtifact(rel string, entry fs.DirEntry) (RemoteArtifact, bool, error
 		artifact.ModTime = t.Unix()
 	}
 	return artifact, true, nil
+}
+
+// entryKind reads a mode as one of the three answers a source adapter
+// branches on. It is a total function over fs.FileMode on purpose: a mode
+// bit combination nobody anticipated lands in EntryKindOther, which is the
+// answer that costs a skipped entry, rather than in EntryKindRegular,
+// which is the answer that costs an open.
+func entryKind(mode fs.FileMode) EntryKind {
+	switch {
+	case mode.IsRegular():
+		return EntryKindRegular
+	case mode&fs.ModeSymlink != 0:
+		return EntryKindSymlink
+	default:
+		return EntryKindOther
+	}
 }
 
 // excludedDirs turns Source.ExcludePaths into the set of directories the

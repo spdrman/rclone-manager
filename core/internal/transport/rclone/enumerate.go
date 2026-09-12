@@ -81,48 +81,19 @@ func (a *Adapter) Enumerate(ctx context.Context, src transport.Source, opts tran
 var _ transport.Enumerator = (*Adapter)(nil)
 
 // manifestForRcloneBackend finds the bundled manifest describing the
-// rclone backend a Source is dialed through, because the capability
-// matrix is declared per backend manifest and a Source names a transport
-// ("local", "sftp").
+// rclone backend a Source is dialed through.
 //
-// A transport no manifest describes is a refusal, not a default. That is
-// the same fail-closed rule the matrix itself follows: this build knows
-// what it knows, and "probably behaves like the others" is the assumption
-// this issue exists to delete.
-//
-// Two manifests naming one rclone backend is also a refusal rather than a
-// first-match. It cannot happen today (each of local, s3 and sftp is
-// named once) and the alternative would be a capability answer that
-// depended on map ordering.
+// The lookup and both of its refusals belong to the registry
+// (backend.Registry.ByRcloneBackend), because this file is not the only
+// caller that has to get from "sftp" to a capability matrix: the backup
+// source adapter asks the same question about the same three backends,
+// and two copies of a fail-closed lookup is one copy that will stop
+// failing closed.
 func manifestForRcloneBackend(name string) (backend.Manifest, error) {
 	reg, err := backend.Bundled()
 	if err != nil {
 		return backend.Manifest{}, fmt.Errorf("reading the bundled backend registry: %w", err)
 	}
-	var found []backend.Manifest
-	for _, id := range reg.IDs() {
-		m, err := reg.Backend(id)
-		if err != nil {
-			return backend.Manifest{}, err
-		}
-		if m.RcloneBackend == name {
-			found = append(found, m)
-		}
-	}
-	switch len(found) {
-	case 1:
-		return found[0], nil
-	case 0:
-		return backend.Manifest{}, fmt.Errorf(
-			"%w: no bundled backend describes the %q transport, so nothing declares whether its directories can be listed safely",
-			backend.ErrUnqualifiedBackend, name)
-	default:
-		ids := make([]string, len(found))
-		for i, m := range found {
-			ids[i] = m.ID
-		}
-		return backend.Manifest{}, fmt.Errorf(
-			"%w: %d bundled backends describe the %q transport (%v), and which one's capabilities apply is not a question this adapter may answer by picking one",
-			backend.ErrUnqualifiedBackend, len(found), name, ids)
-	}
+
+	return reg.ByRcloneBackend(name)
 }

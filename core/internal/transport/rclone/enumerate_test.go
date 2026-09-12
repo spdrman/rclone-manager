@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -290,6 +291,15 @@ func peakDuring(t *testing.T, f func()) (peakHeap uint64, peakGoroutines int) {
 	var base runtime.MemStats
 	runtime.ReadMemStats(&base)
 
+	// The sampler writes these and this function reads them, so they are
+	// atomics rather than the named returns they used to be: the plain
+	// version was a data race the sampler won often enough to be
+	// invisible without -race, and it failed the whole package under it.
+	var (
+		sampledHeap       atomic.Uint64
+		sampledGoroutines atomic.Int64
+	)
+
 	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
@@ -300,23 +310,36 @@ func peakDuring(t *testing.T, f func()) (peakHeap uint64, peakGoroutines int) {
 				return
 			case <-time.After(2 * time.Millisecond):
 				runtime.ReadMemStats(&ms)
-				if ms.HeapAlloc > peakHeap {
-					peakHeap = ms.HeapAlloc
+				for {
+					seen := sampledHeap.Load()
+					if ms.HeapAlloc <= seen || sampledHeap.CompareAndSwap(seen, ms.HeapAlloc) {
+						break
+					}
 				}
-				if n := runtime.NumGoroutine(); n > peakGoroutines {
-					peakGoroutines = n
+				for n := int64(runtime.NumGoroutine()); ; {
+					seen := sampledGoroutines.Load()
+					if n <= seen || sampledGoroutines.CompareAndSwap(seen, n) {
+						break
+					}
 				}
 			}
 		}
 	}()
 	f()
+
+	// The sampler is joined BEFORE its samples are read. Reading them
+	// while it was still running was the other half of the same race.
+	close(stop)
+	<-done
+
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
+
+	peakHeap = sampledHeap.Load()
+	peakGoroutines = int(sampledGoroutines.Load())
 	if after.HeapAlloc > peakHeap {
 		peakHeap = after.HeapAlloc
 	}
-	close(stop)
-	<-done
 	if peakHeap < base.HeapAlloc {
 		return 0, peakGoroutines
 	}

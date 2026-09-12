@@ -1,138 +1,192 @@
 package sourceconsistency
 
-import "github.com/backupdproject/backupd/core/internal/model"
+import (
+	"fmt"
 
-// BundledSourceSignals is what this build has established about each
-// backend it can read a source from, as the five facts a trust
-// classification needs.
-//
-// It is a table in Go, reviewed as a diff, for the reason
-// core/internal/backend/doc.go gives about its own registry: a capability a
-// backend is assumed to have is a claim this product makes on an operator's
-// behalf, and the place to make one is somewhere a reviewer sees it. Each
-// row below is annotated with what it rests on, because the rows an operator
-// would most like to be optimistic about are exactly the ones where
-// optimism costs a silently stale restore point.
-//
-// The values correspond key for key to the backend capability matrix's
-// mtime_precision, stable_size, hash_support and metadata_support, with one
-// deliberate narrowing: RemoteHashAlgorithms records only hashes the backend
-// returns WITHOUT this manager reading the object. See its field
-// documentation in model; the narrowing is why local_volume and sftp carry
-// no hashes here even though rclone advertises md5 and sha1 for both.
-//
-// # This table is Phase 0 only
-//
-// It is a second home for facts the backend capability matrix owns, kept
-// separate here because the matrix lands on another Phase 0 branch and a
-// gate that could not be evaluated until two spikes merged would not be a
-// gate (ADR 0009 records the cost, which has already been paid once in
-// drift). Phase 1 retires it: ObjectGeneration below is derived from the
-// capability manifest key "generation_identity" - the strong-evidence
-// authority K0.3 adds, whose vocabulary is versioned | none |
-// unknown - and the two remaining columns are derived from hash_support
-// and mtime_precision through the NAMED narrowings above rather than
-// copied. Nothing here imports backend, and nothing should until that
-// projection exists with a test per shipped backend asserting the
-// projected value rather than the declared one.
-var BundledSourceSignals = map[string]model.SourceSignals{
-	// A local filesystem: the richest metadata of the three and no content
-	// evidence at all. Sizes that mean what they say, full ownership and
-	// mode, and what it cannot do is answer "has this content changed"
-	// without being read - which is why the richest metadata in the set
-	// still classifies weak.
-	//
-	// The timestamp is recorded as one SECOND and that is not what the
-	// filesystem carries. Every filesystem this product ships on (APFS,
-	// ext4, XFS, btrfs, ZFS) keeps nanoseconds, and the backend capability
-	// matrix says 1ns because the matrix describes the BACKEND. This table
-	// describes what survives into this manager, and
-	// transport.RemoteArtifact.ModTime is unix SECONDS on every path into it
-	// (transport.go:152), so the sub-second half is truncated before any
-	// comparison here can see it. Recording 1ns would be claiming a
-	// resolution this engine discards - the precise shape of unproven
-	// metadata assumption this table exists to refuse.
-	//
-	// It does not change the class: a settable timestamp is weak evidence at
-	// any resolution. It changes how wide the blind window is, from a
-	// nanosecond to a second, which is the number a reason string quotes to
-	// an operator. A transport that carried nanoseconds would move this row,
-	// deliberately, with the test below moving too.
-	"local_volume": {
-		MTimePrecision:  model.MTimeSecond,
-		StableSize:      true,
-		MetadataSupport: model.MetadataFull,
-	},
+	"github.com/backupdproject/backupd/core/internal/backend"
+	"github.com/backupdproject/backupd/core/internal/model"
+)
 
-	// An object store. The one strong source in the set, and strong for the
-	// version identifier rather than for the timestamp.
-	//
-	// The millisecond resolution is the capability matrix's measured answer
-	// for this backend; this manager's own seconds truncation applies to it
-	// as well, and it is recorded as declared here because the class does
-	// not rest on the timestamp at all - the generation identifier settles
-	// every comparison before a timestamp is consulted.
-	//
-	// The md5 entry is the object validator the store already holds, and it
-	// is honest about a caveat rather than omitting it: an object uploaded in
-	// multiple parts has a validator that is a hash of hashes, not a content
-	// usable md5. That is a PER-OBJECT gap in a per-backend capability, and
-	// Decide is what closes it: a policy whose premise is a remote hash,
-	// applied to an object that has none, reads the object.
-	"s3": {
-		MTimePrecision:       model.MTimeMillisecond,
-		StableSize:           true,
-		RemoteHashAlgorithms: []string{"md5"},
-		ObjectGeneration:     true,
-		MetadataSupport:      model.MetadataPartial,
-	},
+// This file is the projection Phase 0 promised and Phase 1 owes: the
+// five facts a trust classification needs, DERIVED from the backend
+// capability matrix instead of restated beside it.
+//
+// What was here before was a map literal - BundledSourceSignals - holding
+// one row per bundled backend, with mtime precision, stable size and
+// metadata support copied by hand out of bundled/*.json. It was correct
+// when it was written and it was documented as Phase 0 only, because a
+// second home for a fact is a second place to change it and the drift
+// arrives silently: the matrix says 1ns, the copy says 1s, nothing
+// compares them, and a classification an operator's restore point depends
+// on is decided by whichever of the two a reader happened to open. It had
+// already drifted once (ADR 0009 records the cost).
+//
+// So four of the five are read off backend.Capabilities, and the fifth is
+// not, and that split is the whole design of this file.
+//
+// # Why four project and one cannot
+//
+// mtime_precision, stable_size, metadata_support and generation_identity
+// are matrix keys that answer exactly the question model.SourceSignals
+// asks, so they project (with one NAMED narrowing, below, for the
+// resolution this manager actually keeps).
+//
+// hash_support does not, and the matrix says so itself: its key
+// documentation states that it answers "could a hash be obtained AT ALL",
+// including by reading the whole object, while
+// model.SourceSignals.RemoteHashAlgorithms is restricted to hashes that
+// arrive WITHOUT this manager transferring the bytes. rclone advertises
+// md5 and sha1 for a local disk and for sftp and computes both by reading
+// the file, so projecting hash_support straight across would classify a
+// local disk as TrustStrong on the strength of work that has not
+// happened - the exact failure the restriction exists to prevent. The two
+// keys look alike and mean different things, which is why the residual is
+// a named table below rather than a copy, and why its default is empty.
 
-	// SFTP. Second-resolution timestamps, because the protocol's attribute
-	// structure carries mtime as a count of seconds (RFC draft-ietf-secsh-
-	// filexfer, version 3, which is what rclone's sftp backend negotiates),
-	// so there is no sub-second information to have in the first place.
-	//
-	// Metadata support is partial rather than full, matching the capability
-	// matrix: ownership and mode come back as the far host's numeric ids
-	// with no way to resolve them, and extended attributes do not come back
-	// at all.
-	//
-	// And no hash, for the reason model/identity.go already wrote down about
-	// the delete path: rclone computes an sftp remote hash by running
-	// sha1sum or md5sum over the SSH session, which requires a shell, and
-	// this project's own recommended posture is a shell-less, forced-
-	// subsystem account. The capability matrix reports the same empty list
-	// for the same reason - hash availability there is a property of
-	// somebody else's PATH - so this is one row where the narrowing and the
-	// matrix happen to agree.
-	"sftp": {
-		MTimePrecision:  model.MTimeSecond,
-		StableSize:      true,
-		MetadataSupport: model.MetadataPartial,
-	},
+// heldHashes is the one column the capability matrix does not answer:
+// which checksums a backend HOLDS, and will therefore hand back without
+// this manager reading the object's bytes.
+//
+// It is keyed by manifest id, its default is none, and none is the
+// conservative answer: a backend absent from this map classifies weaker,
+// which costs reads and never costs correctness. A row here is a claim
+// that a backend answers a hash query out of its own metadata, and it is
+// reviewed as a diff for the same reason every other capability claim in
+// this repository is.
+var heldHashes = map[string][]string{
+	// The object store's md5 is a validator it already holds, so it costs
+	// a HEAD and not a GET. The caveat is per object rather than per
+	// backend - a multipart upload's ETag is a hash of hashes and not a
+	// content md5 - and Decide is what closes it: a policy whose premise
+	// is a remote hash, applied to an object that has none, reads the
+	// object.
+	"s3": {"md5"},
+
+	// local_volume and sftp are deliberately absent. rclone can produce
+	// md5 and sha1 for both and does it by reading every byte - over the
+	// SSH session, through sha1sum, in the sftp case, which the
+	// shell-less forced-subsystem account this project recommends cannot
+	// run at all. A hash that costs a full read is not a signal that lets
+	// a read be skipped; it IS the read.
 }
 
-// SourceSignalsFor returns what has been established about a backend, and
-// false for a backend nothing has been established about.
+// transportMTimeFloor is the finest modification time that survives into
+// this manager, whatever the backend keeps.
+//
+// transport.RemoteArtifact.ModTime is unix SECONDS on every path into it,
+// so a backend declaring 1ns or 1ms has its sub-second half truncated
+// before any comparison in this package can see it. Recording the
+// declared precision here would be claiming a resolution this engine
+// discards, which is the precise shape of unproven metadata assumption
+// this package exists to refuse.
+//
+// It does not change any class - a settable timestamp is weak evidence at
+// any resolution - it changes how wide the blind window is, from a
+// nanosecond to a second, which is the number a reason string quotes to
+// an operator. A transport that carried nanoseconds would move this
+// constant, deliberately, with the tests that pin it moving too.
+const transportMTimeFloor = model.MTimeSecond
+
+// SignalsFromCapabilities projects one backend's declared capability
+// matrix onto the five facts a trust classification reads.
+//
+// backendID selects the residual hash column; it is the manifest id, not
+// the rclone backend name.
+func SignalsFromCapabilities(backendID string, caps backend.Capabilities) model.SourceSignals {
+	return model.SourceSignals{
+		MTimePrecision:       projectMTimePrecision(caps.MTimePrecision),
+		StableSize:           caps.StableSize,
+		RemoteHashAlgorithms: heldHashes[backendID],
+		ObjectGeneration:     caps.GenerationIdentity == backend.GenerationVersioned,
+		MetadataSupport:      projectMetadataSupport(caps.MetadataSupport),
+	}
+}
+
+// projectMTimePrecision coarsens a declared precision to what survives the
+// transport, and passes an unmeasured one straight through as unmeasured.
+//
+// The comparison is on the DURATION rather than on the string, so a
+// precision added to the matrix later is coarsened by the same rule
+// instead of falling through a switch nobody updated. A precision this
+// build cannot read as a duration (the matrix's "unknown", or a value
+// from a newer manifest format) stays unknown, which classifies as
+// TrustUnknown: the cautious end, reached by not answering rather than by
+// guessing.
+func projectMTimePrecision(declared backend.MTimePrecision) model.MTimePrecision {
+	mapped := model.MTimePrecision(declared)
+
+	res, ok := mapped.Resolution()
+	if !ok {
+		return model.MTimePrecisionUnknown
+	}
+
+	floor, _ := transportMTimeFloor.Resolution()
+	if res < floor {
+		return transportMTimeFloor
+	}
+
+	return mapped
+}
+
+// projectMetadataSupport carries the matrix's answer across, and turns
+// anything this build does not recognise into "none".
+//
+// The two vocabularies are spelled identically ("full", "partial",
+// "none") and are still two types, because backend describes a backend
+// and model describes what a classification may assume. An unrecognised
+// value becomes MetadataNone, which reaches TrustUnknown: a manifest
+// written against a newer vocabulary must not be read as the most
+// generous member of the older one.
+func projectMetadataSupport(declared backend.MetadataSupport) model.MetadataSupport {
+	switch model.MetadataSupport(declared) {
+	case model.MetadataFull:
+		return model.MetadataFull
+	case model.MetadataPartial:
+		return model.MetadataPartial
+	default:
+		return model.MetadataNone
+	}
+}
+
+// SourceSignalsFor returns what the bundled matrix establishes about a
+// backend, and false for a backend the matrix does not describe or has
+// not qualified.
 //
 // The false is not a formality and must not be turned into a zero-value
 // default by a caller: the zero SourceSignals classifies as TrustUnknown,
-// which is the right policy for an unmeasured backend but the wrong REPORT,
-// because it would read as "we measured this and it tells us nothing"
-// instead of "nobody has filled in this row". A caller that cannot proceed
-// without signals should refuse by name, the way every other layer in this
-// codebase refuses a capability it does not have.
+// which is the right policy for an unqualified backend and the wrong
+// REPORT, because it would read as "we measured this and it tells us
+// nothing" instead of "nobody has filled in this row". A caller that
+// cannot proceed without signals should refuse by name, the way every
+// other layer in this codebase refuses a capability it does not have.
 func SourceSignalsFor(backendID string) (model.SourceSignals, bool) {
-	sig, ok := BundledSourceSignals[backendID]
+	reg, err := backend.Bundled()
+	if err != nil {
+		return model.SourceSignals{}, false
+	}
 
-	return sig, ok
+	m, err := reg.Backend(backendID)
+	if err != nil {
+		return model.SourceSignals{}, false
+	}
+
+	caps, ok := m.DeclaredCapabilities()
+	if !ok {
+		return model.SourceSignals{}, false
+	}
+
+	return SignalsFromCapabilities(backendID, caps), true
 }
 
+// ErrNoSignals is the refusal for a backend the bundled matrix does not
+// qualify, for the callers that need a sentence rather than a bool.
+var ErrNoSignals = fmt.Errorf("%w: nothing establishes what this backend's metadata can be trusted to say", backend.ErrUnqualifiedBackend)
+
 // PolicyForBackend is the whole chain in one call: a backend id and the
-// operator's preset in, the content policy a run should apply out. It exists
-// so that no call site has to know that a policy is derived from a trust
-// class which is derived from capability signals, and so that all three
-// steps move together when one of them changes.
+// operator's preset in, the content policy a run should apply out. It
+// exists so that no call site has to know that a policy is derived from a
+// trust class which is derived from capability signals, and so that all
+// three steps move together when one of them changes.
 func PolicyForBackend(backendID string, preset model.MetadataTrustPreset) (model.VerificationPolicy, bool) {
 	sig, ok := SourceSignalsFor(backendID)
 	if !ok {
@@ -142,10 +196,10 @@ func PolicyForBackend(backendID string, preset model.MetadataTrustPreset) (model
 	return model.VerificationPolicyFor(model.ClassifyMetadataTrust(sig).Class, preset), true
 }
 
-// TrustForBackend is the middle step on its own, for a surface that shows an
-// operator what this product thinks of their source and why. The reason is
-// the load-bearing half: "weak" on a panel is an accusation, and "no hash
-// arrives without reading the file" is an explanation.
+// TrustForBackend is the middle step on its own, for a surface that shows
+// an operator what this product thinks of their source and why. The
+// reason is the load-bearing half: "weak" on a panel is an accusation,
+// and "no hash arrives without reading the file" is an explanation.
 func TrustForBackend(backendID string) (model.TrustClassification, bool) {
 	sig, ok := SourceSignalsFor(backendID)
 	if !ok {

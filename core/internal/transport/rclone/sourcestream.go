@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 
+	"github.com/rclone/rclone/fs"
+
 	"github.com/backupdproject/backupd/core/internal/transport"
 )
 
@@ -50,4 +52,49 @@ func (a *Adapter) OpenSourceStream(ctx context.Context, src transport.Source, re
 	}
 
 	return &fsBoundReadCloser{ReadCloser: rc, fs: f, ctx: ctx}, nil
+}
+
+// StatSource reports what the source says about one object, reading its
+// METADATA and nothing else.
+//
+// It exists because Stat cannot be used for this, and the reason is
+// measurable rather than stylistic. Stat asks the object for a SHA-256
+// when the backend advertises one, and rclone's local backend advertises
+// one by computing it - which is a full read of the file. That is the
+// right trade for the destination side, where a stat is how a copy is
+// proven and the object was going to be read anyway. It is catastrophic
+// on the source side of a backup: the streaming adapter stats every
+// object again after reading it, to see whether it moved, so a hashing
+// stat would read every byte of a 100 GB source a second time to answer
+// a question about its size and timestamp. Doubling the I/O of a backup
+// is the anti-pattern this whole path exists to avoid, arriving through
+// the back door.
+//
+// Kind is deliberately left unset. rclone's object model has no answer:
+// Fs.NewObject returns an object for a fifo (of size zero) and follows a
+// symlink to its target, so "it resolved to an object" says nothing
+// about what is at the path. The bounded local enumerator classifies
+// what it walks, from the directory read it already performed, and that
+// is where a kind comes from; a consumer that has no kind must not
+// invent one.
+func (a *Adapter) StatSource(ctx context.Context, src transport.Source, remotePath string) (transport.RemoteArtifact, error) {
+	ctx = oneConnectionAtATime(ctx)
+
+	f, err := a.fsFor(ctx, src)
+	if err != nil {
+		return transport.RemoteArtifact{}, WrapCtx(ctx, "stat_source", err)
+	}
+	defer shutdownFs(ctx, f)
+
+	o, err := f.NewObject(ctx, remotePath)
+	if err != nil {
+		return transport.RemoteArtifact{}, WrapCtx(ctx, "stat_source", err)
+	}
+
+	art := toArtifact(o)
+	if ider, ok := o.(fs.IDer); ok {
+		art.ID = ider.ID()
+	}
+
+	return art, nil
 }

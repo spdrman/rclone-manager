@@ -149,6 +149,47 @@ func (r *Registry) IDs() []string {
 	return append([]string(nil), r.ids...)
 }
 
+// ByRcloneBackend finds the manifest describing an rclone backend by the
+// name rclone knows it under ("local", "sftp", "s3"), because the
+// capability matrix is declared per backend manifest while everything on
+// the transport side names a backend the way rclone does.
+//
+// Both refusals are deliberate and neither is a fallback.
+//
+// A name no manifest describes is ErrUnqualifiedBackend, not a zero
+// Manifest: this build knows what it knows, and "probably behaves like
+// the others" is the assumption the capability matrix exists to delete.
+//
+// Two manifests naming one rclone backend is also a refusal rather than a
+// first match. It cannot happen with the three bundled today, and the
+// alternative is a capability answer that depends on map ordering, which
+// is the worst possible way to be wrong about whether a directory can be
+// listed in bounded memory.
+func (r *Registry) ByRcloneBackend(name string) (Manifest, error) {
+	var found []Manifest
+	for _, id := range r.ids {
+		if m := r.byID[id]; m.RcloneBackend == name {
+			found = append(found, m)
+		}
+	}
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		return Manifest{}, fmt.Errorf(
+			"%w: no bundled backend describes the %q transport, so nothing declares what it can be asked to do",
+			ErrUnqualifiedBackend, name)
+	default:
+		ids := make([]string, len(found))
+		for i, m := range found {
+			ids[i] = m.ID
+		}
+		return Manifest{}, fmt.Errorf(
+			"%w: %d bundled backends describe the %q transport (%v), and which one's capabilities apply is not a question that may be answered by picking one",
+			ErrUnqualifiedBackend, len(found), name, ids)
+	}
+}
+
 // Len returns how many backends this registry declares.
 func (r *Registry) Len() int {
 	return len(r.ids)
