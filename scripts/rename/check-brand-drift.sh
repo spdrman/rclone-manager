@@ -83,20 +83,15 @@ bm_csrf
 EOF
 )"
 
-# Still on `main`, deleted (not aliased) by #794's own branches.
-#
-# RM_SIGNAL_EXIT_CHILD_MODE is test-internal: it exists so
-# core/internal/transport/rclone/signalexit_test.go can re-enter its own
-# test binary as a child process. Nothing outside that file has ever set
-# it, so it is a straight rename to BACKUPD_SIGNAL_EXIT_CHILD_MODE with no
-# alias and no deprecation window. It is here rather than in the alias list
-# above because those two states are not the same claim, and the difference
-# is load bearing: an alias is kept on purpose, this is in transit. Delete
-# this line once the env branch of #794 has merged -- the run that first
-# sees it gone will say so.
+# Identifiers still on `main` that a sibling rename is DELETING (not
+# aliasing). Empty now that #794's env slice removed
+# RM_SIGNAL_EXIT_CHILD_MODE (-> BACKUPD_SIGNAL_EXIT_CHILD_MODE, a straight
+# rename with no alias). Add a token here -- not to the alias list above,
+# because "kept on purpose" and "in transit" are different claims -- for
+# any future in-transit rename, and delete it once that rename merges; the
+# first run that sees it gone says so and still exits 0.
 pending="$(
   cat <<'EOF'
-RM_SIGNAL_EXIT_CHILD_MODE
 EOF
 )"
 
