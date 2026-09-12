@@ -313,6 +313,7 @@ func calls(call *ast.CallExpr, name string) bool {
 // never exists when the fault is first reported. What a default
 // deployment must still not pay is the extra LINE.
 func TestListActivity_ServesNoDebugRecordByDefault(t *testing.T) {
+	t.Setenv("BACKUPD_DEBUG", "")
 	t.Setenv("RM_DEBUG", "")
 	t.Setenv("LOG_LEVEL", "")
 
@@ -333,7 +334,8 @@ func TestListActivity_ServesNoDebugRecordByDefault(t *testing.T) {
 // so without one on the success path there is no way to join "the
 // browser could not read this" to "here is what was sent".
 func TestListActivity_DebugRecordsWhatWasServedUnderAQuotableId(t *testing.T) {
-	t.Setenv("RM_DEBUG", "1")
+	t.Setenv("BACKUPD_DEBUG", "1")
+	t.Setenv("RM_DEBUG", "")
 
 	rt, log := newLoggedRouter(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/activity?limit=25", nil)
@@ -390,5 +392,29 @@ func TestListActivity_DebugRecordsWhatWasServedUnderAQuotableId(t *testing.T) {
 		if entry.attrs[key] != want {
 			t.Errorf("%s = %q, want %q", key, entry.attrs[key], want)
 		}
+	}
+}
+
+// TestListActivity_DebugStillRespondsToTheDeprecatedRMDebug is the
+// upgrade clause of issue #794's rename. The knob an operator is given
+// over a phone call is now BACKUPD_DEBUG, but a deployment upgraded
+// without its compose file being re-derived still says RM_DEBUG, and an
+// operator mid-diagnosis must not find that their logs went quiet
+// because we renamed the project. The old spelling stays honoured, as a
+// deprecated alias, for one release.
+func TestListActivity_DebugStillRespondsToTheDeprecatedRMDebug(t *testing.T) {
+	t.Setenv("BACKUPD_DEBUG", "")
+	t.Setenv("RM_DEBUG", "1")
+
+	rt, log := newLoggedRouter(t)
+	rec := rt.get(t, "/api/v1/activity")
+	mustStatus(t, rec, http.StatusOK)
+
+	entry := log.only(t)
+	if entry.event != "activity_debug" {
+		t.Fatalf("event = %q, want activity_debug: the deprecated RM_DEBUG alias no longer turns diagnostics on", entry.event)
+	}
+	if entry.level != slog.LevelDebug {
+		t.Errorf("level = %v, want %v", entry.level, slog.LevelDebug)
 	}
 }

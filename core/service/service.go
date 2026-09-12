@@ -425,7 +425,8 @@ func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Confi
 // returned BackupService.
 //
 // The sink's level comes from the environment (obs.LevelFromEnv:
-// LOG_LEVEL, or RM_DEBUG=1 as the shortcut) rather than from a constant.
+// LOG_LEVEL, or BACKUPD_DEBUG=1 as the shortcut, with RM_DEBUG=1 kept
+// as its deprecated alias) rather than from a constant.
 // This is the engine's composition root, so a hard-coded LevelInfo here
 // meant the ENGINE could not be turned up at all - the half of issue
 // #730 where an operator set LOG_LEVEL on both containers of one

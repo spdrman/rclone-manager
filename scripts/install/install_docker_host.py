@@ -2705,12 +2705,15 @@ services:
       # id, so one container at `debug` gives half of every story and
       # nothing to join it to.
       #
-      # RM_DEBUG=1 is the same switch as LOG_LEVEL=debug, kept as the
-      # shortcut an operator can be told over a phone call; it wins if
-      # both are set. An unparseable value falls back to `info` rather
-      # than refusing to start, because a typo in a diagnostic knob must
-      # never take a backup host down. See docs/deployment.md's
-      # "Turning on diagnostics" for the browser's own half of this.
+      # BACKUPD_DEBUG=1 is the same switch as LOG_LEVEL=debug, kept as
+      # the shortcut an operator can be told over a phone call; it wins
+      # if both are set. RM_DEBUG=1 is that shortcut's deprecated old
+      # name (issue #794): still honoured, for one release, so an
+      # upgrade does not turn a diagnosing operator's logs back off.
+      # An unparseable value falls back to `info` rather than refusing
+      # to start, because a typo in a diagnostic knob must never take a
+      # backup host down. See docs/deployment.md's "Turning on
+      # diagnostics" for the browser's own half of this.
       LOG_LEVEL: ${LOG_LEVEL:-info}
 
       # Retention is evaluated against calendar boundaries (FR-18's
@@ -2948,7 +2951,8 @@ services:
       # what the engine answered, what framing the body arrived with,
       # and how much of it actually got copied to the browser - which is
       # only half of each story without the engine's own line for the
-      # same request. RM_DEBUG=1 is the shortcut, and wins over this.
+      # same request. BACKUPD_DEBUG=1 is the shortcut, and wins over
+      # this; RM_DEBUG=1 is its deprecated old name (issue #794).
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # Published to the host (see `ports:` below); LISTEN_ADDR is this
       # container's own internal bind address, always :8080 regardless of
@@ -3037,7 +3041,7 @@ services:
 """
 
 # Written by scripts/install/embed_compose.py alongside the blob above.
-EMBEDDED_COMPOSE_SHA256 = "95438574623ec135b5bfc167d44b7a0f7db0a49dc915bc4313bc89ce44af252b"
+EMBEDDED_COMPOSE_SHA256 = "9285a6a9a8ddefed5afdbe22349cc1e47b09ef30415170b94da52c7e8d7aed4d"
 
 
 def embedded_compose_bytes() -> bytes:

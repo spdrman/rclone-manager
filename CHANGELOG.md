@@ -54,7 +54,7 @@
   `LOG_LEVEL` to BOTH services — with `container/.env.example`, the provider
   adapters and the Portainer template carrying it too — because the two halves
   of one request are recorded in two containers and one of them at `debug`
-  gives half of every story. `RM_DEBUG=1` stays as the shortcut, and
+  gives half of every story. `BACKUPD_DEBUG=1` stays as the shortcut, and
   `docs/deployment.md`'s new "Turning on diagnostics" covers all three
   switches, the browser's `?debug=1`/`?debug=0` included.
 
@@ -81,6 +81,42 @@
   line, which the server writes down (bounded and validated) — so a console
   screenshot of a failed `fetch` can still be matched to the server's record of
   the same request.
+
+### Changed
+
+- **The debug shortcut is `BACKUPD_DEBUG`, and `RM_DEBUG` is deprecated**
+  (#794). The one-variable diagnostics switch still carried the project's
+  old `RM_` prefix, from before the rename to backupd, which is the wrong
+  name to read out over the phone call this knob exists for. The engine
+  (`obs.LevelFromEnv`) and the web host (`webhost.envLogLevel`) now both
+  accept `BACKUPD_DEBUG=1`, and `container/compose.yaml`,
+  `container/.env.example`, every provider adapter's compose file and
+  `docs/deployment.md` name that spelling.
+
+  `RM_DEBUG=1` keeps working, as a deprecated alias, for one release. The
+  two are OR'd rather than ranked because neither has ever had an "off"
+  value — only the documented `1` means anything — so a deployment that
+  upgrades one container before the other, or that still has the old name
+  in a compose file nobody re-derived, does not go quiet in the middle of
+  a diagnosis. Set `BACKUPD_DEBUG` on new deployments; `RM_DEBUG` will be
+  removed a release after this one.
+
+- **The session and CSRF cookies are named `backupd_session` and
+  `backupd_csrf`** (#794). They were `bm_session` and `bm_csrf`, named for
+  a brand two renames ago. Both new names are the only ones the runtime
+  WRITES; both old names are still READ for one release, so upgrading in
+  place does not sign every open console out and does not break a client
+  mid-session — a rename is not a reason to invalidate a credential. The
+  CSRF cookie needed more than a fallback: its client half is page
+  JavaScript that reads the cookie by name, so an upgrade is guaranteed to
+  have already-cached bundles in the field echoing whatever they found
+  under the old name. A request carrying only the old name therefore has
+  that exact token re-issued under the new one rather than being handed a
+  second, different token — two names holding two values would mean
+  whichever one the double-submit check preferred would refuse the other
+  with 403 `CSRF_TOKEN_MISMATCH`. Nothing an operator configures changes,
+  and the old names disappear from the wire on their own as each client is
+  issued the current one.
 
 ### Fixed
 

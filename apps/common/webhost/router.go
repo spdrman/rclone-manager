@@ -145,24 +145,34 @@ func DebugEnabled() bool { return envLogLevel() == slog.LevelDebug }
 // before there was anything to configure. An operator diagnosing a
 // report we cannot reproduce (issue #730: a browser that gets no HTTP
 // response at all while curl gets a clean 401) sets LOG_LEVEL=debug, or
-// RM_DEBUG=1 as the shortcut, and gets the debug events this package and
-// serve/ui.go emit; nobody who sets neither sees one extra line.
+// BACKUPD_DEBUG=1 as the shortcut, and gets the debug events this
+// package and serve/ui.go emit; nobody who sets neither sees one extra
+// line.
 //
-// RM_DEBUG wins over LOG_LEVEL because it is the shortcut an operator is
-// told to set over a phone call, and an unparseable LOG_LEVEL falls back
-// to INFO rather than refusing to start: a typo in a diagnostic knob
-// must never take a backup host down.
+// BACKUPD_DEBUG wins over LOG_LEVEL because it is the shortcut an
+// operator is told to set over a phone call, and an unparseable
+// LOG_LEVEL falls back to INFO rather than refusing to start: a typo in
+// a diagnostic knob must never take a backup host down.
 //
-// core/internal/obs.LevelFromEnv is the other reader of these same two
+// RM_DEBUG is the same shortcut under this project's old name
+// (rclone-manager, issue #794) and is DEPRECATED: it is still honoured
+// so an upgrade does not silently turn a diagnosing operator's logs back
+// off, and it will be dropped a release after BACKUPD_DEBUG. The two are
+// OR'd rather than ranked because neither has ever had an "off" value -
+// only the documented 1 means anything.
+//
+// core/internal/obs.LevelFromEnv is the other reader of these same
 // variables, with the same precedence and the same fallback, and it is
 // what the ENGINE builds its sink from. Two readers rather than one
 // shared helper because apps/ may import core/ and never the reverse,
 // and core/internal is unreachable from here by construction. They have
 // to agree: a deployment where the two containers answered "how loud am
 // I" differently is the half of #730 where an operator got the proxy
-// trace and nothing from the process it describes.
+// trace and nothing from the process it describes. That includes the
+// deprecated alias: an operator who upgrades one container before the
+// other must not end up with one of them silently quiet.
 func envLogLevel() slog.Level {
-	if os.Getenv("RM_DEBUG") == "1" {
+	if debugShortcutEnv() {
 		return slog.LevelDebug
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL"))) {
@@ -175,6 +185,16 @@ func envLogLevel() slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+// debugShortcutEnv reports whether the one-variable debug shortcut is
+// set, under its own name or under the deprecated RM_DEBUG alias. Only
+// the documented "1" counts, under either name: a knob whose typos mean
+// something is a knob that surprises the operator reading it back. The
+// engine's core/internal/obs.debugShortcut is the same two lines, for
+// the import-direction reason envLogLevel's own doc gives.
+func debugShortcutEnv() bool {
+	return os.Getenv("BACKUPD_DEBUG") == "1" || os.Getenv("RM_DEBUG") == "1"
 }
 
 // handlers bundles what the HTTP methods in handlers_system.go and

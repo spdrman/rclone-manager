@@ -48,8 +48,9 @@ services:
       # per-request diagnostics - the engine's record of what it
       # served and the Web UI's trace of what the engine answered -
       # and the two containers' lines name the same correlation id, so
-      # this belongs on both or neither. RM_DEBUG=1 is the same switch
-      # as the shortcut, and wins if both are set. Derived from
+      # this belongs on both or neither. BACKUPD_DEBUG=1 is the same
+      # switch as the shortcut, and wins if both are set; RM_DEBUG=1
+      # is its deprecated old name (issue #794). Derived from
       # container/compose.yaml; see docs/deployment.md.
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       LISTEN_ADDR: ":8080"

@@ -96,8 +96,8 @@ type UIConfig struct {
 	// Debug turns on the per-request upstream trace below regardless of
 	// the environment. It only exists so a test can assert the trace
 	// without setting process-wide environment; a deployment turns it on
-	// with RM_DEBUG=1 or LOG_LEVEL=debug, which webhost.DebugEnabled
-	// reads.
+	// with BACKUPD_DEBUG=1 (or the deprecated RM_DEBUG=1) or
+	// LOG_LEVEL=debug, which webhost.DebugEnabled reads.
 	Debug bool
 }
 

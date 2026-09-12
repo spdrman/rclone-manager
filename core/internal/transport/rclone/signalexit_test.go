@@ -50,7 +50,7 @@ import (
 // observed from outside that process, so these cases run in a child: this
 // test binary re-executes itself with signalExitChildEnv set to one of
 // the modes below.
-const signalExitChildEnv = "RM_SIGNAL_EXIT_CHILD_MODE"
+const signalExitChildEnv = "BACKUPD_SIGNAL_EXIT_CHILD_MODE"
 
 // childReady is printed by the child once its handlers are installed. The
 // parent waits for it before signalling, so no case can pass or fail on
