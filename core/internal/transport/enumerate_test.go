@@ -175,6 +175,109 @@ func (r *syntheticReader) Close() error {
 	return nil
 }
 
+// subdirTree is the directory-HEAVY fixture, and it is a second shape
+// rather than a bigger instance of the first because the two bound
+// different things. A flat directory of a million entries bounds how the
+// enumerator handles ENTRIES; a directory holding a million
+// SUBDIRECTORIES bounds the walk's pending work, and an enumerator that
+// reads entries in chunks and then keeps one path per child directory is
+// bounded on the first fixture and linear on this one - which is exactly
+// the deployment shape this product runs against (FR-8: one directory
+// per producer run, for years of runs).
+//
+// It cannot be expressed as a syntheticTree: that one names every
+// subdirectory in a fixture map, so a million of them would be a million
+// strings allocated before the measurement starts and a million more
+// inside it. Here the tree is counts alone - the root holds subdirs
+// subdirectories named d%08d, each holding filesPerSubdir regular files
+// - so the only per-directory memory in the run is the enumerator's own.
+type subdirTree struct {
+	subdirs        int
+	filesPerSubdir int
+
+	mu      sync.Mutex
+	open    int
+	maxOpen int
+	opened  int
+	closed  int
+}
+
+func (t *subdirTree) opener() transport.DirOpener {
+	return func(_ context.Context, dir string) (transport.DirReader, error) {
+		rel := strings.TrimPrefix(strings.TrimPrefix(filepath.ToSlash(dir), syntheticRoot), "/")
+		reader := &countedReader{tree: t}
+		switch {
+		case rel == "":
+			reader.dirs = t.subdirs
+		case strings.HasPrefix(rel, "d") && !strings.Contains(rel, "/"):
+			reader.files = t.filesPerSubdir
+		default:
+			return nil, fmt.Errorf("subdir tree has no directory %q (relative %q)", dir, rel)
+		}
+		t.mu.Lock()
+		t.open++
+		t.opened++
+		if t.open > t.maxOpen {
+			t.maxOpen = t.open
+		}
+		t.mu.Unlock()
+		return reader, nil
+	}
+}
+
+func (t *subdirTree) stats() (maxOpen, opened, closed int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.maxOpen, t.opened, t.closed
+}
+
+type countedReader struct {
+	tree   *subdirTree
+	dirs   int
+	files  int
+	served int
+	done   bool
+}
+
+func (r *countedReader) Next(n int) ([]fs.DirEntry, error) {
+	// Sized to what is left, not to what was asked for. *os.File.ReadDir
+	// allocates what it returns, and a fixture that allocated 4096 slots
+	// to hand back one entry would be measuring itself: a million
+	// single-file subdirectories is a million near-empty chunks.
+	remaining := min(n, r.dirs+r.files-r.served)
+	if remaining <= 0 {
+		return nil, io.EOF
+	}
+	out := make([]fs.DirEntry, 0, remaining)
+	for len(out) < n && r.served < r.dirs {
+		out = append(out, syntheticDirEntry{name: fmt.Sprintf("d%08d", r.served), dir: true})
+		r.served++
+	}
+	for len(out) < n && r.served < r.dirs+r.files {
+		out = append(out, syntheticDirEntry{
+			name: fmt.Sprintf("f%08d.dump", r.served-r.dirs),
+			size: int64(r.served - r.dirs),
+		})
+		r.served++
+	}
+	if len(out) == 0 {
+		return nil, io.EOF
+	}
+	return out, nil
+}
+
+func (r *countedReader) Close() error {
+	if r.done {
+		return nil
+	}
+	r.done = true
+	r.tree.mu.Lock()
+	r.tree.open--
+	r.tree.closed++
+	r.tree.mu.Unlock()
+	return nil
+}
+
 // measurement is what #792 asked to be captured: peak memory, total
 // latency, time to the FIRST entry (the number that says whether a caller
 // can start working before the listing finishes), goroutines and open
@@ -336,7 +439,73 @@ func TestEnumerationMemoryDoesNotScaleWithEntryCount(t *testing.T) {
 		t.Errorf("enumeration left %d goroutine(s) behind", large.goroutineDelta)
 	}
 	if large.maxOpenDirs != 1 {
-		t.Errorf("enumeration held %d directory handles at once; a depth-first chunked walk holds one", large.maxOpenDirs)
+		t.Errorf("enumeration held %d directory handles at once over a single flat directory; the walk holds one per level of depth", large.maxOpenDirs)
+	}
+}
+
+// TestEnumerationMemoryDoesNotScaleWithDirectoryCount is the same
+// acceptance criterion asked of the other axis, and it is a separate test
+// because an enumerator can pass the one above and fail this one
+// completely: reading ENTRIES in chunks says nothing about what the walk
+// retains about the directories it has not descended into yet. A walk
+// that collects one path per child directory before descending is linear
+// in the number of directories, and a source laid out one directory per
+// producer run (FR-8) is precisely the tree that has a lot of them.
+//
+// Ten times the subdirectories, at most twice the peak - the same bound
+// as the flat case, because a bounded walk is bounded in its pending work
+// too, not only in its buffer.
+func TestEnumerationMemoryDoesNotScaleWithDirectoryCount(t *testing.T) {
+	const chunk = 4096
+	sizes := []int{100_000, 1_000_000}
+	got := make([]measurement, 0, len(sizes))
+
+	for _, n := range sizes {
+		tree := &subdirTree{subdirs: n, filesPerSubdir: 1}
+		enum := transport.LocalEnumerator{OpenDir: tree.opener()}
+		m := measureEnumeration(t, func(yield func(transport.RemoteArtifact) error) error {
+			return enum.Enumerate(context.Background(), transport.Source{Type: "local", Root: syntheticRoot},
+				transport.EnumerateOptions{ChunkEntries: chunk}, yield)
+		})
+		maxOpen, opened, closed := tree.stats()
+		m.maxOpenDirs = maxOpen
+		if m.entries != n {
+			t.Fatalf("enumerated %d entries from %d subdirectories, want %d", m.entries, n, n)
+		}
+		if opened != n+1 {
+			t.Errorf("opened %d directories, want %d: the root and every subdirectory under it", opened, n+1)
+		}
+		if opened != closed {
+			t.Errorf("%d directory readers opened and %d closed", opened, closed)
+		}
+		t.Logf("directory-heavy enumeration: %s", m)
+		got = append(got, m)
+	}
+
+	small, large := got[0], got[1]
+
+	const ceiling = 32 << 20
+	if large.peakHeap > ceiling {
+		t.Errorf("peak heap enumerating 1,000,000 subdirectories is %s, ceiling %s: the walk is retaining the tree, not walking it",
+			mib(large.peakHeap), mib(ceiling))
+	}
+	if large.rssDelta > ceiling {
+		t.Errorf("max RSS grew by %s while enumerating 1,000,000 subdirectories, ceiling %s", mib(uint64(large.rssDelta)), mib(ceiling))
+	}
+	if small.peakHeap > 0 && float64(large.peakHeap) > 2*float64(small.peakHeap)+float64(4<<20) {
+		t.Errorf("peak heap went from %s at 100,000 subdirectories to %s at 1,000,000: ten times the directories must not cost ten times the memory",
+			mib(small.peakHeap), mib(large.peakHeap))
+	}
+	if large.goroutineDelta != 0 {
+		t.Errorf("enumeration left %d goroutine(s) behind", large.goroutineDelta)
+	}
+	// Two levels of tree, so two open handles at the deepest point: the
+	// root being read and the child being descended into. The handle is
+	// what makes a directory frame RESUMABLE, which is what lets the walk
+	// descend without first collecting every child path, so this number
+	// is the shape of the tree and never the size of it.
+	if large.maxOpenDirs > 2 {
+		t.Errorf("enumeration held %d directory handles at once over a tree two levels deep; the bound is one per level", large.maxOpenDirs)
 	}
 }
 
@@ -487,61 +656,6 @@ func TestAnErrorFromTheCallbackStopsTheWalkAndClosesEverything(t *testing.T) {
 	}
 	if _, opened, closed := tree.stats(); opened != closed {
 		t.Errorf("%d of %d directory readers left open", opened-closed, opened)
-	}
-}
-
-// TestADirectoryOverTheConfiguredCeilingIsRefusedByName is option C, at
-// the transport boundary: a source on a backend that cannot be read in
-// chunks is enumerated with a ceiling, and a directory above it is an
-// explicit, classified refusal. The alternative is an OOM, and an OOM is
-// not a decision this product gets to make on an operator's behalf.
-func TestADirectoryOverTheConfiguredCeilingIsRefusedByName(t *testing.T) {
-	tree := flatTree(5_000)
-	enum := transport.LocalEnumerator{OpenDir: tree.opener()}
-
-	seen := 0
-	err := enum.Enumerate(context.Background(), transport.Source{Type: "local", Root: "/synthetic"},
-		transport.EnumerateOptions{ChunkEntries: 100, MaxDirectoryEntries: 1_000},
-		func(transport.RemoteArtifact) error {
-			seen++
-			return nil
-		})
-	if !errors.Is(err, transport.ErrDirectoryTooLarge) {
-		t.Fatalf("enumerate returned %v, want ErrDirectoryTooLarge", err)
-	}
-	var terr *transport.Error
-	if !errors.As(err, &terr) {
-		t.Fatalf("the refusal is not a transport.Error, so lifecycle code cannot classify it: %v", err)
-	}
-	if terr.Category != transport.Configuration {
-		t.Errorf("the refusal is category %v; a directory larger than the configured ceiling is a Configuration problem - retrying it changes nothing and a different credential does not help", terr.Category)
-	}
-	// The refusal has to arrive while the count is still near the
-	// ceiling. A check that ran after the directory was read would be a
-	// message printed over the OOM it failed to prevent.
-	if seen > 1_000+100 {
-		t.Errorf("the walk delivered %d entries before refusing a ceiling of 1000; the check has to fire within one chunk", seen)
-	}
-	if _, opened, closed := tree.stats(); opened != closed {
-		t.Errorf("the refusal left %d of %d directory readers open", opened-closed, opened)
-	}
-}
-
-// TestNoCeilingMeansNoRefusal is the control for the test above: the
-// ceiling is opt-in, because a backend that streams has nothing to refuse
-// (see backend.Manifest.PlanEnumeration, which is where that decision is
-// taken from the capability matrix).
-func TestNoCeilingMeansNoRefusal(t *testing.T) {
-	tree := flatTree(5_000)
-	enum := transport.LocalEnumerator{OpenDir: tree.opener()}
-	seen := 0
-	if err := enum.Enumerate(context.Background(), transport.Source{Type: "local", Root: "/synthetic"},
-		transport.EnumerateOptions{ChunkEntries: 100},
-		func(transport.RemoteArtifact) error { seen++; return nil }); err != nil {
-		t.Fatalf("enumerate: %v", err)
-	}
-	if seen != 5_000 {
-		t.Errorf("enumerated %d of 5000 entries", seen)
 	}
 }
 

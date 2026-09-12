@@ -3,7 +3,6 @@ package transport
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -43,6 +42,13 @@ import (
 // column in the ADR: microseconds here against tens of seconds for
 // List).
 //
+// Bounded has to hold on both axes, and only one of them is about
+// entries. A tree whose directories each hold one file, a million times
+// over, is the layout FR-8 produces, and a walk that collects child
+// paths before descending is linear in it however small its chunks are.
+// So the walk is over resumable directory FRAMES, one per level of the
+// tree rather than one per directory in it: see Enumerate.
+//
 // The local reader is *os.File.ReadDir(n), which takes a count and is the
 // stdlib primitive the whole of this file exists to reach. It is
 // deliberately NOT routed through rclone: there is no rclone call that
@@ -71,17 +77,13 @@ import (
 // syscall count is not what a listing costs.
 const DefaultChunkEntries = 4096
 
-// ErrDirectoryTooLarge is the refusal a configured ceiling produces. It
-// is the fail-closed half of #792: for a backend whose directories cannot
-// be read in chunks at all, this engine refuses a directory bigger than
-// the operator said to expect rather than reading it and finding out what
-// that costs.
-//
-// It is a Configuration failure (never Transient): a retry re-reads the
-// same too-large directory, and the two things that change the outcome
-// are a bigger configured ceiling or a smaller directory. Both are a
-// person's decision.
-var ErrDirectoryTooLarge = errors.New("directory holds more entries than the configured maximum")
+// There is no refusal sentinel in this file, on purpose. The refusal for
+// a backend whose directories cannot be read in chunks belongs to the
+// capability matrix (backend.ErrUnboundedListing), it fires before
+// anything is dialed, and it is not an entry count: see
+// backend.Manifest.PlanEnumeration for why a configured maximum
+// directory size was removed rather than kept here as a second, weaker
+// gate.
 
 // Enumerator streams a source's artifacts to a callback instead of
 // returning them.
@@ -107,21 +109,15 @@ type EnumerateOptions struct {
 	// at a time. Zero means DefaultChunkEntries: zero is what every
 	// caller that has not thought about this passes, and it must not mean
 	// "read the whole directory".
-	ChunkEntries int
-
-	// MaxDirectoryEntries refuses a single directory holding more than
-	// this many entries, with ErrDirectoryTooLarge. Zero means no
-	// ceiling.
 	//
-	// Zero is the right answer for a backend that streams, and a ceiling
-	// there would be an arbitrary refusal of a directory this engine can
-	// in fact walk in bounded memory. It is NOT the right answer for a
-	// backend whose listing is one slice: see
-	// backend.Manifest.PlanEnumeration, which is where the capability
-	// matrix turns into this number, and which refuses outright rather
-	// than defaulting when an unbounded backend has no ceiling
-	// configured.
-	MaxDirectoryEntries int
+	// It is the only bound there is, and that is deliberate. A maximum
+	// directory size used to live here as well, for the backends that
+	// cannot be read in chunks; it was removed because an entry count
+	// cannot be checked before the entries exist, so on exactly the
+	// backends it claimed to protect it refused after the allocation.
+	// Those backends are now refused by the capability matrix instead,
+	// before anything is opened (backend.Manifest.PlanEnumeration).
+	ChunkEntries int
 }
 
 func (o EnumerateOptions) chunk() int {
@@ -143,9 +139,9 @@ type DirReader interface {
 // path on the local filesystem for the os-backed opener.
 type DirOpener func(ctx context.Context, dir string) (DirReader, error)
 
-// LocalEnumerator is the bounded enumerator for a local source: one
-// directory handle open at a time, one chunk of entries live at a time,
-// no goroutines of its own.
+// LocalEnumerator is the bounded enumerator for a local source: one chunk
+// of entries live per open directory, one open directory per level of the
+// tree's depth, no goroutines of its own.
 //
 // No goroutines is worth stating rather than leaving to be noticed. The
 // reason List fans out is rclone's walk, which runs --checkers goroutines
@@ -171,12 +167,33 @@ var _ Enumerator = LocalEnumerator{}
 // Enumerate walks src.Root depth first, delivering one chunk of entries
 // at a time.
 //
-// Depth first, with an explicit stack, for the memory reason this whole
-// file is about: a breadth-first walk holds every directory of a level
-// before it descends, and the deployments this product runs against have
-// one directory per producer run. Depth first holds one open handle and a
-// stack of pending directory PATHS, so the resident cost is the chunk
-// plus the shape of the tree, never the number of files in it.
+// # What "bounded" has to mean, and the shape that broke it
+//
+// Two things scale with a source: how many entries a directory holds, and
+// how many directories the tree holds. A chunked read bounds the first.
+// The first version of this walk kept a stack of pending directory PATHS
+// - read a directory to its end, collect every child, descend - and that
+// bounds nothing on the second: FR-8's layout is one directory per
+// producer run, so a source with a million runs in it put a million paths
+// on that stack, which is the allocation this file exists to refuse,
+// arriving from the other direction.
+//
+// So a directory is a FRAME instead: its open handle, the chunk of
+// entries last read from it, and how far through that chunk the walk has
+// got. A subdirectory is descended into the moment it is seen, and the
+// parent is left exactly where it was, because *os.File keeps the
+// directory offset and ReadDir(n) resumes from it. What is retained is
+// therefore one chunk per LEVEL of the tree - the shape of it - and never
+// one entry per directory in it.
+//
+// The cost is one open file descriptor per level, which is the trade this
+// makes knowingly: a descriptor is what makes a frame resumable at all,
+// depth is bounded by the filesystem's own path limit (a path is at most
+// PATH_MAX, so levels are at most a few hundred), and the Go runtime
+// raises this process's descriptor limit to the hard maximum at startup.
+// A million-directory tree is a million frames ONLY if it is also a
+// million levels deep, which is not a directory tree, it is a path no
+// operating system will open.
 //
 // Symbolic links are skipped, which is what bundled/local_volume.json's
 // capability matrix declares (symlink_semantics: "skip") and what
@@ -187,6 +204,11 @@ var _ Enumerator = LocalEnumerator{}
 // over. How far that can be trusted at all is #793's question
 // (source-consistency modes); what belongs here is not pretending a race
 // is a malfunction.
+//
+// Ordering is per-directory arrival order, interleaved across levels: a
+// subtree's entries arrive in the middle of its parent's. Enumerate has
+// never promised an order (see the file header), and ADR 0008 records the
+// bounded-AND-ordered feed Kopia's uploader wants as Phase 1 work.
 func (e LocalEnumerator) Enumerate(ctx context.Context, src Source, opts EnumerateOptions, yield func(RemoteArtifact) error) error {
 	open := e.OpenDir
 	if open == nil {
@@ -194,35 +216,92 @@ func (e LocalEnumerator) Enumerate(ctx context.Context, src Source, opts Enumera
 	}
 	excluded := excludedDirs(src.ExcludePaths)
 
-	// The stack holds directories relative to src.Root ("" is the root
-	// itself), so a pending entry costs a path and not a handle.
-	stack := []string{""}
-	for len(stack) > 0 {
-		if err := ctx.Err(); err != nil {
-			return classifyEnumerate(err)
+	root, err := e.openFrame(ctx, open, src.Root, "")
+	if err != nil {
+		return err
+	}
+	stack := []*dirFrame{root}
+	// Every frame still open when the walk stops - cancelled, refused by
+	// the callback, or finished - is closed here. A walk that leaked one
+	// descriptor per abandoned level would leak them per backup run.
+	defer func() {
+		for _, frame := range stack {
+			frame.reader.Close() //nolint:errcheck // a read-only directory handle has nothing to report on close
 		}
-		rel := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
+	}()
 
-		children, err := e.readDirectory(ctx, open, src.Root, rel, excluded, opts, yield)
-		if err != nil {
-			return err
+	for len(stack) > 0 {
+		top := stack[len(stack)-1]
+
+		if top.at == len(top.entries) {
+			// The context check is per chunk rather than per entry:
+			// ctx.Err() on every one of a million entries is a cost paid
+			// for nothing, and one chunk is the latency this promises
+			// (see the cancellation test).
+			if err := ctx.Err(); err != nil {
+				return classifyEnumerate(err)
+			}
+			entries, err := top.reader.Next(opts.chunk())
+			switch {
+			case errors.Is(err, io.EOF), err == nil && len(entries) == 0:
+				// No entries and no error would otherwise spin forever.
+				// No correct DirReader does that; this says so out loud
+				// rather than becoming a hang debugged from a stuck
+				// daemon.
+				top.reader.Close() //nolint:errcheck // as above
+				stack = stack[:len(stack)-1]
+				continue
+			case err != nil:
+				return classifyEnumerate(err)
+			}
+			top.entries, top.at = entries, 0
 		}
-		stack = append(stack, children...)
+
+		entry := top.entries[top.at]
+		top.at++
+		switch {
+		case entry.IsDir():
+			child := path.Join(top.rel, entry.Name())
+			if excluded[child] {
+				continue
+			}
+			frame, err := e.openFrame(ctx, open, src.Root, child)
+			if err != nil {
+				return err
+			}
+			stack = append(stack, frame)
+		case entry.Type().IsRegular():
+			artifact, ok, err := toLocalArtifact(top.rel, entry)
+			if err != nil {
+				return classifyEnumerate(err)
+			}
+			if !ok {
+				continue
+			}
+			if err := yield(artifact); err != nil {
+				return err
+			}
+		}
+		// Everything else - symlinks, sockets, devices - is not an
+		// artifact this product copies, and is skipped rather than
+		// reported. See above.
 	}
 	return nil
 }
 
-// readDirectory reads one directory to its end, yields its objects and
-// returns the subdirectories to descend into.
-func (e LocalEnumerator) readDirectory(
-	ctx context.Context,
-	open DirOpener,
-	root, rel string,
-	excluded map[string]bool,
-	opts EnumerateOptions,
-	yield func(RemoteArtifact) error,
-) ([]string, error) {
+// dirFrame is one directory the walk is part way through: the handle it
+// is being read from, the chunk last read, and how much of that chunk has
+// been dealt with. Its size is the bound - one chunk, whatever the
+// directory holds - and its handle is what lets the walk descend out of
+// the middle of it and come back.
+type dirFrame struct {
+	rel     string
+	reader  DirReader
+	entries []fs.DirEntry
+	at      int
+}
+
+func (e LocalEnumerator) openFrame(ctx context.Context, open DirOpener, root, rel string) (*dirFrame, error) {
 	dir := root
 	if rel != "" {
 		dir = filepath.Join(root, filepath.FromSlash(rel))
@@ -231,58 +310,7 @@ func (e LocalEnumerator) readDirectory(
 	if err != nil {
 		return nil, classifyEnumerate(err)
 	}
-	defer reader.Close() //nolint:errcheck // a read-only directory handle has nothing to report on close
-
-	var children []string
-	seen := 0
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, classifyEnumerate(err)
-		}
-		entries, err := reader.Next(opts.chunk())
-		if errors.Is(err, io.EOF) {
-			return children, nil
-		}
-		if err != nil {
-			return nil, classifyEnumerate(err)
-		}
-		seen += len(entries)
-		if max := opts.MaxDirectoryEntries; max > 0 && seen > max {
-			return nil, NewError(Configuration, "enumerate", fmt.Errorf(
-				"%w: %q holds more than %d entries, and this backend cannot list a directory in bounded memory",
-				ErrDirectoryTooLarge, displayDir(rel), max))
-		}
-		for _, entry := range entries {
-			switch {
-			case entry.IsDir():
-				child := path.Join(rel, entry.Name())
-				if !excluded[child] {
-					children = append(children, child)
-				}
-			case entry.Type().IsRegular():
-				artifact, ok, err := toLocalArtifact(rel, entry)
-				if err != nil {
-					return nil, classifyEnumerate(err)
-				}
-				if !ok {
-					continue
-				}
-				if err := yield(artifact); err != nil {
-					return nil, err
-				}
-			}
-			// Everything else - symlinks, sockets, devices - is not an
-			// artifact this product copies, and is skipped rather than
-			// reported. See Enumerate's doc.
-		}
-		if len(entries) == 0 {
-			// A reader that returns no entries and no error would
-			// otherwise spin forever. No correct DirReader does this;
-			// this is the guard that says so out loud rather than the
-			// hang that would be debugged from a stuck daemon.
-			return children, nil
-		}
-	}
+	return &dirFrame{rel: rel, reader: reader}, nil
 }
 
 // toLocalArtifact builds the RemoteArtifact for one entry. ok is false
