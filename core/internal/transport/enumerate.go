@@ -306,6 +306,16 @@ func toLocalArtifact(rel string, entry fs.DirEntry) (RemoteArtifact, bool, error
 		// local_volume.json declares 1ns) and this is where it is lost;
 		// docs/adr/0008 records that as a known truncation rather than
 		// leaving two paths into one field disagreeing about units.
+		//
+		// Two things about this value a consumer has to know, because
+		// both break silently. It is TRUNCATED, so it is not what the
+		// disk said. And it is a SCAN-TIME capture: it is whatever the
+		// directory read reported, never re-stat'ed, so a file mutated
+		// after this walk passed it carries metadata it no longer has.
+		// Anything deciding "this file is unchanged, skip its content"
+		// from either property is deciding it from the wrong number -
+		// see docs/adr/0009 section 6, which owns that rule and whose
+		// own capture re-stats after the read for exactly this reason.
 		artifact.ModTime = t.Unix()
 	}
 	return artifact, true, nil
