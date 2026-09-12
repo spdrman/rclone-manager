@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,7 +26,8 @@ import (
 //
 //   - dispatch: a local source is enumerated in chunks, and a source on a
 //     backend whose listing is one slice (sftp) is refused before anything
-//     is dialed, rather than after the memory is spent;
+//     is dialed, opened or allocated, rather than after the memory is
+//     spent;
 //   - the capability matrix's claims about the rclone backends it
 //     describes, pinned against what this binary's rclone actually
 //     reports, the same way TestEveryBundledManifestNamesABackendThisBinaryRegisters
@@ -71,11 +73,19 @@ func TestAdapterEnumerateStreamsALocalSource(t *testing.T) {
 
 // TestEnumeratingAnSftpSourceIsRefusedBeforeAnythingIsDialed is the
 // fail-closed half of the decision, and the assertion that matters is
-// where the refusal happens: the source below names a host that does not
-// resolve and carries no key, so if this test passes QUICKLY and with a
-// Configuration category, nothing tried to connect. A refusal that
-// arrived after the connection would still be a refusal that arrived
-// after the directory was read.
+// WHERE the refusal happens. The source below names a host that does not
+// resolve and a key file that does not exist, so the order of the
+// failures is the evidence: a refusal that reads "this backend cannot
+// list a directory in bounded memory" means the capability was checked
+// first, and one that reads "key_file is not accessible" means this
+// adapter was already resolving credentials on the way to dialing - and a
+// refusal that arrives after the dial arrives after the directory has
+// been read into memory, which is the failure it exists to prevent.
+//
+// This is also the regression guard for the ceiling that used to sit in
+// front of it: with an operator-configured maximum directory size, sftp
+// took the walk instead, and this test's source got as far as its key
+// file.
 func TestEnumeratingAnSftpSourceIsRefusedBeforeAnythingIsDialed(t *testing.T) {
 	src := transport.Source{
 		ID:      "unreachable",
@@ -98,110 +108,20 @@ func TestEnumeratingAnSftpSourceIsRefusedBeforeAnythingIsDialed(t *testing.T) {
 	// bounded memory", and a second sentinel here would be a second
 	// place to keep that decision.
 	if !errors.Is(err, backend.ErrUnboundedListing) {
-		t.Fatalf("Enumerate on sftp with no ceiling returned %v, want backend.ErrUnboundedListing", err)
+		t.Fatalf("Enumerate on an sftp source returned %v, want backend.ErrUnboundedListing", err)
+	}
+	if strings.Contains(err.Error(), "key_file") {
+		t.Errorf("the refusal came out of resolving the source's credentials, so the capability gate did not fire first: %v", err)
 	}
 	var terr *transport.Error
 	if !errors.As(err, &terr) {
 		t.Fatalf("the refusal is not a transport.Error: %v", err)
 	}
 	if terr.Category != transport.Configuration {
-		t.Errorf("category = %v, want Configuration: the fix is a configured ceiling, not a retry", terr.Category)
+		t.Errorf("category = %v, want Configuration: a backend that cannot be read in bounded memory is not a retry, it is a source this engine will not enumerate", terr.Category)
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("the refusal took %s, which is long enough that it happened after a dial attempt rather than before one", elapsed)
-	}
-}
-
-// TestAnSftpSourceWithACeilingEnumeratesAndRefusesAboveIt is the other
-// side: with an operator-stated ceiling the walk runs, and a directory
-// above the ceiling is an explicit refusal. It runs against a LOCAL
-// directory dressed as the unbounded path (Type "local" plus an explicit
-// ceiling), because what is under test is the ceiling and not SSH: the
-// dispatch above already proves which enumerator an sftp source gets.
-func TestAnSftpSourceWithACeilingEnumeratesAndRefusesAboveIt(t *testing.T) {
-	root := t.TempDir()
-	for i := range 40 {
-		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("f%02d.dump", i)), []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	under := 0
-	if err := New().Enumerate(context.Background(),
-		transport.Source{Type: "local", Root: root},
-		transport.EnumerateOptions{ChunkEntries: 8, MaxDirectoryEntries: 100},
-		func(transport.RemoteArtifact) error { under++; return nil }); err != nil {
-		t.Fatalf("Enumerate under the ceiling: %v", err)
-	}
-	if under != 40 {
-		t.Errorf("enumerated %d of 40 entries under a ceiling of 100", under)
-	}
-
-	err := New().Enumerate(context.Background(),
-		transport.Source{Type: "local", Root: root},
-		transport.EnumerateOptions{ChunkEntries: 8, MaxDirectoryEntries: 10},
-		func(transport.RemoteArtifact) error { return nil })
-	if !errors.Is(err, transport.ErrDirectoryTooLarge) {
-		t.Fatalf("Enumerate over the ceiling returned %v, want ErrDirectoryTooLarge", err)
-	}
-}
-
-// TestTheUnboundedWalkStreamsPerDirectoryAndRefusesAboveTheCeiling
-// exercises case 2 of the dispatch - the rclone walk an sftp source with
-// a configured ceiling gets - which is otherwise unreachable from a test:
-// dispatch sends "local" to the chunked enumerator, and an sftp source
-// needs an SSH server. So the walk is called directly, against a local
-// Fs, which is exactly what rclone does for sftp anyway (neither backend
-// has a native recursive listing, so both go through walkListDirSorted).
-//
-// Two properties, and both are the reason this path exists rather than
-// just calling List: entries are delivered per directory as the walk
-// reaches them, and a directory bigger than the ceiling is refused with
-// the entry count in the message, so an operator can tell whether to
-// raise the ceiling or to look at what wrote 20,000 files.
-func TestTheUnboundedWalkStreamsPerDirectoryAndRefusesAboveTheCeiling(t *testing.T) {
-	root := t.TempDir()
-	for _, dir := range []string{"", "runs", "runs/deep"} {
-		full := filepath.Join(root, filepath.FromSlash(dir))
-		if err := os.MkdirAll(full, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		for i := range 5 {
-			if err := os.WriteFile(filepath.Join(full, fmt.Sprintf("f%d.dump", i)), []byte("x"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	src := transport.Source{Type: "local", Root: root}
-
-	var got []string
-	if err := New().enumerateWholeDirectories(context.Background(), src,
-		transport.EnumerateOptions{MaxDirectoryEntries: 100},
-		func(a transport.RemoteArtifact) error {
-			got = append(got, a.Path)
-			if a.Size != 1 {
-				t.Errorf("%s size = %d, want 1", a.Path, a.Size)
-			}
-			return nil
-		}); err != nil {
-		t.Fatalf("enumerateWholeDirectories: %v", err)
-	}
-	if len(got) != 15 {
-		t.Fatalf("streamed %d entries (%v), want 15", len(got), got)
-	}
-
-	err := New().enumerateWholeDirectories(context.Background(), src,
-		transport.EnumerateOptions{MaxDirectoryEntries: 3},
-		func(transport.RemoteArtifact) error { return nil })
-	if !errors.Is(err, transport.ErrDirectoryTooLarge) {
-		t.Fatalf("walk over a ceiling of 3 returned %v, want ErrDirectoryTooLarge", err)
-	}
-	var terr *transport.Error
-	if !errors.As(err, &terr) || terr.Category != transport.Configuration {
-		t.Errorf("the refusal is not a Configuration transport.Error: %v", err)
-	}
-	if !strings.Contains(err.Error(), "the configured maximum is 3") {
-		t.Errorf("the refusal does not say what the ceiling was: %v", err)
 	}
 }
 
@@ -240,18 +160,9 @@ func TestTheCapabilityMatrixMatchesWhatRcloneReportsForLocal(t *testing.T) {
 	if !caps.StreamingOpen {
 		t.Error("local_volume declares streaming_open=false, and rclone opens a local object as an io.Reader")
 	}
-	if got := f.Hashes().Contains(hashByName(t, "md5")); got != containsHash(caps.HashSupport, "md5") {
-		t.Errorf("local_volume declares md5 support = %v and rclone reports %v", containsHash(caps.HashSupport, "md5"), got)
+	if got := f.Hashes().Contains(hashByName(t, "md5")); got != slices.Contains(caps.HashSupport, backend.HashMD5) {
+		t.Errorf("local_volume declares md5 support = %v and rclone reports %v", slices.Contains(caps.HashSupport, backend.HashMD5), got)
 	}
-}
-
-func containsHash(list []string, name string) bool {
-	for _, h := range list {
-		if h == name {
-			return true
-		}
-	}
-	return false
 }
 
 // TestTheCapabilityMatrixCoversEveryBundledBackend keeps the matrix from

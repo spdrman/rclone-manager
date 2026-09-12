@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -36,10 +37,11 @@ import (
 // somebody asks it to (PlanEnumeration below), and the zero Capabilities
 // value is the least capable backend describable rather than a blank one.
 //
-// # Why the block is all ten keys or none
+// # Why the block is all twelve keys or none
 //
-// The same argument one key at a time. A manifest that answers nine keys
-// is a manifest whose tenth answer a consumer will infer, and validation
+// The same argument one key at a time. A manifest that answers eleven
+// keys is a manifest whose twelfth answer a consumer will infer, and
+// validation
 // refuses it naming the key that is missing (validateManifestCapabilities).
 // The cost is that adding a key to the vocabulary is a diff that touches
 // every bundled manifest, which is the intended toll: a capability
@@ -134,13 +136,46 @@ const (
 	// mounted at the path an operator configured - APFS, exFAT on a USB
 	// disk, ext4 - and this process cannot know which without probing
 	// that specific path.
+	//
+	// It says nothing about what the backend STORES, which is
+	// case_preservation below and a genuinely separate axis: a
+	// case-insensitive filesystem usually keeps the name as it was
+	// written, and one that does not (an 8.3 FAT volume) loses it.
+	// Collapsing the two - as a "preserving" value inside this key would
+	// - makes a restore's name fidelity unanswerable without knowing
+	// which of the two meanings was meant.
 	CapCaseSensitivity Capability = "case_sensitivity"
+
+	// CapCasePreservation is whether a name survives a round trip with
+	// the case it was written in. A restore is where this is noticed:
+	// "Invoices" written back as "invoices" is a correct restore of the
+	// wrong name, and nothing in a listing comparison would flag it.
+	CapCasePreservation Capability = "case_preservation"
+
+	// CapGenerationIdentity is whether this backend hands back an
+	// identity for the CONTENT of an object, as opposed to the stable
+	// slot the content sits in.
+	//
+	// A path is a slot id: it survives an overwrite, so two different
+	// bytes have the same one and nothing about it says the object
+	// changed. A generation, an S3 versionId or an ETag is a content
+	// identity: it changes when the bytes change, which is what lets a
+	// consumer decide "unchanged" without reading the object. EPIC
+	// #779's trust classification (#793/#824) reads this key and nothing
+	// else for that question, which is the point of putting it here:
+	// one authority instead of a table per consumer.
+	CapGenerationIdentity Capability = "generation_identity"
 )
 
-// CapabilityKeys is the vocabulary, in declaration order. Pinned name for
-// name by TestCapabilityKeysAreExactly, because the key strings are an
-// EPIC #779 Phase 0 contract other issues consume.
-var CapabilityKeys = []Capability{
+// capabilityKeys is the vocabulary, in declaration order.
+//
+// It is unexported and reached through CapabilityKeys() because a
+// package-level exported slice is writable by anyone who imports the
+// package: one line in a caller - or in a test of a caller - reorders or
+// truncates the vocabulary for every consumer in the process, and the
+// failure lands in validation, which is the code that is supposed to be
+// the authority on it.
+var capabilityKeys = []Capability{
 	CapBoundedListing,
 	CapRecursiveListing,
 	CapStreamingOpen,
@@ -151,7 +186,15 @@ var CapabilityKeys = []Capability{
 	CapSymlinkSemantics,
 	CapMetadataSupport,
 	CapCaseSensitivity,
+	CapCasePreservation,
+	CapGenerationIdentity,
 }
+
+// CapabilityKeys returns the vocabulary, in declaration order, as a copy
+// the caller owns. Pinned name for name by TestCapabilityKeysAreExactly,
+// because the key strings are an EPIC #779 Phase 0 contract other issues
+// consume.
+func CapabilityKeys() []Capability { return slices.Clone(capabilityKeys) }
 
 // MTimePrecision is the finest modification time a backend preserves.
 type MTimePrecision string
@@ -198,19 +241,94 @@ var validMetadataSupport = map[MetadataSupport]bool{
 }
 
 // CaseSensitivity is whether two names differing only in case are two
-// objects.
+// objects. It is one axis; CasePreservation is the other.
 type CaseSensitivity string
 
 const (
 	CaseSensitive   CaseSensitivity = "sensitive"
 	CaseInsensitive CaseSensitivity = "insensitive"
-	CasePreserving  CaseSensitivity = "preserving" // insensitive, but the case as written is kept
 	CaseUnknown     CaseSensitivity = "unknown"
 )
 
 var validCaseSensitivity = map[CaseSensitivity]bool{
-	CaseSensitive: true, CaseInsensitive: true,
-	CasePreserving: true, CaseUnknown: true,
+	CaseSensitive: true, CaseInsensitive: true, CaseUnknown: true,
+}
+
+// CasePreservation is whether a stored name keeps the case it was
+// written in, which is a different question from whether two cases are
+// two names.
+type CasePreservation string
+
+const (
+	CasePreserved CasePreservation = "preserved"
+	// CaseNormalized is a backend that rewrites the name - an 8.3 FAT
+	// volume uppercasing it is the one that still exists on hardware
+	// this product runs against.
+	CaseNormalized          CasePreservation = "normalized"
+	CasePreservationUnknown CasePreservation = "unknown"
+)
+
+var validCasePreservation = map[CasePreservation]bool{
+	CasePreserved: true, CaseNormalized: true, CasePreservationUnknown: true,
+}
+
+// GenerationIdentity is what identity a backend gives an object's
+// CONTENT, as opposed to its path.
+type GenerationIdentity string
+
+const (
+	// GenerationVersioned is a per-write identifier the backend assigns
+	// and returns beside the object: S3's versionId, GCS's generation.
+	// It changes on every overwrite. Whether PRIOR versions are retained
+	// is a bucket setting and therefore an instance's configuration, so
+	// this key answers identity and not retention.
+	GenerationVersioned GenerationIdentity = "versioned"
+
+	// GenerationETag is a content-derived validator and nothing more: it
+	// changes when the bytes change and names no retained version.
+	GenerationETag GenerationIdentity = "etag"
+
+	// GenerationNone is a backend offering nothing but the path. An
+	// overwrite that preserves size and mtime is invisible, which is
+	// exactly why a stable slot id must not be reported here as an
+	// identity.
+	GenerationNone GenerationIdentity = "none"
+
+	GenerationUnknown GenerationIdentity = "unknown"
+)
+
+var validGenerationIdentity = map[GenerationIdentity]bool{
+	GenerationVersioned: true, GenerationETag: true,
+	GenerationNone: true, GenerationUnknown: true,
+}
+
+// HashAlgorithm is one checksum a backend can be asked for, spelled the
+// way rclone's own hash registry spells it.
+//
+// The set is closed for the same reason the key vocabulary is: a
+// manifest declaring "sha-256" or "SHA256" would otherwise ship a claim
+// that silently matches nothing a consumer looks for. It holds the
+// general-purpose digests, not the provider-proprietary ones (quickxor,
+// dropbox): a name this engine cannot ask any backend for is a claim no
+// consumer can act on, and adding one is a reviewed diff here rather
+// than a string in a JSON file.
+type HashAlgorithm string
+
+const (
+	HashMD5    HashAlgorithm = "md5"
+	HashSHA1   HashAlgorithm = "sha1"
+	HashSHA256 HashAlgorithm = "sha256"
+	HashSHA512 HashAlgorithm = "sha512"
+	HashCRC32  HashAlgorithm = "crc32"
+)
+
+var validHashAlgorithms = map[HashAlgorithm]bool{
+	HashMD5: true, HashSHA1: true, HashSHA256: true,
+	HashSHA512: true, HashCRC32: true,
+}
+
+func hashAlgorithmList() string {
+	return `"md5", "sha1", "sha256", "sha512", "crc32"`
 }
 
 // Capabilities is one backend's answers, and its zero value is the least
@@ -218,16 +336,18 @@ var validCaseSensitivity = map[CaseSensitivity]bool{
 // declared, every gate below refusing. See the file header for why that
 // is the direction the zero value points.
 type Capabilities struct {
-	BoundedListing   bool             `json:"bounded_listing"`
-	RecursiveListing bool             `json:"recursive_listing"`
-	StreamingOpen    bool             `json:"streaming_open"`
-	RangeOpen        bool             `json:"range_open"`
-	MTimePrecision   MTimePrecision   `json:"mtime_precision"`
-	HashSupport      []string         `json:"hash_support"`
-	StableSize       bool             `json:"stable_size"`
-	SymlinkSemantics SymlinkSemantics `json:"symlink_semantics"`
-	MetadataSupport  MetadataSupport  `json:"metadata_support"`
-	CaseSensitivity  CaseSensitivity  `json:"case_sensitivity"`
+	BoundedListing     bool               `json:"bounded_listing"`
+	RecursiveListing   bool               `json:"recursive_listing"`
+	StreamingOpen      bool               `json:"streaming_open"`
+	RangeOpen          bool               `json:"range_open"`
+	MTimePrecision     MTimePrecision     `json:"mtime_precision"`
+	HashSupport        []HashAlgorithm    `json:"hash_support"`
+	StableSize         bool               `json:"stable_size"`
+	SymlinkSemantics   SymlinkSemantics   `json:"symlink_semantics"`
+	MetadataSupport    MetadataSupport    `json:"metadata_support"`
+	CaseSensitivity    CaseSensitivity    `json:"case_sensitivity"`
+	CasePreservation   CasePreservation   `json:"case_preservation"`
+	GenerationIdentity GenerationIdentity `json:"generation_identity"`
 
 	// declared is which keys the document actually carried, so validation
 	// can refuse a partial block naming the key that is missing rather
@@ -244,10 +364,10 @@ type Capabilities struct {
 func (c Capabilities) Declares(key Capability) bool { return c.declared[key] }
 
 // Undeclared returns the keys this value does not answer, in
-// CapabilityKeys order. Empty means the whole vocabulary was declared.
+// CapabilityKeys() order. Empty means the whole vocabulary was declared.
 func (c Capabilities) Undeclared() []Capability {
 	var missing []Capability
-	for _, key := range CapabilityKeys {
+	for _, key := range capabilityKeys {
 		if !c.declared[key] {
 			missing = append(missing, key)
 		}
@@ -274,8 +394,8 @@ func (c *Capabilities) UnmarshalJSON(raw []byte) error {
 		return fmt.Errorf("capabilities: %w", err)
 	}
 
-	known := make(map[Capability]bool, len(CapabilityKeys))
-	for _, key := range CapabilityKeys {
+	known := make(map[Capability]bool, len(capabilityKeys))
+	for _, key := range capabilityKeys {
 		known[key] = true
 	}
 	var unknown []string
@@ -314,6 +434,10 @@ func (c *Capabilities) UnmarshalJSON(raw []byte) error {
 			err = json.Unmarshal(value, &c.MetadataSupport)
 		case CapCaseSensitivity:
 			err = json.Unmarshal(value, &c.CaseSensitivity)
+		case CapCasePreservation:
+			err = json.Unmarshal(value, &c.CasePreservation)
+		case CapGenerationIdentity:
+			err = json.Unmarshal(value, &c.GenerationIdentity)
 		}
 		if err != nil {
 			return fmt.Errorf("capabilities.%s does not parse: %w", key, err)
@@ -339,8 +463,8 @@ func quoted(values []string) []string {
 }
 
 func capabilityKeyList() string {
-	names := make([]string, len(CapabilityKeys))
-	for i, key := range CapabilityKeys {
+	names := make([]string, len(capabilityKeys))
+	for i, key := range capabilityKeys {
 		names[i] = string(key)
 	}
 	return strings.Join(names, ", ")
@@ -356,7 +480,13 @@ func (m Manifest) DeclaredCapabilities() (Capabilities, bool) {
 	if m.Capabilities == nil {
 		return Capabilities{}, false
 	}
-	return *m.Capabilities, true
+	// The copy is not free and is not optional: Capabilities is a value,
+	// but its hash list is a slice the registry keeps, and a caller that
+	// sorted or appended to it in place would be editing what every
+	// later caller reads.
+	caps := *m.Capabilities
+	caps.HashSupport = slices.Clone(caps.HashSupport)
+	return caps, true
 }
 
 // ErrUnqualifiedBackend is a refusal to enumerate a backend that has not
@@ -367,53 +497,61 @@ func (m Manifest) DeclaredCapabilities() (Capabilities, bool) {
 var ErrUnqualifiedBackend = errors.New("backend: this backend declares no capability matrix, so nothing may assume its directories can be listed safely")
 
 // ErrUnboundedListing is a refusal to enumerate a backend whose listing
-// cannot be bounded, with no ceiling configured to abort at.
+// cannot be bounded. There is no configuration that makes it enumerable,
+// which is why it carries no advice about one.
 var ErrUnboundedListing = errors.New("backend: this backend cannot list a directory in bounded memory")
 
 // EnumerationPlan is how a directory on one backend may be enumerated.
-// It is deliberately two fields and no transport types: this package may
+// It is deliberately one field and no transport types: this package may
 // import nothing from core/internal/transport (see doc.go), and a plan
 // that named a transport option would be that import.
 type EnumerationPlan struct {
 	// Bounded is whether enumeration costs memory proportional to the
 	// caller's buffer rather than to the directory.
+	//
+	// It is true in every plan PlanEnumeration returns today, and that is
+	// the point of the type rather than a redundancy in it: the other
+	// outcomes are refusals, and a caller that stores the plan branches
+	// on a value rather than on having remembered what a nil error meant.
+	// What Phase 1 adds here is in ADR 0008: a per-directory ordering
+	// guarantee, which Kopia's uploader needs and which no bounded walk
+	// gives away for free.
 	Bounded bool
-
-	// MaxDirectoryEntries is the entry count above which enumeration must
-	// refuse, and it is zero exactly when Bounded is true, because a
-	// streaming enumeration has no count to refuse: a ceiling there would
-	// be an arbitrary rejection of a directory this engine can walk.
-	MaxDirectoryEntries int
 }
 
 // PlanEnumeration decides how - or whether - a directory on this backend
-// may be enumerated, given the ceiling an operator has configured for a
-// backend that cannot stream (zero meaning none configured).
-//
-// The three answers, and why the middle one exists:
+// may be enumerated. One plan and two refusals, and the refusals are the
+// point of the function:
 //
 //   - The manifest declares no capabilities: ErrUnqualifiedBackend. Not a
 //     guess, not a conservative-looking default that is still a guess.
-//   - bounded_listing: a plan with no ceiling. The peak is the buffer.
-//   - not bounded_listing, and a ceiling is configured: a plan carrying
-//     it. The enumeration aborts when a directory turns out to be bigger,
-//     which is a late refusal - the entries are already in memory by the
-//     time anything can count them, because that is what "not bounded"
-//     means - but it is bounded by a number an operator chose and it
-//     fails as an error a person can act on instead of as a kill signal.
-//   - not bounded_listing, no ceiling: ErrUnboundedListing. Fail closed.
-func (m Manifest) PlanEnumeration(maxDirectoryEntries int) (EnumerationPlan, error) {
+//   - bounded_listing: a plan. The peak is the caller's buffer.
+//   - not bounded_listing: ErrUnboundedListing, before anything is
+//     dialed, opened or allocated. Fail closed.
+//
+// # Why there is no ceiling parameter
+//
+// There was one, and it was wrong in a way worth recording so it is not
+// reintroduced: an operator-configured maximum directory size, which
+// turned the third answer into "walk it, and refuse a directory holding
+// more than N entries". That number cannot be a memory bound. Counting
+// entries requires having them, and having them is the allocation - on
+// the unbounded path the whole directory is materialised by
+// rclone/pkg-sftp before any code above can call len() on it, so the
+// refusal arrives after the cost it was supposed to prevent, i.e. never,
+// because the process is already dead on the directory that mattered.
+// A ceiling is a fine thing to have for other reasons (a producer that
+// wrote 20,000,000 files is a problem an operator wants told about), and
+// it is not this decision, so it is not this function's parameter.
+func (m Manifest) PlanEnumeration() (EnumerationPlan, error) {
 	caps, ok := m.DeclaredCapabilities()
 	if !ok {
 		return EnumerationPlan{}, fmt.Errorf("%w: %q", ErrUnqualifiedBackend, m.ID)
 	}
-	if caps.BoundedListing {
-		return EnumerationPlan{Bounded: true}, nil
-	}
-	if maxDirectoryEntries <= 0 {
+	if !caps.BoundedListing {
 		return EnumerationPlan{}, fmt.Errorf(
-			"%w: %q, and no maximum directory size is configured for it, so a directory of any size would be read whole",
+			"%w: %q, so a directory of any size would be read into memory whole before anything could refuse it",
 			ErrUnboundedListing, m.ID)
 	}
-	return EnumerationPlan{MaxDirectoryEntries: maxDirectoryEntries}, nil
+	return EnumerationPlan{Bounded: true}, nil
 }

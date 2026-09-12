@@ -128,10 +128,12 @@
 // added by #792 and owned by capability.go, are what the BACKEND is:
 // facts about the protocol and the code that speaks it, identical for
 // every instance, and not discoverable from any configuration an
-// operator could supply. Ten keys, closed in Go (CapabilityKeys),
-// consumed inside EPIC #779 by the bounded enumerator
-// (core/internal/transport.LocalEnumerator) and by #793's
-// metadata-trust classification.
+// operator could supply. Twelve keys, closed in Go (CapabilityKeys(),
+// which hands out a copy), consumed inside EPIC #779 by the bounded
+// enumerator (core/internal/transport.LocalEnumerator), by #793's
+// metadata-trust classification, and - through generation_identity -
+// by #824's decision about whether an object's content can be trusted
+// to be unchanged without reading it.
 //
 // It breaks this format's own default-shaped habit on purpose, and that
 // is the thing to read before changing it. Configurable defaults to TRUE

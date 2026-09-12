@@ -14,7 +14,9 @@
     "stable_size": true,
     "symlink_semantics": "unsupported",
     "metadata_support": "partial",
-    "case_sensitivity": "sensitive"
+    "case_sensitivity": "sensitive",
+    "case_preservation": "preserved",
+    "generation_identity": "versioned"
   },
   "fields": [
     {

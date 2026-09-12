@@ -7,11 +7,12 @@ import (
 	"testing"
 )
 
-// The capability matrix is issue #792's half of the Phase 0 contract: ten
-// keys, owned by this package, that say what a backend can actually be
-// asked to DO, as opposed to what an operator can configure about it
-// (Fields) or what a connection test would prove about one instance
-// (Probe). Every test in this file is about one of two properties:
+// The capability matrix is issue #792's half of the Phase 0 contract:
+// twelve keys, owned by this package, that say what a backend can
+// actually be asked to DO, as opposed to what an operator can configure
+// about it (Fields) or what a connection test would prove about one
+// instance (Probe). Every test in this file is about one of two
+// properties:
 //
 //   - the vocabulary is closed and every shipped manifest answers all of
 //     it, so a consumer never has to guess what silence meant;
@@ -22,8 +23,9 @@ import (
 // TestCapabilityKeysAreExactly pins the vocabulary name for name. The key
 // set is a cross-issue contract in EPIC #779 Phase 0 (#793 classifies
 // metadata trust from mtime_precision, hash_support, stable_size and
-// metadata_support), so a rename is a reviewed diff that breaks a named
-// test rather than a field somebody quietly stopped populating.
+// metadata_support; #824's trust classifier reads generation_identity),
+// so a rename is a reviewed diff that breaks a named test rather than a
+// field somebody quietly stopped populating.
 func TestCapabilityKeysAreExactly(t *testing.T) {
 	want := []Capability{
 		CapBoundedListing,
@@ -36,26 +38,50 @@ func TestCapabilityKeysAreExactly(t *testing.T) {
 		CapSymlinkSemantics,
 		CapMetadataSupport,
 		CapCaseSensitivity,
+		CapCasePreservation,
+		CapGenerationIdentity,
 	}
-	if !reflect.DeepEqual(CapabilityKeys, want) {
-		t.Fatalf("CapabilityKeys = %v, want %v", CapabilityKeys, want)
+	if !reflect.DeepEqual(CapabilityKeys(), want) {
+		t.Fatalf("CapabilityKeys() = %v, want %v", CapabilityKeys(), want)
 	}
 	spelled := []string{
 		"bounded_listing", "recursive_listing", "streaming_open", "range_open",
 		"mtime_precision", "hash_support", "stable_size", "symlink_semantics",
-		"metadata_support", "case_sensitivity",
+		"metadata_support", "case_sensitivity", "case_preservation",
+		"generation_identity",
 	}
-	for i, key := range CapabilityKeys {
+	for i, key := range CapabilityKeys() {
 		if string(key) != spelled[i] {
-			t.Errorf("CapabilityKeys[%d] is %q, and the contract spells it %q", i, key, spelled[i])
+			t.Errorf("CapabilityKeys()[%d] is %q, and the contract spells it %q", i, key, spelled[i])
 		}
 	}
 }
 
+// TestTheVocabularyCannotBeEditedByACaller is why CapabilityKeys is a
+// function and not the exported slice it used to be. A package-level
+// slice is writable by every importer, and the code it would be edited
+// out from under is validation - the one place that is supposed to be
+// the authority on what a complete manifest answers.
+func TestTheVocabularyCannotBeEditedByACaller(t *testing.T) {
+	keys := CapabilityKeys()
+	keys[0] = "not_a_capability"
+	keys = keys[:1]
+	_ = keys
+
+	if got := CapabilityKeys(); !reflect.DeepEqual(got, capabilityKeys) {
+		t.Fatalf("a caller's edit reached the vocabulary: %v", got)
+	}
+	var zero Capabilities
+	if len(zero.Undeclared()) != len(capabilityKeys) {
+		t.Errorf("Undeclared() reports %d keys after a caller edited its copy, want all %d",
+			len(zero.Undeclared()), len(capabilityKeys))
+	}
+}
+
 // TestEveryBundledManifestDeclaresTheWholeCapabilityMatrix is the reason
-// the block is all-or-nothing: a shipped backend that answers nine of ten
-// keys is a backend whose tenth answer some consumer will infer, and the
-// inference that costs nothing to make is the optimistic one.
+// the block is all-or-nothing: a shipped backend that answers eleven of
+// twelve keys is a backend whose twelfth answer some consumer will infer,
+// and the inference that costs nothing to make is the optimistic one.
 func TestEveryBundledManifestDeclaresTheWholeCapabilityMatrix(t *testing.T) {
 	reg, err := Bundled()
 	if err != nil {
@@ -103,40 +129,46 @@ func TestTheBundledCapabilityValuesAreHonest(t *testing.T) {
 	}
 	want := map[string]Capabilities{
 		"local_volume": {
-			BoundedListing:   true,
-			RecursiveListing: false,
-			StreamingOpen:    true,
-			RangeOpen:        true,
-			MTimePrecision:   MTimeNanosecond,
-			HashSupport:      []string{"md5", "sha1", "sha256"},
-			StableSize:       true,
-			SymlinkSemantics: SymlinksSkipped,
-			MetadataSupport:  MetadataFull,
-			CaseSensitivity:  CaseUnknown,
+			BoundedListing:     true,
+			RecursiveListing:   false,
+			StreamingOpen:      true,
+			RangeOpen:          true,
+			MTimePrecision:     MTimeNanosecond,
+			HashSupport:        []HashAlgorithm{HashMD5, HashSHA1, HashSHA256},
+			StableSize:         true,
+			SymlinkSemantics:   SymlinksSkipped,
+			MetadataSupport:    MetadataFull,
+			CaseSensitivity:    CaseUnknown,
+			CasePreservation:   CasePreservationUnknown,
+			GenerationIdentity: GenerationNone,
 		},
 		"s3": {
-			BoundedListing:   true,
-			RecursiveListing: true,
-			StreamingOpen:    true,
-			RangeOpen:        true,
-			MTimePrecision:   MTimeMillisecond,
-			HashSupport:      []string{"md5"},
-			StableSize:       true,
-			SymlinkSemantics: SymlinksUnsupported,
-			MetadataSupport:  MetadataPartial,
-			CaseSensitivity:  CaseSensitive,
+			BoundedListing:     true,
+			RecursiveListing:   true,
+			StreamingOpen:      true,
+			RangeOpen:          true,
+			MTimePrecision:     MTimeMillisecond,
+			HashSupport:        []HashAlgorithm{HashMD5},
+			StableSize:         true,
+			SymlinkSemantics:   SymlinksUnsupported,
+			MetadataSupport:    MetadataPartial,
+			CaseSensitivity:    CaseSensitive,
+			CasePreservation:   CasePreserved,
+			GenerationIdentity: GenerationVersioned,
 		},
 		"sftp": {
-			BoundedListing:   false,
-			RecursiveListing: false,
-			StreamingOpen:    true,
-			RangeOpen:        true,
-			MTimePrecision:   MTimeSecond,
-			HashSupport:      nil,
-			StableSize:       true,
-			SymlinkSemantics: SymlinksSkipped,
-			MetadataSupport:  MetadataPartial,
-			CaseSensitivity:  CaseUnknown,
+			BoundedListing:     false,
+			RecursiveListing:   false,
+			StreamingOpen:      true,
+			RangeOpen:          true,
+			MTimePrecision:     MTimeSecond,
+			HashSupport:        nil,
+			StableSize:         true,
+			SymlinkSemantics:   SymlinksSkipped,
+			MetadataSupport:    MetadataPartial,
+			CaseSensitivity:    CaseUnknown,
+			CasePreservation:   CasePreservationUnknown,
+			GenerationIdentity: GenerationNone,
 		},
 	}
 	for id, expect := range want {
@@ -157,9 +189,34 @@ func TestTheBundledCapabilityValuesAreHonest(t *testing.T) {
 			got.SymlinkSemantics != expect.SymlinkSemantics ||
 			got.MetadataSupport != expect.MetadataSupport ||
 			got.CaseSensitivity != expect.CaseSensitivity ||
+			got.CasePreservation != expect.CasePreservation ||
+			got.GenerationIdentity != expect.GenerationIdentity ||
 			!reflect.DeepEqual(got.HashSupport, expect.HashSupport) {
 			t.Errorf("%s capabilities:\n got %+v\nwant %+v", id, got, expect)
 		}
+	}
+}
+
+// TestTheHashListAManifestDeclaredCannotBeEditedThroughIt is the same
+// ownership rule as the vocabulary's, one level down: the registry holds
+// every manifest for the life of the process, and DeclaredCapabilities
+// hands out a value whose only reference type is this slice. A consumer
+// that sorted it in place would be editing what the next consumer reads.
+func TestTheHashListAManifestDeclaredCannotBeEditedThroughIt(t *testing.T) {
+	reg, err := Bundled()
+	if err != nil {
+		t.Fatalf("Bundled(): %v", err)
+	}
+	m, err := reg.Backend("local_volume")
+	if err != nil {
+		t.Fatalf("Backend: %v", err)
+	}
+	caps, _ := m.DeclaredCapabilities()
+	caps.HashSupport[0] = "not_a_hash"
+
+	again, _ := m.DeclaredCapabilities()
+	if again.HashSupport[0] != HashMD5 {
+		t.Errorf("local_volume's declared hashes now read %v: a caller's edit reached the registry", again.HashSupport)
 	}
 }
 
@@ -175,7 +232,9 @@ const capabilityBlock = `"capabilities": {
     "stable_size": true,
     "symlink_semantics": "skip",
     "metadata_support": "full",
-    "case_sensitivity": "unknown"
+    "case_sensitivity": "unknown",
+    "case_preservation": "unknown",
+    "generation_identity": "none"
   },`
 
 // withCapabilities splices a capabilities block into one of the fixture
@@ -213,7 +272,7 @@ func TestAPartiallyDeclaredCapabilityBlockIsRefusedByName(t *testing.T) {
 	partial := strings.Replace(capabilityBlock, `"stable_size": true,`, "", 1)
 	_, err := Load(mapFS(map[string]string{"a.json": withCapabilities(validLocalVolumeManifest, partial)}))
 	if err == nil {
-		t.Fatal("a manifest declaring nine of ten capability keys loaded; silence on one key is a capability a consumer would have to guess")
+		t.Fatal("a manifest declaring eleven of twelve capability keys loaded; silence on one key is a capability a consumer would have to guess")
 	}
 	if !errors.Is(err, ErrMalformedManifest) {
 		t.Errorf("error is not ErrMalformedManifest: %v", err)
@@ -239,15 +298,26 @@ func TestAnUnknownCapabilityKeyIsRefused(t *testing.T) {
 	}
 }
 
-// TestACapabilityEnumValueOutsideItsVocabularyIsRefused covers the four
-// keys that are not booleans. "sometimes" is the shape of a real mistake:
-// a value that reads like an answer and that no consumer could branch on.
+// TestACapabilityEnumValueOutsideItsVocabularyIsRefused covers the keys
+// that are not booleans. "sometimes" is the shape of a real mistake: a
+// value that reads like an answer and that no consumer could branch on.
+//
+// The case_sensitivity case is the one to read twice. "preserving" was a
+// legal value of that key and is not one any more, because it answered a
+// different question - whether the name comes back spelled the way it
+// went in - and a key that answers two questions can be read as either.
+// It now lives in case_preservation, and the old spelling is refused
+// rather than quietly accepted as the sensitivity it never described.
 func TestACapabilityEnumValueOutsideItsVocabularyIsRefused(t *testing.T) {
 	for _, tc := range []struct{ name, from, to string }{
 		{"mtime_precision", `"mtime_precision": "1ns",`, `"mtime_precision": "sometimes",`},
 		{"symlink_semantics", `"symlink_semantics": "skip",`, `"symlink_semantics": "maybe",`},
 		{"metadata_support", `"metadata_support": "full",`, `"metadata_support": "some",`},
-		{"case_sensitivity", `"case_sensitivity": "unknown"`, `"case_sensitivity": "mixed"`},
+		{"case_sensitivity", `"case_sensitivity": "unknown",`, `"case_sensitivity": "mixed",`},
+		{"case_sensitivity_no_longer_answers_preservation", `"case_sensitivity": "unknown",`, `"case_sensitivity": "preserving",`},
+		{"case_preservation", `"case_preservation": "unknown",`, `"case_preservation": "mostly",`},
+		{"generation_identity", `"generation_identity": "none"`, `"generation_identity": "sometimes"`},
+		{"hash_support", `"hash_support": ["md5", "sha1", "sha256"],`, `"hash_support": ["md5", "sha-256"],`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			block := strings.Replace(capabilityBlock, tc.from, tc.to, 1)
@@ -258,7 +328,8 @@ func TestACapabilityEnumValueOutsideItsVocabularyIsRefused(t *testing.T) {
 			if err == nil {
 				t.Fatalf("a manifest declaring %s outside its vocabulary loaded", tc.name)
 			}
-			if !strings.Contains(err.Error(), tc.name) {
+			key, _, _ := strings.Cut(tc.name, "_no_longer")
+			if !strings.Contains(err.Error(), key) {
 				t.Errorf("the refusal does not name the key it is about: %v", err)
 			}
 		})
@@ -281,7 +352,7 @@ func TestAnUnqualifiedBackendIsRefusedRatherThanEnumerated(t *testing.T) {
 		t.Fatal("a manifest with no capabilities block reports declared capabilities")
 	}
 
-	plan, err := m.PlanEnumeration(0)
+	plan, err := m.PlanEnumeration()
 	if err == nil {
 		t.Fatalf("an unqualified backend planned an enumeration: %+v", plan)
 	}
@@ -291,20 +362,18 @@ func TestAnUnqualifiedBackendIsRefusedRatherThanEnumerated(t *testing.T) {
 	if !strings.Contains(err.Error(), "local_volume") {
 		t.Errorf("the refusal does not name the backend it is about: %v", err)
 	}
-
-	// An operator-configured ceiling does not buy its way past this. A
-	// ceiling says "directories here are smaller than N"; it says nothing
-	// about whether the backend can be read without materialising one.
-	if _, err := m.PlanEnumeration(1000); !errors.Is(err, ErrUnqualifiedBackend) {
-		t.Errorf("a configured ceiling talked an unqualified backend into being enumerable: %v", err)
-	}
+	// The refusal names the backend and nothing else: there is no
+	// argument to this call, so there is nothing an operator could pass
+	// that would turn silence about bounded_listing into permission.
 }
 
-// TestABackendThatCannotStreamIsRefusedUnlessACeilingIsConfigured is
-// option C of the ADR, expressed as a function: sftp cannot be read in
-// bounded memory, so enumerating it is a refusal until an operator states
-// a ceiling this engine will abort at.
-func TestABackendThatCannotStreamIsRefusedUnlessACeilingIsConfigured(t *testing.T) {
+// TestABackendThatCannotStreamIsRefusedOutright is option C of the ADR,
+// expressed as a function: sftp's directories arrive as one slice, so
+// this engine refuses to enumerate sftp at all. There is no configuration
+// that changes that answer, which is the correction this PR makes to the
+// original design - see PlanEnumeration's "why there is no ceiling
+// parameter".
+func TestABackendThatCannotStreamIsRefusedOutright(t *testing.T) {
 	reg, err := Bundled()
 	if err != nil {
 		t.Fatalf("Bundled(): %v", err)
@@ -314,27 +383,22 @@ func TestABackendThatCannotStreamIsRefusedUnlessACeilingIsConfigured(t *testing.
 		t.Fatalf("Backend(\"sftp\"): %v", err)
 	}
 
-	if _, err := sftp.PlanEnumeration(0); !errors.Is(err, ErrUnboundedListing) {
-		t.Fatalf("sftp with no configured ceiling: error is %v, want ErrUnboundedListing", err)
-	}
-
-	plan, err := sftp.PlanEnumeration(50_000)
-	if err != nil {
-		t.Fatalf("sftp with a ceiling of 50k: %v", err)
+	plan, err := sftp.PlanEnumeration()
+	if !errors.Is(err, ErrUnboundedListing) {
+		t.Fatalf("sftp: error is %v, want ErrUnboundedListing", err)
 	}
 	if plan.Bounded {
-		t.Error("the plan claims bounded enumeration for a backend whose listing is one slice")
+		t.Error("a refused plan claims bounded enumeration")
 	}
-	if plan.MaxDirectoryEntries != 50_000 {
-		t.Errorf("plan.MaxDirectoryEntries = %d, want the configured 50000", plan.MaxDirectoryEntries)
+	if !strings.Contains(err.Error(), "sftp") {
+		t.Errorf("the refusal does not name the backend it is about: %v", err)
 	}
 }
 
-// TestABackendThatStreamsNeedsNoCeiling is the other side: local_volume
-// is read in chunks, so its peak is the chunk and there is nothing for a
-// ceiling to protect. A plan that carried one anyway would be an
-// arbitrary refusal of a directory this engine can in fact walk.
-func TestABackendThatStreamsNeedsNoCeiling(t *testing.T) {
+// TestABackendThatStreamsPlansABoundedEnumeration is the other side:
+// local_volume is read in chunks, so its peak is the caller's buffer and
+// there is nothing left for this function to decide.
+func TestABackendThatStreamsPlansABoundedEnumeration(t *testing.T) {
 	reg, err := Bundled()
 	if err != nil {
 		t.Fatalf("Bundled(): %v", err)
@@ -343,15 +407,12 @@ func TestABackendThatStreamsNeedsNoCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Backend(\"local_volume\"): %v", err)
 	}
-	plan, err := local.PlanEnumeration(0)
+	plan, err := local.PlanEnumeration()
 	if err != nil {
-		t.Fatalf("local_volume with no ceiling: %v", err)
+		t.Fatalf("local_volume: %v", err)
 	}
 	if !plan.Bounded {
 		t.Error("plan.Bounded is false for a backend declaring bounded_listing")
-	}
-	if plan.MaxDirectoryEntries != 0 {
-		t.Errorf("plan.MaxDirectoryEntries = %d, want 0: a streaming enumeration has no entry count to refuse", plan.MaxDirectoryEntries)
 	}
 }
 
@@ -368,10 +429,13 @@ func TestTheZeroCapabilitiesValueIsTheLeastCapableOne(t *testing.T) {
 	if len(zero.HashSupport) != 0 {
 		t.Errorf("a zero Capabilities claims hashes: %v", zero.HashSupport)
 	}
-	if len(zero.Undeclared()) != len(CapabilityKeys) {
-		t.Errorf("a zero Capabilities reports %d undeclared keys, want all %d", len(zero.Undeclared()), len(CapabilityKeys))
+	if zero.CasePreservation != "" || zero.GenerationIdentity != "" {
+		t.Errorf("a zero Capabilities claims a name or content identity: %+v", zero)
 	}
-	for _, key := range CapabilityKeys {
+	if len(zero.Undeclared()) != len(CapabilityKeys()) {
+		t.Errorf("a zero Capabilities reports %d undeclared keys, want all %d", len(zero.Undeclared()), len(CapabilityKeys()))
+	}
+	for _, key := range CapabilityKeys() {
 		if zero.Declares(key) {
 			t.Errorf("a zero Capabilities claims to declare %s", key)
 		}

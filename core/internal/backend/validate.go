@@ -210,19 +210,30 @@ func validateManifestCapabilities(file string, m Manifest) []error {
 	}
 	if caps.Declares(CapCaseSensitivity) && !validCaseSensitivity[caps.CaseSensitivity] {
 		addf("capabilities.case_sensitivity is %q, and the accepted values are %s",
-			caps.CaseSensitivity, `"sensitive", "insensitive", "preserving", "unknown"`)
+			caps.CaseSensitivity, `"sensitive", "insensitive", "unknown"`)
+	}
+	if caps.Declares(CapCasePreservation) && !validCasePreservation[caps.CasePreservation] {
+		addf("capabilities.case_preservation is %q, and the accepted values are %s",
+			caps.CasePreservation, `"preserved", "normalized", "unknown"`)
+	}
+	if caps.Declares(CapGenerationIdentity) && !validGenerationIdentity[caps.GenerationIdentity] {
+		addf("capabilities.generation_identity is %q, and the accepted values are %s",
+			caps.GenerationIdentity, `"versioned", "etag", "none", "unknown"`)
 	}
 
-	// A hash this boundary cannot ask for is a claim nothing can act on.
-	// The names are rclone's own (transport.SHA256 is the only algorithm
-	// this product's own verification speaks; see transport.go), and the
-	// list is sorted so two manifests declaring the same set are the same
-	// document.
-	seen := map[string]bool{}
+	// A hash this boundary cannot ask for is a claim nothing can act on,
+	// so the names are a closed vocabulary (HashAlgorithm) rather than
+	// free text: "sha-256" in a manifest would otherwise ship as a claim
+	// that matches nothing any consumer looks for. The list is sorted so
+	// two manifests declaring the same set are the same document.
+	seen := map[HashAlgorithm]bool{}
 	for i, name := range caps.HashSupport {
 		switch {
 		case name == "":
 			addf("capabilities.hash_support[%d] is empty", i)
+		case !validHashAlgorithms[name]:
+			addf("capabilities.hash_support[%d] is %q, and the accepted algorithms are %s",
+				i, name, hashAlgorithmList())
 		case seen[name]:
 			addf("capabilities.hash_support declares %q more than once", name)
 		}
