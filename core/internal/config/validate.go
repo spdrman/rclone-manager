@@ -54,6 +54,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -148,6 +149,7 @@ func (c *Config) Validate() error {
 	}
 
 	declaredMediums := v.validateStorageMediums(c.StorageMediums)
+	declaredDomains := v.validateRepositoryDomains(c.RepositoryDomains)
 	v.validateMaxMovesPerCycle(c.MaxMovesPerCycle, len(c.StorageMediums))
 	v.validateRetention(&c.Retention)
 
@@ -178,6 +180,12 @@ func (c *Config) Validate() error {
 	// so see validateTierMedium for how the rules are split to keep that
 	// path checking everything it can.
 	v.validateMediumReferences(c, declaredMediums)
+
+	// Phase 2 for the same reason as the line above, one axis over: a set
+	// cannot know whether the repository domain it names is declared, nor
+	// whether another set already occupies it. Both are properties of the
+	// whole file (EPIC K, #780).
+	v.validateEngineReferences(c, declaredDomains)
 
 	v.validateAlerts(&c.Alerts)
 	v.validateCapacity(&c.Capacity)
@@ -413,6 +421,379 @@ func (v *validator) validateBackupSet(path, sourceName string, sourceReadOnly bo
 
 	v.validateValidation(path+".validation", &bs.Validation)
 	v.validateRevalidation(path+".revalidation", &bs.Revalidation)
+
+	// EPIC K's engine seam, resolved last because it reads what the
+	// checks above have already validated and normalized: the set's
+	// identity, its remote and its paths.
+	v.resolveBackupSetEngine(path, bs)
+}
+
+// setUUIDShape is the canonical uuid form a backup set's durable
+// identifier has to be written in. Either case is accepted, because
+// model.NewSourceIdentity folds case and two spellings of one uuid must
+// therefore name one lineage; anything that is not a uuid at all is
+// refused, because this value is the only thing standing between a rename
+// and an orphaned snapshot history, and "probably unique" is not a
+// property a lineage can rest on.
+var setUUIDShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// resolveBackupSetEngine resolves EPIC K's engine seam for one backup set:
+// which engine it runs, and, for an incremental set, the repository domain
+// it stores snapshots in, what the operator arranged around the source,
+// how far its restore points are verified, and its stable source identity.
+//
+// It both validates and resolves, which is Validate's contract: every
+// field it fills in is read directly downstream and re-derived nowhere.
+//
+// The one rule worth stating on its own is what happens when the engine
+// key itself is wrong. Nothing else is then checked, because every
+// remaining rule depends on which engine is running: complaining that
+// repository_domain is meaningless on a set whose engine is a typo would
+// point an operator at the key they got right (the deadconfig discipline
+// TestValidate_AnUnknownMediumTypeIsReportedOnceAndNotTwice already holds
+// for storage mediums).
+func (v *validator) resolveBackupSetEngine(path string, bs *BackupSet) {
+	engine, err := model.ResolveBackupEngine(bs.EngineConfig)
+	if err != nil {
+		v.addf("%s: engine: %v", path, err)
+
+		// Leave the set on the engine every existing configuration runs.
+		// Validate is already going to refuse this config, so nothing
+		// reads this value; what it buys is that a caller inspecting the
+		// failed Config does not see a backup set with no engine at all.
+		bs.Engine = model.EngineArtifact
+		v.clearIncrementalResolution(bs)
+
+		return
+	}
+
+	bs.Engine = engine
+
+	if !engine.UsesRepository() {
+		v.refuseIncrementalKeys(path, bs)
+		v.clearIncrementalResolution(bs)
+
+		return
+	}
+
+	if bs.UUID == "" {
+		v.addf("%s: uuid is required for engine %q: a snapshot lineage that hung off this set's name would be orphaned the first time the set is renamed", path, engine)
+	} else if !setUUIDShape.MatchString(bs.UUID) {
+		v.addf("%s: uuid %q is not a uuid; this identifier is what keeps a snapshot lineage attached to this set across every rename", path, bs.UUID)
+	}
+
+	bs.Repository = model.RepositoryRef{}
+
+	switch {
+	case bs.RepositoryDomainConfig == "":
+		v.addf("%s: repository_domain is required for engine %q; a set whose repository nobody named would share an encryption key, a credential, a maintenance window, a deduplication span and a corruption fate with whatever else happened to be there",
+			path, engine)
+	default:
+		domain, err := model.NewRepositoryDomainID(bs.RepositoryDomainConfig)
+		switch {
+		case err != nil:
+			v.addf("%s: repository_domain: %v", path, err)
+		case bs.ID.IsZero():
+			// The set's own identity did not resolve, which is already
+			// reported. A reference carrying no set cannot be checked for
+			// co-tenancy, so it is left unset rather than half-built.
+		default:
+			bs.Repository = model.RepositoryRef{Domain: domain, Set: bs.ID}
+		}
+	}
+
+	if bs.ConsistencyConfig == "" {
+		// The weakest claim, because inferring quiescence or a frozen
+		// image from silence would let a run report a point-in-time
+		// snapshot that never existed (ADR 0009).
+		bs.Consistency = model.ModeLiveBestEffort
+	} else if mode, err := model.ParseConsistencyMode(bs.ConsistencyConfig); err != nil {
+		v.addf("%s: source_consistency: %v", path, err)
+		bs.Consistency = ""
+	} else {
+		bs.Consistency = mode
+	}
+
+	if bs.VerificationLevelConfig == "" {
+		bs.VerificationLevel = model.DefaultVerificationLevel
+	} else if level, err := model.ParseVerificationLevel(bs.VerificationLevelConfig); err != nil {
+		v.addf("%s: verification_level: %v", path, err)
+		bs.VerificationLevel = ""
+	} else {
+		bs.VerificationLevel = level
+	}
+
+	v.resolveSourceIdentity(path, bs)
+}
+
+// refuseIncrementalKeys refuses every key an artifact set cannot act on.
+//
+// This is the rule deadconfig_test states for storage mediums, applied to
+// the engine seam: a configuration this build validates and can never
+// execute is worse than one it refuses, because the operator who wrote the
+// key believes something about how their backup runs and `backupd check`
+// told them it was fine.
+func (v *validator) refuseIncrementalKeys(path string, bs *BackupSet) {
+	for _, key := range []struct {
+		name    string
+		written string
+	}{
+		{"uuid", bs.UUID},
+		{"repository_domain", bs.RepositoryDomainConfig},
+		{"source_consistency", bs.ConsistencyConfig},
+		{"verification_level", bs.VerificationLevelConfig},
+		{"source_mount_prefix", bs.SourceMountPrefix},
+	} {
+		if key.written == "" {
+			continue
+		}
+
+		v.addf("%s: %s is only read by the %q engine, and this set runs the %q engine; remove the key, or set engine: %s",
+			path, key.name, model.EngineKopia, bs.Engine, model.EngineKopia)
+	}
+}
+
+// clearIncrementalResolution puts the resolved incremental fields back to
+// their zero values.
+//
+// It exists for Validate's idempotency promise, which is not decoration
+// here: cmd/backupd's retention overrides re-validate a Config in
+// place, and a set switched from the incremental engine to the artifact
+// engine between two calls would otherwise keep a repository reference and
+// a source identity that the second call never resolved.
+func (v *validator) clearIncrementalResolution(bs *BackupSet) {
+	bs.Repository = model.RepositoryRef{}
+	bs.Consistency = ""
+	bs.VerificationLevel = ""
+	bs.SourceIdentity = ""
+}
+
+// resolveSourceIdentity fills in the stable identity of this set's source.
+//
+// Every input it needs has already been validated by the checks above, so
+// this function's job when one of them is missing is to STAY QUIET: an
+// unreachable remote type, an absent host and a relative remote_path have
+// each been reported once already, and reporting them again as "cannot
+// compute a source identity" would bury the fixable mistake under a
+// consequence of itself.
+//
+// What it does report is the one mistake only it can see: a
+// source_mount_prefix that is not a segment prefix of remote_path.
+// Ignoring that would silently put the whole mount path back into the
+// identity, for the one deployment that tried hardest to keep it out.
+func (v *validator) resolveSourceIdentity(path string, bs *BackupSet) {
+	bs.SourceIdentity = ""
+
+	kind, known := sourceEndpointKind(bs.Remote.Type)
+	if !known {
+		return
+	}
+
+	if kind == model.EndpointSFTP && (bs.Remote.Host == "" || bs.Remote.User == "") {
+		return
+	}
+
+	if validAbsolutePath(bs.RemotePath) != nil {
+		return
+	}
+
+	if bs.UUID == "" || !setUUIDShape.MatchString(bs.UUID) {
+		return
+	}
+
+	id, err := model.NewSourceIdentity(model.SourceIdentityInput{
+		SetUUID: bs.UUID,
+		Endpoint: model.SourceEndpoint{
+			Kind: kind,
+			Host: bs.Remote.Host,
+			Port: bs.Remote.Port,
+			User: bs.Remote.User,
+		},
+		Root: model.SourceRoot{Path: bs.RemotePath, MountPrefix: bs.SourceMountPrefix},
+	})
+	if err != nil {
+		if bs.SourceMountPrefix != "" {
+			v.addf("%s: source_mount_prefix %q: %v", path, bs.SourceMountPrefix, err)
+
+			return
+		}
+
+		v.addf("%s: source identity: %v", path, err)
+
+		return
+	}
+
+	bs.SourceIdentity = id
+}
+
+// sourceEndpointKind translates a remote's configured type into the source
+// endpoint kind an identity is computed over.
+//
+// It is a switch rather than a cast because the two vocabularies are
+// allowed to diverge: FR-4 fixes which backends this build registers, and
+// model's closed set exists so that a kind with no known default port
+// cannot be canonicalised. An unknown type reports false and says nothing;
+// validateRemote has already refused it.
+func sourceEndpointKind(remoteType string) (model.SourceEndpointKind, bool) {
+	switch remoteType {
+	case "local":
+		return model.EndpointLocal, true
+	case "sftp":
+		return model.EndpointSFTP, true
+	default:
+		return "", false
+	}
+}
+
+// validateRepositoryDomains checks every declared repository domain and
+// resolves it, returning the domains a backup set may reference by id.
+//
+// A domain nothing references is legal, exactly as a declared storage
+// medium no tier names is: declaring the boundary before pointing a set at
+// it is how an operator builds one up, and refusing it would mean a domain
+// can only be added in the same edit as the set that uses it.
+//
+// A domain whose isolation did not resolve is still returned, with its
+// isolation left unset. That is deliberate: the operator has to fix the
+// isolation key, and also telling them that every set referencing the
+// domain is "not declared" would be a second complaint about the same
+// mistake. Phase 2 skips the co-tenancy check for such a domain (see
+// validateEngineReferences).
+func (v *validator) validateRepositoryDomains(domains []RepositoryDomainConfig) map[string]model.RepositoryDomain {
+	declared := make(map[string]model.RepositoryDomain, len(domains))
+	claimedBy := make(map[string]string, len(domains))
+
+	for i := range domains {
+		d := &domains[i]
+		path := fmt.Sprintf("repository_domains[%d]", i)
+
+		id, err := model.NewRepositoryDomainID(d.ID)
+		if err != nil {
+			v.addf("%s: %v", path, err)
+
+			continue
+		}
+
+		if prev, dup := claimedBy[id.String()]; dup {
+			v.addf("%s: repository domain id %q is already declared by %s; two entries claiming one id are two boundaries with one name, and whichever a backup set means, the other is silently not in force",
+				path, id, prev)
+
+			continue
+		}
+		claimedBy[id.String()] = path
+
+		// An unresolvable isolation is reported and left zero, so the
+		// domain is referenceable (see this function's own doc) while the
+		// boundary it would enforce is not yet decided.
+		isolation, err := model.ParseRepositoryIsolation(d.Isolation)
+		if err != nil {
+			v.addf("%s: isolation: %v", path, err)
+		}
+
+		d.Domain = model.RepositoryDomain{ID: id, Description: d.Description, Isolation: isolation}
+		declared[id.String()] = d.Domain
+	}
+
+	return declared
+}
+
+// validateEngineReferences is the whole-file half of the engine seam: the
+// two rules no single backup set can check for itself.
+//
+// A set cannot know whether the repository domain it names is declared, and
+// it cannot know whether another set already occupies it. Both are
+// properties of the config as a whole, which is why this runs in Validate's
+// phase 2 beside the medium-reference check, after every set has resolved
+// its own engine.
+//
+// The co-tenancy decision itself is model.RepositoryDomain.MayShare's, not
+// this function's. That is the point of the model type: the rule and the
+// sentence explaining what sharing costs live in one place, so the API, the
+// CLI and this validator cannot each grow their own version of it.
+func (v *validator) validateEngineReferences(c *Config, declared map[string]model.RepositoryDomain) {
+	type member struct {
+		path string
+		ref  model.RepositoryRef
+	}
+
+	occupants := map[string][]member{}
+	claimedBy := map[string]string{} // durable identifier -> the set that claimed it first
+
+	for i := range c.Sources {
+		for j := range c.Sources[i].BackupSets {
+			bs := &c.Sources[i].BackupSets[j]
+			path := fmt.Sprintf("sources[%d].backup_sets[%d]", i, j)
+
+			if !bs.Engine.UsesRepository() {
+				continue
+			}
+
+			// Two sets sharing one durable identifier share one snapshot
+			// lineage: each run would look like the other set's tree
+			// having been replaced, and each set's retention would prune
+			// the other's restore points.
+			if bs.UUID != "" {
+				key := strings.ToLower(bs.UUID)
+				if prev, dup := claimedBy[key]; dup {
+					v.addf("%s: uuid %q is already used by %s; two backup sets sharing one durable identifier share one snapshot lineage",
+						path, bs.UUID, prev)
+				} else {
+					claimedBy[key] = path
+				}
+			}
+
+			if bs.Repository.IsZero() {
+				// The reference did not resolve, and why is already
+				// reported.
+				continue
+			}
+
+			id := bs.Repository.Domain.String()
+
+			domain, ok := declared[id]
+			if !ok {
+				v.addf("%s: repository_domain %q is not declared in repository_domains (declared: %s)",
+					path, id, declaredDomainList(declared))
+
+				continue
+			}
+
+			if domain.Validate() != nil {
+				// The domain's own declaration is incomplete and that is
+				// already reported; enforcing a boundary nobody has
+				// finished declaring would be a second complaint about
+				// the same mistake.
+				continue
+			}
+
+			for _, other := range occupants[id] {
+				if err := domain.MayShare(other.ref, bs.Repository); err != nil {
+					v.addf("%s: %v (%s already occupies it)", path, err, other.path)
+
+					break
+				}
+			}
+
+			occupants[id] = append(occupants[id], member{path: path, ref: bs.Repository})
+		}
+	}
+}
+
+// declaredDomainList renders the declared domain ids for the refusal above,
+// sorted so the message is stable, because an operator who misspelled one
+// needs to see the list they were choosing from.
+func declaredDomainList(declared map[string]model.RepositoryDomain) string {
+	if len(declared) == 0 {
+		return "none"
+	}
+
+	ids := make([]string, 0, len(declared))
+	for id := range declared {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	return strings.Join(ids, ", ")
 }
 
 // validateRemote checks one backup set's remote, switching on the type

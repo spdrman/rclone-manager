@@ -217,7 +217,7 @@ func TestLoadParsesAnIncrementalSet(t *testing.T) {
 		t.Errorf("RepositoryDomains[1].Isolation = %q, want %q", got, want)
 	}
 
-	incremental := theSet(t, &cfg, 1)
+	incremental := theSet(t, cfg, 1)
 	if got, want := incremental.EngineConfig, "kopia"; got != want {
 		t.Errorf("the incremental set's engine = %q, want %q", got, want)
 	}
@@ -230,7 +230,7 @@ func TestLoadParsesAnIncrementalSet(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 
-	artifact, incremental := theSet(t, &cfg, 0), theSet(t, &cfg, 1)
+	artifact, incremental := theSet(t, cfg, 0), theSet(t, cfg, 1)
 	if artifact.Engine != model.EngineArtifact {
 		t.Errorf("the set with no engine key resolved to %q", artifact.Engine)
 	}

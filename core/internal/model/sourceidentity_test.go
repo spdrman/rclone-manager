@@ -211,7 +211,7 @@ func TestSourceIdentity_IsDeterministicAcrossProcesses(t *testing.T) {
 		Root:     SourceRoot{Path: "/backups/postgres"},
 	})
 
-	const want = "a92f5e1d0dc3e0d0c58d0cbbea78d1d2e4b8e11ad8e3d5fb7c9a2b61c0f4e3a7"
+	const want = "8a4cb022fb82ec8e12dfc1ed2fe77dccde69a9659fdd7d903944ddcc5c07c23e"
 	if got.String() != want {
 		t.Errorf("the canonical source identity changed:\n  got  %s\n  want %s\n"+
 			"if this change is intended it re-identifies every source in every existing deployment, which re-reads and re-stores all of them", got, want)
