@@ -163,6 +163,18 @@ The four entries worth arguing about:
   sftp for the same class of reason: rclone probes the far host for an
   `md5sum` binary, so hash availability is a property of somebody else's
   `PATH`.
+- **`hash_support` says a hash is OBTAINABLE, not that it is cheap**, and
+  that distinction was sharpened by #793 during Phase 0 rather than
+  anticipated here. local's three are computed by reading the whole file;
+  s3's md5 is an ETag the store already holds. So this row and #793's
+  `model.SourceSignals.RemoteHashAlgorithms` disagree ON PURPOSE —
+  #793 lists none for local, because a hash that costs a full read *is*
+  the read and cannot be the signal that lets one be skipped. ADR 0009
+  section 3 records the narrowing and tells Phase 1 to project these
+  capabilities through it (with an mtime floor at what the transport
+  actually carries) rather than copying them. Neither row is wrong; they
+  answer different questions, and the one thing that would be wrong is a
+  future reader "fixing" one to match the other.
 
 Silence is **unqualified, not a default**. A manifest with no
 capabilities block describes a backend `Manifest.PlanEnumeration` refuses

@@ -96,12 +96,21 @@ const (
 	// is documented in docs/adr/0008.
 	CapMTimePrecision Capability = "mtime_precision"
 
-	// CapHashSupport names the checksums the backend can be ASKED for
-	// without reading the object back. Empty is a legitimate answer and
-	// is sftp's: rclone probes the far host for an md5sum binary, so
-	// whether a hash is available is a property of that host's PATH
-	// rather than of the protocol, and a matrix may not claim what
-	// depends on somebody else's shell.
+	// CapHashSupport names the checksums this backend can produce AT ALL.
+	// It says nothing about what producing one costs, and the difference
+	// matters enough to be stated here rather than discovered by a
+	// consumer: local's three are computed by reading the whole file,
+	// while s3's md5 is an ETag the store already holds. So this key
+	// answers "could a hash be obtained", not "is a hash cheaper than a
+	// read" - #793's own narrower list (model.SourceSignals'
+	// RemoteHashAlgorithms) is the second question, and ADR 0009 section
+	// 3 records why it is deliberately narrower than this one rather
+	// than a copy of it.
+	//
+	// Empty is a legitimate answer and is sftp's: rclone probes the far
+	// host for an md5sum binary, so whether a hash is available is a
+	// property of that host's PATH rather than of the protocol, and a
+	// matrix may not claim what depends on somebody else's shell.
 	CapHashSupport Capability = "hash_support"
 
 	// CapStableSize is whether the size the backend reports for an object
