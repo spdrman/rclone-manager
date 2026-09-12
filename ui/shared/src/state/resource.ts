@@ -23,6 +23,7 @@ import type { InputNode } from "@causlts/core";
 // literal correlation id doing it. There is one conversion now and it
 // lives with the module that was written for this lesson (api/failure.ts).
 import { asApiError } from "@shared/api/failure";
+import { reportSessionLost } from "@shared/api/sessionLoss";
 import type { ApiError } from "@shared/api/contracts";
 import { graph, registerInput, useCausl } from "./graph";
 
@@ -79,8 +80,15 @@ export function fetchResource<T>(node: InputNode<ResourceState<T>>, fetchFn: () 
     })
     .catch((e: unknown) => {
       if (!isLatest()) return;
+      const error = asApiError(e);
+      // Issue #795, the same report useAsync makes and for the same
+      // reason: the four app-wide reads above this go through here, so a
+      // restarted engine refuses all of them, and a page full of Try
+      // again buttons that cannot work is not what an operator whose
+      // session ended needs to be looking at.
+      if (error.code === "UNAUTHENTICATED") reportSessionLost();
       graph.commit(node.id + "/failed", (tx) =>
-        tx.set(node, { ...graph.read(node), error: asApiError(e), loading: false })
+        tx.set(node, { ...graph.read(node), error, loading: false })
       );
     });
 }

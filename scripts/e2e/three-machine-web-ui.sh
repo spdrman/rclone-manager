@@ -1062,9 +1062,15 @@ if [ "$break_engine" = 1 ]; then
   }
 
   healthy_probe="$(api_probe)"
+  # 401 or 403: both are the ENGINE having looked at an unauthenticated
+  # request and refused it, which is the only fact this half needs. The
+  # break below is the strict one (502, and an id on it), because that is
+  # the assertion the mode exists to make; pinning the healthy side to one
+  # exact status would let a gate variation nobody is testing here stop
+  # the run.
   case "$healthy_probe" in
-    401\ *) note "with the engine up, GET /api/v1/activity answers $healthy_probe" ;;
-    *) die "with the engine up, GET /api/v1/activity answered \"${healthy_probe:-nothing}\", want a 401 from the engine." \
+    401\ *|403\ *) note "with the engine up, GET /api/v1/activity answers $healthy_probe" ;;
+    *) die "with the engine up, GET /api/v1/activity answered \"${healthy_probe:-nothing}\", want a 401 or 403 from the engine." \
            "The break below is only meaningful against a stack that was working, so this refuses to rehearse on one that was not." ;;
   esac
 
@@ -1083,8 +1089,8 @@ if [ "$break_engine" = 1 ]; then
   wait_or_die 180 "the engine to come back up after the rehearsal" engine_is_live
   healed_probe="$(api_probe)"
   case "$healed_probe" in
-    401\ *) note "and with it back, $healed_probe again: the break is reversible, which the recovery half of the suite needs" ;;
-    *) die "after restarting the engine, GET /api/v1/activity answered \"${healed_probe:-nothing}\", want 401 again." \
+    401\ *|403\ *) note "and with it back, $healed_probe again: the break is reversible, which the recovery half of the suite needs" ;;
+    *) die "after restarting the engine, GET /api/v1/activity answered \"${healed_probe:-nothing}\", want the engine's own refusal again." \
            "A break that cannot be undone leaves no way to assert that the pages recover." ;;
   esac
 

@@ -24,7 +24,7 @@
  * have somewhere to put the failure once it stops.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { App } from "@shared/App";
@@ -160,7 +160,12 @@ describe("an app that could not ask does not claim the operator is signed out", 
     expect(screen.queryByRole("heading", { name: "Sign in" })).toBeNull();
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("Backupd did not answer");
-    expect(screen.getByText(/have not been signed out/i)).toBeTruthy();
+    expect(screen.getByText(/could not reach Backupd to ask whether you are signed in/i)).toBeTruthy();
+    // And it does not promise the session survived. The engine holds its
+    // sessions in its own process, so the restart this page is most
+    // often shown for ends them; "you have not been signed out" was the
+    // first draft, and the container run is what caught it.
+    expect(document.body.textContent).not.toMatch(/have not been signed out/i);
     expect(document.body.textContent).not.toContain("unavailable");
   });
 
@@ -181,7 +186,7 @@ describe("an app that could not ask does not claim the operator is signed out", 
     // The gate above must not swallow the ordinary case: a 401 is an
     // answer, and the answer is "sign in".
     expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy();
-    expect(screen.queryByText(/have not been signed out/i)).toBeNull();
+    expect(screen.queryByText(/could not reach Backupd to ask/i)).toBeNull();
   });
 
   it("asks again when Try again is pressed, and gets out of the way once it works", async () => {
@@ -200,8 +205,112 @@ describe("an app that could not ask does not claim the operator is signed out", 
 
     // The engine came back, so the session read succeeds and the app is
     // where the operator left it, signed in, with no reload needed.
-    expect(screen.queryByText(/have not been signed out/i)).toBeNull();
+    expect(screen.queryByText(/could not reach Backupd to ask/i)).toBeNull();
     expect(await screen.findByRole("navigation", { name: "Sections" }, { timeout: 4000 })).toBeTruthy();
+  });
+});
+
+/**
+ * Issue #795, found by running the four-container rig rather than by
+ * reading anything.
+ *
+ * The engine keeps its sessions in its own process, so the restart that
+ * #795's report describes — the container went away and came back — ends
+ * every one of them. What an operator met when it came back was not the
+ * sign-in form. It was the Activity page holding a red panel reading
+ * "authentication required", with a Try again button under it that could
+ * never succeed, because the thing that failed was not the read.
+ *
+ * Reloading produced the form, so the way out existed and was simply
+ * never offered, which is the same family of defect as #795 itself: the
+ * failure was surfaced as something other than what it was, and the
+ * action offered could not address it.
+ */
+describe("a session that ended while the app was open sends the operator to sign in", () => {
+  afterEach(() => {
+    cleanup();
+    resetGraphForTests();
+    vi.restoreAllMocks();
+  });
+
+  /** Signed in at first, and signed out from the moment the engine says
+   *  so — which is what a restarted engine really answers to both the
+   *  page read and the session check. */
+  function restartingDeployment() {
+    let sessionAlive = true;
+    const api = createMockApi();
+    vi.spyOn(api, "listActivity").mockImplementation(() => {
+      if (sessionAlive) return Promise.resolve({ events: [] });
+      return Promise.reject(
+        new BackupdError({ code: "UNAUTHENTICATED", message: "authentication required", correlationId: "cid_gone1" })
+      );
+    });
+    const bridge: PlatformBridge = {
+      ...genericBridge,
+      getAuthContext: () =>
+        Promise.resolve(
+          sessionAlive
+            ? { authenticated: true, username: "e2e-operator", mode: "local-account" as const }
+            : { authenticated: false, username: null, mode: "local-account" as const }
+        )
+    };
+    return { api, bridge, restart: () => { sessionAlive = false; } };
+  }
+
+  it("does not leave a Try again beside a failure a retry cannot fix", async () => {
+    const { api, bridge, restart } = restartingDeployment();
+    render(
+      <MemoryRouter initialEntries={["/activity"]}>
+        <ApiProvider api={api}>
+          <PlatformProvider bridge={bridge}>
+            <App />
+          </PlatformProvider>
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("navigation", { name: "Sections" }, { timeout: 4000 })).toBeTruthy();
+
+    // The engine restarts under the loaded app, and the page re-reads.
+    restart();
+    await userEvent.click(
+      within(screen.getByRole("navigation", { name: "Sections" })).getByRole("link", { name: /Dashboard/i })
+    );
+    await act(async () => {});
+
+    // The one thing that must be on screen is the way back in. A panel
+    // saying "authentication required" with a button that re-issues the
+    // same refused read is a dead end with a button on it.
+    expect(await screen.findByRole("heading", { name: "Sign in" }, { timeout: 4000 })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+  });
+
+  it("leaves an ordinary page failure retryable, which is what the button is for", async () => {
+    // The guard against the fix above turning every failure into a
+    // sign-out: a read that failed for any other reason keeps its panel
+    // and its Try again, and the operator stays where they were.
+    const api = createMockApi();
+    vi.spyOn(api, "listActivity").mockRejectedValue(
+      new BackupdError({ code: "INTERNAL", message: "failed to list activity", correlationId: "cid_internal1" })
+    );
+    render(
+      <MemoryRouter initialEntries={["/activity"]}>
+        <ApiProvider api={api}>
+          <PlatformProvider
+            bridge={{
+              ...genericBridge,
+              getAuthContext: () =>
+                Promise.resolve({ authenticated: true, username: "e2e-operator", mode: "local-account" as const })
+            }}
+          >
+            <App />
+          </PlatformProvider>
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    expect(await screen.findByRole("navigation", { name: "Sections" }, { timeout: 4000 })).toBeTruthy();
+
+    expect(screen.queryByRole("heading", { name: "Sign in" })).toBeNull();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
   });
 });
 

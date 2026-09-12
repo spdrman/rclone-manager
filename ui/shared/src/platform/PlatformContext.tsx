@@ -24,6 +24,7 @@ import type { ReactNode } from "react";
 import type { AuthContext as AuthCtx, PlatformBridge } from "@shared/types/platform";
 import { graph, useCausl } from "@shared/state/graph";
 import { asApiError } from "@shared/api/failure";
+import { onSessionLost } from "@shared/api/sessionLoss";
 import type { ApiError } from "@shared/api/contracts";
 import {
   authErrorNode,
@@ -133,8 +134,26 @@ export function PlatformProvider({
   useEffect(() => {
     let live = true;
     refetchAuth(bridge, () => live);
+    // Issue #795. A page read refused with UNAUTHENTICATED means the
+    // session this app is holding is gone - most often because the
+    // engine restarted, which ends every session it was keeping
+    // (apps/common/auth/local). Re-asking is the whole response: the
+    // answer is "not signed in", App.tsx's own gate then renders the
+    // sign-in form, and the operator has the one route out that a Try
+    // again beside a page panel could never be.
+    //
+    // Gated on currently believing there IS a session. Without that,
+    // every refused read on a browser that is already at the login page
+    // (App.tsx issues the four app-wide reads above its authenticated
+    // branch, by design - see signed-in-refetch.test.tsx) would ask the
+    // same question again and get the same answer.
+    const unsubscribe = onSessionLost(() => {
+      if (!graph.read(authNode)?.authenticated) return;
+      refetchAuth(bridge, () => live);
+    });
     return () => {
       live = false;
+      unsubscribe();
     };
   }, [bridge]);
 
