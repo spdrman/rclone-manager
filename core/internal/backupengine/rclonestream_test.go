@@ -73,13 +73,10 @@ func TestRcloneObjectStreamsStraightIntoKopia(t *testing.T) {
 	if got := hex.EncodeToString(h.Sum(nil)); got != wantHash {
 		t.Fatalf("restored sha256=%s; the rclone object hashes to %s", got, wantHash)
 	}
-
-	// Nothing staged the object. The repository under the test root holds
-	// pack blobs; a mirror would be one file of the object's size.
-	if biggest, where := largestFile(t, root); biggest >= int64(len(payload)) {
-		t.Errorf("a %d-byte file exists at %s, at least the size of the %d-byte object: the stream was staged",
-			biggest, where, len(payload))
-	}
+	// Nothing staged the object: the only place its bytes exist locally is
+	// inside the repository, in pack blobs Kopia wrote as they streamed
+	// past.
+	assertNothingStaged(t, root, filepath.Join(root, "repo"))
 }
 
 // TestRcloneSourceRefusesAMissingObject keeps the failure honest: a source

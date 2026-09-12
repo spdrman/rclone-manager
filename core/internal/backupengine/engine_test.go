@@ -213,8 +213,9 @@ func dirSize(t *testing.T, root string) int64 {
 }
 
 // largestFile returns the size and path of the biggest regular file under
-// root. A staged mirror of the source would show up here as a single file
-// the size of the source; a streamed upload shows up as pack blobs.
+// root. Inside a repository this is a pack blob, which Kopia caps well
+// below the size of any file worth streaming; a staged mirror would blow
+// straight through that cap.
 func largestFile(t *testing.T, root string) (int64, string) {
 	t.Helper()
 
@@ -245,6 +246,46 @@ func largestFile(t *testing.T, root string) (int64, string) {
 	}
 
 	return biggest, where
+}
+
+// assertNothingStaged is the "no complete local mirror" criterion.
+//
+// It walks everything under root EXCEPT the repository, because the
+// repository is where the bytes are supposed to end up. Anywhere else --
+// a temp file, a spool directory, a partial -- is a mirror, and Kopia packs
+// small objects into blobs of their own so the repository's file sizes say
+// nothing about staging either way.
+func assertNothingStaged(t *testing.T, root, repoDir string) {
+	t.Helper()
+
+	// Anything this side of the repository should be configuration. The
+	// Kopia connection config is a few hundred bytes.
+	const configBudget = 64 << 10
+
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path == repoDir {
+				return filepath.SkipDir
+			}
+
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() && info.Size() > configBudget {
+			t.Errorf("a %d-byte file exists outside the repository at %s; the stream was staged", info.Size(), path)
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", root, err)
+	}
 }
 
 // peakHeap samples HeapAlloc while fn runs and reports the highest reading.
@@ -373,13 +414,7 @@ func TestSnapshotAndRestoreSmallStream(t *testing.T) {
 			len(got), gotHash, len(want), wantHash)
 	}
 
-	// Nothing anywhere under the test root may be a copy of the source.
-	// The repository holds the data in pack blobs; a staged mirror would
-	// be one file of exactly the source's size.
-	if biggest, where := largestFile(t, root); biggest >= int64(len(want)) {
-		t.Errorf("found a %d-byte file at %s, at least as large as the %d-byte source: something staged a local mirror",
-			biggest, where, len(want))
-	}
+	assertNothingStaged(t, root, filepath.Join(root, "repo"))
 }
 
 // TestLargeStreamIsBoundedInMemory is the multi-GB criterion. The stream is
@@ -440,8 +475,11 @@ func TestLargeStreamIsBoundedInMemory(t *testing.T) {
 			peak, streamBytes)
 	}
 
-	// No single artifact is the file. Kopia caps a pack blob well below
-	// this; a staged mirror would blow straight through it.
+	assertNothingStaged(t, root, filepath.Join(root, "repo"))
+
+	// Not even the repository holds the file as a file: Kopia caps a pack
+	// blob well below this, so a chunked stream stays under it and a
+	// mirror would blow straight through.
 	const perFileBudget = 64 << 20
 	if biggest, where := largestFile(t, root); biggest >= perFileBudget {
 		t.Errorf("largest file under the test root is %d bytes at %s; nothing here should approach the %d-byte source",
@@ -701,13 +739,23 @@ func TestSecondUnchangedSnapshotReusesContent(t *testing.T) {
 			first.RootObjectID, second.RootObjectID)
 	}
 
-	if second.Deduplicated <= 0 {
-		t.Errorf("second snapshot reported %d deduplicated bytes; want the payload to have been recognised",
-			second.Deduplicated)
+	// The second run still READ every byte -- streaming files carry no
+	// usable mtime/size cache, so there is no metadata short-circuit to
+	// hide behind. What it did not do is store them again.
+	if second.Bytes != int64(len(payload)) {
+		t.Errorf("second snapshot read %d bytes; want the whole %d-byte stream re-read", second.Bytes, len(payload))
+	}
+	if first.UploadedBytes <= 0 {
+		t.Fatalf("first snapshot uploaded %d bytes, so the measurement below distinguishes nothing", first.UploadedBytes)
+	}
+	if second.UploadedBytes > budget {
+		t.Errorf("second snapshot pushed %d bytes to the repository (budget %d); the payload was stored twice",
+			second.UploadedBytes, budget)
 	}
 
-	t.Logf("payload %d bytes; repo after first %d, after second %d, growth %d (%.4f%% of payload)",
-		len(payload), afterFirst, afterSecond, growth, 100*float64(growth)/float64(len(payload)))
+	t.Logf("payload %d bytes; repo after first %d, after second %d, growth %d (%.4f%% of payload); uploaded first=%d second=%d",
+		len(payload), afterFirst, afterSecond, growth, 100*float64(growth)/float64(len(payload)),
+		first.UploadedBytes, second.UploadedBytes)
 
 	snaps, err := e.Snapshots(ctx, "stable.bin")
 	if err != nil {
@@ -735,4 +783,3 @@ func TestSecondUnchangedSnapshotReusesContent(t *testing.T) {
 		}
 	}
 }
-
