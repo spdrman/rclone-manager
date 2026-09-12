@@ -544,7 +544,7 @@ type BackupSet struct {
 	RepositoryDomainConfig string `yaml:"repository_domain,omitempty"`
 
 	// ConsistencyConfig is what the operator has arranged around this
-	// source while a run reads it: one of model.ConsistencyModes
+	// source while a run reads it: one of model.ConsistencyModes()
 	// (live_best_effort, externally_quiesced, external_snapshot). It is
 	// the vocabulary ADR 0009 established, not a second one.
 	//
@@ -554,8 +554,8 @@ type BackupSet struct {
 	ConsistencyConfig string `yaml:"source_consistency,omitempty"`
 
 	// VerificationLevelConfig is how far this set's restore points are
-	// verified: one of model.VerificationLevels (structural,
-	// content_sample, full, restore_drill).
+	// verified: one of model.VerificationLevels() (structural,
+	// content_sample, content_full, restore_drill).
 	//
 	// Omission resolves to model.DefaultVerificationLevel (structural),
 	// the rung that costs nothing beyond the repository's own metadata.

@@ -29,6 +29,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -59,7 +60,13 @@ const (
 	// LevelContentFull reads and re-hashes every byte the snapshot
 	// references. It is the strongest statement available about what is
 	// STORED, and it still does not attempt a restore.
-	LevelContentFull VerificationLevel = "full"
+	//
+	// Its persisted value is "content_full" rather than "full" precisely
+	// because of the rung above it: "full" sitting beside "restore_drill"
+	// reads as "a full restore", which is the one claim this level does
+	// not make. The prefix ties it to content_sample, which is what it
+	// actually differs from, and only by how much is read.
+	LevelContentFull VerificationLevel = "content_full"
 
 	// LevelRestoreDrill restores the snapshot (or a defined subset of it)
 	// to a scratch location and compares the result. It is the only level
@@ -68,18 +75,25 @@ const (
 	LevelRestoreDrill VerificationLevel = "restore_drill"
 )
 
-// VerificationLevels is the ladder, ascending. Its order is the order Rank
+// verificationLevels is the ladder, ascending. Its order is the order Rank
 // reports, so the two cannot disagree.
 //
 // A fifth rung is a product decision -- a new promise, a new cost and a new
 // row in every report -- which is what the count assertion in the tests is
 // defending.
-var VerificationLevels = []VerificationLevel{
+var verificationLevels = []VerificationLevel{
 	LevelStructural,
 	LevelContentSample,
 	LevelContentFull,
 	LevelRestoreDrill,
 }
+
+// VerificationLevels returns the ladder, ascending, as a copy the caller
+// owns, following backend.CapabilityKeys(). A caller able to assign
+// through it would be adding a rung ParseVerificationLevel then accepts
+// and nothing implements, which is a verification claim with no
+// verification behind it.
+func VerificationLevels() []VerificationLevel { return slices.Clone(verificationLevels) }
 
 // ParseVerificationLevel reads a level back from configuration or from the
 // catalog, and refuses anything else rather than defaulting.
@@ -92,13 +106,13 @@ var VerificationLevels = []VerificationLevel{
 // whether it is reading a config file (where omission is legal and resolves
 // to LevelStructural) or a catalog row (where a level is always written).
 func ParseVerificationLevel(s string) (VerificationLevel, error) {
-	for _, level := range VerificationLevels {
+	for _, level := range verificationLevels {
 		if string(level) == s {
 			return level, nil
 		}
 	}
 
-	return "", fmt.Errorf("unknown verification level %q (expected one of %s)", s, joinLevels(VerificationLevels))
+	return "", fmt.Errorf("unknown verification level %q (expected one of %s)", s, joinLevels(verificationLevels))
 }
 
 // DefaultVerificationLevel is what an incremental backup set gets when its
@@ -120,7 +134,7 @@ func (l VerificationLevel) String() string { return string(l) }
 // AtLeast). That is the only safe direction: a typo in a policy must not
 // buy a claim.
 func (l VerificationLevel) Rank() int {
-	for i, level := range VerificationLevels {
+	for i, level := range verificationLevels {
 		if level == l {
 			return i + 1
 		}

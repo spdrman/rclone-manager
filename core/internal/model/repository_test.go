@@ -175,7 +175,7 @@ func TestRepositoryDomain_MayShare_OnlyInsideOneDomain(t *testing.T) {
 	if !errors.Is(err, ErrForeignDomain) {
 		t.Errorf("cross-domain sharing was refused with %v rather than ErrForeignDomain", err)
 	}
-	for _, boundary := range RepositoryBoundaries {
+	for _, boundary := range RepositoryBoundaries() {
 		if !strings.Contains(err.Error(), string(boundary)) {
 			t.Errorf("the refusal %q does not name the %q boundary; a refusal that does not say what would be shared is an assertion an operator can only overrule",
 				err, boundary)
@@ -235,17 +235,17 @@ func TestRepositoryDomain_IsolatedRefusesASecondSet(t *testing.T) {
 func TestRepositoryBoundaries_AreSharedAllOrNothing(t *testing.T) {
 	t.Parallel()
 
-	if len(RepositoryBoundaries) != 6 {
-		t.Fatalf("RepositoryBoundaries has %d entries (%v); EPIC K names six, and dropping one would understate what co-tenancy costs",
-			len(RepositoryBoundaries), RepositoryBoundaries)
+	if len(RepositoryBoundaries()) != 6 {
+		t.Fatalf("RepositoryBoundaries() has %d entries (%v); EPIC K names six, and dropping one would understate what co-tenancy costs",
+			len(RepositoryBoundaries()), RepositoryBoundaries())
 	}
 
 	built := domains(t)
 	for _, d := range built {
 		shares := d.Shares()
-		if len(shares) != len(RepositoryBoundaries) {
+		if len(shares) != len(RepositoryBoundaries()) {
 			t.Fatalf("domain %q shares %d of %d boundaries; a repository cannot share some of them and not others",
-				d.ID, len(shares), len(RepositoryBoundaries))
+				d.ID, len(shares), len(RepositoryBoundaries()))
 		}
 	}
 
@@ -253,7 +253,7 @@ func TestRepositoryBoundaries_AreSharedAllOrNothing(t *testing.T) {
 	// appending to its result rewrites the boundary list for everybody.
 	shares := built["production"].Shares()
 	shares[0] = "tampered"
-	if RepositoryBoundaries[0] == "tampered" {
+	if RepositoryBoundaries()[0] == "tampered" {
 		t.Error("Shares returned the package-level slice; a caller can now rewrite what a repository domain means")
 	}
 }
@@ -315,7 +315,7 @@ func TestRepositoryDomain_Validate_RefusesAnUnstatedIsolation(t *testing.T) {
 	if _, err := ParseRepositoryIsolation("private"); err == nil {
 		t.Error("ParseRepositoryIsolation accepted a value that is neither shared nor isolated")
 	}
-	for _, isolation := range RepositoryIsolations {
+	for _, isolation := range RepositoryIsolations() {
 		got, err := ParseRepositoryIsolation(string(isolation))
 		if err != nil || got != isolation {
 			t.Errorf("ParseRepositoryIsolation(%q) = %q, %v", isolation, got, err)

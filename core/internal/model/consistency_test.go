@@ -48,8 +48,8 @@ func TestConsistencyModeAndTrustClassWireStringsArePinned(t *testing.T) {
 		}
 	}
 
-	if len(ConsistencyModes) != 3 {
-		t.Fatalf("ConsistencyModes has %d entries, want 3; a fourth mode is an operator-visible decision and an ADR change", len(ConsistencyModes))
+	if len(ConsistencyModes()) != 3 {
+		t.Fatalf("ConsistencyModes() has %d entries, want 3; a fourth mode is an operator-visible decision and an ADR change", len(ConsistencyModes()))
 	}
 
 	for _, tc := range []struct {
@@ -116,7 +116,7 @@ func TestOnlyExternalSnapshotGuaranteesAPointInTime(t *testing.T) {
 		ModeExternallyQuiesced: false,
 		ModeExternalSnapshot:   true,
 	}
-	for _, m := range ConsistencyModes {
+	for _, m := range ConsistencyModes() {
 		if got := m.GuaranteesPointInTime(); got != want[m] {
 			t.Errorf("%s.GuaranteesPointInTime() = %v, want %v", m, got, want[m])
 		}
@@ -133,7 +133,7 @@ func TestMutationIsAContractViolationOnlyWhereAPromiseWasMade(t *testing.T) {
 		ModeExternallyQuiesced: true,
 		ModeExternalSnapshot:   true,
 	}
-	for _, m := range ConsistencyModes {
+	for _, m := range ConsistencyModes() {
 		if got := m.MutationIsContractViolation(); got != want[m] {
 			t.Errorf("%s.MutationIsContractViolation() = %v, want %v", m, got, want[m])
 		}
@@ -144,7 +144,7 @@ func TestMutationIsAContractViolationOnlyWhereAPromiseWasMade(t *testing.T) {
 // is rendered from these and a mode whose description was the empty string
 // would render as a blank row.
 func TestEveryModeDescribesItself(t *testing.T) {
-	for _, m := range ConsistencyModes {
+	for _, m := range ConsistencyModes() {
 		if m.Describe() == "" {
 			t.Errorf("%s.Describe() is empty", m)
 		}

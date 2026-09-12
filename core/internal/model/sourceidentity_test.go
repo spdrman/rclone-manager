@@ -152,6 +152,59 @@ func TestSourceIdentity_IgnoresTheEndpointsSpellingButNotItsIdentity(t *testing.
 	}
 }
 
+// TestSourceIdentity_EndpointSubFieldsCannotBleedIntoEachOther is the
+// review finding from #826: an endpoint whose fields are concatenated into
+// one string before hashing lets a separator inside a field impersonate the
+// separator between two fields.
+//
+// The two endpoints below are genuinely different -- one is user "a@b" on
+// host "c", the other is user "a" on host "b@c" -- and an sftp user
+// containing an @ is ordinary rather than exotic (it is how a domain or
+// tenant is written on a good deal of managed sftp). Concatenated as
+// "sftp://user@host:port" both render "sftp://a@b@c:22", so they hash
+// identically: two different sources on one snapshot lineage, where each
+// run looks like the other's tree having changed completely and one set's
+// retention prunes the other's restore points.
+//
+// The fix is that the endpoint's kind, user, host and port are four
+// separate labelled, length-prefixed fields in the canonical form, exactly
+// as the set identifier and the root already are, so no value a field can
+// hold can reach across the field boundary.
+func TestSourceIdentity_EndpointSubFieldsCannotBleedIntoEachOther(t *testing.T) {
+	t.Parallel()
+
+	base := SourceIdentityInput{
+		SetUUID: setUUID,
+		Root:    SourceRoot{Path: "/backups/postgres"},
+	}
+
+	userCarriesTheAt := base
+	userCarriesTheAt.Endpoint = SourceEndpoint{Kind: EndpointSFTP, User: "a@b", Host: "c"}
+
+	hostCarriesTheAt := base
+	hostCarriesTheAt.Endpoint = SourceEndpoint{Kind: EndpointSFTP, User: "a", Host: "b@c"}
+
+	if got, other := mustIdentity(t, userCarriesTheAt), mustIdentity(t, hostCarriesTheAt); got == other {
+		t.Errorf("user=%q host=%q and user=%q host=%q both produced %s; the endpoint's fields are being concatenated before hashing, so a value containing the separator impersonates the field boundary and two different sources share one lineage",
+			userCarriesTheAt.Endpoint.User, userCarriesTheAt.Endpoint.Host,
+			hostCarriesTheAt.Endpoint.User, hostCarriesTheAt.Endpoint.Host, got)
+	}
+
+	// The same hazard on the other side of the port separator: a host
+	// ending in ":2222" and the default port must not be the same bytes as
+	// that host on port 2222.
+	hostCarriesThePort := base
+	hostCarriesThePort.Endpoint = SourceEndpoint{Kind: EndpointSFTP, User: "backup", Host: "example.internal:2222"}
+
+	portIsItsOwnField := base
+	portIsItsOwnField.Endpoint = SourceEndpoint{Kind: EndpointSFTP, User: "backup", Host: "example.internal", Port: 2222}
+
+	if got, other := mustIdentity(t, hostCarriesThePort), mustIdentity(t, portIsItsOwnField); got == other {
+		t.Errorf("host %q on the default port and host %q on port %d both produced %s; the port separator is being read out of the host's own value",
+			hostCarriesThePort.Endpoint.Host, portIsItsOwnField.Endpoint.Host, portIsItsOwnField.Endpoint.Port, got)
+	}
+}
+
 // TestSourceIdentity_DiffersAcrossSetsAndSources is the other direction,
 // and the one a naive "hash the relative path" implementation gets wrong:
 // two backup sets pointed at the same directory, and one set pointed at two
@@ -202,6 +255,16 @@ func TestSourceIdentity_DiffersAcrossSetsAndSources(t *testing.T) {
 // the next upgrade: no predecessor is found, every source is re-read in
 // full, storage doubles and the history of every set restarts. If this test
 // fails, the change under it is a migration, not a refactor.
+//
+// The value below was re-pinned once, before any of this was released: the
+// #826 review found that the endpoint was hashed as one rendered string, so
+// two different endpoints could collide (see
+// TestSourceIdentity_EndpointSubFieldsCannotBleedIntoEachOther), and
+// splitting it into four fields changed every digest. identitySchema stays
+// at v1 deliberately, because a schema tag exists to make a migration
+// visible to deployments that have identities stored, and nothing in this
+// product writes one yet -- there is no lineage in the field to fork. The
+// next change to this form does not get that excuse.
 func TestSourceIdentity_IsDeterministicAcrossProcesses(t *testing.T) {
 	t.Parallel()
 
@@ -211,7 +274,7 @@ func TestSourceIdentity_IsDeterministicAcrossProcesses(t *testing.T) {
 		Root:     SourceRoot{Path: "/backups/postgres"},
 	})
 
-	const want = "8a4cb022fb82ec8e12dfc1ed2fe77dccde69a9659fdd7d903944ddcc5c07c23e"
+	const want = "759d5e29091c6643655d328bfb422f6bd22362b745d3649b8e928f2d50b0950b"
 	if got.String() != want {
 		t.Errorf("the canonical source identity changed:\n  got  %s\n  want %s\n"+
 			"if this change is intended it re-identifies every source in every existing deployment, which re-reads and re-stores all of them", got, want)

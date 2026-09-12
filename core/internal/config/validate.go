@@ -379,6 +379,47 @@ func (v *validator) validateBackupSet(path, sourceName string, sourceReadOnly bo
 		v.addf("%s: remote_path %v", path, err)
 	}
 
+	v.validateExcludePaths(path, bs.ExcludePaths)
+
+	// A stale_after that parses to the zero Duration must not be read as
+	// "age >= 0 is always true, so every backup is stale": that would make
+	// every backup set report STALE the instant it starts, which is a false
+	// alarm at best and, if anything downstream ever reacts to STALE
+	// automatically, a wrong one. There is no default duration documented
+	// anywhere for this field, so rather than guess one, a missing or zero
+	// stale_after is refused outright.
+	//
+	// It is checked for BOTH engines, unlike the block below: "the last
+	// restore point is older than it should be" is a question about a
+	// backup set, not about how one is produced.
+	if bs.StaleAfter.Duration() <= 0 {
+		v.addf("%s: stale_after must be set to a positive duration (got %s)", path, bs.StaleAfter)
+	}
+
+	// EPIC K's engine seam, resolved HERE rather than last, because which
+	// of the remaining keys are even legal depends on the answer (#826).
+	// Everything it reads -- the set's identity, its remote, its
+	// remote_path -- has been validated above.
+	switch resolved := v.resolveBackupSetEngine(path, bs); {
+	case !resolved:
+		// The engine key itself is wrong and already reported. Checking
+		// the engine-specific keys now would report a missing local_path
+		// on a set that may not want one, pointing the operator at keys
+		// they got right; the same discipline
+		// TestValidate_AnUnknownMediumTypeIsReportedOnceAndNotTwice holds
+		// for storage mediums.
+	case bs.Engine.UsesRepository():
+		v.refuseArtifactOnlyKeys(path, bs)
+	default:
+		v.validateArtifactKeys(path, bs)
+	}
+}
+
+// validateArtifactKeys checks the keys only the artifact engine reads, and
+// which that engine cannot run without: where the finished file is copied
+// to, which remote filenames count, when one is finished, and how it is
+// checked once and re-checked later.
+func (v *validator) validateArtifactKeys(path string, bs *BackupSet) {
 	if bs.LocalPath == "" {
 		v.addf("%s: local_path must not be empty", path)
 	} else if err := validAbsolutePath(bs.LocalPath); err != nil {
@@ -404,28 +445,59 @@ func (v *validator) validateBackupSet(path, sourceName string, sourceReadOnly bo
 		}
 	}
 
-	v.validateExcludePaths(path, bs.ExcludePaths)
-
 	v.validateCompletion(path+".completion", &bs.Completion, bs.Include)
-
-	// A stale_after that parses to the zero Duration must not be read as
-	// "age >= 0 is always true, so every backup is stale": that would make
-	// every backup set report STALE the instant it starts, which is a false
-	// alarm at best and, if anything downstream ever reacts to STALE
-	// automatically, a wrong one. There is no default duration documented
-	// anywhere for this field, so rather than guess one, a missing or zero
-	// stale_after is refused outright.
-	if bs.StaleAfter.Duration() <= 0 {
-		v.addf("%s: stale_after must be set to a positive duration (got %s)", path, bs.StaleAfter)
-	}
-
 	v.validateValidation(path+".validation", &bs.Validation)
 	v.validateRevalidation(path+".revalidation", &bs.Revalidation)
+}
 
-	// EPIC K's engine seam, resolved last because it reads what the
-	// checks above have already validated and normalized: the set's
-	// identity, its remote and its paths.
-	v.resolveBackupSetEngine(path, bs)
+// refuseArtifactOnlyKeys refuses every key an incremental set cannot act
+// on, which is the other half of the rule refuseIncrementalKeys applies to
+// an artifact set (#826).
+//
+// Each of these keys describes one moment in the ARTIFACT lifecycle: a
+// finished file appears on a remote, is recognised as complete, is copied
+// to local_path, is validated there, and is revalidated later. An
+// incremental set has no such file. Its engine reads a source tree and
+// writes content into a repository, so a completion strategy names an event
+// that never happens, an include pattern filters basenames that never
+// exist, and a validation hash would be taken over a local copy nothing
+// makes.
+//
+// local_path is refused rather than reinterpreted as a scratch or staging
+// root, which was the live alternative. #783's lifecycle streams content
+// from the source into the repository and has no local staging step at all,
+// so accepting the key would mean this build validating a directory nothing
+// writes; and a repository's own cache location is a property of the
+// repository, not of one backup set that happens to store snapshots in it,
+// so it would be the wrong home for it even once there is something to
+// configure. If a scratch root is ever needed, it arrives as its own key
+// with its own name, which is a schema addition rather than the silent
+// re-pointing of an existing operator's path.
+func (v *validator) refuseArtifactOnlyKeys(path string, bs *BackupSet) {
+	for _, key := range []struct {
+		name    string
+		written bool
+	}{
+		{"local_path", bs.LocalPath != ""},
+		{"include", len(bs.Include) > 0},
+		{"completion.strategy", bs.Completion.Strategy != ""},
+		{"completion.stable_for", bs.Completion.StableFor.Duration() != 0},
+		{"completion.delete_safety_delay", bs.Completion.DeleteSafetyDelay.Duration() != 0},
+		{"completion.manifest_marker", bs.Completion.ManifestMarker != ""},
+		{"validation.hash", bs.Validation.Hash != ""},
+		{"validation.validator_id", bs.Validation.ValidatorID != ""},
+		{"validation.command", bs.Validation.Command != nil},
+		{"revalidation.interval", bs.Revalidation.Interval.Duration() != 0},
+		{"revalidation.max_per_cycle", bs.Revalidation.MaxPerCycle != 0},
+		{"revalidation.hash", bs.Revalidation.Hash},
+		{"revalidation.command", bs.Revalidation.Command != nil},
+	} {
+		if !key.written {
+			continue
+		}
+
+		v.refuseDeadEngineKey(path, key.name, model.EngineArtifact, bs.Engine)
+	}
 }
 
 // setUUIDShape is the canonical uuid form a backup set's durable
@@ -445,14 +517,18 @@ var setUUIDShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F
 // It both validates and resolves, which is Validate's contract: every
 // field it fills in is read directly downstream and re-derived nowhere.
 //
-// The one rule worth stating on its own is what happens when the engine
-// key itself is wrong. Nothing else is then checked, because every
-// remaining rule depends on which engine is running: complaining that
-// repository_domain is meaningless on a set whose engine is a typo would
-// point an operator at the key they got right (the deadconfig discipline
+// It reports whether the engine key itself resolved, because the caller's
+// remaining checks depend on the answer and there is nothing sensible to
+// check without one.
+//
+// The one rule worth stating on its own is what happens when that key is
+// wrong. Nothing else is then checked, because every remaining rule
+// depends on which engine is running: complaining that repository_domain
+// is meaningless on a set whose engine is a typo would point an operator
+// at the key they got right (the deadconfig discipline
 // TestValidate_AnUnknownMediumTypeIsReportedOnceAndNotTwice already holds
 // for storage mediums).
-func (v *validator) resolveBackupSetEngine(path string, bs *BackupSet) {
+func (v *validator) resolveBackupSetEngine(path string, bs *BackupSet) bool {
 	engine, err := model.ResolveBackupEngine(bs.EngineConfig)
 	if err != nil {
 		v.addf("%s: engine: %v", path, err)
@@ -464,7 +540,7 @@ func (v *validator) resolveBackupSetEngine(path string, bs *BackupSet) {
 		bs.Engine = model.EngineArtifact
 		v.clearIncrementalResolution(bs)
 
-		return
+		return false
 	}
 
 	bs.Engine = engine
@@ -473,7 +549,7 @@ func (v *validator) resolveBackupSetEngine(path string, bs *BackupSet) {
 		v.refuseIncrementalKeys(path, bs)
 		v.clearIncrementalResolution(bs)
 
-		return
+		return true
 	}
 
 	if bs.UUID == "" {
@@ -524,6 +600,8 @@ func (v *validator) resolveBackupSetEngine(path string, bs *BackupSet) {
 	}
 
 	v.resolveSourceIdentity(path, bs)
+
+	return true
 }
 
 // refuseIncrementalKeys refuses every key an artifact set cannot act on.
@@ -548,9 +626,20 @@ func (v *validator) refuseIncrementalKeys(path string, bs *BackupSet) {
 			continue
 		}
 
-		v.addf("%s: %s is only read by the %q engine, and this set runs the %q engine; remove the key, or set engine: %s",
-			path, key.name, model.EngineKopia, bs.Engine, model.EngineKopia)
+		v.refuseDeadEngineKey(path, key.name, model.EngineKopia, bs.Engine)
 	}
+}
+
+// refuseDeadEngineKey is the one sentence both directions of the engine
+// dead-key rule are reported in: the key, the engine that would have read
+// it, the engine this set actually runs, and both ways out.
+//
+// It is shared rather than written twice so the two halves cannot drift
+// into saying the same thing differently, which is how an operator ends up
+// believing the two refusals are about different problems.
+func (v *validator) refuseDeadEngineKey(path, key string, reader, running model.BackupEngine) {
+	v.addf("%s: %s is only read by the %q engine, and this set runs the %q engine; remove the key, or set engine: %s",
+		path, key, reader, running, reader)
 }
 
 // clearIncrementalResolution puts the resolved incremental fields back to
@@ -572,15 +661,21 @@ func (v *validator) clearIncrementalResolution(bs *BackupSet) {
 //
 // Every input it needs has already been validated by the checks above, so
 // this function's job when one of them is missing is to STAY QUIET: an
-// unreachable remote type, an absent host and a relative remote_path have
-// each been reported once already, and reporting them again as "cannot
-// compute a source identity" would bury the fixable mistake under a
-// consequence of itself.
+// unreachable remote type, an absent host, a local remote carrying sftp
+// fields and a relative remote_path have each been reported once already,
+// and reporting them again as "cannot compute a source identity" would
+// bury the fixable mistake under a consequence of itself.
 //
 // What it does report is the one mistake only it can see: a
 // source_mount_prefix that is not a segment prefix of remote_path.
 // Ignoring that would silently put the whole mount path back into the
 // identity, for the one deployment that tried hardest to keep it out.
+//
+// Which is why the root is resolved FIRST and on its own (#826). The
+// alternative -- building the whole input, then attributing whatever came
+// back to source_mount_prefix because one was written -- blames the prefix
+// for an endpoint failure, so an operator who left a host on a local
+// remote is told to go and edit the one key in the set that is correct.
 func (v *validator) resolveSourceIdentity(path string, bs *BackupSet) {
 	bs.SourceIdentity = ""
 
@@ -589,8 +684,18 @@ func (v *validator) resolveSourceIdentity(path string, bs *BackupSet) {
 		return
 	}
 
-	if kind == model.EndpointSFTP && (bs.Remote.Host == "" || bs.Remote.User == "") {
-		return
+	// Both halves of what model's endpoint refuses, checked here so that
+	// its refusal is never the thing an operator reads: validateRemote has
+	// already said it, about the key it belongs to.
+	switch kind {
+	case model.EndpointLocal:
+		if bs.Remote.Host != "" || bs.Remote.User != "" || bs.Remote.Port != 0 {
+			return
+		}
+	case model.EndpointSFTP:
+		if bs.Remote.Host == "" || bs.Remote.User == "" {
+			return
+		}
 	}
 
 	if validAbsolutePath(bs.RemotePath) != nil {
@@ -598,6 +703,16 @@ func (v *validator) resolveSourceIdentity(path string, bs *BackupSet) {
 	}
 
 	if bs.UUID == "" || !setUUIDShape.MatchString(bs.UUID) {
+		return
+	}
+
+	// The root first, alone, so the message below can name the key it is
+	// actually about. remote_path is absolute by the check just above, so
+	// the prefix is the only input left that can make this fail.
+	root := model.SourceRoot{Path: bs.RemotePath, MountPrefix: bs.SourceMountPrefix}
+	if _, err := root.Relative(); err != nil {
+		v.addf("%s: source_mount_prefix %q: %v", path, bs.SourceMountPrefix, err)
+
 		return
 	}
 
@@ -609,15 +724,13 @@ func (v *validator) resolveSourceIdentity(path string, bs *BackupSet) {
 			Port: bs.Remote.Port,
 			User: bs.Remote.User,
 		},
-		Root: model.SourceRoot{Path: bs.RemotePath, MountPrefix: bs.SourceMountPrefix},
+		Root: root,
 	})
 	if err != nil {
-		if bs.SourceMountPrefix != "" {
-			v.addf("%s: source_mount_prefix %q: %v", path, bs.SourceMountPrefix, err)
-
-			return
-		}
-
+		// Nothing known can reach this: every input has been checked
+		// above. It is reported rather than swallowed because the
+		// alternative is a set that silently resolves no identity, which
+		// downstream reads as "artifact engine, no lineage".
 		v.addf("%s: source identity: %v", path, err)
 
 		return

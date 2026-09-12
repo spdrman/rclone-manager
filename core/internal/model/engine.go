@@ -35,7 +35,10 @@
 
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // BackupEngine names the machinery that produces one backup set's restore
 // points (EPIC K). It is deliberately independent of where those restore
@@ -70,13 +73,22 @@ const (
 	EngineKopia BackupEngine = "kopia"
 )
 
-// BackupEngines is every engine, in the order a surface should offer them:
+// backupEngines is every engine, in the order a surface should offer them:
 // the one that is already running everywhere first.
 //
 // A third entry is an operator-visible decision with a lifecycle, a
 // catalog shape and a verification story attached, which is what the count
 // assertion in the tests is defending.
-var BackupEngines = []BackupEngine{EngineArtifact, EngineKopia}
+var backupEngines = []BackupEngine{EngineArtifact, EngineKopia}
+
+// BackupEngines returns the vocabulary, in the order a surface should
+// offer it, as a copy the caller owns.
+//
+// A copy rather than the slice itself, following
+// backend.CapabilityKeys(): a closed set a caller can assign through is
+// not closed, and the assignment would change what ResolveBackupEngine
+// accepts for every goroutine in the process.
+func BackupEngines() []BackupEngine { return slices.Clone(backupEngines) }
 
 // ResolveBackupEngine turns what configuration said -- including having
 // said nothing -- into the engine a backup set actually runs under.
@@ -96,7 +108,7 @@ func ResolveBackupEngine(declared string) (BackupEngine, error) {
 		return EngineArtifact, nil
 	}
 
-	for _, e := range BackupEngines {
+	for _, e := range backupEngines {
 		if string(e) == declared {
 			return e, nil
 		}

@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -32,6 +33,14 @@ import (
 // declared repository domain and one incremental set that names it, beside
 // the artifact set validConfig() already has. Individual tests copy it and
 // break exactly one thing, the same discipline validConfig() follows.
+//
+// The incremental set deliberately carries NONE of the artifact-only keys
+// the set it was copied from carries: no local_path, no include, no
+// completion block, no validation and no revalidation. That is the #826
+// finding made structural -- an incremental set that had to name a
+// completion strategy for a file it never produces was config an operator
+// could only guess at -- and it means every refusal test below starts from
+// a set where adding one such key is the only thing wrong.
 func incrementalConfig() Config {
 	c := validConfig()
 	c.RepositoryDomains = []RepositoryDomainConfig{{
@@ -49,8 +58,11 @@ func incrementalConfig() Config {
 	incremental.VerificationLevelConfig = string(model.LevelContentSample)
 	incremental.RemotePath = "/snapshots/nightly/srv/uploads"
 	incremental.SourceMountPrefix = "/snapshots/nightly"
-	incremental.LocalPath = "/backups/production/uploads"
+	incremental.LocalPath = ""
+	incremental.Include = nil
+	incremental.Completion = Completion{}
 	incremental.Validation = Validation{}
+	incremental.Revalidation = Revalidation{}
 	c.Sources[0].BackupSets = append(c.Sources[0].BackupSets, incremental)
 
 	return c
@@ -413,7 +425,6 @@ func TestValidate_AnIsolatedDomainRefusesASecondSet(t *testing.T) {
 	second.Name = "uploads-archive"
 	second.UUID = "0c9a44e2-77b1-4d3f-8a61-5f0ab2c3d4e5"
 	second.RemotePath = "/snapshots/nightly/srv/archive"
-	second.LocalPath = "/backups/production/archive"
 	c.Sources[0].BackupSets = append(c.Sources[0].BackupSets, second)
 
 	err := c.Validate()
@@ -472,6 +483,89 @@ func TestValidate_RefusesIncrementalKeysOnAnArtifactSet(t *testing.T) {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not mention %q: %v", want, err)
 				}
+			}
+		})
+	}
+}
+
+// TestValidate_RefusesArtifactOnlyKeysOnAnIncrementalSet is the same rule
+// pointed the other way, which is the half #826 found missing.
+//
+// Every key below is read by exactly one thing: the artifact pipeline that
+// discovers a finished file on a remote, copies it to local_path, and
+// decides from completion/validation/revalidation whether it is done,
+// correct and still correct. An incremental set has no such file. Its
+// engine reads a source TREE and writes content into a repository, so a
+// completion strategy describes an event that never happens, an include
+// pattern filters artifact basenames that never exist, and a validation
+// hash would be computed over a local copy nothing makes.
+//
+// Accepting them would be the same one-way door this package already
+// refuses in the other direction: `backupd check` says the file is fine,
+// the operator believes their snapshots are hash-validated and stable-for
+// gated, and nothing ever reads either key.
+func TestValidate_RefusesArtifactOnlyKeysOnAnIncrementalSet(t *testing.T) {
+	for _, tc := range []struct {
+		key    string
+		break_ func(*BackupSet)
+	}{
+		{"local_path", func(bs *BackupSet) { bs.LocalPath = "/backups/production/uploads" }},
+		{"include", func(bs *BackupSet) { bs.Include = []string{"*.dump.zst"} }},
+		{"completion.strategy", func(bs *BackupSet) { bs.Completion.Strategy = "stable" }},
+		{"completion.stable_for", func(bs *BackupSet) { bs.Completion.StableFor = Duration(10 * time.Minute) }},
+		{"completion.delete_safety_delay", func(bs *BackupSet) { bs.Completion.DeleteSafetyDelay = Duration(30 * time.Minute) }},
+		{"completion.manifest_marker", func(bs *BackupSet) { bs.Completion.ManifestMarker = "SHA256SUMS" }},
+		{"validation.hash", func(bs *BackupSet) { bs.Validation.Hash = "sha256" }},
+		{"validation.validator_id", func(bs *BackupSet) { bs.Validation.ValidatorID = "postgres" }},
+		{"validation.command", func(bs *BackupSet) {
+			bs.Validation.Command = &Command{Executable: "/usr/local/bin/validate", Timeout: Duration(time.Minute)}
+		}},
+		{"revalidation.interval", func(bs *BackupSet) { bs.Revalidation.Interval = Duration(24 * time.Hour) }},
+		{"revalidation.max_per_cycle", func(bs *BackupSet) { bs.Revalidation.MaxPerCycle = 5 }},
+		{"revalidation.hash", func(bs *BackupSet) { bs.Revalidation.Hash = true }},
+		{"revalidation.command", func(bs *BackupSet) {
+			bs.Revalidation.Command = &Command{Executable: "/usr/local/bin/restore-test", Timeout: Duration(time.Minute)}
+		}},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			c := incrementalConfig()
+			tc.break_(&c.Sources[0].BackupSets[1]) // the incremental set
+
+			err := c.Validate()
+			if err == nil {
+				t.Fatalf("Validate accepted %s on a set running the %q engine, where nothing will ever read it", tc.key, model.EngineKopia)
+			}
+			for _, want := range []string{tc.key, string(model.EngineArtifact)} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not mention %q, so it names neither the key nor the engine that would read it: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// TestValidate_AnArtifactSetStillRequiresItsOwnKeys is the control for the
+// test above, and the reason it is not redundant with the existing
+// local_path and completion tests: resolving the engine BEFORE those checks
+// is what made them conditional, so this asserts the condition did not
+// swallow them. An artifact set that stopped requiring a local_path or a
+// completion strategy would be a daemon with nowhere to put a file and no
+// idea when one is finished.
+func TestValidate_AnArtifactSetStillRequiresItsOwnKeys(t *testing.T) {
+	for _, tc := range []struct {
+		key    string
+		break_ func(*BackupSet)
+	}{
+		{"local_path", func(bs *BackupSet) { bs.LocalPath = "" }},
+		{"completion", func(bs *BackupSet) { bs.Completion = Completion{} }},
+		{"stable_for", func(bs *BackupSet) { bs.Completion.StableFor = 0 }},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			c := incrementalConfig()
+			tc.break_(&c.Sources[0].BackupSets[0]) // the artifact set
+
+			if err := c.Validate(); err == nil {
+				t.Fatalf("Validate accepted an artifact set with no %s", tc.key)
 			}
 		})
 	}
@@ -551,8 +645,15 @@ func TestValidate_SourceIdentityIgnoresHowThisDeploymentReachesTheSource(t *test
 		hold bool // true: the identity must not change
 	}{
 		{
-			name: "the local staging path moves",
-			move: func(c *Config) { c.Sources[0].BackupSets[1].LocalPath = "/mnt/newdisk/backups/uploads" },
+			// An incremental set has no local_path at all any more (see
+			// TestValidate_RefusesArtifactOnlyKeysOnAnIncrementalSet), so
+			// the "staging path moved" case this row used to cover cannot
+			// be written. What is left in the same family is a key that IS
+			// legal on both engines and still says nothing about which
+			// source this is: which sub-trees are skipped changes what is
+			// read, never what is being read.
+			name: "the excluded sub-trees change",
+			move: func(c *Config) { c.Sources[0].BackupSets[1].ExcludePaths = []string{"cache"} },
 			hold: true,
 		},
 		{
@@ -628,6 +729,37 @@ func TestValidate_RefusesAMountPrefixThatIsNotOne(t *testing.T) {
 		if !strings.Contains(err.Error(), "source_mount_prefix") {
 			t.Errorf("the refusal does not name the key: %v", err)
 		}
+	}
+}
+
+// TestValidate_SourceIdentityBlamesTheKeyThatIsActuallyWrong is the #826
+// finding about where a refusal POINTS, which is the whole of its value to
+// the person reading it.
+//
+// Computing an identity needs three things the operator wrote in three
+// different places, and only one of them -- the mount prefix -- is this
+// step's own business (TestValidate_RefusesAMountPrefixThatIsNotOne holds
+// that direction). The other two have already been checked and reported by
+// the remote and remote_path rules above it, so a refusal that blamed
+// every identity failure on source_mount_prefix would send an operator to
+// edit the one key that is correct, and would say the same thing twice
+// about the key that is not.
+func TestValidate_SourceIdentityBlamesTheKeyThatIsActuallyWrong(t *testing.T) {
+	c := incrementalConfig()
+	set := &c.Sources[0].BackupSets[1]
+	// A real edit: the remote was switched to local and the sftp fields
+	// were left behind. validateRemote refuses exactly that, by name.
+	set.Remote = Remote{Type: "local", Host: "production.example.internal", User: "backup"}
+
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("Validate accepted a local remote carrying a host and a user")
+	}
+	if !strings.Contains(err.Error(), `not used for type "local"`) {
+		t.Errorf("the refusal does not name the remote fields that are wrong: %v", err)
+	}
+	if strings.Contains(err.Error(), "source_mount_prefix") {
+		t.Errorf("the refusal blames source_mount_prefix, which is correct here, for an endpoint this set's own remote already refused; the operator would edit the wrong key: %v", err)
 	}
 }
 

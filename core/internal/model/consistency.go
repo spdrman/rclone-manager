@@ -48,6 +48,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -83,14 +84,20 @@ const (
 	ModeExternalSnapshot ConsistencyMode = "external_snapshot"
 )
 
-// ConsistencyModes is every mode. A fourth entry is an operator-visible
+// consistencyModes is every mode. A fourth entry is an operator-visible
 // decision (it reaches the API, the wizard and the run report) and an ADR
 // change, which is what the count assertion in the tests is defending.
-var ConsistencyModes = []ConsistencyMode{
+var consistencyModes = []ConsistencyMode{
 	ModeLiveBestEffort,
 	ModeExternallyQuiesced,
 	ModeExternalSnapshot,
 }
+
+// ConsistencyModes returns every mode as a copy the caller owns, which is
+// this package's form for a closed vocabulary (see BackupEngines()): a set
+// a caller can assign through would change what ParseConsistencyMode
+// accepts for the whole process.
+func ConsistencyModes() []ConsistencyMode { return slices.Clone(consistencyModes) }
 
 func (m ConsistencyMode) String() string { return string(m) }
 
@@ -104,7 +111,7 @@ func (m ConsistencyMode) String() string { return string(m) }
 // arrangement, while answering ModeExternalSnapshot would invent a
 // point-in-time guarantee nobody made.
 func ParseConsistencyMode(s string) (ConsistencyMode, error) {
-	for _, m := range ConsistencyModes {
+	for _, m := range consistencyModes {
 		if string(m) == s {
 			return m, nil
 		}

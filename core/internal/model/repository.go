@@ -39,6 +39,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -125,10 +126,16 @@ const (
 	RepositoryIsolated RepositoryIsolation = "isolated"
 )
 
-// RepositoryIsolations is both answers. There is no third, and the absence
+// repositoryIsolations is both answers. There is no third, and the absence
 // is deliberate: "shared with these two other sets" is a repository per
 // group, which is what declaring another domain already expresses.
-var RepositoryIsolations = []RepositoryIsolation{RepositoryShared, RepositoryIsolated}
+var repositoryIsolations = []RepositoryIsolation{RepositoryShared, RepositoryIsolated}
+
+// RepositoryIsolations returns both answers as a copy the caller owns,
+// following backend.CapabilityKeys(). A caller that could assign through
+// this would be changing what ParseRepositoryIsolation accepts as an
+// answer to a security question.
+func RepositoryIsolations() []RepositoryIsolation { return slices.Clone(repositoryIsolations) }
 
 func (i RepositoryIsolation) String() string { return string(i) }
 
@@ -142,7 +149,7 @@ func (i RepositoryIsolation) String() string { return string(i) }
 // engine at all. An operator declaring a repository domain is declaring a
 // boundary; they have to say which one.
 func ParseRepositoryIsolation(s string) (RepositoryIsolation, error) {
-	for _, isolation := range RepositoryIsolations {
+	for _, isolation := range repositoryIsolations {
 		if string(isolation) == s {
 			return isolation, nil
 		}
@@ -194,13 +201,13 @@ const (
 	BoundaryAdministrativeTrust RepositoryBoundary = "administrative_trust"
 )
 
-// RepositoryBoundaries is every boundary co-tenancy crosses, which is
+// repositoryBoundaries is every boundary co-tenancy crosses, which is
 // exactly what sharing a repository means.
 //
 // There is deliberately no way to share some and not others. A field
 // offering that would be a promise the storage layer cannot keep: the
 // deduplication span and the encryption key are the same repository.
-var RepositoryBoundaries = []RepositoryBoundary{
+var repositoryBoundaries = []RepositoryBoundary{
 	BoundaryEncryption,
 	BoundaryCredential,
 	BoundaryCorruption,
@@ -208,6 +215,13 @@ var RepositoryBoundaries = []RepositoryBoundary{
 	BoundaryDeduplication,
 	BoundaryAdministrativeTrust,
 }
+
+// RepositoryBoundaries returns every boundary co-tenancy crosses as a copy
+// the caller owns, following backend.CapabilityKeys(). The list is what a
+// refusal prints and what co-tenancy is refused against; a caller able to
+// shorten it could make a refusal name fewer things than sharing actually
+// shares.
+func RepositoryBoundaries() []RepositoryBoundary { return slices.Clone(repositoryBoundaries) }
 
 // RepositoryDomain is one declared boundary: an identity, the operator's
 // own description of what it is for, and whether it admits co-tenants.
@@ -246,12 +260,7 @@ func (d RepositoryDomain) Validate() error {
 // Shares is every boundary a set in this domain shares with every other set
 // in it. It returns a copy: a caller that appended to the package's own
 // slice would rewrite what a repository domain means for the whole process.
-func (d RepositoryDomain) Shares() []RepositoryBoundary {
-	out := make([]RepositoryBoundary, len(RepositoryBoundaries))
-	copy(out, RepositoryBoundaries)
-
-	return out
-}
+func (d RepositoryDomain) Shares() []RepositoryBoundary { return RepositoryBoundaries() }
 
 // Admits reports whether this domain accepts one backup set's reference,
 // i.e. whether that set's snapshots may be stored in this domain's
@@ -360,9 +369,9 @@ func sharingCosts() string {
 
 	b.WriteString("sharing one repository shares ")
 
-	for i, boundary := range RepositoryBoundaries {
+	for i, boundary := range repositoryBoundaries {
 		switch {
-		case i == len(RepositoryBoundaries)-1:
+		case i == len(repositoryBoundaries)-1:
 			b.WriteString(" and ")
 		case i > 0:
 			b.WriteString(", ")

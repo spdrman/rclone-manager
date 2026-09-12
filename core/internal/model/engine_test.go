@@ -37,7 +37,7 @@ func TestResolveBackupEngine_SilenceIsTheArtifactEngine(t *testing.T) {
 func TestResolveBackupEngine_NamesBothEngines(t *testing.T) {
 	t.Parallel()
 
-	for _, want := range BackupEngines {
+	for _, want := range BackupEngines() {
 		got, err := ResolveBackupEngine(string(want))
 		if err != nil {
 			t.Errorf("ResolveBackupEngine(%q): %v", want, err)
@@ -116,11 +116,62 @@ func TestBackupEngine_UsesRepository(t *testing.T) {
 func TestBackupEngines_IsTheWholeSet(t *testing.T) {
 	t.Parallel()
 
-	if len(BackupEngines) != 2 {
-		t.Fatalf("BackupEngines has %d entries (%v); a third engine is an architectural decision, not a constant", len(BackupEngines), BackupEngines)
+	if len(BackupEngines()) != 2 {
+		t.Fatalf("BackupEngines() has %d entries (%v); a third engine is an architectural decision, not a constant", len(BackupEngines()), BackupEngines())
 	}
-	if BackupEngines[0] != EngineArtifact {
-		t.Errorf("BackupEngines[0] = %q; the engine every deployment already runs is offered first", BackupEngines[0])
+	if BackupEngines()[0] != EngineArtifact {
+		t.Errorf("BackupEngines()[0] = %q; the engine every deployment already runs is offered first", BackupEngines()[0])
+	}
+}
+
+// TestClosedVocabularies_HandOutCopies covers all four of this package's
+// EPIC K vocabularies in one place, because the hazard is the same one
+// four times and it is not a style point.
+//
+// Each of these lists is the vocabulary a Parse function accepts and a
+// surface renders. Exported as a slice VARIABLE, any caller in the process
+// -- a handler, a test, a wizard -- can assign through it, and the next
+// ParseVerificationLevel or ParseRepositoryIsolation in any goroutine
+// accepts a value this package never defined, or refuses one it does. That
+// is a closed set that is not closed.
+//
+// The accessor form is already this repository's convention for exactly
+// this reason: backend.CapabilityKeys() hands out a slices.Clone.
+func TestClosedVocabularies_HandOutCopies(t *testing.T) {
+	t.Parallel()
+
+	if got := BackupEngines(); len(got) > 0 {
+		got[0] = BackupEngine("smuggled")
+		if BackupEngines()[0] == BackupEngine("smuggled") {
+			t.Error("BackupEngines() hands out the package's own slice, so a caller can redefine which engines exist")
+		}
+	}
+
+	if got := VerificationLevels(); len(got) > 0 {
+		got[0] = VerificationLevel("smuggled")
+		if VerificationLevels()[0] == VerificationLevel("smuggled") {
+			t.Error("VerificationLevels() hands out the package's own slice, so a caller can put a rung on the ladder that nothing implements")
+		}
+		if _, err := ParseVerificationLevel("smuggled"); err == nil {
+			t.Error("ParseVerificationLevel accepted a level written into the vocabulary from outside")
+		}
+	}
+
+	if got := RepositoryIsolations(); len(got) > 0 {
+		got[0] = RepositoryIsolation("smuggled")
+		if RepositoryIsolations()[0] == RepositoryIsolation("smuggled") {
+			t.Error("RepositoryIsolations() hands out the package's own slice, so a caller can invent a third answer to a security question")
+		}
+		if _, err := ParseRepositoryIsolation("smuggled"); err == nil {
+			t.Error("ParseRepositoryIsolation accepted an isolation written into the vocabulary from outside")
+		}
+	}
+
+	if got := RepositoryBoundaries(); len(got) > 0 {
+		got[0] = RepositoryBoundary("smuggled")
+		if RepositoryBoundaries()[0] == RepositoryBoundary("smuggled") {
+			t.Error("RepositoryBoundaries() hands out the package's own slice, so a caller can drop a boundary out of the list co-tenancy is refused against")
+		}
 	}
 }
 
@@ -130,7 +181,7 @@ func TestBackupEngines_IsTheWholeSet(t *testing.T) {
 func TestBackupEngine_Describe(t *testing.T) {
 	t.Parallel()
 
-	for _, e := range BackupEngines {
+	for _, e := range BackupEngines() {
 		if desc := e.Describe(); desc == "" {
 			t.Errorf("engine %q has no description, so a surface that lists engines renders a blank row for it", e)
 		}

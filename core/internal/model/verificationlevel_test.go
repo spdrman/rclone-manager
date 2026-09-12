@@ -24,15 +24,15 @@ import (
 func TestVerificationLevels_AreAnOrderedLadder(t *testing.T) {
 	t.Parallel()
 
-	if len(VerificationLevels) != 4 {
-		t.Fatalf("VerificationLevels has %d entries (%v); EPIC K's ladder has four rungs and a fifth is a product decision",
-			len(VerificationLevels), VerificationLevels)
+	if len(VerificationLevels()) != 4 {
+		t.Fatalf("VerificationLevels() has %d entries (%v); EPIC K's ladder has four rungs and a fifth is a product decision",
+			len(VerificationLevels()), VerificationLevels())
 	}
 
 	want := []VerificationLevel{LevelStructural, LevelContentSample, LevelContentFull, LevelRestoreDrill}
 	for i, level := range want {
-		if VerificationLevels[i] != level {
-			t.Fatalf("VerificationLevels[%d] = %q, want %q; the slice is the ladder in ascending order", i, VerificationLevels[i], level)
+		if VerificationLevels()[i] != level {
+			t.Fatalf("VerificationLevels()[%d] = %q, want %q; the slice is the ladder in ascending order", i, VerificationLevels()[i], level)
 		}
 		if got := level.Rank(); got != i+1 {
 			t.Errorf("%q.Rank() = %d, want %d", level, got, i+1)
@@ -41,6 +41,50 @@ func TestVerificationLevels_AreAnOrderedLadder(t *testing.T) {
 
 	if VerificationLevel("restore-drill").Rank() != 0 {
 		t.Error("an unrecognised level has a rank, so it would compare as if it were somewhere on the ladder")
+	}
+}
+
+// TestVerificationLevel_PersistedValues pins the strings themselves,
+// because these are not internal names: they are what an operator writes
+// under verification_level, what a catalog row stores and what a report
+// renders, so changing one is a config migration for every deployment that
+// set it.
+//
+// content_full rather than "full" is the #826 review's finding, and the
+// reason is the rung sitting next to it: beside restore_drill, a bare
+// "full" reads as "a full restore was done", which is the exact promise
+// this ladder exists to stop the product making. The prefix says what it
+// actually covers -- the CONTENT was read in full -- and pairs it with
+// content_sample, which is the rung it genuinely differs from by degree.
+func TestVerificationLevel_PersistedValues(t *testing.T) {
+	t.Parallel()
+
+	for level, want := range map[VerificationLevel]string{
+		LevelStructural:    "structural",
+		LevelContentSample: "content_sample",
+		LevelContentFull:   "content_full",
+		LevelRestoreDrill:  "restore_drill",
+	} {
+		if level.String() != want {
+			t.Errorf("level renders as %q, want %q; this value is persisted, so a change here is a migration", level.String(), want)
+		}
+
+		back, err := ParseVerificationLevel(want)
+		if err != nil {
+			t.Errorf("ParseVerificationLevel(%q) = %v; a value this product writes must read back", want, err)
+
+			continue
+		}
+		if back != level {
+			t.Errorf("ParseVerificationLevel(%q) = %q, want %q", want, back, level)
+		}
+	}
+
+	// The old spelling is refused rather than accepted as an alias: no
+	// deployment has written one, and an alias would keep both spellings
+	// alive in configs and catalog rows forever.
+	if _, err := ParseVerificationLevel("full"); err == nil {
+		t.Error(`ParseVerificationLevel("full") succeeded; the pre-#826 spelling must not survive as a silent alias`)
 	}
 }
 
@@ -102,7 +146,7 @@ func TestVerificationLevel_SaysWhatItProves(t *testing.T) {
 func TestParseVerificationLevel_RefusesEverythingElse(t *testing.T) {
 	t.Parallel()
 
-	for _, level := range VerificationLevels {
+	for _, level := range VerificationLevels() {
 		got, err := ParseVerificationLevel(string(level))
 		if err != nil {
 			t.Errorf("ParseVerificationLevel(%q): %v", level, err)
@@ -134,7 +178,7 @@ func TestParseVerificationLevel_RefusesEverythingElse(t *testing.T) {
 func TestVerificationLevel_Describe(t *testing.T) {
 	t.Parallel()
 
-	for _, level := range VerificationLevels {
+	for _, level := range VerificationLevels() {
 		if level.Describe() == "" {
 			t.Errorf("level %q has no description, so a surface that lists levels renders a blank row", level)
 		}

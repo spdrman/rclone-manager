@@ -109,7 +109,24 @@ type SourceEndpoint struct {
 	User string
 }
 
-// canonical renders the endpoint in the one form an identity is computed
+// canonicalEndpoint is a SourceEndpoint reduced to the four values an
+// identity is computed over, each already normalised.
+//
+// It is four separate values rather than one rendered string on purpose.
+// An endpoint written out as "kind://user@host:port" and hashed as a single
+// field lets a value reach across a field boundary: user "a@b" on host "c"
+// and user "a" on host "b@c" render the same bytes, which is two different
+// sources sharing one snapshot lineage (#826). Keeping the parts apart
+// until they are length-prefixed individually removes the boundary a value
+// could impersonate.
+type canonicalEndpoint struct {
+	kind string
+	user string
+	host string
+	port string
+}
+
+// canonical normalises the endpoint into the parts an identity is computed
 // over, and refuses an endpoint it cannot canonicalise.
 //
 // Two normalisations, both of which are a spelling change rather than an
@@ -124,14 +141,14 @@ type SourceEndpoint struct {
 // ignored. Ignoring it would mean two configs that differ visibly produce
 // one identity, and the operator who wrote the host believed something
 // about where their data comes from.
-func (e SourceEndpoint) canonical() (string, error) {
+func (e SourceEndpoint) canonical() (canonicalEndpoint, error) {
 	port, known := e.Kind.defaultPort()
 	if !known {
 		if e.Kind == "" {
-			return "", fmt.Errorf("source endpoint has no kind (expected %q or %q)", EndpointLocal, EndpointSFTP)
+			return canonicalEndpoint{}, fmt.Errorf("source endpoint has no kind (expected %q or %q)", EndpointLocal, EndpointSFTP)
 		}
 
-		return "", fmt.Errorf("unknown source endpoint kind %q (expected %q or %q)", e.Kind, EndpointLocal, EndpointSFTP)
+		return canonicalEndpoint{}, fmt.Errorf("unknown source endpoint kind %q (expected %q or %q)", e.Kind, EndpointLocal, EndpointSFTP)
 	}
 
 	if e.Port != 0 {
@@ -140,25 +157,30 @@ func (e SourceEndpoint) canonical() (string, error) {
 
 	host := strings.ToLower(strings.TrimSpace(e.Host))
 	if host != strings.ToLower(e.Host) {
-		return "", fmt.Errorf("source endpoint host %q has surrounding whitespace", e.Host)
+		return canonicalEndpoint{}, fmt.Errorf("source endpoint host %q has surrounding whitespace", e.Host)
 	}
 
 	switch e.Kind {
 	case EndpointLocal:
 		if host != "" || e.User != "" || e.Port != 0 {
-			return "", fmt.Errorf("a %q source endpoint has no host, user or port, but this one names host=%q user=%q port=%d",
+			return canonicalEndpoint{}, fmt.Errorf("a %q source endpoint has no host, user or port, but this one names host=%q user=%q port=%d",
 				EndpointLocal, e.Host, e.User, e.Port)
 		}
 	case EndpointSFTP:
 		if host == "" {
-			return "", fmt.Errorf("a %q source endpoint requires a host", EndpointSFTP)
+			return canonicalEndpoint{}, fmt.Errorf("a %q source endpoint requires a host", EndpointSFTP)
 		}
 		if e.User == "" {
-			return "", fmt.Errorf("a %q source endpoint requires a user", EndpointSFTP)
+			return canonicalEndpoint{}, fmt.Errorf("a %q source endpoint requires a user", EndpointSFTP)
 		}
 	}
 
-	return string(e.Kind) + "://" + e.User + "@" + host + ":" + strconv.Itoa(port), nil
+	return canonicalEndpoint{
+		kind: string(e.Kind),
+		user: e.User,
+		host: host,
+		port: strconv.Itoa(port),
+	}, nil
 }
 
 // SourceRoot is where the tree being backed up starts, in two parts,
@@ -266,11 +288,24 @@ func (s SourceIdentity) IsZero() bool { return s == "" }
 // NewSourceIdentity computes the identity, or refuses an input it cannot
 // identify honestly.
 //
-// The canonical form is a fixed sequence of length-prefixed, labelled
-// fields. The length prefixes are what make it unambiguous: without them a
-// set identifier ending in a separator and a user beginning with one could
-// produce the same bytes as a different pair, which is a collision between
-// two sources rather than a cosmetic flaw.
+// The canonical form is a fixed sequence of labelled, length-prefixed
+// fields, one per input value, rendered into a single buffer and hashed
+// once.
+//
+// Both halves of that sentence are load bearing:
+//
+//   - the length prefix is what makes the concatenation unambiguous. A set
+//     identifier ending in a separator and a user beginning with one would
+//     otherwise produce the same bytes as a different pair.
+//   - one field per VALUE, never one field per struct. The endpoint's kind,
+//     user, host and port are four fields, because rendering them as
+//     "kind://user@host:port" first puts a separator inside the field where
+//     a value can impersonate it: user "a@b" on host "c" and user "a" on
+//     host "b@c" hashed identically before #826, which is two different
+//     sources sharing one snapshot lineage.
+//
+// The label is hashed alongside its value so that a field added later
+// cannot be made to look like an existing one by taking its position.
 func NewSourceIdentity(in SourceIdentityInput) (SourceIdentity, error) {
 	setID := strings.ToLower(in.SetUUID)
 	if setID == "" {
@@ -291,23 +326,37 @@ func NewSourceIdentity(in SourceIdentityInput) (SourceIdentity, error) {
 		return "", err
 	}
 
-	h := sha256.New()
-	for _, field := range [][2]string{
+	fields := [...][2]string{
 		{"schema", identitySchema},
 		{"set", setID},
-		{"endpoint", endpoint},
+		{"endpoint.kind", endpoint.kind},
+		{"endpoint.user", endpoint.user},
+		{"endpoint.host", endpoint.host},
+		{"endpoint.port", endpoint.port},
 		{"root", root},
-	} {
-		// label=len:value, newline-terminated. The label is in the digest
-		// as well as the value so that a future field cannot be added by
-		// reusing another one's position.
-		h.Write([]byte(field[0]))
-		h.Write([]byte("="))
-		h.Write([]byte(strconv.Itoa(len(field[1]))))
-		h.Write([]byte(":"))
-		h.Write([]byte(field[1]))
-		h.Write([]byte("\n"))
 	}
 
-	return SourceIdentity(hex.EncodeToString(h.Sum(nil))), nil
+	// One buffer, one hash call. Sized up front so an identity computed
+	// per backup set per cycle does not grow a buffer four times on the
+	// way: the ten bytes per field cover the "=", the ":", the newline and
+	// a decimal length of any value this can hold.
+	size := 0
+	for _, field := range fields {
+		size += len(field[0]) + len(field[1]) + 10
+	}
+
+	buf := make([]byte, 0, size)
+	for _, field := range fields {
+		// label=len:value, newline-terminated.
+		buf = append(buf, field[0]...)
+		buf = append(buf, '=')
+		buf = strconv.AppendInt(buf, int64(len(field[1])), 10)
+		buf = append(buf, ':')
+		buf = append(buf, field[1]...)
+		buf = append(buf, '\n')
+	}
+
+	sum := sha256.Sum256(buf)
+
+	return SourceIdentity(hex.EncodeToString(sum[:])), nil
 }
