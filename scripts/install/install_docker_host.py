@@ -3751,7 +3751,14 @@ def cmd_install(args) -> int:
             remedy,
         )
 
-    for line in installed_epilog(args):
+    # Read here rather than left to the operator. Until #803 the last
+    # step of a fresh install was a hand-typed 200-character `docker
+    # compose ... logs backupd | grep enroll`, every part of which this
+    # program had written itself minutes earlier. After the checks, so a
+    # link is never printed under an "Installed." that is not said.
+    notice = wait_for_enrollment_notice(args)
+
+    for line in installed_epilog(args, notice):
         say(line)
     return EXIT_OK
 
@@ -3892,35 +3899,109 @@ def finish_cli_only_install(args) -> int:
     return EXIT_OK
 
 
-def first_run_epilog(args: argparse.Namespace) -> list[str]:
+def _first_run_here(args) -> bool:
+    """Whether this deployment still has a first run ahead of it.
+
+    Asked of the configuration directory rather than of the install
+    mode, because "did an operator end up with a config" is the real
+    question, and a fresh install pointed at a directory that already
+    holds one is in the same position as an upgrade (#588).
+    """
+    return not (args.config_dir / "config.yaml").is_file()
+
+
+# How long the install waits for the engine's enrollment notice, and how
+# often it looks. Constants rather than flags, for the reason
+# ENROLL_NOTICE_WAIT is one: the engine is already answering its
+# liveness probe by the time this runs, so the notice is all but
+# certainly in the log already and this window exists for the first
+# start that is merely slow. There is a fallback for the rest.
+FIRST_RUN_NOTICE_WAIT = 30
+FIRST_RUN_NOTICE_POLL = 3
+
+FIRST_RUN_NOTICE_SAY = f"==> Reading the one-time enrollment link out of the {ENGINE_SERVICE} log"
+
+
+def wait_for_enrollment_notice(args, timeout: int = FIRST_RUN_NOTICE_WAIT) -> str:
+    """The engine's one-time enrollment notice, or "" and no waiting.
+
+    Issue #803. The notice is the last thing an operator needs from an
+    install and it was the one thing the install made them go and fetch,
+    so it is fetched here, through the same reader `enroll-link` uses.
+
+    A poll rather than a single read because the token is minted during
+    startup: the liveness probe can go healthy a moment before the line
+    is written, and a single read on exactly that host reports no link.
+
+    The two skips are not optimisations. Neither an upgrade that kept
+    its configuration nor a deployment that already has an administrator
+    issues a token, so polling either one spends the whole window to
+    find nothing and then prints a sentence telling somebody who has an
+    account to go and create one.
+    """
+    if not _first_run_here(args):
+        return ""
+    if (args.state_dir / "local-auth.json").is_file():
+        return ""
+
+    say(FIRST_RUN_NOTICE_SAY)
+    deadline = time.time() + timeout
+    while True:
+        notice = _newest_enrollment_notice(args)
+        if notice:
+            return notice
+        if time.time() >= deadline:
+            return ""
+        time.sleep(FIRST_RUN_NOTICE_POLL)
+
+
+def first_run_epilog(args: argparse.Namespace, notice: str = "") -> list[str]:
     """What to say after "Installed." about the setup flow, which is
     nothing at all when there is already a configuration.
 
-    Issue #588. These three sentences are true of a fresh install and
-    false of an upgrade, and they used to print unconditionally. An
-    upgrade of a real NAS kept its config.yaml, both backup sets and its
+    Issue #588. These sentences are true of a fresh install and false of
+    an upgrade, and they used to print unconditionally. An upgrade of a
+    real NAS kept its config.yaml, both backup sets and its
     administrator record, and then told the operator none of it had been
     written and to go and enroll. Somebody following that hunts the
-    engine log for a link to an account they already have, and reasonably
-    concludes the upgrade lost their configuration.
+    engine log for a link to an account they already have, and
+    reasonably concludes the upgrade lost their configuration.
 
-    The question is asked of the configuration directory rather than of
-    the mode, because "did an operator end up with a config" is what the
-    sentences are about, and a fresh install pointed at a directory that
-    already holds one is in the same position as an upgrade.
+    The configuration outranks the notice for that reason: a container
+    log keeps the notice from the original install across every restart
+    since, so an upgrade can have one in hand and still have nobody to
+    hand it to.
+
+    With a notice, the link is the epilog's last line and there is
+    nothing to run. Without one, the command that reads it back is
+    printed in full (#803): the fallback is reached on a deployment that
+    is already behaving oddly, which is the worst place to hand somebody
+    an invocation they have to reconstruct.
     """
-    if (args.config_dir / "config.yaml").is_file():
+    if not _first_run_here(args):
         return []
-    return [
+    opening = [
         "",
         "    No config.yaml was written, on purpose. Issue #176 shipped a first-run setup flow",
         "    precisely so that a fresh install does not need one hand-written before it starts.",
+    ]
+    if notice:
+        return [
+            *opening,
+            "    Open this link and follow it:",
+            "",
+            f"    {notice}",
+            "",
+            "    If it lapses before you get to it, `enroll-link` issues another.",
+        ]
+    return [
+        *opening,
         "    Open the Web UI and follow it. The enrollment link is in the engine's log:",
-        f"      {' '.join(compose_argv(args))} logs backupd | grep enroll",
+        f"      {' '.join(compose_argv(args))} logs {ENGINE_SERVICE} | grep enroll",
     ]
 
 
-def installed_epilog(args: argparse.Namespace) -> list[str]:
+def installed_epilog(args: argparse.Namespace, notice: str = "") -> list[str]:
     """Everything a full install prints once its last check has passed.
 
     A list rather than a run of say() calls, for the reason
@@ -3929,13 +4010,17 @@ def installed_epilog(args: argparse.Namespace) -> list[str]:
     copied into a page by hand drifts from the program silently. The
     site's check renders these lines and compares, so the page cannot
     claim an epilog this installer does not print.
+
+    The notice is passed in rather than read here, because reading it
+    means waiting on a container and this function is also rendered by
+    that page check.
     """
     return [
         "",
         "==> Installed.",
         f"    Web UI:  {args.public_base_url}",
         f"    Compose: {' '.join(compose_argv(args))}",
-        *first_run_epilog(args),
+        *first_run_epilog(args, notice),
     ]
 
 
