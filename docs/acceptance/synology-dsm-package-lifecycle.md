@@ -11,7 +11,7 @@ behave the way §72's acceptance criteria require.
 §68's Provider Test Matrix says provider acceptance procedures "SHALL be
 written/version-controlled before manual execution". This is that
 procedure, written before the package existed, and it is the only thing
-that can close the four hardware-gated acceptance criteria on issue #85.
+that can close the four hardware-gated acceptance criteria on
 
 Until it has been executed and its results recorded, every claimed
 architecture below is **build-supported but uncertified**, in §68's own
@@ -59,7 +59,7 @@ narrow, and so nobody executes it expecting it to prove more than it does.
   **This is proven against synthetic fixtures only.** No test anywhere
   runs the parity check against a real release artifact: nothing
   cross-compiles the release binaries or builds a `.spk` in CI, which is
-  blocked on #174. Step 1.6 below is where a real package's binaries are
+  blocked on Step 1.6 below is where a real package's binaries are
   compared against `container/release-manifest.json`, by hand, and it is
   the only place that comparison happens at all.
 - The INFO file carries every field Synology documents as necessary, and
@@ -245,7 +245,7 @@ this criterion is the one most likely to differ between the two.
 5. Complete enrollment with the token from step 2, choose an
    administrator password, and log in.
 6. Expect: the shared UI loads and `GET /api/v1/system/capabilities`
-   succeeds, and it reports the **Synology** bridge. Since issue #169 the
+   succeeds, and it reports the **Synology** bridge. Since the
    package carries this provider's own UI bundle in its payload and
    `start-stop-status` serves it with `--ui-dir`, so a generic bridge here
    is now a failure of this step rather than the documented gap it used to

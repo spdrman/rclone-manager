@@ -53,14 +53,14 @@ privileged mode, and no mandatory telemetry. The current result for this target 
 
 ## Before submitting
 
-- [ ] `container/release-manifest.json` pins a commit that is on the main branch, so the
+- `container/release-manifest.json` pins a commit that is on the main branch, so the
       bytes in this submission can be traced to a recorded build. The preflight decides
       this; the box is here because a submission is checked by a person, not only by a gate.
-- [ ] The acceptance run in `docs/acceptance/store-submission-preflight.md` has been done on
+- The acceptance run in `docs/acceptance/store-submission-preflight.md` has been done on
       real hardware and accepted.
-- [ ] The acceptance run in `docs/acceptance/casaos-app-store-install.md` has been done on
+- The acceptance run in `docs/acceptance/casaos-app-store-install.md` has been done on
       real hardware and accepted.
-- [ ] The screenshots exist and are of that run.
+- The screenshots exist and are of that run.
 
 ### How to read the State column
 

@@ -42,8 +42,8 @@ eight-element adapter drift gate. The current result is in
 
 ## Before calling this target ready
 
-- [ ] `container/release-manifest.json` pins a commit that is on the main branch.
-- [ ] The acceptance run in `docs/acceptance/store-submission-preflight.md` has been done on
+- `container/release-manifest.json` pins a commit that is on the main branch.
+- The acceptance run in `docs/acceptance/store-submission-preflight.md` has been done on
       real hardware and accepted.
 
 ### How to read the State column

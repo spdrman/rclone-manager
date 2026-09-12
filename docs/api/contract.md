@@ -4,7 +4,7 @@
 the TypeScript client: the document. Both sides are generated from it, and both
 are held to it by checks that fail CI rather than by review.
 
-Issue #166 (B6.2) is where this came from. Before it, the boundary existed but
+ (B6.2) is where this came from. Before it, the boundary existed but
 nothing described it: the Go handlers were the only statement of the request and
 response shapes, `ui/shared/src/api/contracts.ts` held a hand-transcribed copy of
 the error-code list, and `ui/shared/src/api/client.ts` held a second
@@ -44,14 +44,14 @@ A Go struct can express a field's name and type. It cannot express whether the
 operation needs a session, whether it needs a CSRF token, whether it requires an
 `Idempotency-Key`, which optimistic-concurrency token it reads, whether the
 destructive gate stands in front of it, or which typed errors it can return.
-Those are precisely the things #166 requires to become contract *data*
+Those are precisely the things requires to become contract *data*
 ("authentication requirements become explicit contract data rather than handler
 convention, which makes an unauthenticated destructive endpoint a contract
 violation a test can catch"). Under Go-first they would have to live in
 annotations beside the structs, which is a second hand-maintained format with
 none of OpenAPI's tooling and all of its drift risk.
 
-There is a second reason. #90's adapter conformance gate has to compare an
+There is a second reason. 's adapter conformance gate has to compare an
 adapter's declared API compatibility against the canonical runtime's contract.
 That comparison needs a document that exists independently of building Go. A
 contract that is an output of `go build` is not that.
@@ -62,7 +62,7 @@ Two consequences follow, and both are deliberate.
 - The handlers are **not** generated. They still declare their own structs, and
   a reflection test compares those structs to the generated ones field by field.
   Making the handlers use the generated types is a behaviour-preserving move
-  worth doing, but #81 is explicit that behaviour is not rewritten in the same
+  worth doing, but is explicit that behaviour is not rewritten in the same
   step that a boundary is introduced, so it is not done here.
 - The generator is in this repository (`scripts/api/gen-bindings.go`), stdlib
   only, no module. Every other gate here is shaped the same way, and an
@@ -81,7 +81,7 @@ Edit `api/v1/openapi.json`, run that, commit both generated files:
 
 | generated file | consumed by |
 |---|---|
-| `core/apicontract/contract.gen.go` | the Go conformance tests, and `core/internal/apiclient`, the CLI's own client (issue #541) |
+| `core/apicontract/contract.gen.go` | the Go conformance tests, and `core/internal/apiclient`, the CLI's own client |
 | `ui/shared/src/api/generated/contract.ts` | `ui/shared/src/api/contracts.ts` and `client.ts`, directly |
 
 Both carry a `DO NOT EDIT` banner. Editing either one by hand fails CI.
@@ -106,7 +106,7 @@ produced by the same Go program as the Go one.
 ### `scripts/api/check-contract-drift.sh` says an implementation type reached the public schema
 
 A schema name, property name, enum value, path or operation id in the contract
-names rclone, SQLite, a filesystem path or a provider SDK. #81's standing
+names rclone, SQLite, a filesystem path or a provider SDK. 's standing
 constraint forbids that on `/api/v1`, and the issue is explicit that if a public
 shape leaks one, the contract is wrong, not the check. Rename the field to say
 what it means rather than what implements it.
@@ -125,7 +125,7 @@ obeys, and they are the ones that reach `apicontract.Endpoint`. So the generated
 bindings can be byte-for-byte correct while the published document tells an
 outside reader something else entirely, which is what happened: fifteen of the
 forty-six operations were mutating, sat behind `requireCSRF` at runtime, and
-said nothing about CSRF in `security` (PR #546 review). The fix is the contract,
+said nothing about CSRF in `security` (PR review). The fix is the contract,
 in whichever direction is true of the route, and then `scripts/api/generate.sh`.
 
 A `security` block this rule cannot read is a failure too, never a skip. It
@@ -144,7 +144,7 @@ This gate exists because the two checks above only cover *generated* files, and
 `client.ts` is not one. It is hand-written on top of the generated module and
 imports nothing from it but types and the error-code registry, so every request
 path it builds is a string literal that the binding comparison cannot see. Issue
-#211 measured what that cost: fourteen such pairs, four of the six shipped pages
+ measured what that cost: fourteen such pairs, four of the six shipped pages
 failing outright against a real engine, and every suite in the repository green,
 because the browser tests run against `createMockApi`, which implements whatever
 the client asks for.
@@ -181,7 +181,7 @@ Three properties are worth knowing before changing it:
   `scripts/api/generate.sh`, then implement it in
   `apps/common/webhost/router.go`), or the client stops calling it.
 
-### `go test ./webhost/` says the contract hashes to something else
+### `go test./webhost/` says the contract hashes to something else
 
 `api/v1/openapi.json` was edited and the bindings were not regenerated. This is
 the same failure the drift script reports, caught in the ordinary test run so a
@@ -193,7 +193,7 @@ regenerate without shelling out to the generator. The full comparison, and the
 only thing that also catches a hand edit to the *body* of a generated file, is
 the drift script.
 
-### `go test ./webhost/` says a field is in the handler type but not in the contract
+### `go test./webhost/` says a field is in the handler type but not in the contract
 
 A handler's request or response shape moved and the contract did not. This is
 the **Go drift** gate. Add the field to `api/v1/openapi.json`, regenerate, and
@@ -263,7 +263,7 @@ call.
 - a new value in a RESPONSE enum, provided the existing values keep their
   meaning. A response enum is what the server may say, not a closed set a
   client may assume: `BackendManifest.role` gained `remote_filesystem`
-  under `v1` when #731 registered a backend that is a directory on
+  under `v1` when registered a backend that is a directory on
   another host, and it will gain another the next time a shape appears
   that none of the existing values honestly describes. A client MUST
   preserve a value it does not recognise and render it as itself; one
@@ -303,7 +303,7 @@ serves, so a client and an adapter can both check rather than assume.
 `POST /operations` refuses with three different codes at 409, and they do not
 all carry the same body. `CONFIG_REVISION_STALE` carries the current revision
 in a structured top-level `config_revision` field, so a client retries against
-a value it can rely on instead of one parsed out of prose (#118 item 5);
+a value it can rely on instead of one parsed out of prose ( item 5);
 `IDEMPOTENCY_KEY_CONFLICT` and `OPERATION_ALREADY_RUNNING` go through the
 ordinary error envelope and have no such field.
 
@@ -311,7 +311,7 @@ The 409 body is therefore `oneOf(ConfigRevisionStaleResponse, ErrorResponse)`.
 Two alternatives were available and both were rejected:
 
 - **One schema with `config_revision` optional.** Simplest to generate, and it
-  throws away the #118 item 5 guarantee at the type level: every client reading
+  throws away the item 5 guarantee at the type level: every client reading
   `.config_revision` after a `CONFIG_REVISION_STALE` would be reading an
   optional field, which is the thing that guarantee exists to prevent.
 - **Giving the stale case its own status.** Cleanest typing, but changing which
@@ -327,7 +327,7 @@ bindings in silence, so the generator now fails on one rather than emitting it.
 
 ## Recorded decision: live progress is a nested object that disappears
 
-Issue #221. `Operation` is a durable, crash-safe record: submitted, started,
+ `Operation` is a durable, crash-safe record: submitted, started,
 finished, plus a result or an error. Live transfer progress is the opposite
 kind of thing, and the contract keeps the two apart rather than growing the
 record a set of counters.
@@ -362,7 +362,7 @@ before the end. The byte counters describe the ONE artifact being copied, and
 the counters beside them (`backup_sets_done` of `backup_sets_total`,
 `artifacts_done`) say where in the cycle that artifact sits. `backup_sets_total`
 is exact rather than estimated: it is a count of the enabled sets in the
-configuration snapshot the cycle started with. Issue #211 removed nine fields
+configuration snapshot the cycle started with. removed nine fields
 the UI displayed that nothing computed, and a cycle-level percentage would have
 been the tenth.
 
@@ -372,7 +372,7 @@ has started and moved nothing is a measured zero; `omitempty` on a plain
 
 ## Recorded decision: a placement is a copy, and absence is not presence
 
-Issue #240 (EPIC E, FR-34). An artifact's copies reach a client as
+ (, FR-34). An artifact's copies reach a client as
 `Artifact.placements`, and the shape is built so three different facts stay
 three different facts. They all read the same if a schema is careless, and the
 one that gets rendered as a green tick is the one an operator acts on.
@@ -382,7 +382,7 @@ because the journal recorded a finished copy. An artifact still transferring has
 none, and the `.partial` file `local_path` names is deliberately not one. The
 array is REQUIRED for the same reason: an optional array has three readings (a
 copy exists, no copy exists, the server did not say), and only two of them are
-ever true, so a client is always handed `[]` rather than a missing key it has to
+ever true, so a client is always handed `` rather than a missing key it has to
 interpret.
 
 **A copy the journal knows is gone is not served at all.** `status` admits
@@ -428,7 +428,7 @@ stores.
 
 ## Recorded decision: on a retention verdict, no medium means local
 
-Issue #430 (EPIC E, FR-27 and FR-30). The retention preview carries three
+ (, FR-27 and FR-30). The retention preview carries three
 placement facts: `RetentionPlan.moves`, `RetentionPlan.unconfirmed_placements`,
 and `medium` on every verdict. Two of the three are spelled by absence, and I
 want the reason on the record rather than inferred from a diff.
@@ -436,7 +436,7 @@ want the reason on the record rather than inferred from a diff.
 **A verdict on the implicit local medium carries no `medium` key.** The obvious
 alternative was to serve `"medium": "local"` everywhere, the way
 `Placement.medium` already does, and I did not take it. Every deployment
-written before EPIC E holds every copy locally, so that spelling would have put
+written before holds every copy locally, so that spelling would have put
 a new key on every verdict of every response those deployments serve, to say
 the only thing that was ever true of them. Absence says the same thing and
 leaves them byte for byte as they were. `backupd retention` made the
@@ -467,7 +467,7 @@ the operator read them is refused like any other stale plan.
 
 ## Recorded decision: the settings write carries a consent, not a setting
 
-Issue #240 (FR-27). `UpdateSettingsRequest.acknowledge_medium_disclosure` is the
+ (FR-27). `UpdateSettingsRequest.acknowledge_medium_disclosure` is the
 only field on that request that asks for no change. It permits one.
 
 A write that newly sends a retention tier's artifacts to a non-local medium is
@@ -505,7 +505,7 @@ so a client that round-trips what it was served cannot re-consent by accident.
 
 ## Recorded decision: the two shapes `POST /system/first-run` declares
 
-Issue #176 adds the first-run setup pair, `GET` and `POST /system/first-run`.
+ adds the first-run setup pair, `GET` and `POST /system/first-run`.
 Both shapes below were settled when they were declared rather than after,
 because a shape in this document is fixed until `v2`, and the two questions
 had answers that were not obvious.
@@ -551,17 +551,17 @@ domain types the rest of the app speaks. What changed is only where the wire
 half comes from.
 
 `apps/common/webhost/handlers_system.go` gained one field,
-`capabilities_response.platform`, because the capability shape #166 documents
+`capabilities_response.platform`, because the capability shape documents
 reports which platform the capabilities belong to. It is additive, and it is
 explicitly not something to branch on: the UI-side check above fails on a
 platform-name conditional in `ui/shared`.
 
 ## Recorded, deliberately not fixed here
 
-#166 says an endpoint whose shape is genuinely wrong gets recorded rather than
+ says an endpoint whose shape is genuinely wrong gets recorded rather than
 redesigned in this issue. Three things qualify.
 
-1. **`httpApi` calls fourteen paths the runtime does not serve.** `getVersion()`
+1. **`httpApi` calls fourteen paths the runtime does not serve.** `getVersion`
    requests `/api/v1/version` while the runtime serves `/api/v1/system/version`,
    so the shared UI's version banner cannot ever have worked against a real
    server; `getHealth`, `listOperations`, `listActivity`, `listQuarantine`,
@@ -587,6 +587,6 @@ redesigned in this issue. Three things qualify.
 
 The capability response is also flat (`platform` and the five booleans as
 siblings) rather than nesting the booleans under a `capabilities` key the way
-#166's illustrative JSON does. Nesting would break every existing reader for no
-gain the contract needs, and #166 forbids reshaping endpoints beyond what the
+'s illustrative JSON does. Nesting would break every existing reader for no
+gain the contract needs, and forbids reshaping endpoints beyond what the
 contract requires.

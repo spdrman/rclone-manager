@@ -1,11 +1,11 @@
 # `distribution/`, the distribution layer
 
-This tree is one of the three layers issue #165 made explicit. It holds
+This tree is one of the three layers made explicit. It holds
 **packaging, metadata, templates and store presentation**: everything that
 changes how the same runtime is installed and presented, and nothing that
 changes what the runtime does.
 
-The rule that makes an adapter an adapter, quoted from EPIC B #81's standing
+The rule that makes an adapter an adapter, quoted from 's standing
 constraint, and binding here:
 
 > Adapters may change installation metadata, host paths, the authentication
@@ -26,7 +26,7 @@ The per-platform packaging artifacts are still under `apps/<platform>/`
 (`apps/truenas/catalog`, `apps/unraid/template`, `apps/openmediavault/compose`,
 `apps/proxmox/compose`, `apps/synology/spk`, `apps/portainer`, `apps/casaos`,
 `apps/zimaos`, `apps/dockge`, and the canonical runtime in `container/`). The
-last four are issue #170's, and they are the cheapest evidence in the
+last four are 's, and they are the cheapest evidence in the
 repository for what this layer is for: four new targets, four adapter entries
 in `layers.conf`, and no new entry in any other layer. They are already **classified** as distribution-layer in
 `scripts/architecture/layers.conf`, so every layer check covers them today,
@@ -34,10 +34,10 @@ and `verify-core-without-distribution.sh` deletes exactly them to prove the
 core and the generic application stand without the adapter tree.
 
 They are not physically moved here yet, and that is deliberate rather than
-unfinished. EPIC B #81 says plainly that converting the already-shipped Phase 4
-platform packaging is **#169's** work, and that nobody should reconcile Phase 4
+unfinished. says plainly that converting the already-shipped Phase 4
+platform packaging is **'s** work, and that nobody should reconcile Phase 4
 into this refactor on their own initiative; the canonical image and Compose
-runtime under `container/` are **#167's**. Moving those files here now and
+runtime under `container/` are **'s**. Moving those files here now and
 converting them there would churn the same artifacts twice and put this issue
 inside two others' scope. `docs/architecture/layers.md` records the mapping so
 those issues have a destination to move to rather than a decision to re-make.

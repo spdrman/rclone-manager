@@ -1,9 +1,9 @@
 # Phase 6 performance baselines and the regression gate
 
-EPIC B (#81) says the Phase 6 refactor is expected to be performance-neutral,
+ says the Phase 6 refactor is expected to be performance-neutral,
 and that reproducible baselines have to be captured *before* structural
 refactoring begins, because once code starts moving the pre-refactor number is
-gone for good. Issue #165 owns capturing them. This is where they live, what
+gone for good. owns capturing them. This is where they live, what
 they mean, and exactly what a later Phase 6 change has to beat.
 
 ## The one-line answer
@@ -25,7 +25,7 @@ deliberately on the benchmark host, and what CI enforces for those six is that a
 complete baseline exists and that the gate can still fail.
 
 **`image_size_bytes` is the exception, and is enforced on every full local gate
-run** (#635). It is not a timing measurement: two builds of one commit produce
+run**. It is not a timing measurement: two builds of one commit produce
 byte-identical sizes, so nothing about a loaded machine can move it, and
 `apps/generic/tests/dockercli` already builds `container/Dockerfile` for its
 licence and CLI proofs. `TestTheBuiltImageIsInsideTheRecordedSizeBudget` reads
@@ -117,10 +117,10 @@ So:
 
 - **`idle_rss_bytes` and `image_size_bytes`** are gated on a ratio alone. Their
   noise is 45x and infinitely below the budget respectively, so the ratio is a
-  real gate. Nothing #635 measured touches either: idle RSS is a process property
+  real gate. Nothing measured touches either: idle RSS is a process property
   and an image size is a function of the tree and the target architecture.
 - **`transfer_mb_per_second`** was in that list on the strength of the 0.93%
-  above, and #635 established that the 0.93% measures the wrong quantity. Both of
+  above, and established that the 0.93% measures the wrong quantity. Both of
   those baselines were taken back to back on a quiet machine, so what they
   measured is repeatability under ONE condition, not sensitivity to condition,
   and a 256 MiB disk-to-disk copy is the metric here most exposed to the
@@ -137,7 +137,7 @@ So:
   baseline the ratio allows 0.185 ms and the floor allows 0.218 ms, so the floor
   always binds and the budget this metric really carries is **+29.8%**, not
   +10%. (Those two numbers were 0.143 ms and 0.180 ms, for +38.5%, against the
-  0.130 ms baseline this record replaced in #635. The floor is absolute, so a
+  0.130 ms baseline this record replaced in The floor is absolute, so a
   larger baseline narrows the effective budget rather than widening it, and
   `scripts/perf/selftest.sh` refuses the whole run if the floor ever stops
   binding first.) The floor is there because 0.05 ms is 2.6x the observed 0.019 ms
@@ -166,9 +166,9 @@ So:
   and the process consumes less CPU at idle than `ps` can resolve
   (`idle_cpu_floor_percent` in the record says what the floor is). They are
   review signals: a Phase 6 issue that moves one of them materially has to say
-  so and explain it, which is what #81 asks for on idle memory too.
+  so and explain it, which is what asks for on idle memory too.
 
-All seven metrics EPIC B #81's contract names are still **required to be
+All seven metrics 's contract names are still **required to be
 present**. `check-baseline.sh` refuses a record that is missing any of them, so
 a `--skip-image` capture can never be mistaken for a real baseline.
 
@@ -196,7 +196,7 @@ The record here was captured at `8ad3100` on 2026-08-31 and replaced at
 enough to need an account, and `image_size_bytes` moved to 1.62x of a metric
 gated at 1.05x. A baseline is not allowed to absorb a number like that on the
 grounds that it is the current number, so this is the accounting that was done
-before it was re-captured (#635). Every figure below was produced on this host
+before it was re-captured. Every figure below was produced on this host
 on 2026-09-08.
 
 ### `image_size_bytes`, 43,008,762 -> 69,704,266 (1.621x)
@@ -230,8 +230,8 @@ Both columns sum to their image exactly, so nothing is unattributed. Both
 commits predate 0.3.3, so the binaries carry the names they had then;
 0.3.3 renamed them to `/backupd` and `/backupd-web`.
 
-**9,502,720 bytes of each binary is rclone's S3 backend**, which #369 imported
-for EPIC E's MediumStore. Measured by building each command for `linux/arm64`
+**9,502,720 bytes of each binary is rclone's S3 backend**, which imported
+for 's MediumStore. Measured by building each command for `linux/arm64`
 with the Dockerfile's own flags and then again with that one blank import
 commented out: `backupd` goes 31,391,904 -> 21,889,184 and
 `backupd-web` goes 31,981,728 -> 22,479,008. Identical deltas, because it
@@ -244,7 +244,7 @@ lines of non-test Go landed under `core/`, `apps/common/` and `apps/generic/`
 between the two commits, which is about 56 bytes of image per line: an
 unremarkable ratio, and the same order in both binaries.
 
-`/ui/bundles` is #180's five adapter bundles and `/licenses` is #407's licence
+`/ui/bundles` is 's five adapter bundles and `/licenses` is 's licence
 material. Neither existed to be measured when the old record was taken.
 
 Ruled out, so that "expected" means something: the Go builder and the distroless
@@ -255,12 +255,12 @@ v1.75.0. Each bundle's JS chunk is distinct (its own provider bridge), so there
 is no duplicate to remove there.
 
 One real duplication, recorded rather than blessed: the seven IBM Plex woff2
-faces #632 added are byte-identical in all five bundles and embedded a sixth
+faces added are byte-identical in all five bundles and embedded a sixth
 time in `backupd-web`. That is 139,744 bytes per copy and **558,976 bytes
 of pure redundancy** in `/ui/bundles`. It follows from a bundle being a
 self-contained document root, which is what `serve-ui --ui-root <root>/<profile>`
 resolves, so removing it needs a shared asset route and a change to every
-bundle's CSS. That is a design change, not a fix, and it is on #635 rather than
+bundle's CSS. That is a design change, not a fix, and it is on rather than
 quietly absorbed here.
 
 ### `idle_rss_bytes`, 98,861,056 -> 106,725,376 (1.08x, inside its 1.10 gate)
@@ -298,7 +298,7 @@ than about the tree. As defined by this workload, `startup_to_healthy_ms` is a
 for as long as the workload gives each capture an empty database. An operator
 restarting a container that already has its schema pays the warm number, which
 moved 14.4 ms -> 17.1 ms. Anyone reading this metric as "how long the engine
-takes to come up" is reading the wrong thing, and #635 carries the note.
+takes to come up" is reading the wrong thing, and carries the note.
 
 ### `transfer_mb_per_second`, 537.702 -> 746.867 (1.39x), and its ratio 0.90 -> 0.60
 
@@ -381,7 +381,7 @@ lenient: that metric's own spread within this capture was 64% of its median.
 ## About `working_tree_dirty: true` in the checked-in record
 
 The record names commit `186ba0c7` with `working_tree_dirty: true`, and that is
-accurate rather than sloppy. What was uncommitted at capture time is #635's own
+accurate rather than sloppy. What was uncommitted at capture time is 's own
 change: two `_test.go` files in `apps/generic/tests/dockercli`, and comment-only
 edits to `container/Dockerfile`, `ui/shared/scripts/build-bundles.mjs`,
 `distribution/packaging` and two documents. None of it is compiled into the
@@ -416,7 +416,7 @@ scripts/perf/selftest.sh
 
 Presence mode and the self-test take no measurements and run in seconds, so
 they are safe in ordinary CI. Compare mode is not wired into ordinary CI on
-purpose: #81 allows the measurements to run on a dedicated stable benchmark
+purpose: allows the measurements to run on a dedicated stable benchmark
 environment rather than blocking ordinary CI on noisy numbers, and a shared
 runner is not that environment.
 
@@ -427,7 +427,7 @@ mode and the mutation self-test. Every timing number in a Phase 6 pull request
 is therefore an author self-report taken by hand on the host named above, and a
 reviewer who wants to reproduce one has to capture on that host.
 
-**`image_size_bytes` is the exception** (#635). It is not a timing measurement,
+**`image_size_bytes` is the exception**. It is not a timing measurement,
 so none of the reasoning above applies to it: two builds of one commit produce
 byte-identical sizes, load cannot move it, and nothing about a shared runner
 makes it noisy. What made it awkward to gate was cost, not noise, and that turned
@@ -444,7 +444,7 @@ of the tree AND the target architecture.
 That one condition is the whole limit on this arm, and it is worth stating
 precisely rather than as "it only runs locally". GitHub CI **does** run this
 package: `.github/workflows/ci.yml`'s `apps/generic build, vet, test` job runs
-`go test -race ./...` in `apps/generic` on `ubuntu-latest`, `tests/dockercli` is
+`go test -race./...` in `apps/generic` on `ubuntu-latest`, `tests/dockercli` is
 in that package list, there are no build tags or env guards on it, and Docker is
 present on the runner. So CI builds the image and then takes the skip, because
 `runtime.GOARCH` there is amd64 and the only checked-in record is arm64. CI pays
@@ -477,7 +477,7 @@ a red gate green is how the contract stops meaning anything; the record carries
 review.
 
 Shipping features does move them, and the record has been re-cut once, at
-`186ba0c7` (#635). The order that made that legitimate is the part to copy:
+`186ba0c7`. The order that made that legitimate is the part to copy:
 **account for it first, capture second.** "What moved between `8ad3100` and
 `186ba0c7`" above is what a re-cut has to look like. Every component of the
 26,695,504-byte image move is attributed to a named change by a measurement
@@ -487,7 +487,7 @@ down rather than folded into the new number. A re-capture with none of that
 behind it records a regression as the new normal, which is the one use this
 directory must never be put to.
 
-There is a second way to put it to that use, and #635 nearly did. A threshold
+There is a second way to put it to that use, and nearly did. A threshold
 that a normal run cannot meet fails on trees nobody regressed, and a gate that
 always fails gets ignored exactly as fast as a gate nobody runs: the same ending
 by a different road. So the rule has a second half. **A threshold is sized from

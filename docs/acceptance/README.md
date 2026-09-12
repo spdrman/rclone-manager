@@ -31,7 +31,7 @@ the parts of the Phase 4 TDD Gate that are decidable from the repository alone:
 | Phase 4 gate item | Where it is checked |
 | --- | --- |
 | core version parity | `distribution/packaging` (one canonical image reference, identical across every platform and across the TrueNAS catalog as an install renders it) |
-| core binary hash parity | **not claimed**. Nothing in `distribution/packaging` derives a hash from any artifact. It checks only that `container/release-manifest.json` records a non-empty SHA-256 per binary per architecture, which cannot detect a stale or wrong hash. #174 closed the worse half of that gap: the manifest no longer pins a commit that has left `main`'s history, and `release-manifest-integrity` passes for every provider. A reachable manifest is still not a byte comparison, so this row stays unclaimed. The only place binary hashes are verified against real bytes is `spkctl verify` against a built `.spk` in `apps/synology`. |
+| core binary hash parity | **not claimed**. Nothing in `distribution/packaging` derives a hash from any artifact. It checks only that `container/release-manifest.json` records a non-empty SHA-256 per binary per architecture, which cannot detect a stale or wrong hash. closed the worse half of that gap: the manifest no longer pins a commit that has left `main`'s history, and `release-manifest-integrity` passes for every provider. A reachable manifest is still not a byte comparison, so this row stays unclaimed. The only place binary hashes are verified against real bytes is `spkctl verify` against a built `.spk` in `apps/synology`. |
 | provider package metadata | `distribution/packaging` (every metadata file parses, and carries the keys its platform requires) |
 | architecture | `distribution/packaging` (the claimed set equals what `container/release-manifest.json` records as built) |
 | backup-root containment | `distribution/packaging` (§19.2: private state, config and key material are never inside the backup root, and the declared storage mount IS the backup root, so the rule has one reading rather than three) |
@@ -105,7 +105,7 @@ from this directory and records what happened.
 | OpenMediaVault | [openmediavault-provider-acceptance.md](openmediavault-provider-acceptance.md) | current OMV 8.x Debian-based test system |
 | Synology DSM | [synology-dsm-package-lifecycle.md](synology-dsm-package-lifecycle.md) | a representative DSM 7.x model per claimed architecture |
 | Proxmox VE | [proxmox-ve-deployment.md](proxmox-ve-deployment.md) | current PVE release test host or VM environment |
-| UGOS | [ugos-local-notification.md](ugos-local-notification.md) | a real authorized UGREEN NAS. Covers notifications only; the install/update/uninstall procedure belongs with the UPK, which is #83 |
+| UGOS | [ugos-local-notification.md](ugos-local-notification.md) | a real authorized UGREEN NAS. Covers notifications only; the install/update/uninstall procedure belongs with the UPK, which is |
 
 Generic Docker has no procedure here on purpose: `apps/generic/tests/dockercli`
 drives the real `docker` CLI against the real image (§67), so there is no

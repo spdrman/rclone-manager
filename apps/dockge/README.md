@@ -3,7 +3,7 @@
 Dockge manages **the canonical Compose stack**. There is no Dockge packaging in
 this directory and there is deliberately no compose file here either, because
 adding one would create a second definition of the same stack for the same kind
-of host, which is the fork issue #170 rules out.
+of host, which is the fork rules out.
 
 This is new platform support, not a conversion: no Phase 4 issue targeted
 Dockge, so there is nothing here that replaces earlier packaging.
@@ -84,7 +84,7 @@ Dockge-specific workaround:
 
 This is written down here rather than fixed in code because it is not a Dockge
 incompatibility: it is the same choice every pull-based deployment of the
-canonical stack makes, and issue #170 asks for a real incompatibility to be
+canonical stack makes, and asks for a real incompatibility to be
 recorded before any code is written for one. Nothing in this repository was
 written for it.
 

@@ -1,9 +1,9 @@
 # The three layers, what each owns, and what enforces it
 
-Phase 6 (EPIC B, #81) claims the product is **one Go application, one shared
+Phase 6 (,) claims the product is **one Go application, one shared
 TypeScript UI, one versioned multi-arch OCI image and one authoritative Compose
 runtime**, with every NAS OS, container manager and app store reduced to a thin
-adapter around it. Issue #165 exists to make the boundaries that claim depends
+adapter around it. exists to make the boundaries that claim depends
 on explicit and mechanically enforceable, because a boundary that is only
 documented is not a boundary.
 
@@ -22,7 +22,7 @@ them.
 | path | what it is |
 |---|---|
 | `core/` | the provider-neutral engine: lifecycle, retention, catalog, validation, state, transport |
-| `api/` | the authoritative `/api/v1` contract (issue #166) that both the Go host and the shared UI are generated from |
+| `api/` | the authoritative `/api/v1` contract that both the Go host and the shared UI are generated from |
 | `apps/common/webhost/` | the `/api/v1` host |
 | `apps/common/auth/` | the reusable local authentication service |
 | `apps/common/csrf/` | the shared double-submit CSRF primitive |
@@ -30,7 +30,7 @@ them.
 | `ui/shared/` | the one React/TypeScript UI |
 
 `apps/common/platform/` sits in this layer and not in the platform one on
-purpose. #81's dependency rule reads `platform ───► app/core contracts only`,
+purpose. 's dependency rule reads `platform ───► app/core contracts only`,
 which means the contract itself belongs to core. A runtime profile *implements*
 it; it does not own it.
 
@@ -41,13 +41,13 @@ trusted native authentication gateway, a provider notification bridge, a launch
 or navigation bridge, platform capability reporting. Selected explicitly, for
 example `backupd serve --profile=generic`.
 
-**A profile must never alter backup lifecycle semantics.** That is #81's wording
+**A profile must never alter backup lifecycle semantics.** That is 's wording
 and it is the line that separates a profile from a fork.
 
 | path | what it is |
 |---|---|
 | `apps/generic/` | the vendor-neutral profile and the binary that hosts it |
-| `apps/ugos/` | the UGOS bridge (EPIC C and EPIC D own its runtime behaviour) |
+| `apps/ugos/` | the UGOS bridge ( and own its runtime behaviour) |
 | `apps/<platform>/frontend/` | one capability declaration, one bootstrap, at most an auth bridge, per platform |
 | `apps/common/tests/` | the cross-provider bridge conformance suite: the one place that imports every provider's `platform.ts` |
 
@@ -58,7 +58,7 @@ presented: a Portainer app template, TrueNAS catalog metadata, an Unraid Docker
 template XML, CasaOS and ZimaOS `x-casaos` metadata, an OMV or Proxmox
 deployment profile, a Synology `.spk`.
 
-The rule that makes an adapter an adapter, quoted from #81 and binding here:
+The rule that makes an adapter an adapter, quoted from and binding here:
 
 > Adapters may change installation metadata, host paths, the authentication
 > bridge, notifications, launch behavior and store presentation. They must not
@@ -176,30 +176,30 @@ somewhere else:
 
 | was | is | who |
 |---|---|---|
-| `apps/common/packaging/` | `distribution/packaging/` | #165, done |
-| `github.com/backupdproject/backupd/apps/common/packaging` | `github.com/backupdproject/backupd/distribution/packaging` (new module) | #165, done |
-| `cd apps/common && go test ./packaging/` | `cd distribution && go test ./packaging/` | #165, done |
-| `apps/common/cmd/provenance` | `distribution/cmd/provenance` | #165, done |
-| `cd apps/common && go run ./cmd/provenance -write` | `cd distribution && go run ./cmd/provenance -write` | #165, done |
-| `container/{Dockerfile,compose.yaml,.env.example,release-manifest.json}` | `distribution/compose/` | **#167**, not yet |
+| `apps/common/packaging/` | `distribution/packaging/` |, done |
+| `github.com/backupdproject/backupd/apps/common/packaging` | `github.com/backupdproject/backupd/distribution/packaging` (new module) |, done |
+| `cd apps/common && go test./packaging/` | `cd distribution && go test./packaging/` |, done |
+| `apps/common/cmd/provenance` | `distribution/cmd/provenance` |, done |
+| `cd apps/common && go run./cmd/provenance -write` | `cd distribution && go run./cmd/provenance -write` |, done |
+| `container/{Dockerfile,compose.yaml,.env.example,release-manifest.json}` | `distribution/compose/` | ****, not yet |
 | `apps/truenas/{catalog,compose}` | `distribution/truenas/` | not scheduled, see below |
 | `apps/unraid/{template,frontend/webui.json}` | `distribution/unraid/` | not scheduled, see below |
 | `apps/openmediavault/compose` | `distribution/openmediavault/` | not scheduled, see below |
 | `apps/proxmox/{compose,frontend/deployment.md}` | `distribution/proxmox/` | not scheduled, see below |
 | `apps/synology/{spk,cmd/spkctl,compose}` | `distribution/synology/` | not scheduled, see below |
-| `tools/ugcli-install` | `distribution/ugos/` | **EPIC D**, not yet |
+| `tools/ugcli-install` | `distribution/ugos/` | ****, not yet |
 
 Those artifacts are **already classified** as distribution-layer, so every check
 above covers them today and `verify-core-without-distribution.sh` deletes exactly
 them.
 
-**The five platform rows used to say "#169, not yet", and #169 did not move
+**The five platform rows used to say ", not yet", and did not move
 them.** That is a decision rather than an omission, and it is recorded here
 rather than in a commit message so the next person does not read the table as a
 task list.
 
-#169's own acceptance criteria do not ask for the move; its layer requirement is
-that platform metadata sits in the distribution adapter layer #165 created,
+'s own acceptance criteria do not ask for the move; its layer requirement is
+that platform metadata sits in the distribution adapter layer created,
 cleanly separated from runtime platform behaviour, and that is what
 `layers.conf` decides. Every one of these paths is classified `distribution
 adapter` today, the dependency rule is enforced against that classification, the
@@ -220,10 +220,10 @@ The enforcement cost is still one edit in `scripts/architecture/layers.conf`.
 
 ## A note on the source specification's paths
 
-The refactor specification behind #81's standing constraint roots its structure
+The refactor specification behind 's standing constraint roots its structure
 diagram at `tools/backupd/`, a path that does not exist in this
 repository. The binding requirement is the **dependency direction**, not the
-literal paths: #81 says so, and #165 restates it. The layer a file is in is what
+literal paths: says so, and restates it. The layer a file is in is what
 `scripts/architecture/layers.conf` says it is, not what its directory happens to
 be called.
 

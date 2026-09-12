@@ -64,7 +64,7 @@ notification mechanism itself:
   `capacity.AssessCurrent` reaches `Critical` only when the filesystem
   reports no available bytes at all, which is after the point where a
   warning would have helped. Step 4 below is blocked on FR-21's threshold
-  configuration (see #157) and must not be executed, or marked failed,
+  configuration (see) and must not be executed, or marked failed,
   before it lands. `core/internal/app/alerts_test.go` pins that shipped
   default so it is a recorded fact rather than a surprise on the day.
 
@@ -72,8 +72,8 @@ notification mechanism itself:
 
 1. An authorized UGOS Pro NAS. Never someone else's production NAS, and
    never one holding backups whose loss would matter.
-2. A UGOS `PlatformAdapter` (apps/ugos) whose `Capabilities()` returns
-   `NativeNotifications: true` and whose `Notifier()` calls the real UGOS
+2. A UGOS `PlatformAdapter` (apps/ugos) whose `Capabilities` returns
+   `NativeNotifications: true` and whose `Notifier` calls the real UGOS
    notification API.
 3. The engine container running from a build that includes this work
    package, with `alerts.enabled: true` in its config file.
@@ -133,7 +133,7 @@ notification actually appeared, where, and for whom.
 > value is zero and this condition fires only at literally zero available
 > bytes. Executing the steps below as written produces a false reject of
 > the whole notification mechanism. Run this section once the threshold
-> configuration lands (#157), with step 1 reading the configured value.
+> configuration lands, with step 1 reading the configured value.
 
 1. Fill the destination filesystem (a large sparse file outside the
    managed backup root) until free space is at or below the configured

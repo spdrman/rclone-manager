@@ -1,6 +1,6 @@
 # Installing backupd on a Docker host
 
-Issue #262. `scripts/install/install_docker_host.py` brings the engine and the Web UI
+ `scripts/install/install_docker_host.py` brings the engine and the Web UI
 up on a machine you have SSH on, or refuses and tells you exactly which prerequisite
 stopped it.
 
@@ -8,7 +8,7 @@ stopped it.
 python3 scripts/install/install_docker_host.py install
 ```
 
-That is the whole command on a bare host (issue #347). It installs under
+That is the whole command on a bare host. It installs under
 `~/backupd`, generates an SSH keypair and an empty `known_hosts` under
 `<prefix>/secrets` if they are not there, and prints the public half with a note that
 it belongs in the `authorized_keys` of whichever host you are backing up.
@@ -96,7 +96,7 @@ link. `backupd daemon` has no such thing: it is refused rather than started when
 restarted, exits again, and an installer that either claims success over a crash loop or
 waits out its timeout for a state that can never arrive. So it stages everything, starts
 nothing, exits 0, and prints the command that writes the first configuration. Creating
-the first backup set writes the first `config.yaml` along with it (issue #176), so
+the first backup set writes the first `config.yaml` along with it, so
 there is no file to hand-author first.
 
 Since there is nothing serving, there is no health endpoint to ask either. What the
@@ -408,7 +408,7 @@ with no mode flag at all is the other case, and that one exits 20 and names `--m
 
 ## It derives from the canonical definition, it does not restate it
 
-`container/compose.yaml` is the canonical runtime contract (issue #167), and
+`container/compose.yaml` is the canonical runtime contract, and
 `distribution/compose` fails the build when a derived artifact stops matching it. The
 installer stages that file byte for byte and lays one override beside it carrying two
 keys per service: `image`, and `pull_policy: never`.
@@ -466,9 +466,9 @@ install taught me it was a separate claim:
 1. Docker reports the engine healthy **by its own liveness probe**. Not
    `backupd status`, which is a backup freshness verdict a fresh install
    legitimately fails; gating on that means the Web UI never starts, which is issue
-   #206.
+   
 2. The Web UI serves its bundle. A fresh install with no config serves a first-run
-   setup flow rather than refusing to start, which is issue #176.
+   setup flow rather than refusing to start, which is
 3. A request through the Web UI reaches the engine. `/health/ready` answering 503
    `not_ready` is a **pass**: that is the correct answer for an unconfigured instance.
    A request that never completes is not.
@@ -536,7 +536,7 @@ did the host.
 
 It matters twice over. The Web UI reaches the engine over exactly that hop, so the page
 loaded and every API call hung. And the engine reaches an SFTP source over the same hop,
-so no backup could run at all. So the installer diagnoses it and fixes it (issue #271).
+so no backup could run at all. So the installer diagnoses it and fixes it.
 
 ### How it decides what is wrong
 

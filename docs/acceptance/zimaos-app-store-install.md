@@ -15,16 +15,16 @@ submitted to two stores and separately certified, so a green CasaOS run says
 nothing about ZimaOS. Anything you find here that is genuinely a ZimaOS
 difference belongs in `apps/zimaos/README.md` as a finding.
 
-Issue #170 adds ZimaOS as new platform support. There was no Phase 4
+ adds ZimaOS as new platform support. There was no Phase 4
 ZimaOS packaging, so nothing here is a migration from an earlier one.
 
 ## Step 0 — Prerequisites
 
 ### 0.1 Record the host
 
-- [ ] ZimaOS version (Settings, About) recorded in the evidence table
-- [ ] Architecture recorded (`uname -m`)
-- [ ] Container engine version recorded
+- ZimaOS version (Settings, About) recorded in the evidence table
+- Architecture recorded (`uname -m`)
+- Container engine version recorded
 
 ### 0.2 Make the canonical image resolvable
 
@@ -42,7 +42,7 @@ docker buildx build --platform=linux/amd64,linux/arm64 -f container/Dockerfile -
 docker save backupd:acceptance | ssh admin@<host> 'docker load'
 ```
 
-- [ ] The image is resolvable on the host, and the exact reference used is recorded
+- The image is resolvable on the host, and the exact reference used is recorded
 
 ### 0.3 Create the host paths
 
@@ -78,25 +78,25 @@ chown 1000:1000 /DATA/Backups/backupd
 chmod 600 /DATA/AppData/backupd/secrets/id_ed25519
 ```
 
-- [ ] All four paths exist and are owned by the app's uid and gid
-- [ ] The recursive ownership change touched only state, config and secrets
-- [ ] It ran **after** the key and `known_hosts` were created
-- [ ] `/DATA/AppData/backupd/config` is writable by the app's uid and gid
-- [ ] Key material lives only on this host, redacted everywhere else
+- All four paths exist and are owned by the app's uid and gid
+- The recursive ownership change touched only state, config and secrets
+- It ran **after** the key and `known_hosts` were created
+- `/DATA/AppData/backupd/config` is writable by the app's uid and gid
+- Key material lives only on this host, redacted everywhere else
 
 ---
 
 ### 0.4 The configuration directory, and the config file that is now optional
 
 The engine's start gate is a liveness question, not a backup-freshness verdict
-(issue #206). It declares
+. It declares
 `["CMD", "/backupd-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]`,
 derived from `container/compose.yaml`, and `backupd-ui` waits on that with
 `condition: service_healthy`. `/backupd status` is still FR-24's freshness
 verdict and still the image's own baked-in `HEALTHCHECK`, and it exits non-zero on a
 fresh install by design, which is exactly why nothing waits on it any more. So a
 **fresh install reaches the web UI**: an empty configuration directory is a legitimate
-state, and the engine serves its first-run setup flow from it (issue #176).
+state, and the engine serves its first-run setup flow from it.
 
 **What this step still requires.** The configuration directory itself, created and
 owned by the app's uid and gid before the first start, because a bind mount does not
@@ -127,13 +127,13 @@ annotated example is this same file with another platform's host paths, and
 **Never commit the config or paste one into the evidence table:** it names the SFTP
 host and user.
 
-- [ ] Either `config.yaml` is written into `/DATA/AppData/backupd/config` **before** the install
+- Either `config.yaml` is written into `/DATA/AppData/backupd/config` **before** the install
       and is valid, or that directory is left empty and the first-run flow writes it.
       A file that exists and does not validate is the one state that refuses the start,
       so record which of the two routes this run took
-- [ ] It is owned by the app's uid and gid and readable by them
-- [ ] It was written after 0.3's ownership fix-up, or chowned afterwards
-- [ ] The engine reported healthy on the first start, rather than restarting
+- It is owned by the app's uid and gid and readable by them
+- It was written after 0.3's ownership fix-up, or chowned afterwards
+- The engine reported healthy on the first start, rather than restarting
 
 ---
 
@@ -144,60 +144,60 @@ host and user.
 2. ZimaOS renders the install dialog out of the `x-casaos` block. Change nothing.
 3. Install.
 
-- [ ] ZimaOS accepted the file: no schema error, and the store build validated it
-- [ ] The app tile shows the title, icon, category and description from `x-casaos`
-- [ ] The install dialog listed the five volumes and the two environment values
+- ZimaOS accepted the file: no schema error, and the store build validated it
+- The app tile shows the title, icon, category and description from `x-casaos`
+- The install dialog listed the five volumes and the two environment values
       the per-service `x-casaos` blocks describe
-- [ ] Both containers reach `running`
-- [ ] `backupd` reports healthy (it declares the liveness probe
+- Both containers reach `running`
+- `backupd` reports healthy (it declares the liveness probe
       `/backupd-web healthcheck --url http://127.0.0.1:8080/health/live`,
       not the image's own `/backupd status`: the web UI waits on this, and
       the backup-freshness verdict is non-zero on a fresh install)
-- [ ] `backupd-ui` reports healthy, having overridden the image's own healthcheck
-- [ ] The app claims `amd64` and `arm64`, and it installed on this machine's architecture
+- `backupd-ui` reports healthy, having overridden the image's own healthcheck
+- The app claims `amd64` and `arm64`, and it installed on this machine's architecture
 
 ## Step 2 — Web UI
 
-- [ ] The published port loads the shared web UI
-- [ ] The UI reports the deployment as a Docker Compose deployment, which is what
+- The published port loads the shared web UI
+- The UI reports the deployment as a Docker Compose deployment, which is what
       `apps/zimaos/README.md` says to expect: this adapter ships no platform
       bridge and serves the bundle compiled into the binary
-- [ ] The capability list shows no native authentication, no native
+- The capability list shows no native authentication, no native
       notifications, no embedded window and no storage picker, all four reported
       as unsupported rather than hidden
 
 ## Step 3 — Authentication
 
-- [ ] First start printed a one-time enrollment link (keep it out of the evidence table)
-- [ ] Enrollment sets an administrator password, stored as an Argon2id hash
-- [ ] The enrollment link is single-use and is rejected the second time
-- [ ] An unauthenticated request to `/api/v1/` is refused
-- [ ] The UI reports auth mode `local-account`, and no platform identity is trusted
+- First start printed a one-time enrollment link (keep it out of the evidence table)
+- Enrollment sets an administrator password, stored as an Argon2id hash
+- The enrollment link is single-use and is rejected the second time
+- An unauthenticated request to `/api/v1/` is refused
+- The UI reports auth mode `local-account`, and no platform identity is trusted
 
 ## Step 4 — Storage mapping and backup-root containment
 
-- [ ] Private state lands under `/DATA/AppData/backupd/state`
-- [ ] Retained artifacts land under `/DATA/Backups/backupd`
-- [ ] No SSH private key, `known_hosts`, config file or authentication record
+- Private state lands under `/DATA/AppData/backupd/state`
+- Retained artifacts land under `/DATA/Backups/backupd`
+- No SSH private key, `known_hosts`, config file or authentication record
       exists anywhere under `/DATA/Backups/backupd`
-- [ ] The key and `known_hosts` are mounted read-only, and a write attempt from
+- The key and `known_hosts` are mounted read-only, and a write attempt from
       inside the container fails
-- [ ] The configuration directory is mounted **writable**: creating a backup set
+- The configuration directory is mounted **writable**: creating a backup set
       through the UI rewrites `config.yaml`, and saving a setting succeeds. This
-      is the shape issue #196 fixed, and a read-only mount here makes all three
+      is the shape fixed, and a read-only mount here makes all three
       write paths fail
 
 ## Step 5 — Container posture
 
-- [ ] Neither container is privileged, neither mounts a Docker socket, neither
+- Neither container is privileged, neither mounts a Docker socket, neither
       uses host networking or the host PID namespace, and neither adds a capability:
 
       ```bash
       docker inspect backupd backupd-ui \
         --format '{{.Name}} priv={{.HostConfig.Privileged}} net={{.HostConfig.NetworkMode}} binds={{.HostConfig.Binds}}'
       ```
-- [ ] Both containers run as uid 1000, on a read-only root filesystem
-- [ ] The engine publishes no port: `docker ps` shows exactly one published port
+- Both containers run as uid 1000, on a read-only root filesystem
+- The engine publishes no port: `docker ps` shows exactly one published port
       for this app, and it belongs to the web UI container
 
 ## Step 6 — Update
@@ -221,11 +221,11 @@ find /DATA/Backups/backupd -type f -printf '%p %s\n' | sort > /root/zimaos-after
 diff /root/zimaos-before-update.txt /root/zimaos-after-update.txt
 ```
 
-- [ ] The update pulled a new image and recreated both containers
-- [ ] `diff` of the retained-artifact listing is empty: the update moved no backup data
-- [ ] Backup sets, schedules, retained artifacts and the administrator account all persist
-- [ ] No re-enrollment was required
-- [ ] The new image version is reported in the UI
+- The update pulled a new image and recreated both containers
+- `diff` of the retained-artifact listing is empty: the update moved no backup data
+- Backup sets, schedules, retained artifacts and the administrator account all persist
+- No re-enrollment was required
+- The new image version is reported in the UI
 
 ## Step 7 — Removal, and retained-backup safety
 
@@ -251,14 +251,14 @@ find /DATA/Backups/backupd -type f -printf '%p %s\n' | sort > /root/zimaos-after
 diff /root/zimaos-before-remove.txt /root/zimaos-after-remove.txt
 ```
 
-- [ ] `sha256sum -c` says OK and `diff` is empty: every retained backup and
+- `sha256sum -c` says OK and `diff` is empty: every retained backup and
       artifact is untouched, byte for byte
-- [ ] Uninstalling with "delete data" accepted deleted no retained
+- Uninstalling with "delete data" accepted deleted no retained
       artifact either: the backup root is outside `/DATA/AppData`, and the same
       `sha256sum -c` and `diff` are still clean
-- [ ] `/DATA/AppData/backupd/state` still holds the catalogue, so a reinstall
+- `/DATA/AppData/backupd/state` still holds the catalogue, so a reinstall
       pointed at the same paths comes back with the same backup sets
-- [ ] Removing this adapter removes no core behaviour: the same image runs
+- Removing this adapter removes no core behaviour: the same image runs
       unchanged under `container/compose.yaml` on a plain Docker host
 
 ## Step 8 — The host management plane is untouched
@@ -271,18 +271,18 @@ dpkg -l > /root/zimaos-baseline-packages.txt 2>/dev/null || true
 ls /etc/systemd/system > /root/zimaos-baseline-units.txt 2>/dev/null || true
 ```
 
-- [ ] No package this procedure installed appears in a `diff` of the two package lists
-- [ ] No unit file was added
-- [ ] No entry was added under `/etc/cron.d` or to any crontab
-- [ ] ZimaOS's own app list, users and settings are unchanged apart
+- No package this procedure installed appears in a `diff` of the two package lists
+- No unit file was added
+- No entry was added under `/etc/cron.d` or to any crontab
+- ZimaOS's own app list, users and settings are unchanged apart
       from this app being gone
 
 ## Step 9 — Destructive-safety re-check
 
-- [ ] A backup set configured with a root outside `/DATA/Backups/backupd` is refused
-- [ ] A symlink inside the backup root that points outside it is not followed into a delete
-- [ ] A retention apply deletes only artifacts under the backup root
-- [ ] Nothing under the private state, config or secrets paths is ever a delete target
+- A backup set configured with a root outside `/DATA/Backups/backupd` is refused
+- A symlink inside the backup root that points outside it is not followed into a delete
+- A retention apply deletes only artifacts under the backup root
+- Nothing under the private state, config or secrets paths is ever a delete target
 
 ## Step 10 — Cross-check against the automated matrix
 
@@ -290,9 +290,9 @@ ls /etc/systemd/system > /root/zimaos-baseline-units.txt 2>/dev/null || true
 cd distribution && GOWORK=off go test ./packaging/ -count=1 -run TestCrossProviderConformanceMatrix -v
 ```
 
-- [ ] Every ZimaOS row the matrix reports as `PASS` still holds on the real host
-- [ ] Every row it reports as `PENDING_OPERATOR` is now decided by this procedure
-- [ ] No row it reports as `UNSUPPORTED` or `NOT_APPLICABLE` turned out to be
+- Every ZimaOS row the matrix reports as `PASS` still holds on the real host
+- Every row it reports as `PENDING_OPERATOR` is now decided by this procedure
+- No row it reports as `UNSUPPORTED` or `NOT_APPLICABLE` turned out to be
       supported here. If one did, `distribution/packaging/conformance.json` is
       stale and must be corrected rather than the check
 

@@ -45,7 +45,7 @@ curl -fsSLO https://raw.githubusercontent.com/backupdproject/backupd/main/script
 python3 install_docker_host.py install
 ```
 
-[`scripts/install/install_docker_host.py`](scripts/install/install_docker_host.py) (#262)
+[`scripts/install/install_docker_host.py`](scripts/install/install_docker_host.py)
 is one file, and that is the point: it needs no checkout beside it, nothing else from this
 project on disk, and nothing outside the Python standard library, because an operator
 installing onto a NAS does not have a git clone there. The canonical Compose runtime is
@@ -94,7 +94,7 @@ port is deliberately not enough. The token proves you can read the container's o
 which is what somebody else on the network cannot do. It is single use, it expires in
 thirty minutes, and the address in it is this machine's own rather than `localhost`,
 because the link is opened from whichever computer you are sitting at — printing
-`localhost` was #688, and over SSH on a laptop `localhost` is the laptop.
+`localhost` was, and over SSH on a laptop `localhost` is the laptop.
 
 Nothing reissues that link while the engine keeps running, so a lapsed one has its own
 command:
@@ -154,7 +154,7 @@ guessing between keeping the data and wiping it is not an installer's decision. 
 
 Every flag with its default, and every exit code, is on [the reference
 page](https://backupdproject.github.io/backupd/reference.html#installer) and in
-[`docs/install.md`](docs/install.md). This is the path #263 used on the UGREEN NAS.
+[`docs/install.md`](docs/install.md). This is the path used on the UGREEN NAS.
 
 ### What the browser looks like while it works
 
@@ -164,20 +164,20 @@ motion](https://backupdproject.github.io/backupd/web-ui.html), which has seven m
 in-memory fixture API rather than against a running engine**: the layout, the copy, the flow
 and the interaction are the real ones, and the data is not.
 
-**The terminal is docked to the window, not to the end of the page** (#617). One backup
+**The terminal is docked to the window, not to the end of the page**. One backup
 set's page scrolled from the top to the bottom and back, with the panel staying put and the
 content column reserving room under itself so the last row of a long table can still be
 scrolled clear of it.
 
 ![The backup set page scrolling from top to bottom while the terminal stays fixed to the bottom of the window](docs/site/screens/ui-terminal-pinned.gif)
 
-**A run reports an outcome, and the command it was equivalent to** (#597, #620). The press,
+**A run reports an outcome, and the command it was equivalent to**. The press,
 the notice, the same line arriving in the docked terminal, the *This browser* chip isolating
 it, and the close control that a banner you have read needs.
 
 ![Pressing Run this backup set, the notice appearing with the equivalent command, the same line arriving in the docked terminal, the This browser filter isolating it, then closing the notice](docs/site/screens/ui-run-controls.gif)
 
-**Dark mode, including the native controls** (#618). The settings page is the worst case and
+**Dark mode, including the native controls**. The settings page is the worst case and
 so it is the one in shot: it is mostly native `select`s and number inputs, which is exactly
 what the application used to leave at the browser's default and paint black on black.
 

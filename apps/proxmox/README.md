@@ -1,6 +1,6 @@
 # Proxmox VE deployment profile
 
-Issue #86 / work package B4.5, `docs/EPIC-B-multi-nas.md` §72, the Proxmox
+ / work package B4.5, `docs/EPIC-B-multi-nas.md` §72, the Proxmox
 entry in §4A, and D-9 in §5.
 
 Proxmox VE is the one target in Phase 4 with nothing to package into. It
@@ -15,7 +15,7 @@ format. There is no builder, no installer and no lifecycle code here, and
 `distribution/packaging` fails the build if any appears.
 
 
-## Converted to a thin adapter (issue #169)
+## Converted to a thin adapter
 
 Everything here is now **derived** from the one authoritative Compose runtime
 definition rather than authored beside it. `distribution/packaging`'s
@@ -29,10 +29,10 @@ that means in practice for this directory:
   build-time constant;
 - the Web UI container sets `UI_ROOT=/ui/bundles`, so it serves this
   platform's own frontend bridge out of the canonical image rather than the
-  generic one (issue #180). A missing bundle is a hard start failure, never a
+  generic one. A missing bundle is a hard start failure, never a
   silent fall back;
 - the configuration mount is a writable **directory** holding `config.yaml`
-  instead of a read-only single file (issue #196).
+  instead of a read-only single file.
 
 The upgrade path from the Phase 4 packaging, including the one renamed mount,
 is in

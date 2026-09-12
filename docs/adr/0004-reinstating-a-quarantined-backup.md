@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted and implemented (issue #220, EPIC B #81). Extends FR-10's state
+Accepted and implemented (,). Extends FR-10's state
 machine and FR-15's delete gate. Nothing here supersedes an earlier decision.
 
 ## Context
@@ -102,7 +102,7 @@ That is a large change to the meaning of a state vocabulary, in service of a
 property option 2 also delivers.
 
 And option 2 does not merely assert the property, it derives it.
-`ReinstatementEdges()` is computed from the `Transitions` table itself, so an
+`ReinstatementEdges` is computed from the `Transitions` table itself, so an
 edge from a quarantine state into a durable restore point is covered by the
 delete gate the moment it is declared, and
 `TestEveryQuarantineExitIntoADurableStateForfeitsRemoteDeletion` walks the real
@@ -261,10 +261,10 @@ rather than one, which is a stronger statement about a larger surface.
   is still present, alongside FR-24's existing counts) is worth doing and is not
   in this change.
 
-  Landed since, in issue #227. `health.BackupSetHealth` carries
+  Landed since, `health.BackupSetHealth` carries
   `ReinstatedRemoteRetainedCount`, computed by asking the append-only
   transition log once per backup set through `lifecycle.ReinstatedArtifacts`,
-  which derives its edge set from the same `ReinstatementEdges()` the delete
+  which derives its edge set from the same `ReinstatementEdges` the delete
   gate refuses on, so the reported population and the refused population cannot
   drift apart. Artifacts whose remote this manager has already released are
   excluded, which matters because the `QUARANTINED_LOST` to `COMPLETE` edge is

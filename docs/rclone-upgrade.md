@@ -29,12 +29,12 @@ it's a `go build` with commentary.
 | # | Requirement | Status | Where |
 |---|---|---|---|
 | 1 | Dependency update | **Enforced** | The Dependabot/manual PR itself is the update. The gate workflow records the old and new pinned version. |
-| 2 | Compilation | **Enforced** | `go build ./...` runs in both `ci.yml` and the dedicated gate workflow. |
-| 3 | Unit tests | **Partially enforced** | `go test ./...` runs on every PR. Today the module has no `*_test.go` files, so this currently runs clean but exercises nothing. Once the suite lands (`#30`), this line becomes real enforcement with no workflow changes needed, `go test ./...` picks up whatever exists. |
-| 4 | Transport contract tests | **Pending** | Tracked in `#30` (A1.6). Will live under `core/internal/transport` as ordinary `_test.go` files, so it also rides on `go test ./...` once written. |
-| 5 | SFTP integration tests | **Pending** | Tracked in `#31` (A2.13). Needs a disposable SFTP server (Docker is already available in this environment for exactly that). Not wired into any workflow yet because the suite doesn't exist to wire in. |
-| 6 | Crash / reconciliation tests | **Pending** | Tracked in `#31`. The crash matrix in `docs/EPIC.md` under Testing Requirements. |
-| 7 | Destructive-safety tests | **Pending** | Tracked in `#31`. Malicious paths, symlinks, replaced remote objects, malformed config, stale journal state. |
+| 2 | Compilation | **Enforced** | `go build./...` runs in both `ci.yml` and the dedicated gate workflow. |
+| 3 | Unit tests | **Partially enforced** | `go test./...` runs on every PR. Today the module has no `*_test.go` files, so this currently runs clean but exercises nothing. Once the suite lands (``), this line becomes real enforcement with no workflow changes needed, `go test./...` picks up whatever exists. |
+| 4 | Transport contract tests | **Pending** | Tracked in `` (A1.6). Will live under `core/internal/transport` as ordinary `_test.go` files, so it also rides on `go test./...` once written. |
+| 5 | SFTP integration tests | **Pending** | Tracked in `` (A2.13). Needs a disposable SFTP server (Docker is already available in this environment for exactly that). Not wired into any workflow yet because the suite doesn't exist to wire in. |
+| 6 | Crash / reconciliation tests | **Pending** | Tracked in ``. The crash matrix in `docs/EPIC.md` under Testing Requirements. |
+| 7 | Destructive-safety tests | **Pending** | Tracked in ``. Malicious paths, symlinks, replaced remote objects, malformed config, stale journal state. |
 | 8 | Upstream release notes / changelog review | **Manual, permanently** | This is a human reading prose and judging risk. It cannot be automated away, and pretending otherwise would defeat the point. The gate workflow surfaces the changelog and release URLs for the exact version range so there's no excuse to skip it, but it does not and cannot verify that anyone read them. |
 
 "Pending" here means the suite does not exist in this repository yet, not
@@ -125,7 +125,7 @@ _ "github.com/rclone/rclone/backend/sftp"
 But the adapter also imports `github.com/rclone/rclone/fs/operations` for
 `operations.Copy`, and `fs/operations` itself imports
 `github.com/rclone/rclone/backend/crypt`. Backend packages register
-themselves via `init()`, so importing `fs/operations` silently registers a
+themselves via `init`, so importing `fs/operations` silently registers a
 **third** backend, `crypt`, that nothing in this repository asked for by
 name. Confirm this yourself with:
 

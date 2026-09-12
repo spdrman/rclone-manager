@@ -1,7 +1,7 @@
 # The submission bundle
 
 Everything a store or catalog reviewer is handed, for every target this project
-distributes. Work Package 5.4 (`docs/EPIC-B-multi-nas.md` §73), issue #90.
+distributes. Work Package 5.4 (`docs/EPIC-B-multi-nas.md` §73),
 
 One bundle, not one per store. The seven shared materials below describe the same product
 however it is packaged, and a per-store rewrite of any of them is a per-store opportunity
@@ -18,7 +18,7 @@ for a target with no store, its documented workflow.
 | `release-notes.md` | 1.0.0. |
 | `privacy-disclosure.md` | No personal data, no telemetry, nothing leaves the NAS. |
 | `permission-rationale.md` | Why the application asks for as little as it does, in the form a store asks the question. |
-| `support-source-license.md` | Support, source, and the licence row that is blocked on #88. |
+| `support-source-license.md` | Support, source, and the licence row that is blocked on |
 
 ## Per-target
 
@@ -27,7 +27,7 @@ for a target with no store, its documented workflow.
 | Synology DSM | `synology.md` | Synology Package Center |
 | TrueNAS | `truenas.md` | TrueNAS Apps catalog |
 | Unraid | `unraid.md` | Unraid Community Applications |
-| UGOS Pro | `ugreen.md` | UGREEN App Center (EPIC D's to submit, #178) |
+| UGOS Pro | `ugreen.md` | UGREEN App Center ('s to submit,) |
 | Generic Docker | `generic.md` | none: documented workflow |
 | OpenMediaVault | `openmediavault.md` | none: documented workflow |
 | Proxmox VE | `proxmox.md` | none: documented workflow |
@@ -51,5 +51,5 @@ depends on `currentColor`.
 ## The recorded verdict
 
 `docs/conformance/submission-preflight.md` holds the generated, per-target readiness
-verdict, and EPIC D's #178 consumes it rather than re-running any of these checks. Nothing
+verdict, and 's consumes it rather than re-running any of these checks. Nothing
 in this directory is the answer to "is this ready"; that report is.

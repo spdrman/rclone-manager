@@ -1,6 +1,6 @@
 # Tier destinations: the seam, and the decisions it encodes
 
-Issue #334 asks for retention tiers that can send artifacts somewhere
+ asks for retention tiers that can send artifacts somewhere
 other than the local backup root, so twelve monthly copies can live on
 object storage instead of NAS disk.
 
@@ -31,9 +31,9 @@ symlink-free path the safety checks just proved, and routing it back
 through the configured root would throw that resolution away. It stays
 where it is and it fails closed.
 
-**The interface landed with no production caller, and #390 gave it two.**
+**The interface landed with no production caller, and gave it two.**
 This paragraph used to say the opposite, and being blunt about the change
-matters as much as being blunt about the original state did. #334 landed
+matters as much as being blunt about the original state did. landed
 `Store`, `Local`, `NewLocal`, `Kind`, `Stat`, `Open`, `Put`, `Remove`,
 `ErrNotPresent` and `ErrAlreadyPresent` with nothing in production calling
 any of them: a design fixture, the contract a mover and a second backend
@@ -43,14 +43,14 @@ was the package-level function `artifactstore.LocalLocator`, from
 `lifecycle/transfer.go` and `retention/prune.go`, and both of those held a
 directory string rather than a `Store`, so both bypassed `Store` entirely.
 
-#390 did the conversion #334 named. Both call sites build a `Local` for
+ did the conversion named. Both call sites build a `Local` for
 the backup set and ask its `Locator`, and `LocalLocator` is unexported, so
 there is no longer any way to compute an artifact's location without going
 through a store. `NewLocal`, `Locator`, `Kind` and `KindLocal` have real
 production callers now; `Stat`, `Open`, `Put` and `Remove` still do not,
 which is still deliberate.
 
-That conversion is not a no-op, which is exactly why #334 deferred it.
+That conversion is not a no-op, which is exactly why deferred it.
 `NewLocal` refuses an empty root, so `finalPath` and `pruneFinalPath` grew
 an error return: an unrooted backup set is refused rather than resolving
 the artifact's bare name against whatever directory the daemon started in.
@@ -66,7 +66,7 @@ Every method is addressed by the artifact, never by a path the caller
 composed. A path is a local-filesystem detail. An object store has keys,
 no parent directories and no symlinks; handing the seam a path would mean
 every caller had already assumed a filesystem, which is the assumption
-#334 exists to remove.
+ exists to remove.
 
 The backup set half of that pair arrives through the constructor instead
 of through every call, because a store's configuration is a fact about
@@ -95,7 +95,7 @@ composes them in one auditable place, in one order:
 2. `Stat` the destination and confirm it holds them.
 3. Only then `Remove` at the origin.
 
-That answers #334's failure-model question directly:
+That answers 's failure-model question directly:
 
 - **The origin copy is the one guaranteed intact.** It is not removed
   until the destination copy is independently confirmed present.
@@ -227,28 +227,28 @@ lines above would reasonably have put checks inside their own `Remove`.
 A future adapter owes an equivalent proof in its own terms, on the caller
 side. It does not owe these six.
 
-## Decision: no `destination:` config key yet, SUPERSEDED by #234
+## Decision: no `destination:` config key yet, SUPERSEDED by
 
 The original decision, kept because the reasoning still binds: adding an
 optional `destination` to `RetentionTier` was refused, because such a key
 could only ever have said "local", and selecting the sole existing
 behaviour is not a choice. It would have appeared in the schema, needed
-documenting, and done nothing. #299 removed several Settings and wizard
+documenting, and done nothing. removed several Settings and wizard
 fields that were exactly that, decorative and read by nothing. The key
 was to arrive with something that gave it a second value.
 
-EPIC E's #234 is that arrival, and the key is spelled `medium` rather
+'s is that arrival, and the key is spelled `medium` rather
 than `destination`. What gives it a second value is the new top-level
 `storage_mediums` list: a tier's `medium` now names a declared S3 medium,
 which validation resolves and refuses when it dangles. So the key is not
 a knob with one legal value.
 
 It IS still ahead of anything that acts on it, and that is worth stating
-plainly rather than hiding behind the paragraph above. Phase 1 of EPIC E
+plainly rather than hiding behind the paragraph above. Phase 1 of
 builds every load-bearing wall (schema, transport, placements,
 verification) and can still not move or delete anything it could not
-before; the planner that reads a tier's medium is #239 and the mover it
-feeds is #238. The difference from the #299 fields is that these have a
+before; the planner that reads a tier's medium is and the mover it
+feeds is The difference from the fields is that these have a
 scheduled reader rather than none, and the phasing is the EPIC's own
 decision, made so the schema is argued in review before a mover is
 depending on it.
@@ -262,7 +262,7 @@ Two shapes this decision asked for, both kept:
   `StorageMedium.EffectiveUploadVerification`. Absent means the local
   backup root. Nothing is written back into the struct, because a default
   Validate resolves in place is a default the next settings save freezes
-  into the operator's own file (#294).
+  into the operator's own file.
 - Absent is the ONLY spelling of local. A tier writing `medium: local` is
   refused, and `local` is reserved as a medium id too. That is what makes
   FR-35's round-trip rule structural: with local unspellable, the only
@@ -273,7 +273,7 @@ Two shapes this decision asked for, both kept:
 
 ## Decision: the catalog will own location, and does not yet
 
-#334 is right that the catalog, not the config and not a filesystem
+ is right that the catalog, not the config and not a filesystem
 scan, has to be the source of truth for where an artifact currently is.
 Config describes intent, and intent is what an interrupted move differs
 from; a scan can only see one backend at a time.

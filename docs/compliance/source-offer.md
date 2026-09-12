@@ -54,10 +54,10 @@ because it is neither a module nor a package: material vendored into this
 repository's own tree.
 
 The icon artwork compiled into the web bundle is Font Awesome Free,
-carried as SVG path data rather than pulled in as a package (#621), and it
+carried as SVG path data rather than pulled in as a package, and it
 is CC BY 4.0. The typeface the web UI renders in is IBM Plex Sans and IBM
 Plex Mono, carried as woff2 files served out of the image rather than
-fetched from a font service (#631), and it is SIL OFL 1.1. Both are
+fetched from a font service, and it is SIL OFL 1.1. Both are
 attribution licences. `docs/compliance/bundled-icon-artwork.md` and
 `docs/compliance/bundled-webfonts.md` are the full records: the creator,
 the release, the licence and its text, and a statement about modification.
@@ -218,7 +218,7 @@ It is public, and that is recorded rather than assumed, in
 `provenance/release-provenance.json` (`links.publiclyReachable`). Both are read
 from `gh repo view backupdproject/backupd --json visibility`, and both said
 private for a while after the repository stopped being private, which is issue
-#484's finding: a recorded measurement with a note asserting its freshness is
+'s finding: a recorded measurement with a note asserting its freshness is
 worse than an unmeasured value, because the note is what stops anyone checking.
 
 Access is a fact about convenience rather than about the licence. Apache-2.0

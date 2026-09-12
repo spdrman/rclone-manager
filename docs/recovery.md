@@ -4,7 +4,7 @@ This is the page to read when a backup didn't arrive, an artifact looks wrong, o
 trying to figure out whether you can still get a file back. It assumes you've already read
 the README's [Status](../README.md#status-what-actually-runs-today) section; the short
 version repeated here because it changes every answer below: there is no `backupd
-status`, `restore`, `run` or `daemon` command yet (issues #25, #26). Everything in this
+status`, `restore`, `run` or `daemon` command yet. Everything in this
 document works directly against the SQLite journal and the NAS filesystem, because that's
 genuinely the only interface that exists today.
 
@@ -230,10 +230,10 @@ section is the longer version:
 
 - `core/internal/retention.GFSDecide` only classifies artifacts into keep/not-kept-by-GFS. It
   contains no deletion code at all. A `Keep: false` verdict is a candidate, not an order.
-- Deletion is real, and it is deliberately somewhere else. FR-20 (issue #21) landed in
+- Deletion is real, and it is deliberately somewhere else. FR-20 landed in
   `core/internal/retention/prune.go`: `PruneApply` removes the positively identified local
-  file, and since #239 the object on a storage medium beside it. FR-19's last-known-good
-  protection (issue #20) landed with it and does protect the newest good backup.
+  file, and since the object on a storage medium beside it. FR-19's last-known-good
+  protection landed with it and does protect the newest good backup.
 - Nothing schedules that. The only thing that runs `PruneApply` is the API's retention
   preview/apply pair (`core/service`): `PreviewRetention` issues a `plan_id`, and
   `ApplyRetentionPlan` deletes only against that `plan_id`, and only while the plan it
@@ -242,9 +242,9 @@ section is the longer version:
 - `backupd retention` is a preview in both of its modes and deletes nothing, with or
   without `--dry-run`. That is not a gap waiting to be filled: a CLI that deleted backups
   without the `plan_id` confirmation the HTTP path insists on would be a second, weaker
-  authorisation path to the same act (issue #431).
+  authorisation path to the same act.
 - `backupd retention apply <source/backup-set> --acknowledge` is the terminal's own
-  way in (issue #602), and it is not that second path: it goes through the same
+  way in, and it is not that second path: it goes through the same
   `PreviewRetention`/`ApplyRetentionPlan` pair, prints the plan it is about to apply, and
   refuses with `RETENTION_PLAN_STALE` and zero deletions if the set moved in between.
   `--acknowledge` is required, and the refusal without it says what it consents to.
@@ -281,7 +281,7 @@ backupd artifacts production/postgres/dump-2026-09-04.zst
 The `reason` line is the literal sentence the manager recorded at the moment it gave up.
 Three shapes come up most:
 
-- **A transient failure that ran out of attempts** ("copy failed: transient: ..."). The
+- **A transient failure that ran out of attempts** ("copy failed: transient:..."). The
   source was unreachable or the link dropped. If it is back, there is nothing else to fix.
 - **A final-name collision.** A file is already sitting where this backup's final copy
   belongs. Move or remove it first; a retry re-checks before it copies a byte, so retrying
