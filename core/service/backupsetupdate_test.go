@@ -580,6 +580,13 @@ func writeRichTestConfigFile(t *testing.T) string {
 		"          delete_safety_delay: 30s\n" +
 		"        stale_after: 24h\n" +
 		"        read_only: true\n" +
+		// EPIC K's engine key, written out explicitly. An artifact set
+		// means the same thing whether it says so or leaves the key out,
+		// which is exactly why the fixture says so: an applier that
+		// dropped an operator's `engine: artifact` on an unrelated edit
+		// would be silently rewriting which engine a set declares, and a
+		// fixture that omitted the key could not tell.
+		"        engine: artifact\n" +
 		// Issue #624's mark, set so the whole-struct comparison in
 		// TestUpdateBackupSet_WritesOnlyTheFieldsTheRequestNames means
 		// something about it: a field left at its zero value on both
@@ -700,6 +707,25 @@ var exemptFromIsolationFixture = map[string]string{
 	"Remote.Key.Passphrase.Command": "the third of those three, refused alongside File for the same reason",
 	"Completion.ManifestMarker":     "issue #291's marker filename, used only by the \"marker\" strategy and refused by Validate alongside \"stable\", which is the strategy this fixture uses so that stable_for (a field the update path CAN set) is exercised instead",
 	"Validation.Command":            "the RESOLVED validator command, this deployment's own materialized script path. newBackupSetFor's doc is explicit that a config.yaml holding a stale copy of it fails every artifact in the set after the next restart, so a fixture that wrote one would be pinning the thing the applier deliberately clears",
+
+	// EPIC K's engine seam (#780). This fixture is an ARTIFACT set --
+	// which is what the update path can create and edit; incremental
+	// sets reach service in #783 -- and config.Validate refuses every
+	// one of these keys on a set running the artifact engine, because a
+	// key nothing will ever read is dead configuration. So they cannot be
+	// set alongside what the fixture already sets, which is the same
+	// shape as the mutually-exclusive entries above. The one key an
+	// artifact set CAN carry, `engine` itself, the fixture writes out.
+	"UUID":                    "the durable identifier a snapshot lineage hangs off, refused by Validate on an artifact set (nothing reads it there); it is required and exercised for an incremental set",
+	"RepositoryDomainConfig":  "the repository domain a snapshot is stored in, refused by Validate on an artifact set, which has no repository",
+	"ConsistencyConfig":       "ADR 0009's source-consistency mode, refused by Validate on an artifact set, whose unit of work is a completed file rather than a source tree being read live",
+	"VerificationLevelConfig": "how far a SNAPSHOT is verified, refused by Validate on an artifact set; FR-11's validation/revalidation of a durable copy is what this fixture exercises instead",
+	"SourceMountPrefix":       "the part of remote_path that is this deployment's mount rather than the source's own identity; it only feeds a source identity, so Validate refuses it on an artifact set",
+	"Engine":                  "the RESOLVED engine, filled in by Validate from the `engine` key the fixture does set, on the same footing as Retention and ReadOnly above",
+	"Repository":              "the RESOLVED repository reference, carrying yaml:\"-\" and zero for an artifact set, so it is never on disk to compare",
+	"Consistency":             "the RESOLVED consistency mode, filled in by Validate for an incremental set only",
+	"VerificationLevel":       "the RESOLVED verification level, filled in by Validate for an incremental set only",
+	"SourceIdentity":          "the RESOLVED source identity, computed by Validate for an incremental set only; an artifact set has no snapshot lineage to keep stable",
 }
 
 // TestUpdateBackupSetIsolationFixtureExercisesEveryField is a control on

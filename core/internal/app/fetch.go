@@ -136,6 +136,29 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 	if err != nil {
 		return FetchResult{}, err
 	}
+
+	// EPIC K (#780): the same refusal processBackupSet makes, at the other
+	// entry point into this package's artifact pipeline.
+	//
+	// Fetch is not a shortcut into a cycle, it is a second, equal way in:
+	// it calls reconcileOne, discoverOne and processArtifacts itself, so a
+	// guard that only sat in the cycle's loop left `backupd fetch` (and
+	// the fetch action on the API, and the button in the web UI) walking an
+	// incremental set's source TREE and offering its files for deletion.
+	// One operator click, the outcome EPIC K forbids.
+	//
+	// It is refused BEFORE the --dry-run branch, which lists the remote and
+	// deletes nothing, because a preview that presented a source tree's
+	// files as artifact candidates would be answering a question nobody can
+	// act on -- and it would walk the tree to do it.
+	if err := unrunnableEngine(bs.Engine); err != nil {
+		// Returned unwrapped, unlike every other error below it. Those
+		// wrap because they have to say WHICH step failed; here no step
+		// ran, and "app: fetch: app: this build has no pipeline..." would
+		// stutter the package name at an operator to say less.
+		return FetchResult{Set: bs.ID}, err
+	}
+
 	source := sourceFor(s.Config, src, bs)
 
 	if dryRun {

@@ -114,6 +114,29 @@ type Config struct {
 	// intention.
 	MaxMovesPerCycle *int `yaml:"max_moves_per_cycle,omitempty"`
 
+	// RepositoryDomains declares the repository security boundaries an
+	// incremental backup set may store its snapshots in (EPIC K, #780).
+	//
+	// It sits at the top level for the reason StorageMediums does: a
+	// domain is a boundary, not a policy, and a backup set NAMES one. A
+	// declared domain that no set references yet is a legal, staged
+	// configuration, because declaring the boundary before pointing a set
+	// at it is how an operator builds one up; the alternative would mean a
+	// domain can only be added in the same edit as the set that uses it.
+	//
+	// Nothing here says where a repository's bytes live or how it is
+	// unlocked. That is #781's, and it belongs beside the engine adapter
+	// rather than in a list whose job is to make the SHARING boundary
+	// explicit.
+	//
+	// omitempty for StorageMediums' round-trip reason: core/service
+	// re-marshals the whole Config on every settings save, and a config
+	// file that never heard of repository domains must not come back from
+	// one carrying "repository_domains: []", which an older binary then
+	// refuses outright under Load's KnownFields(true). FR-35 makes that a
+	// gate rather than an intention.
+	RepositoryDomains []RepositoryDomainConfig `yaml:"repository_domains,omitempty"`
+
 	Alerts        Alerts        `yaml:"alerts"`
 	Capacity      Capacity      `yaml:"capacity,omitempty"`
 	KeyEncryption KeyEncryption `yaml:"key_encryption,omitempty"`
@@ -392,6 +415,42 @@ type State struct {
 	Database string `yaml:"database"`
 }
 
+// RepositoryDomainConfig is one declared repository security boundary
+// (EPIC K, #780): the shared encryption, credential, corruption,
+// maintenance, deduplication and administrative-trust boundary that every
+// backup set stored in it necessarily shares.
+//
+// The name carries the Config suffix because the resolved, validated value
+// is model.RepositoryDomain, and this is the file's spelling of it, on the
+// same discipline BackupSet.ReadOnlyConfig follows: the schema type is
+// what YAML may say, the model type is what the rest of the program reads.
+type RepositoryDomainConfig struct {
+	// ID is how a backup set names this domain. It is validated through
+	// model.NewRepositoryDomainID rather than here, so the rules that
+	// decide what may become a repository's name live in one place.
+	ID string `yaml:"id"`
+
+	// Description is the operator's own sentence about what this domain
+	// holds. It is never interpreted. It exists because a list of five
+	// domain ids with no prose is a list nobody reviews, and reviewing it
+	// is how an isolation mistake gets caught before an audit does.
+	Description string `yaml:"description,omitempty"`
+
+	// Isolation is "shared" or "isolated", and it is REQUIRED: a domain
+	// that does not state its co-tenancy is not an explicit boundary, and
+	// neither default is acceptable. Defaulting to shared would make an
+	// isolation boundary a belief rather than a rule; defaulting to
+	// isolated would silently forgo the deduplication that is the reason
+	// to run this engine. See model.ParseRepositoryIsolation.
+	Isolation string `yaml:"isolation"`
+
+	// Domain is the fully-resolved boundary, filled in by Validate on the
+	// same before/after-Validate discipline BackupSet.ID follows. It stays
+	// the zero value until Validate succeeds, and every consumer reads it
+	// rather than re-deriving a domain from the strings above.
+	Domain model.RepositoryDomain `yaml:"-"`
+}
+
 // Source is one origin of backup sets, e.g. "production" or "staging". It
 // exists as a grouping level because a backup set's identity (FR-7) is
 // source-plus-set, not the set name alone: two different sources are
@@ -428,6 +487,135 @@ type BackupSet struct {
 	// concatenating strings. It stays the zero value until Validate
 	// succeeds.
 	ID model.BackupSetID `yaml:"-"`
+
+	// EngineConfig is which machinery produces this set's restore points
+	// (EPIC K, #780): "artifact" or "kopia".
+	//
+	// OMISSION IS NOT A CHOICE THIS KEY MAKES, it is the only thing every
+	// configuration written before EPIC K says, and it means the artifact
+	// engine. Validate resolves it through model.ResolveBackupEngine, in
+	// one place, and an unrecognised value is refused rather than
+	// defaulted in either direction: reading a typo as the artifact engine
+	// would silently ignore an operator who asked for snapshots, and
+	// reading it as the incremental engine would silently change what a
+	// run does to a source tree.
+	//
+	// Like ReadOnlyConfig, this field is never read directly outside
+	// Validate. Every other consumer reads the resolved Engine field.
+	//
+	// omitempty, like every other key this schema has gained, so a
+	// deployment that runs only artifact sets never writes a file an older
+	// build cannot parse (Load's KnownFields(true); see RetentionConfig's
+	// own note on that one-way door).
+	EngineConfig string `yaml:"engine,omitempty"`
+
+	// UUID is this backup set's DURABLE identifier: the one thing about it
+	// that no rename changes. It is required for an incremental set and
+	// refused for an artifact set, which is the only honest pair of rules
+	// available, and the asymmetry is worth stating.
+	//
+	// Required, because the snapshot lineage hangs off it. A set's
+	// configured identity is source-plus-name (FR-7) and both halves are
+	// editable in the UI; if the lineage hung off them, renaming a set
+	// would orphan every snapshot it had ever taken -- the next run would
+	// find no predecessor, re-read the whole source and store a second
+	// full copy. It is also not DERIVED from the name, because deriving it
+	// would be that same bug with extra steps.
+	//
+	// Refused for an artifact set, because nothing reads it there: FR-8's
+	// artifacts are identified by set plus remote basename
+	// (model.ArtifactID), and a key that cannot ever be acted on is
+	// refused rather than ignored, exactly as a local remote carrying
+	// sftp fields is (validateRemote).
+	UUID string `yaml:"uuid,omitempty"`
+
+	// RepositoryDomainConfig names the repository security boundary this
+	// set's snapshots are stored in: one of Config.RepositoryDomains'
+	// ids.
+	//
+	// It is required for an incremental set and has no default, because a
+	// default is exactly the decision EPIC K says must be intentional. A
+	// set that silently landed in some "default" repository would be
+	// deduplicating against, sharing an encryption key with, sharing a
+	// credential with and sharing a corruption fate with whatever else
+	// happened to be there.
+	//
+	// Validate resolves it into the Repository field below.
+	RepositoryDomainConfig string `yaml:"repository_domain,omitempty"`
+
+	// ConsistencyConfig is what the operator has arranged around this
+	// source while a run reads it: one of model.ConsistencyModes()
+	// (live_best_effort, externally_quiesced, external_snapshot). It is
+	// the vocabulary ADR 0009 established, not a second one.
+	//
+	// Omission resolves to model.ModeLiveBestEffort, the weakest claim,
+	// because inferring quiescence or a frozen image from silence would
+	// let a run report a point-in-time snapshot that never existed.
+	ConsistencyConfig string `yaml:"source_consistency,omitempty"`
+
+	// VerificationLevelConfig is how far this set's restore points are
+	// verified: one of model.VerificationLevels() (structural,
+	// content_sample, content_full, restore_drill).
+	//
+	// Omission resolves to model.DefaultVerificationLevel (structural),
+	// the rung that costs nothing beyond the repository's own metadata.
+	// Every stronger rung spends a deployment's I/O budget on a cadence,
+	// which is not this product's decision to make by default.
+	//
+	// This is not Validation/Revalidation above, and the two must not be
+	// confused: those are FR-11's artifact validation, run against a
+	// durable COPY of one file. This is a statement about how hard a
+	// snapshot in a repository has been looked at.
+	VerificationLevelConfig string `yaml:"verification_level,omitempty"`
+
+	// SourceMountPrefix is the leading part of RemotePath that is how
+	// THIS DEPLOYMENT reaches the source rather than part of the source's
+	// own identity: a container bind mount, an install prefix, or the
+	// temporary directory an externally-provided snapshot is mounted under
+	// for the duration of one run.
+	//
+	// It exists so that moving any of those does not fork the snapshot
+	// lineage (see model.SourceRoot). Empty is the ordinary case and means
+	// "the whole path is the source's own", which is right for an sftp
+	// source whose path is absolute on the far side and does not move when
+	// anything on this side does.
+	//
+	// It is declared rather than detected because nothing on this side can
+	// tell which leading segments of /srv/snap-47/data/pg are the mount:
+	// that is a fact about the operator's arrangement, exactly like
+	// ConsistencyConfig, and a heuristic here would be a guess deciding
+	// whether a deployment keeps its backup history.
+	SourceMountPrefix string `yaml:"source_mount_prefix,omitempty"`
+
+	// Engine is the fully-resolved engine this set runs, filled in by
+	// Validate from EngineConfig on the same before/after-Validate
+	// discipline ID and ReadOnly follow. An unvalidated BackupSet reads ""
+	// here regardless of what YAML said; a validated one always names an
+	// engine.
+	Engine model.BackupEngine `yaml:"-"`
+
+	// Repository is the fully-resolved reference to this set's repository
+	// domain, carrying both the domain and this set's own identity so that
+	// co-tenancy can be checked (model.RepositoryDomain.MayShare). It is
+	// the zero value for an artifact set, which has no repository.
+	Repository model.RepositoryRef `yaml:"-"`
+
+	// Consistency and VerificationLevel are the resolved forms of the two
+	// keys above. They are the zero value for an artifact set: resolving
+	// either one for an engine that reads neither would record a claim
+	// nobody made.
+	Consistency       model.ConsistencyMode   `yaml:"-"`
+	VerificationLevel model.VerificationLevel `yaml:"-"`
+
+	// SourceIdentity is this set's stable source identity
+	// (model.NewSourceIdentity): the value that lets a run days later
+	// recognise the same source and reuse its previous snapshot. It is
+	// deliberately computed from the durable identifier, the endpoint and
+	// the source's own path only -- never from LocalPath, the set's name,
+	// or the mount prefix -- so that none of those moving forks a lineage.
+	//
+	// Zero for an artifact set, which has no snapshot lineage.
+	SourceIdentity model.SourceIdentity `yaml:"-"`
 
 	Remote     Remote   `yaml:"remote"`
 	RemotePath string   `yaml:"remote_path"`

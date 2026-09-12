@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/backupdproject/backupd/core/internal/config"
@@ -437,6 +438,34 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 		result.Err = err
 		return result
 	}
+
+	// EPIC K (#780): a set declaring an engine this build has no pipeline
+	// for is refused HERE, before reconcileOne, which is the last point
+	// before anything reads or writes this set's remote.
+	//
+	// Position is the whole of it. config.Validate accepts `engine: kopia`
+	// because the schema seam has to exist before the repository adapter
+	// (#781) and the snapshot lifecycle (#783) are built against it, and
+	// the loop that calls this function skips only disabled and held sets.
+	// So without this check an incremental set would run the ARTIFACT
+	// pipeline: its source TREE walked as though every file in it were a
+	// finished artifact, copied, committed, and then offered for deletion
+	// unless the set happens to be read-only. That is the one outcome EPIC
+	// K names as unacceptable, and it would arrive looking like a
+	// successful cycle.
+	//
+	// It is a set-level Err rather than a silent skip because the operator
+	// has configured something this build cannot do, and a set that
+	// quietly does nothing every cycle is indistinguishable from one that
+	// is working (see reportBarrenSets for why this package treats silence
+	// as a failure mode in its own right). The set is still counted in the
+	// progress feed above, so a refusal does not freeze "set 2 of 5".
+	if err := unrunnableEngine(bs.Engine); err != nil {
+		s.logger().Error(ctx, "cycle", err)
+		result.Err = err
+
+		return result
+	}
 	recRep, err := s.reconcileOne(ctx, source, bs.ID)
 	result.Reconcile = recRep
 	for _, f := range recRep.Findings {
@@ -522,4 +551,45 @@ func (s *Service) enabledBackupSetCount() int {
 		}
 	}
 	return n
+}
+
+// ErrEngineNotImplemented is what a cycle reports for a backup set whose
+// configured engine this build has no pipeline for.
+//
+// It is a distinct sentinel because the operator response is distinct, and
+// unusually so: nothing is wrong with the configuration. The set names an
+// engine the schema accepts and this binary cannot yet run, so the answer
+// is to upgrade or to move the set back to the artifact engine, never to
+// hunt for a mistake in the file. A generic error here would send somebody
+// looking for one.
+var ErrEngineNotImplemented = errors.New("app: this build has no pipeline for the configured backup engine")
+
+// unrunnableEngine reports whether this build must refuse to run a backup
+// set on the given engine, and says why in the operator's words.
+//
+// The artifact engine is what this package implements, end to end, and it
+// is the only thing here that may touch a remote.
+//
+// An EMPTY engine is runnable, and that carve-out is narrower than it
+// looks: config.Validate resolves an omitted `engine` key to
+// model.EngineArtifact by name, so a Config that came through Load and
+// Validate never carries one. The only way to reach this branch is a
+// config.BackupSet built in memory that skipped Validate, which is every
+// fixture in this package's own tests and nothing in production. It is
+// explicitly NOT a second default for the engine decision: that decision
+// has exactly one home (model.ResolveBackupEngine) and this is not it.
+//
+// Anything else is refused rather than attempted, including an engine this
+// function has not been taught. "Run it and see" means running the
+// artifact pipeline -- discover, copy, commit, delete the source's copy --
+// over whatever that engine's source actually is.
+func unrunnableEngine(engine model.BackupEngine) error {
+	switch engine {
+	case model.EngineArtifact, "":
+		return nil
+	}
+
+	return fmt.Errorf("%w: this set is configured for the %q engine (%s), and this build implements the %q engine only; "+
+		"the incremental pipeline lands in #783. Nothing was read from this set's source, and nothing on it was deleted",
+		ErrEngineNotImplemented, engine, engine.Describe(), model.EngineArtifact)
 }
