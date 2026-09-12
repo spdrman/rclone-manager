@@ -376,12 +376,11 @@ recorded under Consequences below, and it now has a named authority to
 derive from: K0.3 adds a generation/version-identity key to
 `backend.Capabilities`, the manifest key `generation_identity` (Go
 constant `backend.CapGenerationIdentity`), whose vocabulary is
-`versioned` | `etag` | `none` | `unknown`:
+`versioned` | `none` | `unknown`:
 
 | `generation_identity` | What it asserts | `SourceSignals` |
 | --- | --- | --- |
 | `versioned` | the backend assigns every write an identifier returned with the object (S3 `versionId`, GCS generation), so it changes on overwrite | `ObjectGeneration` true - strong |
-| `etag` | a content-derived validator that changes when the bytes change and names no retained version | strong, with the per-object multipart-ETag gap `Decide` already closes |
 | `none` | nothing but the path or slot; an overwrite that preserves size and mtime is invisible. A stable slot id is **not** a version identity | no content evidence |
 | `unknown` | not established without probing the object | no content evidence |
 

@@ -29,7 +29,7 @@ import "github.com/backupdproject/backupd/core/internal/model"
 // gate (ADR 0009 records the cost, which has already been paid once in
 // drift). Phase 1 retires it: ObjectGeneration below is derived from the
 // capability manifest key "generation_identity" - the strong-evidence
-// authority K0.3 adds, whose vocabulary is versioned | etag | none |
+// authority K0.3 adds, whose vocabulary is versioned | none |
 // unknown - and the two remaining columns are derived from hash_support
 // and mtime_precision through the NAMED narrowings above rather than
 // copied. Nothing here imports backend, and nothing should until that
@@ -73,9 +73,9 @@ var BundledSourceSignals = map[string]model.SourceSignals{
 	// not rest on the timestamp at all - the generation identifier settles
 	// every comparison before a timestamp is consulted.
 	//
-	// The md5 entry is the ETag, and it is honest about a caveat rather than
-	// omitting it: an object uploaded in multiple parts has an ETag that is
-	// a hash of hashes, not a content hash, and such an object reports no
+	// The md5 entry is the object validator the store already holds, and it
+	// is honest about a caveat rather than omitting it: an object uploaded in
+	// multiple parts has a validator that is a hash of hashes, not a content
 	// usable md5. That is a PER-OBJECT gap in a per-backend capability, and
 	// Decide is what closes it: a policy whose premise is a remote hash,
 	// applied to an object that has none, reads the object.

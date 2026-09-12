@@ -34,8 +34,8 @@ type Entry struct {
 	// RemoteHash is a hash the BACKEND computed, with RemoteHashAlg naming
 	// it. Empty where the backend offers none for this object, which is a
 	// per-object state and not only a per-backend one: an s3 object uploaded
-	// in multiple parts has an ETag that is not a content hash, while its
-	// neighbour uploaded in one part has one.
+	// in multiple parts has a backend validator that is not a content hash,
+	// while its neighbour uploaded in one part has one.
 	RemoteHash    string
 	RemoteHashAlg string
 
