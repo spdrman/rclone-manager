@@ -138,6 +138,70 @@ get away from.
                     the plain HTTP/1.1 this rig otherwise uses. The
                     reproduction for backupd#730. RM_SEED_CYCLES=N
                     additionally runs N backup cycles to enlarge the feed.
+  --break-engine    hand the suite the ability to take the ENGINE away
+                    mid-session, leaving serve-ui up, so the browser
+                    meets a front door that cannot reach the service
+                    behind it. The reproduction for backupd#795.
+
+                    The engine is NOT stopped up front, and that is the
+                    whole design. serve-ui proxies all of /api/v1,
+                    /auth/session included, so a stack that starts
+                    broken never gets a browser past the login page and
+                    the Activity page is never reached. The reported NAS
+                    failed the other way round: a loaded, signed-in app
+                    whose engine went away underneath it. So the break
+                    happens while the suite holds a live session.
+
+                    The client container gets two more variables:
+
+                      RM_ENGINE_UNREACHABLE=1   branch on this
+                      RM_ENGINE_CONTROL         a directory under
+                                                /artifacts, described
+                                                below
+
+                    and a watcher on THIS host owns the docker socket
+                    the client deliberately does not have. The protocol
+                    is files in that directory:
+
+                      write "stop"    -> the engine container is stopped
+                                         and "stopped" appears, or
+                                         "stop-failed" does
+                      write "start"   -> it is started, and "started"
+                                         appears only once its own
+                                         healthcheck passes, or
+                                         "start-failed" does
+
+                    Exactly one ack appears per request, and a success
+                    ack means the state was VERIFIED: "stopped" only
+                    after Docker reports the container not running,
+                    "started" only after `docker start` succeeded and
+                    the engine's own healthcheck passed. Anything else
+                    is a failure ack carrying a one-line reason, which
+                    the suite quotes rather than reporting its own
+                    timeout. A suite that reads a success ack as proof
+                    of the state is reading it correctly, which is why
+                    one is never written on a guess (#795).
+
+                    A request file is removed as it is picked up, so one
+                    request is never acknowledged by the leavings of the
+                    last, and "start" against an engine that is already
+                    running is a no-op that still acknowledges. A suite
+                    that deletes an ack before asking again is doing the
+                    right thing and is expected to.
+
+                    Not combinable with --keep-up: the watcher is a
+                    process of THIS script, so a kept-up stack has
+                    nobody acking. The two variables are then left off
+                    the printed command on purpose, and the manual
+                    equivalent is printed instead.
+
+                    Before handing over, the break is REHEARSED: the
+                    engine is stopped, the edge network is asked for
+                    /api/v1/activity and has to come back 502 with an
+                    X-Correlation-Id on it, and the engine is started
+                    again. A mode that cannot demonstrate the fault it
+                    exists to produce fails here rather than handing a
+                    suite a healthy stack to pass against.
 
 The exit status is the client container's, not the teardown's. A run that
 tore down cleanly after a red suite is a red run.

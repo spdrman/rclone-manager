@@ -131,3 +131,79 @@ describe("asApiError is the one conversion the fetch hooks use", () => {
     expect(api.detail).toContain("Unexpected token '<'");
   });
 });
+
+/**
+ * Issue #795's review. Which MACHINE a refusal came out of is a separate
+ * question from what it says, and this module used to answer it by
+ * looking at two things that cannot: the error code (where `unknown`
+ * conflates "no typed envelope" with "a valid code this bundle has not
+ * heard of") and the status (where 502/503/504 conflates "the proxy in
+ * front of the service" with "the service, answering for itself").
+ *
+ * It reads recorded provenance now, and these are the four answers.
+ */
+describe("provenance decides which hop a failure names", () => {
+  it("never speaks over a service that typed its own refusal, whatever the status", () => {
+    const failure = describeFailure(
+      new BackupdError({
+        code: "unknown",
+        message: "Backupd is in a maintenance window until 04:00.",
+        status: 503,
+        origin: "service"
+      }),
+      "Activity could not be loaded."
+    );
+
+    expect(failure.message).toBe("Backupd is in a maintenance window until 04:00.");
+    expect(failure.remediation).toBeUndefined();
+    expect(failure.origin).toBe("service");
+  });
+
+  it("names the hop when the proxy in front of the service said it wrote the refusal", () => {
+    const failure = describeFailure(
+      new BackupdError({
+        code: "unknown",
+        message: "The backup service returned an unexpected response.",
+        status: 502,
+        correlationId: "cid_marked",
+        origin: "gateway"
+      }),
+      "Activity could not be loaded."
+    );
+
+    expect(failure.message).toMatch(/could not reach the Backupd service/i);
+    expect(failure.correlationId).toBe("cid_marked");
+    expect(failure.origin).toBe("gateway");
+  });
+
+  it("falls back to the gateway wording for an untyped gateway status, which older builds are", () => {
+    // serve-ui's marker is newer than this classification, and another
+    // proxy between the browser and the service would not set it at all.
+    // An untyped 502 is still a response with nothing of the service's in
+    // it, so the wording holds.
+    const failure = describeFailure(
+      new BackupdError({
+        code: "unknown",
+        message: "The backup service returned an unexpected response.",
+        status: 502,
+        origin: "unknown"
+      }),
+      "Activity could not be loaded."
+    );
+
+    expect(failure.message).toMatch(/could not reach the Backupd service/i);
+  });
+
+  it("names no hop at all for a refusal nothing established the origin of", () => {
+    // A hand-built ApiError, a mock, or a page's own state. Absent
+    // provenance is "not established", and guessing one from the status
+    // is the defect, not the fix.
+    const failure = describeFailure(
+      new BackupdError({ code: "unknown", message: "something nobody typed", status: 502 }),
+      "Activity could not be loaded."
+    );
+
+    expect(failure.message).toBe("something nobody typed");
+    expect(failure.message).not.toMatch(/could not reach the Backupd service/i);
+  });
+});

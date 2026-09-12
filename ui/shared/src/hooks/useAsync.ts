@@ -17,6 +17,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { asApiError } from "@shared/api/failure";
+import { reportSessionLost } from "@shared/api/sessionLoss";
 import type { ApiError } from "@shared/api/contracts";
 
 /** A fetch in one of its three states, plus the way to run it again.
@@ -73,7 +74,15 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
         // it also catches a mapper throwing on a response that DID
         // arrive - that is a different failure, and asApiError now says
         // so rather than calling it the same thing.
-        setError(asApiError(e));
+        const api = asApiError(e);
+        // Issue #795. A refusal that says the session is gone is not a
+        // failure of this read, and a Try again beside it can never
+        // succeed: the engine restarting ends every session it was
+        // holding, which is exactly the story #795 was reported from.
+        // Reported rather than handled here, because what follows is the
+        // app shell's decision and not this hook's (api/sessionLoss.ts).
+        if (api.code === "UNAUTHENTICATED") reportSessionLost();
+        setError(api);
       })
       .finally(() => live && setLoading(false));
     return () => {

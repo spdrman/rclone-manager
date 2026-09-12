@@ -23,8 +23,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { AuthContext as AuthCtx, PlatformBridge } from "@shared/types/platform";
 import { graph, useCausl } from "@shared/state/graph";
-import { authLoadingNode, authNode, bridgeNode, capabilityCopyNode } from "@shared/state/platformNodes";
-import { describeCapabilities } from "./capabilities";
+import { asApiError } from "@shared/api/failure";
+import { onSessionLost } from "@shared/api/sessionLoss";
+import type { ApiError } from "@shared/api/contracts";
+import {
+  authErrorNode,
+  authLoadingNode,
+  authNode,
+  bridgeNode,
+  capabilityCopyNode
+} from "@shared/state/platformNodes";
+import type { CapabilityCopy } from "./capabilities";
 
 /** Guards against the stale-response race: two auth fetches (the mount
  *  effect and a manual refreshAuth(), or two refreshAuth() calls in a row)
@@ -49,13 +58,34 @@ function refetchAuth(bridge: PlatformBridge, isLive: () => boolean) {
   bridge
     .getAuthContext()
     .then((ctx) => {
-      if (isCurrent()) graph.commit("platform/auth-resolved", (tx) => tx.set(authNode, ctx));
-    })
-    .catch(() => {
       if (isCurrent())
-        graph.commit("platform/auth-failed", (tx) =>
-          tx.set(authNode, { authenticated: false, username: null, mode: "local-account" })
-        );
+        graph.commit("platform/auth-resolved", (tx) => {
+          tx.set(authNode, ctx);
+          tx.set(authErrorNode, null);
+        });
+    })
+    .catch((e: unknown) => {
+      // Issue #795. This used to commit `{ authenticated: false }` for
+      // ANY rejection, which is a verdict about the operator's session
+      // drawn from a failure that never asked one. On the reported
+      // deployment the engine was unreachable from the web-ui container,
+      // so the session route answered 502 and the operator was shown a
+      // sign-in form — the one action that could not possibly work —
+      // while their session was in fact untouched.
+      //
+      // A bridge that CAN tell now does: readLocalAccountSession
+      // resolves `{ authenticated: false }` for the 401/403 that means
+      // it, and rejects for everything else. So a rejection reaching
+      // here is "the check could not be made", and is recorded as that.
+      // authNode stays unauthenticated because nothing here may claim a
+      // session either, and App.tsx reads the two together: an error
+      // beside an unauthenticated context is a service that did not
+      // answer, not a browser that is signed out.
+      if (isCurrent())
+        graph.commit("platform/auth-failed", (tx) => {
+          tx.set(authNode, { authenticated: false, username: null, mode: "local-account" });
+          tx.set(authErrorNode, asApiError(e));
+        });
     })
     .finally(() => {
       if (isCurrent()) graph.commit("platform/auth-settled", (tx) => tx.set(authLoadingNode, false));
@@ -104,8 +134,26 @@ export function PlatformProvider({
   useEffect(() => {
     let live = true;
     refetchAuth(bridge, () => live);
+    // Issue #795. A page read refused with UNAUTHENTICATED means the
+    // session this app is holding is gone - most often because the
+    // engine restarted, which ends every session it was keeping
+    // (apps/common/auth/local). Re-asking is the whole response: the
+    // answer is "not signed in", App.tsx's own gate then renders the
+    // sign-in form, and the operator has the one route out that a Try
+    // again beside a page panel could never be.
+    //
+    // Gated on currently believing there IS a session. Without that,
+    // every refused read on a browser that is already at the login page
+    // (App.tsx issues the four app-wide reads above its authenticated
+    // branch, by design - see signed-in-refetch.test.tsx) would ask the
+    // same question again and get the same answer.
+    const unsubscribe = onSessionLost(() => {
+      if (!graph.read(authNode)?.authenticated) return;
+      refetchAuth(bridge, () => live);
+    });
     return () => {
       live = false;
+      unsubscribe();
     };
   }, [bridge]);
 
@@ -115,12 +163,17 @@ export function PlatformProvider({
 export function usePlatform(): {
   bridge: PlatformBridge;
   auth: AuthCtx | null;
+  /** Why the auth check could not be made, when it could not be made at
+   *  all (#795). Never set for a browser the service said is signed out:
+   *  that is an answer, and it is in `auth`. */
+  authError: ApiError | null;
   authLoading: boolean;
-  capabilityCopy: ReturnType<typeof describeCapabilities>;
+  capabilityCopy: CapabilityCopy[];
   refreshAuth(): void;
 } {
   const bridge = useCausl(bridgeNode);
   const auth = useCausl(authNode);
+  const authError = useCausl(authErrorNode);
   const authLoading = useCausl(authLoadingNode);
   const capabilityCopy = useCausl(capabilityCopyNode);
 
@@ -138,8 +191,8 @@ export function usePlatform(): {
   // standard React hook hygiene, and gets an infinite refetch loop with
   // no reason to suspect usePlatform() itself.
   return useMemo(
-    () => ({ bridge, auth, authLoading, capabilityCopy, refreshAuth }),
-    [bridge, auth, authLoading, capabilityCopy, refreshAuth]
+    () => ({ bridge, auth, authError, authLoading, capabilityCopy, refreshAuth }),
+    [bridge, auth, authError, authLoading, capabilityCopy, refreshAuth]
   );
 }
 

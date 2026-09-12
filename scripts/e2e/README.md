@@ -232,3 +232,88 @@ fault is in what serve-ui / the engine put on the wire for that one route;
 if it stays green even here, the trigger is more specific to the operator's
 own front end (their proxy build, TLS stack, or browser), and the rig has
 narrowed it either way.
+
+## Reproducing #795 (the Activity page that shows nothing)
+
+`backupd#795` is the other half of the same page failing, and unlike #730 it
+is not an experiment: the cause was known before the rig was asked to
+reproduce it. The web-ui container could not resolve the engine —
+`dial tcp: lookup rclone-manager: no such host` — so `serve-ui` answered
+every `/api/v1` call itself, 502 with no body on it, and the Activity page
+put nothing useful on screen.
+
+`--break-engine` produces that from the four containers this rig already
+stands up:
+
+```sh
+scripts/e2e/three-machine-web-ui.sh --break-engine
+scripts/e2e/three-machine-web-ui.sh --break-engine \
+  --suite ../backupd-tests/suites/web-ui
+```
+
+**The engine is left running when the stack is handed over**, and that is the
+design rather than an omission. `serve-ui` proxies all of `/api/v1`,
+`/auth/session` included, so a stack that starts broken never gets a browser
+past the login page: the Activity page is never reached and a suite's own
+sign-in fixture fails in setup instead of asserting anything. The reported
+NAS failed the other way round — a loaded, signed-in app whose engine went
+away underneath it — so the break happens mid-session, when the suite asks
+for it.
+
+The client container has no Docker socket, deliberately: a browser that can
+stop containers is not the browser under test. So the capability is held by a
+watcher on the host and exposed as files in the directory named by
+`RM_ENGINE_CONTROL` (inside the already-mounted `/artifacts`):
+
+| file | written by | meaning |
+| --- | --- | --- |
+| `stop` | the suite | stop the engine container; `serve-ui` stays up |
+| `stopped` | the watcher | Docker reports the container not running |
+| `stop-failed` | the watcher | it does not, and this file says why |
+| `start` | the suite | start it again |
+| `started` | the watcher | `docker start` succeeded **and** the engine's own healthcheck has passed |
+| `start-failed` | the watcher | one of those two did not, and this file says why |
+
+Exactly one ack appears per request, and a **success ack is only ever written
+for a state the watcher verified**. That is the whole contract, because the
+suite across the repository boundary reads these files as proof: a discarded
+`docker stop` failure would read there as "the engine is unreachable" and run
+the outage assertions against a healthy engine, and a start whose healthcheck
+timed out would read as "healthy" and run the recovery assertions against an
+engine that never came back — both then reported as product defects. A failure
+ack carries a one-line reason (written atomically, so a reader never sees half
+of it) and the suite quotes it instead of inferring a rig fault from its own
+timeout.
+
+A request file is removed as it is picked up, so one request is never
+acknowledged by the leavings of the last, and `start` against an engine that
+is already running is a no-op that still acknowledges. `RM_ENGINE_UNREACHABLE=1`
+is set alongside it, and a suite branches on that: assert the failure surface
+when it is set, assert the healthy feed when it is not, so a banner that never
+goes away fails the default run.
+
+`--break-engine` is **not combinable with `--keep-up`**. The watcher is a
+background process of the script, and the `--keep-up` exit stops it, so the
+kept-up stack has nobody acking; the two variables are therefore left off the
+printed command on purpose and the by-hand equivalent is printed instead.
+Re-run without `--keep-up` to drive the engine-unreachable cases.
+
+The break is **rehearsed before the stack is handed over**. The engine is
+stopped, `/api/v1/activity` is asked for from the edge network and has to come
+back `502` with an `X-Correlation-Id` on it, and the engine is started again
+and has to answer `401` as before. A mode that cannot demonstrate the fault it
+exists to produce fails there, rather than handing a suite a healthy stack to
+pass against.
+
+The built-in `web-ui-smoke.mjs` drives the whole window when
+`RM_ENGINE_UNREACHABLE=1`: the Activity page has to surface an alert rather
+than a blank page or an empty feed, in the wording for a service that did not
+answer rather than one whose answer could not be read, with no literal
+`correlation id unavailable` anywhere on it, a Try again that really
+re-issues, the dashboard's Recent activity panel saying the same thing, and
+recovery once the engine is back. Recovery is followed through the session
+transition the restart causes rather than assumed: the engine holds its
+sessions in its own process, so the app may land on the sign-in form, and the
+check signs in again and then requires a real feed (or the healthy empty
+state) with no error alert. An uncaught exception is never excused by the
+outage window, unlike the 502s and failed requests the window asked for.

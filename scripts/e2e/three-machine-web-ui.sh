@@ -140,6 +140,70 @@
 #                     the plain HTTP/1.1 this rig otherwise uses. The
 #                     reproduction for backupd#730. RM_SEED_CYCLES=N
 #                     additionally runs N backup cycles to enlarge the feed.
+#   --break-engine    hand the suite the ability to take the ENGINE away
+#                     mid-session, leaving serve-ui up, so the browser
+#                     meets a front door that cannot reach the service
+#                     behind it. The reproduction for backupd#795.
+#
+#                     The engine is NOT stopped up front, and that is the
+#                     whole design. serve-ui proxies all of /api/v1,
+#                     /auth/session included, so a stack that starts
+#                     broken never gets a browser past the login page and
+#                     the Activity page is never reached. The reported NAS
+#                     failed the other way round: a loaded, signed-in app
+#                     whose engine went away underneath it. So the break
+#                     happens while the suite holds a live session.
+#
+#                     The client container gets two more variables:
+#
+#                       RM_ENGINE_UNREACHABLE=1   branch on this
+#                       RM_ENGINE_CONTROL         a directory under
+#                                                 /artifacts, described
+#                                                 below
+#
+#                     and a watcher on THIS host owns the docker socket
+#                     the client deliberately does not have. The protocol
+#                     is files in that directory:
+#
+#                       write "stop"    -> the engine container is stopped
+#                                          and "stopped" appears, or
+#                                          "stop-failed" does
+#                       write "start"   -> it is started, and "started"
+#                                          appears only once its own
+#                                          healthcheck passes, or
+#                                          "start-failed" does
+#
+#                     Exactly one ack appears per request, and a success
+#                     ack means the state was VERIFIED: "stopped" only
+#                     after Docker reports the container not running,
+#                     "started" only after `docker start` succeeded and
+#                     the engine's own healthcheck passed. Anything else
+#                     is a failure ack carrying a one-line reason, which
+#                     the suite quotes rather than reporting its own
+#                     timeout. A suite that reads a success ack as proof
+#                     of the state is reading it correctly, which is why
+#                     one is never written on a guess (#795).
+#
+#                     A request file is removed as it is picked up, so one
+#                     request is never acknowledged by the leavings of the
+#                     last, and "start" against an engine that is already
+#                     running is a no-op that still acknowledges. A suite
+#                     that deletes an ack before asking again is doing the
+#                     right thing and is expected to.
+#
+#                     Not combinable with --keep-up: the watcher is a
+#                     process of THIS script, so a kept-up stack has
+#                     nobody acking. The two variables are then left off
+#                     the printed command on purpose, and the manual
+#                     equivalent is printed instead.
+#
+#                     Before handing over, the break is REHEARSED: the
+#                     engine is stopped, the edge network is asked for
+#                     /api/v1/activity and has to come back 502 with an
+#                     X-Correlation-Id on it, and the engine is started
+#                     again. A mode that cannot demonstrate the fault it
+#                     exists to produce fails here rather than handing a
+#                     suite a healthy stack to pass against.
 #
 # The exit status is the client container's, not the teardown's. A run that
 # tore down cleanly after a red suite is a red run.
@@ -220,6 +284,11 @@ prebuilt_image="${RM_PRODUCT_IMAGE:-}"
 # reaches a real NAS (h2 over TLS) rather than the plain HTTP/1.1 the rig
 # otherwise uses. Off by default; the default rig is unchanged.
 front_proxy="${RM_FRONT_PROXY_TLS:-0}"
+# backupd#795 reproduction: let the suite take the engine away while the
+# browser holds a live session, with serve-ui left up in front of it.
+# Off by default; every line it adds is behind this flag, so a default run
+# is the run it was before.
+break_engine="${RM_BREAK_ENGINE:-0}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -232,9 +301,10 @@ while [ $# -gt 0 ]; do
     --keep-on-failure) keep_on_failure=1; shift ;;
     --keep-up) keep_up=1; shift ;;
     --front-proxy-tls) front_proxy=1; shift ;;
+    --break-engine) break_engine=1; shift ;;
     -h|--help) render_help; exit 0 ;;
     *) die "unknown option $1" \
-           "Usage: $0 [--suite DIR] [--artifacts DIR] [--image REF] [--front-proxy-tls] [--keep-up] [--keep-on-failure]" ;;
+           "Usage: $0 [--suite DIR] [--artifacts DIR] [--image REF] [--front-proxy-tls] [--break-engine] [--keep-up] [--keep-on-failure]" ;;
   esac
 done
 
@@ -288,6 +358,17 @@ run_dir="$tmp_root/$run_id"
 # the password that was typed into it, and this repository is not where
 # credential material goes, dead or not.
 [ -n "$artifacts_dir" ] || artifacts_dir="$tmp_root/$run_id-artifacts"
+
+# backupd#795's control channel, and it lives UNDER the artifacts
+# directory rather than beside it for one reason: that directory is
+# already bind-mounted into the client container, and the client must not
+# be given anything else. A suite that could reach the Docker socket could
+# stop the engine itself, and would then be a suite that can do anything
+# to this host; a few small files in a directory it already has is the
+# whole capability it needs.
+engine_control="$artifacts_dir/engine-control"
+engine_control_in_client="/artifacts/engine-control"
+engine_watcher_pid=""
 
 product_image="${prebuilt_image:-backupd-web-ui-e2e:$run_id}"
 source_image="backupd-e2e-source:1"
@@ -354,6 +435,13 @@ teardown() {
   local status="${1:-0}"
   [ "$teardown_done" = 1 ] && return
   teardown_done=1
+
+  # The watcher first, and before the --keep-up return below rather than
+  # after it: it is a process on THIS host holding the Docker socket, and
+  # a run that leaves the stack up on purpose still must not leave a loop
+  # behind that stops a container somebody is reading. Killed even when
+  # the containers are kept.
+  stop_engine_watcher
 
   if [ "$keep_up" = 1 ] || { [ "$keep_on_failure" = 1 ] && [ "$status" != 0 ]; }; then
     echo "" >&2
@@ -450,6 +538,185 @@ wait_or_die() {
     fi
     sleep 1
   done
+}
+
+# ------------------------------------------- the engine control channel
+#
+# backupd#795. Only ever used with --break-engine, and every line of it is
+# inert without that flag.
+#
+# engine_is_live is the same healthcheck the startup wait uses, asked of
+# the engine's own listener from inside its container: "docker start
+# returned" is not the same fact as "the engine is serving again", and a
+# suite told the second when only the first is true fails on a race it
+# cannot see.
+engine_is_live() {
+  docker exec "$c_engine" /backupd-web healthcheck --url http://127.0.0.1:8080/health/live >/dev/null 2>&1
+}
+
+# And the hop the BROWSER actually uses, which is not the same fact
+# either. Found by running this: the smoke's recovery step failed on
+# three 502s logged after "started" had been acknowledged.
+#
+# engine_is_live asks the engine's own listener from inside its own
+# container. A browser reaches it through serve-ui's reverse proxy, in
+# another container, over the internal network - and that path has its
+# own state: Docker may hand the restarted container a different address,
+# and serve-ui's http.Transport is holding idle keep-alive connections to
+# the address the engine had BEFORE it went away. So there is a window in
+# which the engine is serving, the ack has been written, and the first
+# request the browser makes still comes back 502 from the proxy.
+#
+# This closes it by asking serve-ui to proxy the same healthcheck: the
+# request is made INSIDE the web container against serve-ui's own port,
+# and /health/ is one of the two prefixes it forwards (webhost/serve's
+# NewUI), so a pass here means one real request has already traversed the
+# whole hop and any stale connection has already been discarded on it
+# rather than on a page the suite is about to assert against.
+#
+# It is the same principle as the acks themselves: what the reader
+# depends on is what has to be verified, not the nearest thing that is
+# cheap to check.
+serve_ui_reaches_engine() {
+  docker exec "$c_web" /backupd-web healthcheck --url http://127.0.0.1:8080/health/live >/dev/null 2>&1
+}
+
+# The health budget one "start" request is given, in seconds.
+#
+# 175 rather than the 120 this used to allow, because the number the
+# suite waits is 180 (backupd-tests' startEngine) and a watcher that
+# gives up at 120 reports a failure for an engine that would have been
+# serving at 130 with a minute of the reader's patience left unspent.
+# 175 and not 180 for the other end of the same arithmetic: the ack has
+# to LAND inside the suite's budget to be read at all, so the few seconds
+# this loop spends picking the request up and running `docker start` are
+# left for the failure ack to be written in rather than raced against.
+engine_start_health_budget=175
+
+# The opposite fact from engine_is_live, and asked of Docker rather than
+# of the engine: "docker stop returned 0" includes a container that was
+# not there to stop and a daemon that accepted the request, so the state
+# is read back before anything is acknowledged.
+engine_is_stopped() {
+  [ "$(docker inspect -f '{{.State.Running}}' "$c_engine" 2>/dev/null)" = "false" ]
+}
+
+# engine_ack <name> [reason]
+#
+# Written to a dotfile beside the ack and moved into place, so a reader
+# polling for the name can never see half of a reason: rename within one
+# directory is atomic, and the suite reads these files the instant they
+# appear.
+engine_ack() {
+  local name="$1"
+  # One line, and bounded. This string is quoted verbatim into the
+  # exception the suite throws, and a page of docker output in a test
+  # report is a page nobody reads to the end of.
+  local reason
+  reason="$(printf '%s' "${2:-}" | tr '\n\t' '  ' | cut -c1-200)"
+  printf '%s\n' "$reason" > "$engine_control/.$name.tmp"
+  mv -f "$engine_control/.$name.tmp" "$engine_control/$name"
+}
+
+# engine_watcher_loop is what the client container cannot do for itself.
+# It has no Docker socket, deliberately: the thing under test is a browser
+# on an edge network, and a browser that can stop containers is not one.
+# So the capability is held here and exposed as a directory of files.
+#
+# Ordering inside each branch is the contract, not tidiness. The request
+# file is removed BEFORE the work, so a second request can never be
+# acknowledged by the first one's leftovers, and the ack is written AFTER
+# it, so a suite that sees "started" can rely on the engine answering.
+# `docker start` against a running container is a no-op that exits 0,
+# which makes a redundant heal (a test that heals mid-run and again in a
+# finally) acknowledge rather than fail.
+#
+# And an ack is only ever written for a state this watcher WATCHED the
+# stack reach (#795's review, all four reviewers). Both branches used to
+# `|| true` the docker command and write the success ack regardless, and
+# the start branch wrote "started" even when the health loop had timed
+# out. The suite across the repository boundary reads these files as
+# proof: a discarded `docker stop` failure reads there as "the engine is
+# unreachable" and runs the outage assertions against a healthy engine,
+# and a timed-out start reads as "healthy" and runs the recovery
+# assertions against an engine that never came back. Both then fail as
+# product defects. So the exit status is kept, the state is read back,
+# and a failure is acknowledged AS a failure: "stop-failed" /
+# "start-failed", carrying a one-line reason the suite quotes. The
+# contract is the same either way - exactly one file appears per request
+# - which is what lets the suite stop inferring a rig fault from its own
+# timeout.
+engine_watcher_loop() {
+  while :; do
+    if [ -e "$engine_control/stop" ]; then
+      rm -f "$engine_control/stop"
+      local out=""
+      if out="$(docker stop "$c_engine" 2>&1)" && engine_is_stopped; then
+        rm -f "$engine_control/started" "$engine_control/stop-failed" "$engine_control/start-failed"
+        engine_ack stopped
+      else
+        # Not "stopped", and not silence either. The engine is still up,
+        # or Docker would not say, and the browser is about to be asked
+        # to prove an outage that never happened.
+        rm -f "$engine_control/stopped"
+        engine_ack stop-failed "docker stop did not leave the engine stopped: ${out:-no output}"
+      fi
+    elif [ -e "$engine_control/start" ]; then
+      rm -f "$engine_control/start"
+      local out=""
+      if ! out="$(docker start "$c_engine" 2>&1)"; then
+        rm -f "$engine_control/started"
+        engine_ack start-failed "docker start refused: ${out:-no output}"
+      else
+        # Bounded, and it gives up out loud rather than hanging or
+        # lying. A container that is running but has not opened its
+        # database yet answers the proxy with a refusal, so "started" is
+        # withheld until the engine's own healthcheck passes AND the same
+        # healthcheck passes through serve-ui's proxy, which is the hop
+        # the browser uses and the one a restarted container's new
+        # address invalidates. A budget that runs out is a start-failed
+        # rather than a "started" the suite would read as a recovered
+        # stack.
+        local waited=0 live=0
+        while [ "$waited" -lt "$engine_start_health_budget" ]; do
+          if engine_is_live && serve_ui_reaches_engine; then live=1; break; fi
+          sleep 1
+          waited=$(( waited + 1 ))
+        done
+        if [ "$live" = 1 ]; then
+          rm -f "$engine_control/stopped" "$engine_control/start-failed" "$engine_control/stop-failed"
+          engine_ack started
+        else
+          rm -f "$engine_control/started"
+          engine_ack start-failed "the engine container started but the browser's own path to it did not come good within ${engine_start_health_budget}s (its healthcheck, then the same check through serve-ui's proxy)"
+        fi
+      fi
+    fi
+    sleep 0.25
+  done
+}
+
+start_engine_watcher() {
+  mkdir -p "$engine_control"
+  # The state the stack is actually in when the suite is handed it. The
+  # suite is not expected to read it before asking for anything - it
+  # removes the acks it is about to wait for first - but a directory whose
+  # contents describe the world is easier to debug than an empty one.
+  # The two failure acks are cleared for a sharper reason: one left behind
+  # by an earlier run against the same artifacts directory would be read
+  # by the first request of this one as its own answer.
+  rm -f "$engine_control/stop" "$engine_control/start" "$engine_control/stopped" \
+        "$engine_control/stop-failed" "$engine_control/start-failed"
+  : > "$engine_control/started"
+  engine_watcher_loop &
+  engine_watcher_pid=$!
+}
+
+stop_engine_watcher() {
+  [ -n "$engine_watcher_pid" ] || return 0
+  kill "$engine_watcher_pid" >/dev/null 2>&1 || true
+  wait "$engine_watcher_pid" 2>/dev/null || true
+  engine_watcher_pid=""
 }
 
 # The VPS container, which is alpine and has coreutils. The product's
@@ -893,6 +1160,69 @@ case "$login_probe" in
          "This is the hop the whole stack exists for, so nothing below is worth running until it works." ;;
 esac
 
+# ========================================= the break, rehearsed (#795)
+
+if [ "$break_engine" = 1 ]; then
+  step "--break-engine: rehearsing the fault before handing the stack over"
+
+  # api_probe <what it is for> -> "<status> <correlation id or ->"
+  #
+  # /api/v1/activity unauthenticated, from the edge network, which is the
+  # exact route and the exact position the browser will fail from. The
+  # request carries no session, so a working stack refuses it 401 FROM
+  # THE ENGINE; a stack whose engine is gone is answered 502 by serve-ui
+  # itself. Those two numbers are the whole proof, and telling them apart
+  # is why this probe asks for an API route rather than for the bundle:
+  # the bundle is served by serve-ui either way and says nothing about
+  # the hop behind it.
+  api_probe() {
+    docker run --rm --label "$label" --network "$net_edge" \
+      -e "RM_BASE_URL=$base_url" $front_proxy_probe_env "$client_image" \
+      node -e '
+        (async () => {
+          const r = await fetch(process.env.RM_BASE_URL + "/api/v1/activity");
+          console.log(r.status + " " + (r.headers.get("x-correlation-id") || "-"));
+        })().catch((e) => { console.log("no-answer " + e.message); process.exitCode = 1; });
+      ' 2>&1 || true
+  }
+
+  healthy_probe="$(api_probe)"
+  # 401 or 403: both are the ENGINE having looked at an unauthenticated
+  # request and refused it, which is the only fact this half needs. The
+  # break below is the strict one (502, and an id on it), because that is
+  # the assertion the mode exists to make; pinning the healthy side to one
+  # exact status would let a gate variation nobody is testing here stop
+  # the run.
+  case "$healthy_probe" in
+    401\ *|403\ *) note "with the engine up, GET /api/v1/activity answers $healthy_probe" ;;
+    *) die "with the engine up, GET /api/v1/activity answered \"${healthy_probe:-nothing}\", want a 401 or 403 from the engine." \
+           "The break below is only meaningful against a stack that was working, so this refuses to rehearse on one that was not." ;;
+  esac
+
+  docker stop "$c_engine" >/dev/null || die "could not stop the engine for the rehearsal."
+  broken_probe="$(api_probe)"
+  case "$broken_probe" in
+    502\ -) die "with the engine stopped, GET /api/v1/activity answered 502 with no X-Correlation-Id." \
+                "The browser's banner would then have nothing to quote and the proxy_error line in serve-ui's log nothing to be joined by (#795)." ;;
+    502\ *) note "with the engine stopped, GET /api/v1/activity answers $broken_probe, from serve-ui rather than the engine" ;;
+    *) docker start "$c_engine" >/dev/null 2>&1 || true
+       die "with the engine stopped, GET /api/v1/activity answered \"${broken_probe:-nothing}\", want 502 from serve-ui." \
+           "Either serve-ui went down with the engine, in which case this mode is testing something else entirely, or something is answering for it." ;;
+  esac
+
+  docker start "$c_engine" >/dev/null || die "could not start the engine again after the rehearsal."
+  wait_or_die 180 "the engine to come back up after the rehearsal" engine_is_live
+  healed_probe="$(api_probe)"
+  case "$healed_probe" in
+    401\ *|403\ *) note "and with it back, $healed_probe again: the break is reversible, which the recovery half of the suite needs" ;;
+    *) die "after restarting the engine, GET /api/v1/activity answered \"${healed_probe:-nothing}\", want the engine's own refusal again." \
+           "A break that cannot be undone leaves no way to assert that the pages recover." ;;
+  esac
+
+  start_engine_watcher
+  note "the control channel is live at $engine_control (write \"stop\" or \"start\", wait for \"stopped\" or \"started\")"
+fi
+
 # ------------------------------------------------------- hand it over
 
 step "the stack is up"
@@ -918,6 +1248,27 @@ client_env=(
 # an empty case never expands to a stray argument.
 if [ "$front_proxy" = 1 ]; then
   client_env+=(-e "RM_IGNORE_HTTPS=1" -e "NODE_TLS_REJECT_UNAUTHORIZED=0" -e "NODE_NO_WARNINGS=1")
+fi
+# backupd#795. The flag the suite branches on, and the directory it drives
+# the break from. Same appended-after-the-literal shape as the block
+# above, and for the same reason: off, neither variable exists at all, so
+# a spec that reads RM_ENGINE_UNREACHABLE gets undefined and asserts the
+# healthy feed.
+#
+# And NOT under --keep-up, which is the other half of that same rule
+# (#795's review). The watcher that acks these requests is a background
+# process of this script, and the --keep-up exit tears it down, so a
+# command carrying these two variables would hand a suite a control
+# channel with nobody on the other end: every engine-unreachable case
+# would sit out its full timeout and then report a rig failure as a
+# product one. Left off, RM_ENGINE_UNREACHABLE is simply undefined in
+# that command and those cases skip themselves, which is the honest
+# answer. The block printed with the command says so and gives the
+# by-hand equivalent.
+if [ "$break_engine" = 1 ] && [ "$keep_up" != 1 ]; then
+  client_env+=(-e "RM_ENGINE_UNREACHABLE=1" -e "RM_ENGINE_CONTROL=$engine_control_in_client")
+  note "RM_ENGINE_UNREACHABLE 1"
+  note "RM_ENGINE_CONTROL     $engine_control_in_client, watched on this host at $engine_control"
 fi
 
 client_run=(
@@ -980,6 +1331,29 @@ if [ "$keep_up" = 1 ]; then
   echo ""
   echo "    The teardown line is printed below. Nothing here is published to a host port,"
   echo "    so the only way to reach the UI is from a container on $net_edge."
+  if [ "$break_engine" = 1 ]; then
+    echo ""
+    echo "    --break-engine's watcher is NOT left running: it holds this host's Docker socket,"
+    echo "    and a loop outliving the script that started it is a loop nobody owns. So"
+    echo "    RM_ENGINE_UNREACHABLE and RM_ENGINE_CONTROL are deliberately NOT in the command"
+    echo "    above: with them set, every engine-unreachable case would write a request into a"
+    echo "    directory nobody is watching, wait out its whole timeout, and report the rig's"
+    echo "    silence as a product failure. Without them those cases skip themselves and the"
+    echo "    rest of the suite runs against a healthy stack."
+    echo ""
+    echo "    Break the engine by hand, which is all the watcher does:"
+    echo ""
+    echo "        docker stop $c_engine     # serve-ui stays up and answers 502"
+    echo "        docker start $c_engine    # and the pages recover"
+    echo ""
+    echo "    To drive the engine-unreachable cases against this stack, either re-run without"
+    echo "    --keep-up, or export the two variables into your own suite run and ack the"
+    echo "    requests yourself, in the watcher's own order (request file first, then the ack):"
+    echo ""
+    echo "        RM_ENGINE_UNREACHABLE=1 RM_ENGINE_CONTROL=$engine_control_in_client"
+    echo "        rm -f $engine_control/stop  && docker stop  $c_engine && : > $engine_control/stopped"
+    echo "        rm -f $engine_control/start && docker start $c_engine && : > $engine_control/started"
+  fi
   exit 0
 fi
 

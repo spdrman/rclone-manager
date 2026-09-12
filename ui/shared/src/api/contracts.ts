@@ -82,6 +82,46 @@ export function toApiErrorCode(value: unknown): ApiErrorCode {
     : "unknown";
 }
 
+/**
+ * WHERE a failure came from, which is a different question from what it
+ * says (#795's review).
+ *
+ * The frontend used to answer it by looking at two things that cannot
+ * answer it. `code === "unknown"` was read as "no typed envelope", but it
+ * is also what `toApiErrorCode` returns for a code this BUNDLE has never
+ * heard of, so a service one version newer that refused with a typed
+ * 503 was misread as a proxy that could not reach it — and lost its own
+ * actionable message in the process. And a 502/503/504 status was read as
+ * "the proxy in front of the service", which a service is perfectly
+ * entitled to answer with itself.
+ *
+ * So provenance is RECORDED where it is known, by the code holding the
+ * response, and never re-derived downstream. api/failure.ts is the only
+ * reader, and it is what decides which sentence an operator gets.
+ */
+export type FailureOrigin =
+  /** A typed error envelope was parsed off the response: the service
+   *  looked at the request and refused it, in its own words, whatever
+   *  status that arrived on and whether or not this bundle recognises the
+   *  code. */
+  | "service"
+  /** Something in FRONT of the service answered on its behalf, and said
+   *  so: serve-ui's reverse proxy could not reach the engine and marked
+   *  the response (webhost/serve's ProxyErrorHeader). Nothing in it came
+   *  from the service. */
+  | "gateway"
+  /** `fetch` rejected. Nothing arrived at all, so there is no status and
+   *  no correlation id anywhere. */
+  | "no-response"
+  /** A response arrived and its body could not be read. */
+  | "unreadable-body"
+  /** A response arrived with no typed envelope and no marker, or the
+   *  failure came from neither the service nor the transport (a mapper
+   *  throwing on a response that was fine). Provenance is genuinely not
+   *  established, and the surfaces that name a hop do not name one on
+   *  this. */
+  | "unknown";
+
 /** A refusal, as the service states it. `message` is already written for
  *  an operator rather than for a log, which is why the default path in
  *  api/failure.ts shows it verbatim: a reason nobody anticipated still
@@ -100,6 +140,18 @@ export interface ApiError {
    *  so a literal one buys an operator a panel to open with a string in it
    *  that appears in no log anywhere. Optional so "no id" is expressible. */
   correlationId?: string;
+  /** The HTTP status the refusal arrived with, and ABSENT when no
+   *  response arrived at all. Carried for the Advanced details panel and
+   *  for the one classification that still needs it: an untyped refusal
+   *  from a build of serve-ui too old to mark its own proxy errors.
+   *  Never rendered on its own — api/failure.ts is the only reader. */
+  status?: number;
+  /** Which machine this refusal came out of, decided at the one place
+   *  that can know and never re-derived from the status or the code
+   *  (#795's review). ABSENT where nothing established it: an ApiError
+   *  built by hand, by a mock, or by a page out of its own state. Absent
+   *  is read as "not established", so no surface names a hop on it. */
+  origin?: FailureOrigin;
   /** The technical facts behind this failure, for the Advanced details
    *  panel and the copy button beside it: an exception's own name and
    *  message, the request path, the response status and content type where

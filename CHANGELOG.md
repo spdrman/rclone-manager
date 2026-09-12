@@ -160,6 +160,53 @@
   nothing about it can be submitted. `configurable` defaults to true, so an
   ordinary manifest says nothing and behaves as it always has.
 
+- **A deployment whose engine is unreachable says so, on every surface that
+  meets it** (#795). The web-ui container on a reported NAS could not resolve
+  the engine (`dial tcp: lookup rclone-manager: no such host`), and the
+  Activity page showed nothing. One fault, and three places turned it into
+  something other than what it was.
+
+  The reverse proxy inside `serve-ui` answers **502 with no body** when it
+  cannot reach the engine, and the browser client read that as a refusal it
+  could not parse: "The backup service returned an unexpected response.", with
+  no remediation under it. The backup service returned nothing — it was never
+  spoken to — so the sentence named the wrong machine and pointed away from
+  the container an operator has to go and look at. A refusal now carries the
+  response status, and — because a status cannot say which hop wrote it —
+  `serve-ui` now marks the responses its own proxy writes
+  (`X-Backupd-Proxy-Error`, deleted from any upstream response so it can only
+  ever mean this hop). A refusal identified that way is described as what it
+  is: Backupd's web interface could not reach the Backupd service, with the
+  correlation id that 502 really carried (it is inherited from the request
+  scope, so it matches the `proxy_error` line in the same container's log). A
+  5xx that carries its own **typed** reason is untouched, whether or not this
+  build recognises its code, because the service's own sentence says more than
+  anything written here could.
+
+  `/auth/session` is proxied down the same hop, and six provider bridges held
+  a byte-identical copy of a session read that treated **any** refusal as "not
+  signed in". So an operator who reloaded during the outage — the first thing
+  anybody does — was told they had been signed out and handed a sign-in form
+  that posts back down the connection that is failing. There is one reader
+  now, and it answers that question only when the service answered it: **401**
+  means signed out, and everything else is a failure to ask. A **403** is a
+  policy denial that no sign-in can lift, so it goes down the typed path with
+  every other refusal. The app records the failure and replaces the login form
+  with a page that says only what is known: "Backupd is not answering" when
+  nothing came back, and "Backupd could not check your session" — over the
+  service's own words — when something did. Both offer Try again.
+
+  And there was no reproduction. `scripts/e2e/three-machine-web-ui.sh
+  --break-engine` takes the engine away from a browser that is already signed
+  in and holding the app — mid-session, because a stack that starts broken
+  never gets a browser past the login page — leaving `serve-ui` up in front of
+  it. The client container has no Docker socket, so the break is driven
+  through files in a directory it already has, the harness acknowledges only
+  states it verified (and says so explicitly when it could not reach one,
+  rather than letting a suite read its own timeout), and the mode rehearses
+  the fault before handing the stack over rather than letting a suite pass
+  against a stack that was never broken.
+
 ## [0.4.0] - 2026-09-09
 
 ### Added
