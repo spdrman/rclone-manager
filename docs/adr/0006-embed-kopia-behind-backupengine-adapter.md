@@ -42,17 +42,42 @@ import Kopia. Lifecycle, retention, catalog and CLI code only ever see our
 own `RepositoryLocation`, `Source`, `SnapshotID`, `SnapshotInfo`,
 `VerifyReport`, `RestoreReport` and `MaintenanceReport`, never Kopia's.
 
+Streaming sources are part of that same boundary and not a second one. A
+source whose bytes can only be read once, forward — the case ADR 0007
+measures — is carried as a capability on this port: `StreamSource`
+(`ModTime` plus `Open(ctx) (io.ReadCloser, error)`) and
+`StreamingRepository` (`SnapshotStream`, `OpenSnapshotStream`), declared in
+`engine.go` in our own types, implemented in `kopia/stream.go` with
+everything that knows the vendor's name. The streaming spike originally
+arrived as a second, Kopia-importing `Engine` in the manager-owned package;
+that would have been two boundaries rather than one, so it was folded in
+behind this port instead, which cost `engine.go` four declarations and no
+imports.
+
 We register exactly one storage backend, `repo/blob/filesystem`, not Kopia's
 full backend catalog. A repository on a mounted NAS share is a filesystem
 repository, which is the case this product has.
 
-Two properties are enforced by tests rather than by convention, because both
-are the kind of rule that decays quietly:
+Four properties are enforced by tests rather than by convention, because all
+four are the kind of rule that decays quietly:
 
 - `engine.go` contains no occurrence of the string `kopia`. A Kopia type
   cannot appear in a signature without its package qualifier appearing in the
   file, so this one grep is a complete check of "no upstream type crosses the
   boundary". `internal/backupengine/boundary_test.go` performs it.
+- No file anywhere else in the module imports `github.com/kopia/kopia`,
+  including test files. One clean file stopped being the interesting property
+  the moment this package held more than one, and a helper in
+  `internal/lifecycle` reaching around the adapter would leave `engine.go`
+  spotless and the quarantine gone. `TestNoVendorImportOutsideTheAdapter`
+  walks the module and also asserts the adapter *does* import Kopia, so it
+  cannot pass vacuously.
+- `Engine` and `Repository` are each declared exactly once under
+  `internal/backupengine`, in `engine.go`. Two declarations is not a merge
+  conflict, it is two ports: callers pick one, the second accumulates its own
+  semantics, and the quarantine stops meaning anything because there are two
+  doors. `TestOneEngineAndOneRepositoryDeclaration` makes the return of the
+  second one a failing build rather than an argument.
 - The adapter package references no process-spawning API at all (`os/exec`,
   `exec.Command`, `exec.CommandContext`, `syscall.Exec`, `StartProcess`),
   including in its own test files.
@@ -94,6 +119,15 @@ fooled by the same mistake:
   incompressible file and **9,049 bytes** for the second. That is
   **0.11%**, or roughly 1/928th of the first snapshot's physical cost.
 
+The second half of the spike is the streaming capability, in
+`internal/backupengine/kopia/stream_test.go`: a source that can only be read
+once, forward, round-trips byte-exactly, a 2 GiB stream is stored with a peak
+live heap of 68.4 MiB and nothing staged outside the repository, a cancelled
+stream closes its reader and saves no snapshot, and an object named
+`/runs/2026/db.dump` restores. ADR 0007 records those measurements and what
+a stream costs; the reason it is one PR with this one is that a second
+`Engine` would have been a second boundary.
+
 ## Measurements
 
 Host: Apple M5, darwin/arm64, Go 1.27.0, `CGO_ENABLED=0 -trimpath`.
@@ -119,18 +153,35 @@ different numbers" lesson from ADR 0001, applied deliberately this time.
 
 ### Dependency count
 
+Measured on the tidied graph: `go mod tidy -diff` is a no-op on this branch,
+which matters because an untidied one flatters nobody — the streaming spike
+that is now folded in here carried **705** modules and 197 requirement lines
+before `tidy` removed 175 of them, mostly GCP monitoring/storage and OTLP
+requirements for code nothing in this repository calls. The numbers below are
+what the committed `core/go.mod` and `core/go.sum` actually produce, re-read
+with `go list -m all` on Go 1.27.1.
+
 | Measure | Baseline | After | Delta |
 | --- | --- | --- | --- |
-| `go list -m all` (build list) | 338 | 400 | +62 modules |
-| module requirements in `core/go.mod` | — | — | +26 lines |
-| pre-existing versions changed by MVS | — | — | 1 |
+| `go list -m all` (build list) | 334 | 400 | +66 modules |
+| module requirements in `core/go.mod` | 102 | 126 | +24 lines |
+| module paths added / dropped | — | — | +68 / -2 |
+| pre-existing versions changed by MVS | — | — | 5 |
 | Kopia's own source in the module cache | — | 9 MiB | — |
 
-The one pre-existing dependency minimal version selection moved is
-`github.com/coreos/go-systemd/v22`, v22.6.0 -> v22.7.0. Nothing else that was
-already there changed version.
+The five pre-existing dependencies minimal version selection moved are
+`github.com/coreos/go-systemd/v22` (v22.6.0 -> v22.7.0), `github.com/fatih/color`
+(v1.16.0 -> v1.19.0), `github.com/godbus/dbus/v5` (v5.1.0 -> v5.2.2),
+`github.com/golang/protobuf` (v1.5.0 -> v1.5.4) and `google.golang.org/api`
+(v0.279.0 -> v0.283.0). Two module paths left the build list entirely
+(`github.com/creack/pty`, `github.com/kr/pty`), which is MVS reshuffling
+test-only dependencies of other modules, not us dropping anything.
 
-+62 modules is a smaller graph shock than rclone's was, and it is the same
+Folding the streaming capability in adds **zero** modules: it uses `fs`,
+`fs/virtualfs` and `snapshot/upload` from the module already pinned here, so
+the streaming finding costs dependency graph nothing on top of this table.
+
+66 modules is a smaller graph shock than rclone's was, and it is the same
 *kind* of cost: cloud SDKs for backends we do not register, arriving because
 Kopia's module graph does not care which of its backends we import. They are
 CVE surface to monitor, not bytes in the binary.
@@ -272,15 +323,76 @@ This is the part to read before bumping the pin.
   repository's own recorded maintenance-run count before and after, because an
   operator needs to distinguish "maintenance ran" from "maintenance quietly
   did not".
-- **One pre-existing dependency moved.** `github.com/coreos/go-systemd/v22`
-  went v22.6.0 -> v22.7.0 by minimal version selection. Every bump of this pin
-  can move unrelated versions the same way, and the diff to check is
-  `core/go.mod`, not just the Kopia line.
+- **A streamed source is never reused on metadata, on purpose.** A streaming
+  entry reports no size, so Kopia's `findCachedEntry` degrades to comparing
+  mode and modification time and would skip the read entirely if previous
+  manifests were passed to `Upload`. `SnapshotStream` passes none: a source
+  rewritten in place with its mtime preserved would otherwise have its new
+  content skipped silently, and the snapshot would claim to hold bytes it
+  never read. `TestChangedContentWithPreservedModTimeIsReRead` is the guard,
+  and an upstream change to `findCachedEntry`/`commonMetadataEquals` cannot
+  weaken it without failing that test. The cost is real and stated in
+  ADR 0007: every streamed run re-reads every byte, and dedupe happens on
+  content instead.
+- **A verification that did not finish is not a verification.** Kopia's tree
+  walker records a cancelled read as a per-object finding *and* returns an
+  error, so deciding "did it run" by counting findings reports a cancelled
+  verify as a completed one that found damage. `Verify` therefore returns the
+  operational error alongside the partial report, and a nil error means
+  exactly "completed and found nothing". Both halves are pinned, by
+  `TestVerifyReportsCancellationNotJustFindings` and
+  `TestVerifyReportsDamageAsBothErrorAndFindings`, because a future upstream
+  change to where that error surfaces would otherwise quietly restore the
+  masking.
+- **`OpenRepository` connects the storage it was asked for, every time.** The
+  config file records which storage it belongs to, so reusing an existing one
+  because it happens to be present hands back a repository the caller did not
+  ask for and writes snapshots into it successfully. `Connect` is
+  unconditional and the opened repository's own connection info is compared
+  against the requested path afterwards, because "we wrote the right config"
+  and "we are talking to the right storage" are different claims.
+- **Five pre-existing dependencies moved.** Minimal version selection moved
+  `go-systemd`, `fatih/color`, `godbus/dbus`, `golang/protobuf` and
+  `google.golang.org/api` (versions in the dependency table above). Every bump
+  of this pin can move unrelated versions the same way, and the diff to check
+  is `core/go.mod`, not just the Kopia line.
 
 The spike's lifecycle test is retained, unchanged in intent, as the
 compatibility smoke test for all of the above. It is not product code and it
 is not a unit test: it is the thing that fails when an upgrade breaks one of
 these assumptions, which is the only reason it survives the spike.
+
+## What Phase 1 owes this boundary
+
+Three shapes are missing from the port on purpose. Each was identified while
+consolidating this spike, each is a design decision rather than an omission,
+and none is built here: the Phase 0 gate is a feasibility answer, and
+building Phase 1 shapes before the gate merges is how a spike quietly becomes
+the architecture. They are recorded here so they arrive as requirements on
+the Phase 1 work rather than as rediscoveries.
+
+- **A source data-plane slot on `SnapshotRequest`.** Today `Snapshot` takes a
+  `Source` whose `Path` the adapter opens with `localfs`, and streaming lives
+  on a separate capability because a stream is not a path. Phase 1 wants one
+  request that carries *how the bytes are produced* — a stream, a directory
+  enumerator, or a per-entry decision provider — so that "what to back up"
+  and "how to read it" stop being the same field. The current pair
+  (`SnapshotRequest` + `StreamSnapshotRequest`) is honest for two cases and
+  does not generalise to three.
+- **Backup-set identity instead of the engine's host/user/path tuple.**
+  `Source{Host, User, Path}` is Kopia's own snapshot identity wearing our
+  field names, and it is the thing snapshot lineage is keyed on: two runs are
+  "the same source" iff all three match. That makes a renamed path or a
+  changed hostname look like a brand new source with no history, and it makes
+  one backup set spanning two locations impossible to express. Phase 1 needs
+  a backup-set identity that we own and that survives both, with the engine
+  tuple derived from it inside the adapter.
+- **`Decision.Action` threaded through the port.** The source-consistency work
+  produces a per-entry decision (back up, skip, quarantine) that this port has
+  no way to accept, so the engine currently re-derives what to include from
+  its own policy tree. Phase 1 should pass those decisions in rather than
+  duplicating the logic on both sides of the boundary, which is the only way
+  the two can be made to agree by construction instead of by review.
 
 ## Consequences
 
@@ -295,16 +407,20 @@ these assumptions, which is the only reason it survives the spike.
   upstream by `errors.Is` against real sentinel values, never by message text,
   for the reason `internal/transport/rclone/errors.go` explains at length.
 - Real `context.Context` cancellation through snapshot, restore, verify and
-  maintenance.
-- A narrow, auditable, test-enforced boundary: one package imports Kopia, one
-  grep proves no Kopia type escapes, one test proves no subprocess exists.
+  maintenance, including the case Kopia cannot reach on its own: a reader
+  blocked in `Read` on a stalled remote (ADR 0007).
+- Sources that cannot be staged, statted or seeked, stored at a bounded
+  memory cost, behind the same port and with no vendor type in sight.
+- A narrow, auditable, test-enforced boundary: one package imports Kopia, a
+  module-wide scan proves no import escapes it, one test proves there is only
+  one `Engine`, and one test proves no subprocess exists.
 
 ### What actually hurts
 
 - **+7.0 MiB of binary, the moment Phase 1 links it.** Not negotiable and not
   visible yet, which is the dangerous combination; it is written down here so
   it is not discovered as a surprise in a release note.
-- **+62 modules of dependency graph** for one registered backend, including
+- **+66 modules of dependency graph** for one registered backend, including
   cloud SDKs we will never call. Same category of cost as rclone's, smaller
   in magnitude, identical in kind.
 - **150 MB of idle resident set unless we reclaim explicitly.** The cause is
