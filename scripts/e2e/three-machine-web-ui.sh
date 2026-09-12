@@ -554,6 +554,33 @@ engine_is_live() {
   docker exec "$c_engine" /backupd-web healthcheck --url http://127.0.0.1:8080/health/live >/dev/null 2>&1
 }
 
+# And the hop the BROWSER actually uses, which is not the same fact
+# either. Found by running this: the smoke's recovery step failed on
+# three 502s logged after "started" had been acknowledged.
+#
+# engine_is_live asks the engine's own listener from inside its own
+# container. A browser reaches it through serve-ui's reverse proxy, in
+# another container, over the internal network - and that path has its
+# own state: Docker may hand the restarted container a different address,
+# and serve-ui's http.Transport is holding idle keep-alive connections to
+# the address the engine had BEFORE it went away. So there is a window in
+# which the engine is serving, the ack has been written, and the first
+# request the browser makes still comes back 502 from the proxy.
+#
+# This closes it by asking serve-ui to proxy the same healthcheck: the
+# request is made INSIDE the web container against serve-ui's own port,
+# and /health/ is one of the two prefixes it forwards (webhost/serve's
+# NewUI), so a pass here means one real request has already traversed the
+# whole hop and any stale connection has already been discarded on it
+# rather than on a page the suite is about to assert against.
+#
+# It is the same principle as the acks themselves: what the reader
+# depends on is what has to be verified, not the nearest thing that is
+# cheap to check.
+serve_ui_reaches_engine() {
+  docker exec "$c_web" /backupd-web healthcheck --url http://127.0.0.1:8080/health/live >/dev/null 2>&1
+}
+
 # The health budget one "start" request is given, in seconds.
 #
 # 175 rather than the 120 this used to allow, because the number the
@@ -644,12 +671,15 @@ engine_watcher_loop() {
         # Bounded, and it gives up out loud rather than hanging or
         # lying. A container that is running but has not opened its
         # database yet answers the proxy with a refusal, so "started" is
-        # withheld until the engine's own healthcheck passes, and a
-        # budget that runs out is a start-failed rather than a "started"
-        # the suite would read as a recovered stack.
+        # withheld until the engine's own healthcheck passes AND the same
+        # healthcheck passes through serve-ui's proxy, which is the hop
+        # the browser uses and the one a restarted container's new
+        # address invalidates. A budget that runs out is a start-failed
+        # rather than a "started" the suite would read as a recovered
+        # stack.
         local waited=0 live=0
         while [ "$waited" -lt "$engine_start_health_budget" ]; do
-          if engine_is_live; then live=1; break; fi
+          if engine_is_live && serve_ui_reaches_engine; then live=1; break; fi
           sleep 1
           waited=$(( waited + 1 ))
         done
@@ -658,7 +688,7 @@ engine_watcher_loop() {
           engine_ack started
         else
           rm -f "$engine_control/started"
-          engine_ack start-failed "the engine container started but its own healthcheck did not pass within ${engine_start_health_budget}s"
+          engine_ack start-failed "the engine container started but the browser's own path to it did not come good within ${engine_start_health_budget}s (its healthcheck, then the same check through serve-ui's proxy)"
         fi
       fi
     fi

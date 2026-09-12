@@ -45,7 +45,7 @@ import { RequestFailure } from "@shared/api/contracts";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
 import { resetGraphForTests } from "@shared/state/graph";
-import type { BackupdApi } from "@shared/api/contracts";
+import type { ActivityFeedPage, BackupdApi } from "@shared/api/contracts";
 import type { AsyncState } from "@shared/hooks/useAsync";
 import type { ActivityEvent } from "@shared/types/operation";
 import type { BackupSet } from "@shared/types/backup";
@@ -416,5 +416,63 @@ describe("a bodyless 502 from serve-ui names the hop that failed", () => {
     const alert = screen.getByRole("alert");
     expect(alert.textContent).not.toContain("could not reach the Backupd service");
     expect(alert.textContent).toContain("cid_untyped500");
+  });
+});
+
+/**
+ * Found by RUNNING the four-container rig, on the recovery step: the page
+ * said "Nothing has happened in this window" while its first read after
+ * the engine came back was still in flight.
+ *
+ * On a deployment with a journal that sentence is false, and it is the
+ * same lie in the same words that the outage cases above exist to catch —
+ * a state the page does not know yet, rendered as a fact about the
+ * deployment. BackupSetsPage settled the rule for `sets` in #141 and
+ * BackupsPage for `artifacts` in #144; this was the surface that still
+ * broke it.
+ */
+describe("a read still in flight is not an empty timeline", () => {
+  afterEach(() => {
+    cleanup();
+    resetGraphForTests();
+    vi.restoreAllMocks();
+  });
+
+  it("says nothing at all while the first read is outstanding, then shows the feed", async () => {
+    const api = createMockApi();
+    // The executor form and not Promise.withResolvers: this bundle's
+    // `lib` is older than es2024, so the typed-resolvers helper does not
+    // exist for the compiler.
+    let answer: (page: ActivityFeedPage) => void = () => {};
+    vi.spyOn(api, "listActivity").mockReturnValue(
+      new Promise<ActivityFeedPage>((resolve) => {
+        answer = resolve;
+      })
+    );
+    withProviders(api, "activity");
+    await act(async () => {});
+
+    // The heading is up, the filters are up, and the page must not have
+    // an answer about the journal yet.
+    expect(screen.getByRole("heading", { level: 1, name: "Activity" })).toBeTruthy();
+    expect(screen.queryByText("No matching events")).toBeNull();
+
+    await act(async () => {
+      answer({ events: [EVENT] });
+    });
+
+    expect(screen.getByText(/Backed up 3 files from the VPS/)).toBeTruthy();
+    expect(screen.queryByText("No matching events")).toBeNull();
+  });
+
+  it("still says so once a read has finished with nothing in it", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "listActivity").mockResolvedValue({ events: [] });
+    withProviders(api, "activity");
+    await act(async () => {});
+
+    // The empty state is not being removed, only moved behind the answer:
+    // an instance that genuinely has no activity still has to say so.
+    expect(screen.getByText("No matching events")).toBeTruthy();
   });
 });

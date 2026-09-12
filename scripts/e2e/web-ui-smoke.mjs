@@ -83,9 +83,14 @@ function log(msg) {
 //   the engine away on purpose, so the 502s, the failed requests and the
 //   console errors during that window are the fault this run ASKED for.
 //   Counting them would make the mode unable to pass; not counting them is
-//   safe because the window is bounded by two explicit calls and because
-//   the assertions inside it are stricter than the ones outside: a page
-//   that went blank instead of complaining fails there.
+//   safe because the window is bounded — it opens when the engine is
+//   stopped and closes when the app has been SEEN reading again, not when
+//   the harness acknowledged the restart, because the requests the page
+//   already had in flight then were issued into a broken hop and answer
+//   502 after the ack — and because the assertions inside it are stricter
+//   than the ones outside: a page that went blank instead of complaining
+//   fails there, and once the window closes the app is driven again with
+//   every complaint counted.
 //
 //   What the window does NOT excuse is an uncaught exception (#795's
 //   review). The guard used to read `!engineDown && (alwaysCounts || ...)`,
@@ -164,8 +169,13 @@ async function engine(action, budgetMs) {
     }
     await sleep(200);
   }
-  engineDown = action === "stop";
-  log(`the engine is ${engineDown ? "stopped, and serve-ui is still up in front of it" : "running again"}`);
+  // Only ever OPENED here. Closing it is the caller's, once the recovery
+  // has been seen on screen: requests the page had in flight when the
+  // engine came back were issued into a broken hop and answer 502 after
+  // the ack, and treating the ack as the end of the window read those as
+  // failures on a working stack.
+  if (action === "stop") engineDown = true;
+  log(`the engine is ${action === "stop" ? "stopped, and serve-ui is still up in front of it" : "running again"}`);
 }
 
 const browser = await chromium.launch({
@@ -383,6 +393,28 @@ try {
     }
 
     await expect(activityHeading).toBeVisible({ timeout: 30_000 });
+
+    // The feed itself, FIRST, because "no error on screen" is a claim
+    // about a page that may still be fetching, and asserting the absence
+    // of something on a half-rendered page is how a check passes for the
+    // wrong reason.
+    //
+    // ROWS, not "rows or the empty state". This deployment provably has a
+    // journal: the harness ran a backup cycle before handing the stack
+    // over, three artifacts landed, and the database is on a volume the
+    // restart did not touch. So "Nothing has happened in this window" is
+    // a false sentence here, and accepting it is accepting the exact lie
+    // this whole reproduction exists to catch. A run of this block did
+    // accept it, and the page it accepted it from was mid-fetch — which
+    // is how ActivityPage's own conflation of "loading" with "empty" was
+    // found.
+    //
+    // A WAITING assertion, not a count: `count()` samples once, and the
+    // heading renders before the fetch under it resolves.
+    const rows = page.getByRole("main").getByRole("listitem");
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("No matching events")).toHaveCount(0);
+
     // A banner that never goes away is its own defect: an operator who
     // fixed the deployment has to be able to see that they fixed it.
     await expect(surfaced).toHaveCount(0, { timeout: 30_000 });
@@ -391,41 +423,51 @@ try {
     // recovered into a different failure (an UNAUTHENTICATED read, a
     // half-open database) would have passed the line above.
     await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0, { timeout: 30_000 });
-
-    // The feed itself, because "no error" is not the same fact as
-    // "reading again". Either rows out of the journal — the seeded cycle
-    // put some there and the restart did not empty the database, it is on
-    // a volume — or the healthy empty state that says so in words. Never
-    // neither, which is what a page that rendered nothing at all looks
-    // like, and that is the shape of the original report.
-    const rows = page.getByRole("main").getByRole("listitem");
-    const emptyFeed = page.getByText("No matching events");
-    if ((await rows.count()) === 0 && (await emptyFeed.count()) === 0) {
-      throw new Error(
-        "the Activity page recovered into neither a feed nor its empty state, so nothing " +
-          "on screen says the read worked: this is the blank page #795 was reported as, " +
-          "arrived at from the other direction."
-      );
-    }
     log(
       `the engine came back and the Activity page read the journal again (${await rows.count()} events on screen)`
     );
 
-    // Nothing may have gone wrong AFTER the break was healed, and nothing
-    // may have THROWN during it: complaints recorded inside the window
-    // were excused as they were recorded, except the uncaught ones, which
-    // are never excused (see record above).
-    const counting = complaints.filter((c) => c.counts);
-    if (counting.length > 0) {
-      const duringOutage = counting.filter((c) => c.engineDown);
+    // ------------------------------------- and the recovery is CLEAN
+    //
+    // The window closes here rather than when the ack arrived, and the
+    // container run is what taught this file the difference. The requests
+    // the page already had in flight when the engine came back were
+    // issued into a broken hop and come back 502 afterwards, so three of
+    // them landed on the healthy side of an ack and read as an unclean
+    // recovery. They are the outage's own failures arriving late, not a
+    // fault on a working stack.
+    //
+    // Which would be a comfortable place to loosen the filter and leave
+    // nothing behind it, so the window closing is followed by the app
+    // being DRIVEN again, on a stack that is now known good, with every
+    // complaint from that point counted. The assertion moves; it does not
+    // soften.
+    engineDown = false;
+    const fromHere = complaints.length;
+
+    await nav.getByRole("link", { name: /Dashboard/i }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({ timeout: 30_000 });
+    await nav.getByRole("link", { name: /Activity/i }).click();
+    await expect(activityHeading).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0, { timeout: 30_000 });
+
+    // Two findings, said apart, because they are different problems: an
+    // uncaught exception during the outage is never excused (a 502 is the
+    // fault this mode asked for and a crash in this bundle is not), and
+    // anything at all on the stack that is working again means the
+    // recovery left something behind.
+    const threwInTheOutage = complaints.filter((c) => c.counts && c.engineDown);
+    const afterRecovery = complaints.slice(fromHere).filter((c) => c.counts);
+    if (threwInTheOutage.length > 0 || afterRecovery.length > 0) {
+      const shown = threwInTheOutage.length > 0 ? threwInTheOutage : afterRecovery;
       throw new Error(
-        (duringOutage.length > 0
-          ? "the browser threw while the engine was deliberately down, which this mode does not excuse: " +
-            "a 502 is the fault it asked for and an uncaught exception is not:\n"
-          : "the browser complained on a stack that was working again, so the recovery is not clean:\n") +
-          counting.map((c) => `      ${c.kind}: ${c.text}`).join("\n")
+        (threwInTheOutage.length > 0
+          ? "the browser threw while the engine was deliberately down, which this mode does not excuse:\n"
+          : "the browser complained while being driven on a stack that was working again, so the recovery is not clean:\n") +
+          shown.map((c) => `      ${c.kind}: ${c.text}`).join("\n")
       );
     }
+    log("and the app was driven again on the healed stack without a single complaint");
   }
 } catch (err) {
   failure = err;

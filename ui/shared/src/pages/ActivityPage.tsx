@@ -184,7 +184,24 @@ export function ActivityPage() {
             reads further back one page at a time. */}
       </div>
 
-      {filtered.length === 0 ? (
+      {/* "Still reading" and "there is nothing to read" are different
+          states and must not be conflated — the rule BackupSetsPage
+          settled for `sets` in #141 and BackupsPage for `artifacts` in
+          #144, and the one surface that still broke it was this one.
+
+          Found by running the four-container rig against #795's own
+          reproduction: the recovery step asked whether the Activity page
+          was reading again, and the page answered "Nothing has happened
+          in this window" while its first fetch after the engine came back
+          was still in flight. On a NAS with a journal full of events that
+          sentence is false, and it is the same lie in the same words that
+          the outage case exists to catch one state earlier.
+
+          Gated on `page.loading` as well as on `page.data`, for #144's
+          reason: a reload (Try again, or a filter change) resets loading
+          without resetting data, so the alternative is a stale list
+          presented as the current one. */}
+      {!page.data || page.loading ? null : filtered.length === 0 ? (
         <EmptyState title="No matching events">
           Nothing has happened in this window for the selected filters.
         </EmptyState>
