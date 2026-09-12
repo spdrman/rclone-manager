@@ -36,6 +36,7 @@ func validateManifest(file string, m Manifest) []error {
 
 	problems = append(problems, validateManifestFields(file, m)...)
 	problems = append(problems, validateManifestProbe(file, m)...)
+	problems = append(problems, validateManifestCapabilities(file, m)...)
 
 	return problems
 }
@@ -160,6 +161,81 @@ func validateManifestProbe(file string, m Manifest) []error {
 			addf("probe step %q does not run and carries no reason; a surface has to be able to tell an operator why", got.Step)
 		}
 	}
+	return problems
+}
+
+// validateManifestCapabilities checks a DECLARED capability block. A
+// manifest that declares none is legal and is refused later, by name, at
+// the moment something asks to enumerate it (Manifest.PlanEnumeration):
+// the registry's job is to refuse a document that is wrong, and a
+// manifest that has not answered this yet is incomplete rather than
+// wrong. capability.go's header has the whole argument.
+//
+// Once there IS a block, two rules. It answers the whole vocabulary,
+// because a missing key reads as a capability nobody claimed and a
+// consumer would have to guess which of those two it was. And every
+// value is in its own closed set, because "sometimes" is the shape of a
+// real mistake: an answer no consumer can branch on, in a document that
+// otherwise looks complete.
+func validateManifestCapabilities(file string, m Manifest) []error {
+	if m.Capabilities == nil {
+		return nil
+	}
+	var problems []error
+	addf := func(format string, args ...any) {
+		problems = append(problems, manifestErrorf(file, format, args...))
+	}
+	caps := *m.Capabilities
+
+	if missing := caps.Undeclared(); len(missing) > 0 {
+		names := make([]string, len(missing))
+		for i, key := range missing {
+			names[i] = string(key)
+		}
+		addf("declares capabilities and omits %s; the block answers the whole vocabulary or none of it, because a key nobody declared is one every consumer has to guess about",
+			strings.Join(names, ", "))
+	}
+
+	if caps.Declares(CapMTimePrecision) && !validMTimePrecisions[caps.MTimePrecision] {
+		addf("capabilities.mtime_precision is %q, and the accepted values are %s",
+			caps.MTimePrecision, `"1ns", "1ms", "1s", "2s", "unknown"`)
+	}
+	if caps.Declares(CapSymlinkSemantics) && !validSymlinkSemantics[caps.SymlinkSemantics] {
+		addf("capabilities.symlink_semantics is %q, and the accepted values are %s",
+			caps.SymlinkSemantics, `"store", "follow", "skip", "unsupported"`)
+	}
+	if caps.Declares(CapMetadataSupport) && !validMetadataSupport[caps.MetadataSupport] {
+		addf("capabilities.metadata_support is %q, and the accepted values are %s",
+			caps.MetadataSupport, `"full", "partial", "none"`)
+	}
+	if caps.Declares(CapCaseSensitivity) && !validCaseSensitivity[caps.CaseSensitivity] {
+		addf("capabilities.case_sensitivity is %q, and the accepted values are %s",
+			caps.CaseSensitivity, `"sensitive", "insensitive", "preserving", "unknown"`)
+	}
+
+	// A hash this boundary cannot ask for is a claim nothing can act on.
+	// The names are rclone's own (transport.SHA256 is the only algorithm
+	// this product's own verification speaks; see transport.go), and the
+	// list is sorted so two manifests declaring the same set are the same
+	// document.
+	seen := map[string]bool{}
+	for i, name := range caps.HashSupport {
+		switch {
+		case name == "":
+			addf("capabilities.hash_support[%d] is empty", i)
+		case seen[name]:
+			addf("capabilities.hash_support declares %q more than once", name)
+		}
+		seen[name] = true
+	}
+	for i := 1; i < len(caps.HashSupport); i++ {
+		if caps.HashSupport[i-1] > caps.HashSupport[i] {
+			addf("capabilities.hash_support is not sorted (%q before %q); a set declared in two orders is two documents saying one thing",
+				caps.HashSupport[i-1], caps.HashSupport[i])
+			break
+		}
+	}
+
 	return problems
 }
 

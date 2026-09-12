@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,8 +93,12 @@ func TestEnumeratingAnSftpSourceIsRefusedBeforeAnythingIsDialed(t *testing.T) {
 	})
 	elapsed := time.Since(start)
 
-	if !errors.Is(err, transport.ErrUnboundedListing) {
-		t.Fatalf("Enumerate on sftp with no ceiling returned %v, want ErrUnboundedListing", err)
+	// The sentinel is backend's, not this package's: the capability
+	// matrix owns the statement "this backend cannot list a directory in
+	// bounded memory", and a second sentinel here would be a second
+	// place to keep that decision.
+	if !errors.Is(err, backend.ErrUnboundedListing) {
+		t.Fatalf("Enumerate on sftp with no ceiling returned %v, want backend.ErrUnboundedListing", err)
 	}
 	var terr *transport.Error
 	if !errors.As(err, &terr) {
@@ -138,6 +143,65 @@ func TestAnSftpSourceWithACeilingEnumeratesAndRefusesAboveIt(t *testing.T) {
 		func(transport.RemoteArtifact) error { return nil })
 	if !errors.Is(err, transport.ErrDirectoryTooLarge) {
 		t.Fatalf("Enumerate over the ceiling returned %v, want ErrDirectoryTooLarge", err)
+	}
+}
+
+// TestTheUnboundedWalkStreamsPerDirectoryAndRefusesAboveTheCeiling
+// exercises case 2 of the dispatch - the rclone walk an sftp source with
+// a configured ceiling gets - which is otherwise unreachable from a test:
+// dispatch sends "local" to the chunked enumerator, and an sftp source
+// needs an SSH server. So the walk is called directly, against a local
+// Fs, which is exactly what rclone does for sftp anyway (neither backend
+// has a native recursive listing, so both go through walkListDirSorted).
+//
+// Two properties, and both are the reason this path exists rather than
+// just calling List: entries are delivered per directory as the walk
+// reaches them, and a directory bigger than the ceiling is refused with
+// the entry count in the message, so an operator can tell whether to
+// raise the ceiling or to look at what wrote 20,000 files.
+func TestTheUnboundedWalkStreamsPerDirectoryAndRefusesAboveTheCeiling(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"", "runs", "runs/deep"} {
+		full := filepath.Join(root, filepath.FromSlash(dir))
+		if err := os.MkdirAll(full, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for i := range 5 {
+			if err := os.WriteFile(filepath.Join(full, fmt.Sprintf("f%d.dump", i)), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	src := transport.Source{Type: "local", Root: root}
+
+	var got []string
+	if err := New().enumerateWholeDirectories(context.Background(), src,
+		transport.EnumerateOptions{MaxDirectoryEntries: 100},
+		func(a transport.RemoteArtifact) error {
+			got = append(got, a.Path)
+			if a.Size != 1 {
+				t.Errorf("%s size = %d, want 1", a.Path, a.Size)
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("enumerateWholeDirectories: %v", err)
+	}
+	if len(got) != 15 {
+		t.Fatalf("streamed %d entries (%v), want 15", len(got), got)
+	}
+
+	err := New().enumerateWholeDirectories(context.Background(), src,
+		transport.EnumerateOptions{MaxDirectoryEntries: 3},
+		func(transport.RemoteArtifact) error { return nil })
+	if !errors.Is(err, transport.ErrDirectoryTooLarge) {
+		t.Fatalf("walk over a ceiling of 3 returned %v, want ErrDirectoryTooLarge", err)
+	}
+	var terr *transport.Error
+	if !errors.As(err, &terr) || terr.Category != transport.Configuration {
+		t.Errorf("the refusal is not a Configuration transport.Error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "the configured maximum is 3") {
+		t.Errorf("the refusal does not say what the ceiling was: %v", err)
 	}
 }
 

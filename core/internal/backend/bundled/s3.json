@@ -4,6 +4,18 @@
   "summary": "Amazon S3, or any service that speaks its API: MinIO, Ceph, Backblaze B2, Wasabi, a private gateway.",
   "role": "object_store",
   "rclone_backend": "s3",
+  "capabilities": {
+    "bounded_listing": true,
+    "recursive_listing": true,
+    "streaming_open": true,
+    "range_open": true,
+    "mtime_precision": "1ms",
+    "hash_support": ["md5"],
+    "stable_size": true,
+    "symlink_semantics": "unsupported",
+    "metadata_support": "partial",
+    "case_sensitivity": "sensitive"
+  },
   "fields": [
     {
       "id": "bucket",

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -94,15 +95,25 @@ type syntheticNode struct {
 	prefix string // file name prefix, so two directories' entries differ
 }
 
+// syntheticRoot is the Source.Root every synthetic fixture uses. It names
+// no real directory: the opener below never touches a filesystem.
+const syntheticRoot = "/synthetic"
+
 func flatTree(files int) *syntheticTree {
 	return &syntheticTree{dirs: map[string]syntheticNode{"": {files: files, prefix: "f"}}}
 }
 
+// opener maps an absolute directory path back to a node of the tree. The
+// enumerator opens directories by absolute path (it is the os-backed
+// reader's own argument), and the tree is described relative to the
+// synthetic root, so the prefix is stripped here rather than duplicated
+// into every fixture.
 func (t *syntheticTree) opener() transport.DirOpener {
 	return func(ctx context.Context, dir string) (transport.DirReader, error) {
-		node, ok := t.dirs[filepath.ToSlash(dir)]
+		rel := strings.TrimPrefix(strings.TrimPrefix(filepath.ToSlash(dir), syntheticRoot), "/")
+		node, ok := t.dirs[rel]
 		if !ok {
-			return nil, fmt.Errorf("synthetic tree has no directory %q", dir)
+			return nil, fmt.Errorf("synthetic tree has no directory %q (relative %q)", dir, rel)
 		}
 		t.mu.Lock()
 		t.open++
