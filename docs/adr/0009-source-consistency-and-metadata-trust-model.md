@@ -287,6 +287,44 @@ should not have the files that *are* read read twice). Under an
 always-verify policy the first read is already happening, so the second is
 the cheapest correctness available.
 
+### 6. What a Phase 1 engine feed may and may not do
+
+Both halves of the finding in the Context above turn into constraints on
+whatever code eventually hands files to the engine, and both are the kind
+that produce no error and no log line when broken. They are written here
+because this is the ADR that established them; ADR 0008 records the
+enumeration side of the same two facts and points back.
+
+**A feed must not hand the engine a truncated modification time.** The
+engine's reuse test compares mtime at full nanosecond resolution, so the
+resolution it is *given* is the resolution of its own change detection.
+`transport.RemoteArtifact.ModTime` is unix seconds; feeding that field to
+the engine would widen its reuse window from a nanosecond to a second for
+every file on a local source, silently, and would do it while this table
+honestly declares `1s`. The two are not in tension - the declaration is
+about what this design can reason about, the constraint is about not making
+the engine worse than it is. A feed either widens the field (a change to a
+type the catalogue persists, deliberately out of Phase 0's diff) or takes
+the modification time from the filesystem directly. It must never read the
+truncated value as though it were what the disk said.
+
+**A feed must not hand the engine a scan-time modification time either,
+whatever its resolution.** This is the worse half. The engine stores the
+metadata its directory walk captured and never re-stats before reading
+(`fs/localfs/local_fs.go:16-45`, `Open` at 108-115), so a file mutated
+between the walk and the read is recorded under metadata it no longer has -
+which is what makes the mutation permanently invisible to every later run,
+not merely missed by this one. `Capture.ModTimeNanos` is deliberately the
+value taken from the **post-read** fstat, for exactly this: it is the only
+modification time that was true across the whole window the bytes came
+from. A feed passes that, or it reintroduces the hole this package was
+built to close while appearing to use it.
+
+The general shape of both: this design's job is not to second-guess the
+engine's heuristic everywhere, it is to make sure the heuristic is fed
+inputs that mean what it thinks they mean, and to read the bytes itself
+wherever they do not.
+
 ## Measurements
 
 Apple M5, macOS 25.6, APFS temp directory, Go 1.27, best of four warm
