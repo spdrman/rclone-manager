@@ -224,7 +224,16 @@ hash everything under either preset.
 One setting, `metadata-trust`, with two values, because the real question
 is "would you rather pay I/O or carry risk" and that has two ends.
 
-| Trust class | `metadata-trust = strong` | `metadata-trust = conservative` |
+Neither value is called `strong`. `strong` is already a **trust class** - a
+derived statement about what a backend can prove - and spelling the preset
+the same way made the word mean two unrelated things in one sentence: a
+source could be `strong` under the `strong` preset or `weak` under it, and a
+run report that said "strong" told an operator nothing about which half it
+meant. The preset names what the operator is asking for
+(`trust_metadata`), the class names what the source can back up (`strong`,
+`weak`, `unknown`).
+
+| Trust class | `metadata-trust = trust_metadata` | `metadata-trust = conservative` |
 | --- | --- | --- |
 | `strong` | compare the backend's hash or generation id every run; read any object it cannot answer for; full read floor **90 days** | compare as well, and read every path in full **every 30 days** regardless |
 | `weak` | re-read **5% of paths** every run (deterministic sample), every path at least **weekly** | **read and hash every file every run** |
@@ -252,10 +261,11 @@ test cannot pin it at all.
 ### 5. The capture: every read has a proven window
 
 `sourceconsistency.Reader` bounds its own read window, and every capture
-ends in one of exactly four outcomes. There is no "probably fine".
+ends in one of exactly six outcomes. There is no "probably fine".
 
 | Check | What only it can see |
 | --- | --- |
+| the **kind** from the first stat | whether there is content here at all - a symlink and a directory are not files to read |
 | stat before the read | gives the comparison something to compare against |
 | **fstat on the open descriptor** after the read | answers about the object the bytes came from, even after the path was replaced |
 | byte count vs that fstat's size | a read that ended early or ran long while metadata happened to agree |
@@ -263,29 +273,69 @@ ends in one of exactly four outcomes. There is no "probably fine".
 | device+inode comparison | distinguishes "this file was rewritten" from "a different file was renamed onto this path" |
 | **second full read, digests compared** | a mutation whose metadata was restored - nothing else sees this |
 
-| Outcome | Verified? | Meaning |
-| --- | --- | --- |
-| `stable` | yes | nothing moved; metadata identical before and after |
-| `retried` | yes | something moved; a later attempt within the bound saw a file that held still. The stored digest is the settled content, never the torn read |
-| `incomplete` | **no** | not captured coherently within the bound, or unreadable |
-| `vanished` | **no** | the path no longer names anything |
+| Outcome | Verified? | Run incomplete? | Meaning |
+| --- | --- | --- | --- |
+| `stable` | yes | no | nothing moved; metadata identical before and after |
+| `retried` | yes | no | something moved; a later attempt within the bound saw a file that held still. The stored digest is the settled content, never the torn read |
+| `incomplete` | **no** | yes | the source kept moving: not captured coherently within the retry bound |
+| `unreadable` | **no** | yes | the source did not answer: an open, read or stat failed, the source would not say what is at the path, or the run was cancelled |
+| `vanished` | **no** | yes | the path no longer names anything |
+| `not_a_file` | no | **no** | the path names a symlink, directory, socket or device; `Kind` says which |
+
+`incomplete` and `unreadable` were one outcome and are now two, because
+they are different facts with different remedies and folding them together
+made a permission error look like a busy file. The distinction is
+load-bearing in one more place: only `incomplete`, `retried` and `vanished`
+are EVIDENCE that the source moved, so only they can be reported as a
+contract violation under a quiesced or snapshot mode. An `EACCES` is not
+evidence that somebody wrote to the source, and reporting it as a broken
+quiesce claim sent an operator to look at the wrong thing.
+
+`not_a_file` is the other outcome that used to be wrong. A symlink's path
+stat is the link and a read through it fstats the TARGET, so the reader's
+own identity check saw two different objects, retried three times and
+reported **every symlink in the tree** as an incomplete capture - a false
+alarm loud enough to hide the real ones. The reader now classifies the path
+before it opens anything, reports what is there, and opens with
+`O_NOFOLLOW` so a link put in place after that stat cannot be traversed
+either. Whether a symlink is stored, followed or skipped stays where it
+belongs: the capability matrix's `symlink_semantics` decision.
 
 The retry bound is 3 attempts. The bound is the point: one attempt cannot
 distinguish "a writer touched this once" from "this file is written
 continuously", and an unbounded retry on an active log is a run that never
 ends.
 
-`Run` makes completeness a property of its captures - a single unverified
-capture makes `Complete()` false - and reports contract violations
-separately, per the mode table above.
+`Run` makes completeness a property of its captures - a single missing
+file makes `Complete()` false - and reports contract violations separately,
+per the mode table above. Its state is unexported and every accessor hands
+back a copy: a run report is the record of what a run proved, and a caller
+that could append to the slice it was handed could make that record say
+something the run never observed.
 
-The confirm read is armed by `ConfirmReadRequired(mode, policy)`: not
-under a mode that guarantees a point in time (a frozen image cannot
-change, so the second pass buys nothing), and not under a policy that
-permits metadata to skip content (an operator who asked to read less
-should not have the files that *are* read read twice). Under an
-always-verify policy the first read is already happening, so the second is
-the cheapest correctness available.
+**The confirm read is armed by the mode and by nothing else**
+(`ConfirmReadRequired(mode)`): off under `external_snapshot`, where a
+frozen image cannot change and a second pass buys nothing, and on under
+every other mode.
+
+It deliberately does not consult the verification policy, and the earlier
+version of this design that did was wrong in a way worth recording. That
+version also disarmed the confirm read under any policy which lets metadata
+skip content, reasoning that an operator who asked to read less should not
+have the sampled paths read twice. But the policy decides WHICH paths are
+read; it says nothing about what a read PROVES. Under the sampled policy a
+weak source's 5% sample is the only thing standing between it and a
+silently stale restore point, and disarming the confirm read left that
+sample unable to detect the one mutation it exists to catch - an in-place
+rewrite with a restored timestamp, invisible to every stat-based check by
+construction. The requirement is now immutable in the code as well as on
+paper: `Reader`'s fields are unexported and set once by `NewReader`, so no
+call site can bank an unconfirmed read as verified content by forgetting a
+flag.
+
+The price is that the sampled policy costs two reads per sampled path
+rather than one - 10% of a full pass on a weak source instead of 5%. That
+is the price of the sample meaning anything.
 
 ### 6. What a Phase 1 engine feed may and may not do
 
@@ -320,38 +370,103 @@ modification time that was true across the whole window the bytes came
 from. A feed passes that, or it reintroduces the hole this package was
 built to close while appearing to use it.
 
-The general shape of both: this design's job is not to second-guess the
-engine's heuristic everywhere, it is to make sure the heuristic is fed
+**A feed must derive `SourceSignals` from the capability matrix, not from
+the table in this package.** This is the Phase 1 half of the duplication
+recorded under Consequences below, and it now has a named authority to
+derive from: K0.3 adds a generation/version-identity key to
+`backend.Capabilities`, the manifest key `generation_identity` (Go
+constant `backend.CapGenerationIdentity`), whose vocabulary is
+`versioned` | `etag` | `none` | `unknown`:
+
+| `generation_identity` | What it asserts | `SourceSignals` |
+| --- | --- | --- |
+| `versioned` | the backend assigns every write an identifier returned with the object (S3 `versionId`, GCS generation), so it changes on overwrite | `ObjectGeneration` true - strong |
+| `etag` | a content-derived validator that changes when the bytes change and names no retained version | strong, with the per-object multipart-ETag gap `Decide` already closes |
+| `none` | nothing but the path or slot; an overwrite that preserves size and mtime is invisible. A stable slot id is **not** a version identity | no content evidence |
+| `unknown` | not established without probing the object | no content evidence |
+
+Phase 1 retires `BundledSourceSignals` in favour of that key plus the two
+named narrowings in section 3 (`hash_support` filtered to hashes obtainable
+without a read, `mtime_precision` floored at what the transport carries).
+It is recorded rather than built here because the key lands on K0.3's
+branch and a Phase 0 gate that could not be evaluated until two spikes
+merged would not be a gate. This ADR names the key by string on purpose:
+nothing in this package imports `backend`.
+
+The general shape of all three: this design's job is not to second-guess
+the engine's heuristic everywhere, it is to make sure the heuristic is fed
 inputs that mean what it thinks they mean, and to read the bytes itself
 wherever they do not.
 
 ## Measurements
 
-Apple M5, macOS 25.6, APFS temp directory, Go 1.27, best of four warm
-runs. Wall-clock figures on this machine vary by a factor of two or more
-between runs, so the comparisons that matter are the ratios and the
-deterministic allocation count.
+Reproducible, because a published cost nobody can re-run is a claim rather
+than a measurement. The benchmarks are
+`core/internal/sourceconsistency/bench_test.go` and these are the exact
+commands:
 
-| Measurement | Result |
-| --- | --- |
-| 512 MiB single file, one read + sha256 | 0.84 s, **607 MiB/s** |
-| same with the confirm read (two reads, two hashes) | 1.84 s, **278 MiB/s** |
-| **cost of torn-read detection** | **2.2x wall time** - approximately a doubling of read bandwidth |
-| 20,000 x 10-byte files, full window (3 stats + open + hash) | 39.4 us/file, 25,400 files/s |
-| the same work hand-rolled without the window (1 stat + open + hash) | 57.3 us/file, 17,500 files/s |
-| **cost of the two extra stats** | **not measurable above this filesystem's noise** |
-| allocation per small file, after sizing the read buffer to the stat | **5,723 B** |
-| the fixed read buffer it replaced | 131,072 B per file - 2.5 GiB of garbage over 20,000 files |
-| `Decide` | 157 ns, **6.4M decisions/s** |
+```
+cd core && go test ./internal/sourceconsistency/ -run '^$' -bench Capture -benchtime 1x -count 5
+cd core && go test ./internal/sourceconsistency/ -run '^$' -bench Decide -count 5
+```
 
-Two of those were found by measuring rather than assumed. The read buffer
-was a fixed 128 KiB per file whatever the file's length, which nearly
-tripled the per-file cost of a tree of small files and is now sized from
-the stat (`Reader.bufferFor`); and the per-file cost of the window checks,
-which was the thing this design was most worried about, turns out to be
-lost in the noise of the filesystem's own syscalls. The real cost of
-correctness here is the confirm read's second pass, and it is charged only
-where it buys something.
+`-benchtime 1x` for the `Capture` rows because each iteration stages its
+own fixture (a 512 MiB file, a tree of 20,000 ten-byte files) and a larger
+iteration count would mostly measure the filesystem writing it. `-count 5`
+because wall-clock figures on a laptop vary by a factor of two between
+runs; the figures below are the best of the five, and the comparisons that
+matter are the ratios between neighbouring rows and the allocation figures,
+which are deterministic to within a rounding of the runtime's own
+bookkeeping.
+
+Environment: Apple M5 (`goarch arm64`, 10 procs), macOS 26.6.2 (Darwin
+25.6.0), Go 1.27.1, APFS under `TMPDIR`, the repository's pinned
+dependencies. Every figure below is the best of five from ONE invocation of
+the command above, so the ratios compare rows measured under the same
+conditions. The large-file rows read a file that has just been written and
+is therefore in the page cache: they price this package's own work, the
+hashing and the window, not a disk.
+
+| Measurement | Benchmark | Result |
+| --- | --- | --- |
+| 512 MiB single file, one read + sha256 | `CaptureLargeFile` | 182 ms, **2,814 MiB/s** |
+| the same with the confirm read (two reads, two hashes) | `CaptureLargeFileConfirmed` | 362 ms, **1,413 MiB/s** |
+| **cost of torn-read detection** | the ratio of those two | **1.99x wall time** - exactly the doubling of read bandwidth the design predicts |
+| 20,000 x 10-byte files, full window (3 stats + open + hash) | `CaptureSmallFileTree/window` | 17.1 us/file, 58,500 files/s, 5,800 B and 24 allocs per file |
+| the same with the confirm read | `CaptureSmallFileTree/window,_confirmed` | 26.6 us/file, 6,544 B and 35 allocs per file |
+| the same work hand-rolled without the window (1 stat + open + hash) | `CaptureSmallFileTree/no_window` | 14.2 us/file, 4,776 B and 8 allocs per file |
+| **cost of the window** | the ratio of those two | **1.20x**, +2.9 us/file - two extra stats on a ten-byte file |
+| the same, with the fixed 128 KiB read buffer this package used to allocate per read | `CaptureSmallFileTree/no_window,_fixed_buffer` | 22.1 us/file, **131,752 B per file** - 2.45 GiB of garbage over the tree |
+| **cost of a read buffer not sized from the stat** | the ratio of those two | **1.56x wall time and 27.6x the allocated bytes** |
+| `Decide` | `Decide` | 110 ns, 128 B, 3 allocs, **9.1M decisions/s** |
+
+Three things in that table are findings rather than confirmations, and one
+of them corrects an earlier revision of this ADR.
+
+**The read buffer.** It was a fixed 128 KiB per file whatever the file's
+length, and is now sized from the stat (`Reader.bufferSize`) and reused
+across the up-to-six reads one capture can perform. The earlier revision
+called the fixed buffer "nearly tripling" the per-file cost on a small-file
+tree; a committed benchmark says 1.56x on wall time and 27.6x on allocated
+bytes. The allocation figure is the real finding and the wall-clock one was
+noise read too confidently - which is the argument for committing the
+benchmark rather than the number. The reuse is visible in the table too:
+the confirmed row reads every file twice and allocates 6,544 B per file
+rather than the ~9,900 a second per-read buffer would have cost, because
+the buffer belongs to the capture and not to the read.
+
+**The window.** Three stats and an fstat instead of one stat cost 2.9
+us/file on ten-byte files, a fifth of the total, and nothing measurable on
+anything larger - the earlier revision reported this as lost in the noise,
+which was true of the noisier runs it was measured in and is not true of a
+quiet one. It is the correct order of magnitude for two extra `stat`
+syscalls and it is the price of knowing that the bytes and the metadata
+recorded for them describe the same object.
+
+**The confirm read** is the real cost of correctness here: 1.99x on bytes,
+1.56x on a tree of tiny files where the fixed per-file work dominates. It
+is charged wherever a path is read under a mode that does not promise a
+frozen image.
 
 ## Consequences
 
@@ -359,9 +474,13 @@ where it buys something.
 
 - The engine's reuse heuristic is no longer inherited by default. On the
   one pair that matters - same path, same size, same modification time,
-  different content - `KopiaMetadataReuse` says reuse and `Decide` says
-  read, and a test asserts exactly that disagreement
-  (`TestOnThePairKopiaWouldReuseAWeakSourceStillReads`).
+  different content - the engine's rule says reuse and `Decide` says read,
+  and a test asserts exactly that disagreement
+  (`TestOnThePairKopiaWouldReuseAWeakSourceStillReads`). The engine's rule
+  is `kopiaMetadataReuse` in `decide_test.go`: it is a model of somebody
+  else's code, asserted against and never called in a run, so it is not on
+  this package's API surface. A caller reaching for "what would kopia do"
+  is a caller about to take back the decision this package exists to make.
 - Every bundled backend's trust class is derived from signals that are
   written down, and `TestNoBackendReachesStrongTrustWithoutContentEvidence`
   refuses a row that reached `strong` without a hash or a generation id.
@@ -370,22 +489,41 @@ where it buys something.
   comes in: same-size-with-restored-mtime, sub-second, mid-read write,
   rename into place, rename away, delete. Either a bounded retry settled
   it or the run is incomplete. Nothing is recorded as proven that was not.
+- A path that is read is proven, whatever made it eligible to be skipped.
+  The confirm read follows from the mode alone, and `Reader` cannot be
+  constructed without it, so a sampled or periodic policy can no longer
+  bank an unconfirmed read as verified content.
+- A hung source is cancellable. Every method on `Source` and `File` takes a
+  context, including the read itself, so a run against an SSH session whose
+  connection has been black-holed ends when the run is cancelled instead of
+  waiting forever inside a syscall no bound on retries can reach.
+- A symlink is reported as a symlink rather than as a file that would not
+  hold still, so an ordinary tree no longer produces one false
+  `incomplete` per link, and the reader cannot read through one by
+  accident.
 - The residual risk that has no metadata answer at all - an in-place
   rewrite with a restored timestamp - has a mechanism (the confirm read), a
-  price (roughly double the read bandwidth), and a stated configuration
-  under which it is paid. It is a decision an operator makes, not a hole
-  nobody mentioned.
+  price (a doubling of read bandwidth), and exactly one configuration under
+  which it is not paid: a source declared `external_snapshot`, where the
+  claim is that it cannot happen. It is a decision an operator makes, not a
+  hole nobody mentioned.
 - `external_snapshot` is the only mode that may be called a point in time
   anywhere, so the word cannot leak onto a live read.
 
 ### What it costs, honestly
 
 - **The conservative preset on a weak source reads and hashes the entire
-  source every run, twice.** On a local disk that is roughly 280 MiB/s of
-  read bandwidth spent to defend against a class of writer that restores
-  timestamps. For a 2 TB source that is over two hours of reading before
-  anything is uploaded. This is the real price of the honest answer and
-  the reason the default preset is `strong`, which samples.
+  source every run, twice.** On this machine that is 1,413 MiB/s instead of
+  2,814, measured against a file already in the page cache. For a 2 TB
+  source it is over twenty minutes of hashing before anything is uploaded,
+  and on a source whose bandwidth is a network or a spinning disk rather
+  than a page cache it is far longer. This is the real price of the honest
+  answer and the reason the default preset is `trust_metadata`, which
+  samples.
+- **The `trust_metadata` preset on a weak source now reads twice as much as
+  it used to**: the 5% sample is read twice, so it costs 10% of a full
+  pass. That is a deliberate regression in cost, taken because the earlier
+  5% could not detect the mutation the sample exists to catch (section 5).
 - **`local_volume` is classified `weak`,** which will read as a
   downgrade to anyone who assumes a local filesystem is the most
   trustworthy source there is. It has the richest metadata of the three
@@ -411,17 +549,25 @@ where it buys something.
   It is still not a copy, and Phase 1 must not make it one by deleting this
   table: two of the three shipped rows' hash lists differ from the matrix
   ON PURPOSE, for the reasons in section 3. `SourceSignalsFor` should read
-  the manifest's capabilities and apply the narrowing as an explicit,
-  named projection - `hash_support` filtered to hashes obtainable without a
+  the manifest's capabilities - including the `generation_identity` key
+  K0.3 adds, which is the single authority for the strong-evidence half of
+  the classification (section 6) - and apply the narrowing as an explicit,
+  named projection: `hash_support` filtered to hashes obtainable without a
   read, and `mtime_precision` floored at whatever the transport actually
-  carries - with a test per shipped backend asserting the projected value
+  carries, with a test per shipped backend asserting the projected value
   rather than the declared one. A straight copy would classify a local disk
   `strong` on the strength of three hashes that each cost a full read.
-- **`OSSource` does not resolve symlinks.** The containment check is
-  lexical. Whether a symlink is stored, followed or skipped is the
-  capability matrix's `symlink_semantics` decision, and a reader that
-  quietly followed one would be making that decision by accident in the
-  most expensive possible place.
+- **`OSSource` does not resolve symlinks, and a symlink's content is not
+  in a run.** The containment check is lexical, `Stat` lstats, `Open`
+  passes `O_NOFOLLOW`, and a symlink capture is `not_a_file`, which does
+  NOT make the run incomplete. That is the right answer for a content
+  reader and it is also a silence: a run whose symlinks were never stored
+  reports itself complete, because whether a symlink is stored, followed or
+  skipped is the capability matrix's `symlink_semantics` decision and
+  nothing here is in a position to make it. Whatever consumes captures in
+  Phase 1 has to route `not_a_file` somewhere, and `Capture.Kind` is what
+  it routes on. A reader that quietly followed a link would be making that
+  decision by accident, in the most expensive possible place.
 - **The confirm read is not atomicity.** It proves the bytes hashed twice
   in this run agree; it does not freeze the file. A writer that mutates
   during both reads in the same way twice is not distinguishable, and a
