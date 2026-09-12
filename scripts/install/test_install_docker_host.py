@@ -5530,10 +5530,11 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
     sentence is held to the Fprintf format in
     apps/common/auth/local/service.go, with the name it opens with read
     out of core/cliecho, where WebBinary is derived from Binary
-    precisely so the two cannot drift. Both blocks on the page that show
-    it are rendered from that format against the token the page shows,
-    so the install block and the fallback's own output cannot disagree
-    about the sentence either.
+    precisely so the two cannot drift. index.html shows it inside the
+    install block, because that is where the install prints it, and
+    first-run.html shows it on its own as screen 0; both are rendered
+    from that format against the token the page carries, so neither can
+    drift into a sentence the engine does not write.
 
     That last pin is #688 as a test. The installer used to print
     `http://localhost:8080/enroll?token=...`, which on a laptop reading it
@@ -5562,6 +5563,9 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
     # Non-greedy rather than \\S+: one page shows a token and the other
     # shows "<a long random string>", which has spaces in it.
     TOKEN_IN_LINE = re.compile(r"\?token=(.+?) to create one")
+    # The install block carries one link, and removing its tags is what
+    # lets that line be compared against the epilog like every other.
+    TAG = re.compile(r"<[^>]+>")
 
     def page(self, name):
         path = REPO_ROOT / "docs" / "site" / name
@@ -5578,21 +5582,29 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
         return doc[i + len(begin):j]
 
     @staticmethod
-    def block_lines(region_text):
-        """An output block's own lines, blank ends trimmed.
+    def trimmed(region_text):
+        """A region's own lines, blank ends dropped.
 
-        Only the HTML escapes are undone: an output block carries no
-        markup, so a tag appearing in one is a reason to look rather than
-        something to tolerate. The blank line each epilog opens with
-        separates it from the command's own output in a terminal and from
-        the label on the page, so it is not compared.
+        The blank line each epilog opens with separates it from the
+        command's own output in a terminal and from the label on the
+        page, so it is not compared.
         """
-        lines = html.unescape(region_text).split("\n")
+        lines = region_text.split("\n")
         while lines and not lines[0].strip():
             lines.pop(0)
         while lines and not lines[-1].strip():
             lines.pop()
         return lines
+
+    @classmethod
+    def block_lines(cls, region_text):
+        """An output block's lines, as the text that block claims to be.
+
+        Only the HTML escapes are undone: an output block carries no
+        markup, so a tag appearing in one is a reason to look rather
+        than something to tolerate.
+        """
+        return [html.unescape(line) for line in cls.trimmed(region_text)]
 
     @staticmethod
     def sentence(region_text):
@@ -5639,8 +5651,54 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
         """
         return enrolment_notice(self.SAMPLE_BASE_URL, self.SAMPLE_TOKEN).strip()
 
+    def install_output(self):
+        """index.html's install block, line for line.
+
+        One line of it carries markup and only that one may. The notice
+        is the link now: #803 made it the install's own last line, so
+        the page hangs the anchor and the token span on it there rather
+        than printing the block and then repeating the link beside it.
+        Its tags are removed before the comparison and nothing else is,
+        so the text between them is still held to the epilog character
+        for character, indentation included: marking the line up did
+        not loosen the pin, it only moved where the link lives.
+        """
+        lines = []
+        for line in self.trimmed(self.region("index.html", "INSTALL-OUTPUT")):
+            if "<" in line:
+                self.assertIn(installer.ENROLL_NOTICE_MARKER, line,
+                              "a line of the install output block on docs/site/index.html is "
+                              "marked up and is not the enrolment notice; that block is "
+                              "compared against what the installer prints, and the notice is "
+                              "the one line in it allowed to be a link")
+                line = self.TAG.sub("", line)
+            lines.append(html.unescape(line))
+        return lines
+
+    def install_notice(self):
+        """The engine's sentence as the install block shows it.
+
+        Collapsed rather than sliced: the installer indents the notice
+        under its own epilog, and what is being checked here is the
+        sentence rather than the four spaces in front of it, which
+        install_output has already compared.
+        """
+        found = [line for line in self.install_output()
+                 if installer.ENROLL_NOTICE_MARKER in line]
+        self.assertEqual(len(found), 1,
+                         f"docs/site/index.html's install block shows {len(found)} enrolment "
+                         f"notices; it shows the one the install hands over, and exactly one")
+        return " ".join(found[0].split())
+
     def notice_and_token(self, name):
-        shown = self.sentence(self.region(name, "ENROL-LOG-LINE"))
+        """The sentence a page shows, and the token inside it.
+
+        The two pages keep it in different places, because they are
+        showing different things: index.html shows the install printing
+        it, first-run.html shows the line itself as screen 0.
+        """
+        shown = (self.install_notice() if name == "index.html"
+                 else self.sentence(self.region(name, "ENROL-LOG-LINE")))
         found = self.TOKEN_IN_LINE.search(shown)
         self.assertIsNotNone(found,
                              f"docs/site/{name}'s enrolment line has no ?token=... in it, so it is "
@@ -5653,8 +5711,7 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
         the page showing the fallback instead would send every reader to
         a shell for something they were already handed."""
         printed = self.epilog(installer.installed_epilog, self.sample_notice())
-        shown = self.block_lines(self.region("index.html", "INSTALL-OUTPUT"))
-        self.assertEqual(shown, self.block_lines("\n".join(printed)),
+        self.assertEqual(self.install_output(), self.block_lines("\n".join(printed)),
                          "docs/site/index.html shows an install epilog this installer does not "
                          "print. The page is what is wrong here: it exists to tell a reader which "
                          "part of their screen matters, and it cannot do that with output that is "
@@ -5665,13 +5722,14 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
         a `docker compose ... logs` invocation is the old install, and a
         reader comparing it against their screen would go looking for a
         command that is no longer printed."""
-        shown = self.block_lines(self.region("index.html", "INSTALL-OUTPUT"))
+        shown = self.install_output()
         self.assertTrue(any(installer.ENROLL_NOTICE_MARKER in line for line in shown),
                         "the install block on docs/site/index.html carries no enrolment notice, so "
                         "it is not showing the link the install now hands over")
         self.assertNotIn("grep enroll", "\n".join(shown),
                          "the install block ends by telling the reader to grep the engine's log; "
-                         "that is the fallback, and the page shows it separately as one")
+                         "that is the fallback for a deployment already behaving oddly, and a "
+                         "fresh install is handed the link instead")
 
     def test_the_cli_only_output_block_is_the_epilog_a_fresh_cli_only_install_prints(self):
         printed = self.epilog(installer.cli_only_staged_epilog)
@@ -5703,25 +5761,6 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
         self.assertEqual(notice,
                          enrolment_notice(self.SAMPLE_BASE_URL, found.group(1)).strip(),
                          "the notice enroll-link is shown printing is not the one the engine emits")
-
-    def test_the_fallback_command_the_page_shows_is_the_one_the_epilog_falls_back_to(self):
-        """The page shows this command as what an install prints when the
-        notice never arrived, so it has to be the line that install
-        really prints: the last line of the epilog rendered with no
-        notice. Two hand-typed copies of one long invocation is exactly
-        where an elision gets introduced, and a fallback nobody reaches
-        on a healthy host is where a wrong one would survive longest.
-        """
-        fallback = self.epilog(installer.installed_epilog, "")
-        instruction = fallback[-1].strip()
-        self.assertIn("grep enroll", instruction,
-                       "the epilog rendered without a notice no longer ends in the command that "
-                       "reads the link out of the log; docs/site/index.html shows that command as "
-                       "the fallback, so this test is reading the wrong line or the fallback moved")
-        echoed = self.sentence(self.region("index.html", "ENROL-COMMAND"))
-        self.assertEqual(echoed, instruction,
-                         "the fallback command shown above the enrolment line is not the one the "
-                         "install epilog prints when it has no link to hand over")
 
     def test_the_cli_only_output_block_carries_no_enrolment_link(self):
         """The absence is the point of the block, not an oversight in it.

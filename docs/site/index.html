@@ -115,7 +115,8 @@
     <pre class="cmd-primary"><code>python3 install_docker_host.py install</code></pre>
 
     <p class="io-label">Output</p>
-    <pre class="io-out"><code><!-- BEGIN INSTALL-OUTPUT -->==&gt; Installed.
+    <div class="io">
+      <pre class="io-out"><code><!-- BEGIN INSTALL-OUTPUT -->==&gt; Installed.
     Web UI:  http://10.0.0.10:8080
     Compose: docker compose -p backupd --env-file /home/you/backupd/.env -f /home/you/backupd/compose.yaml -f /home/you/backupd/compose.image.yaml
 
@@ -123,21 +124,9 @@
     precisely so that a fresh install does not need one hand-written before it starts.
     Open this link and follow it:
 
-    backupd-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?token=4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6 to create one (valid 30 minutes, single use).
+    <span class="io-wrap">backupd-web: no administrator account exists yet. Open <a class="tip-term" href="first-run.html#enrol">http://10.0.0.10:8080/enroll?token=<span class="tip-token">4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6</span></a> to create one (valid 30 minutes, single use).</span>
 
     If it lapses before you get to it, `enroll-link` issues another.<!-- END INSTALL-OUTPUT --></code></pre>
-
-    <p>That is the whole of it. The installer picks every path for you (<code>~/backupd</code>, with <code>backups</code>, <code>state</code>, <code>config</code> and <code>secrets</code> under it), generates the SSH key the engine will use, pins the exact image it was built against, and refuses before it changes anything if the machine cannot run it. Nothing needs deciding up front, and everything it chose can be changed afterwards.</p>
-    <p>The last lines are the ones that matter, and they are output rather than something to run. The engine mints the enrolment token during startup and writes the notice to its own log, so the installer waits for that line and hands it over itself (<a href="https://github.com/backupdproject/backupd/issues/803">#803</a>): a fresh install ends with the link, and opening it is the next step. Nothing has to be fetched by hand.</p>
-
-    <p>If no link appeared there &mdash; the notice had not been written by the time the installer stopped waiting, on a deployment already behaving oddly &mdash; the install prints this instead, and it reads the same line back out of the engine's log. Every path in it is the one the install just chose:</p>
-    <pre><code><!-- BEGIN ENROL-COMMAND -->docker compose -p backupd --env-file /home/you/backupd/.env -f /home/you/backupd/compose.yaml -f /home/you/backupd/compose.image.yaml logs backupd | grep enroll<!-- END ENROL-COMMAND --></code></pre>
-
-    <p class="io-label">Output</p>
-    <div class="io">
-      <pre class="io-out"><code><!-- BEGIN ENROL-LOG-LINE -->backupd-web: no administrator account exists yet. Open
-<a class="tip-term" href="first-run.html#enrol">http://10.0.0.10:8080/enroll?token=<span class="tip-token">4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6</span></a>
-to create one (valid 30 minutes, single use).<!-- END ENROL-LOG-LINE --></code></pre>
       <aside class="tip-bubble">
         <button type="button" class="tip-close" aria-label="Close this note">&times;</button>
         <span class="tip-heading">Attention &middot; this is the one-time link</span>
@@ -146,8 +135,10 @@ to create one (valid 30 minutes, single use).<!-- END ENROL-LOG-LINE --></code><
         <p><a href="first-run.html#enrol">Creating the administrator, screen by screen &rarr;</a></p>
       </aside>
     </div>
-    <p>The address in it is this machine's own rather than <code>localhost</code>, because the link is read from another machine on the same network: <code>localhost</code> over SSH on a laptop is the laptop, which is <a href="https://github.com/backupdproject/backupd/issues/688">what the installer used to print</a>. Open it, set an administrator password, and <a href="first-run.html">the first-run tutorial</a> picks up from there.</p>
 
+    <p>That is the whole of it. The installer picks every path for you (<code>~/backupd</code>, with <code>backups</code>, <code>state</code>, <code>config</code> and <code>secrets</code> under it), generates the SSH key the engine will use, pins the exact image it was built against, and refuses before it changes anything if the machine cannot run it. Nothing needs deciding up front, and everything it chose can be changed afterwards.</p>
+    <p>The last lines are the ones that matter, and they are output rather than something to run. The engine mints the enrolment token during startup and writes the notice to its own log, so the installer waits for that line and hands it over itself (<a href="https://github.com/backupdproject/backupd/issues/803">#803</a>): a fresh install ends with the link, and opening it is the next step. Nothing has to be fetched by hand, and if the notice had not been written by the time the installer stopped waiting &mdash; on a deployment already behaving oddly &mdash; the install prints the one command that reads it back out of the engine's log instead, with every path in it the one it just chose.</p>
+    <p>The address in the link is this machine's own rather than <code>localhost</code>, because the link is read from another machine on the same network: <code>localhost</code> over SSH on a laptop is the laptop, which is <a href="https://github.com/backupdproject/backupd/issues/688">what the installer used to print</a>. Open it, set an administrator password, and <a href="first-run.html">the first-run tutorial</a> picks up from there.</p>
 
     <div class="note ok">
       <span class="note-label">If the link has expired</span>
