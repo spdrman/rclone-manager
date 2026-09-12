@@ -19,9 +19,10 @@ type Entry struct {
 	ModTimeNanos int64
 
 	// Mode and Owner are carried because the embedded engine compares them
-	// (see KopiaMetadataReuse) and because a changed mode is a change worth
-	// storing. Neither bears on CONTENT, so neither forces a re-read on its
-	// own: a chmod does not rewrite a file.
+	// (kopiaMetadataReuse, in decide_test.go, is that rule in Go) and
+	// because a changed mode is a change worth storing. Neither bears on
+	// CONTENT, so neither forces a re-read on its own: a chmod does not
+	// rewrite a file.
 	Mode  uint32
 	Owner string
 
@@ -214,29 +215,4 @@ func sampled(path string, fraction float64) bool {
 	_, _ = h.Write([]byte(path))
 
 	return float64(h.Sum64()%samplingBuckets) < fraction*samplingBuckets
-}
-
-// KopiaMetadataReuse reports what the pinned engine would decide on its own:
-// whether kopia v0.23.1 would carry this path's content forward from the
-// previous snapshot without reading the file.
-//
-// It is the engine's rule, written here so that the gap between it and
-// Decide is executable rather than a paragraph in an ADR. The rule is
-// `metadataEquals` in `snapshot/upload/upload.go` at v0.23.1 (lines
-// 694-720): the modification time compared with time.Time.Equal at full
-// resolution, the mode, the owner, and the size - reached only for an entry
-// found under the same name in a previous snapshot's directory
-// (`findCachedEntry`, 722-754). No content, no identifier, and no re-hash
-// unless `ForceHashPercentage` is raised from its zero default.
-//
-// This function exists for two reasons and neither is decoration. It is the
-// executable statement of the finding K0.4 was asked to establish, and it is
-// what a test asserts Decide disagrees with on the pair that matters: same
-// path, same size, same modification time, different content.
-func KopiaMetadataReuse(prev, cur Entry) bool {
-	return prev.Path == cur.Path &&
-		prev.Size == cur.Size &&
-		prev.ModTimeNanos == cur.ModTimeNanos &&
-		prev.Mode == cur.Mode &&
-		prev.Owner == cur.Owner
 }

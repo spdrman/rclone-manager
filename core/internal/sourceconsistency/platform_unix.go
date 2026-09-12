@@ -24,3 +24,9 @@ func fileIdentity(fi os.FileInfo) string {
 
 	return strconv.FormatUint(uint64(st.Dev), 10) + ":" + strconv.FormatUint(uint64(st.Ino), 10)
 }
+
+// openNoFollow makes an open of a symlink fail rather than traverse it,
+// which is what keeps the symlink decision out of this reader even when a
+// link is put in place between the stat that classified the path and the
+// open that reads it.
+const openNoFollow = syscall.O_NOFOLLOW

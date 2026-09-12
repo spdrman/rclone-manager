@@ -11,6 +11,7 @@
 package sourceconsistency
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -44,10 +45,12 @@ type hookSource struct {
 	opens        int
 }
 
-func (s *hookSource) Stat(path string) (Stat, error) { return s.inner.Stat(path) }
+func (s *hookSource) Stat(ctx context.Context, path string) (Stat, error) {
+	return s.inner.Stat(ctx, path)
+}
 
-func (s *hookSource) Open(path string) (File, error) {
-	f, err := s.inner.Open(path)
+func (s *hookSource) Open(ctx context.Context, path string) (File, error) {
+	f, err := s.inner.Open(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -70,14 +73,55 @@ type hookFile struct {
 	fired      bool
 }
 
-func (f *hookFile) Read(p []byte) (int, error) {
-	n, err := f.File.Read(p)
+func (f *hookFile) Read(ctx context.Context, p []byte) (int, error) {
+	n, err := f.File.Read(ctx, p)
 	if n > 0 && !f.fired && f.afterChunk != nil {
 		f.fired = true
 		f.afterChunk()
 	}
 
 	return n, err
+}
+
+// blockingSource is a source whose reads never return on their own, which
+// is what a hung remote looks like from this side: the session is up, the
+// handle is open, and the bytes never arrive.
+//
+// It is the only honest test of the context contract. A source that could
+// not see the context would block here forever and no bound on retries,
+// chunk sizes or attempts would get the run back - only the context
+// reaching the read does.
+type blockingSource struct {
+	inner  Source
+	opened chan struct{}
+}
+
+func (s *blockingSource) Stat(ctx context.Context, path string) (Stat, error) {
+	return s.inner.Stat(ctx, path)
+}
+
+func (s *blockingSource) Open(ctx context.Context, path string) (File, error) {
+	f, err := s.inner.Open(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+
+	select {
+	case s.opened <- struct{}{}:
+	default:
+	}
+
+	return blockingFile{File: f}, nil
+}
+
+type blockingFile struct {
+	File
+}
+
+func (f blockingFile) Read(ctx context.Context, _ []byte) (int, error) {
+	<-ctx.Done()
+
+	return 0, ctx.Err()
 }
 
 // writeFile creates a source file and returns nothing but the path, because
@@ -91,6 +135,19 @@ func writeFile(t *testing.T, dir, name, content string) string {
 	}
 
 	return p
+}
+
+// readAll is how a mutation hook asks what it is looking at, so a test can
+// flip a file's content back and forth without keeping its own state.
+func readAll(t *testing.T, path string) string {
+	t.Helper()
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	return string(b)
 }
 
 // rewrite replaces a file's content in place, leaving the filesystem to
@@ -107,7 +164,7 @@ func rewrite(t *testing.T, path, content string) {
 // the same number of bytes, different content, and the modification time put
 // back where it was. Anything that reasons about content from size and mtime
 // alone sees nothing here, and that includes kopia's own cached-entry
-// heuristic (see KopiaMetadataReuse).
+// heuristic (see kopiaMetadataReuse in decide_test.go).
 //
 // It is not an exotic attack. rsync --times, tar -p, an editor that restores
 // timestamps and a restore-from-backup of the source itself all do exactly
@@ -183,17 +240,4 @@ func subSecondTimestampsAvailable(t *testing.T, path string) bool {
 	}
 
 	return after.ModTime().Nanosecond() != 0
-}
-
-// statOf reads the reader's own view of a file, so tests can build catalogue
-// entries out of exactly what a real capture would have recorded.
-func statOf(t *testing.T, src Source, path string) Stat {
-	t.Helper()
-
-	st, err := src.Stat(path)
-	if err != nil {
-		t.Fatalf("Stat(%s): %v", path, err)
-	}
-
-	return st
 }

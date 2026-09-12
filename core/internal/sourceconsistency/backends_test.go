@@ -231,7 +231,7 @@ func TestEverySignalRowStatesAResolutionThisPackageUnderstands(t *testing.T) {
 // backends because the combination is what the ADR's matrix publishes.
 func TestPolicyForBackendCoversBothPresets(t *testing.T) {
 	for _, id := range bundledBackendIDs(t) {
-		for _, preset := range []model.MetadataTrustPreset{model.PresetStrong, model.PresetConservative} {
+		for _, preset := range []model.MetadataTrustPreset{model.PresetTrustMetadata, model.PresetConservative} {
 			pol, ok := PolicyForBackend(id, preset)
 			if !ok {
 				t.Errorf("PolicyForBackend(%q, %q) found no signals", id, preset)
@@ -246,7 +246,7 @@ func TestPolicyForBackendCoversBothPresets(t *testing.T) {
 		}
 	}
 
-	if _, ok := PolicyForBackend("not-a-backend", model.PresetStrong); ok {
+	if _, ok := PolicyForBackend("not-a-backend", model.PresetTrustMetadata); ok {
 		t.Error("PolicyForBackend invented a policy for a backend it has no signals for")
 	}
 }

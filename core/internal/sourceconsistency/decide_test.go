@@ -16,6 +16,34 @@ import (
 
 var now = time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 
+// kopiaMetadataReuse reports what the pinned engine would decide on its own:
+// whether kopia v0.23.1 would carry this path's content forward from the
+// previous snapshot without reading the file.
+//
+// It is the engine's rule, written here so that the gap between it and
+// Decide is executable rather than a paragraph in an ADR. The rule is
+// `metadataEquals` in `snapshot/upload/upload.go` at v0.23.1 (lines
+// 694-720): the modification time compared with time.Time.Equal at full
+// resolution, the mode, the owner, and the size - reached only for an entry
+// found under the same name in a previous snapshot's directory
+// (`findCachedEntry`, 722-754). No content, no identifier, and no re-hash
+// unless `ForceHashPercentage` is raised from its zero default.
+//
+// It lives in the test file rather than beside Decide deliberately. It is a
+// model of somebody else's code, asserted against and never called in a
+// run, and exporting it put a function on this package's API surface that
+// no caller should ever consult: a caller reaching for "what would kopia
+// do" is a caller about to make the decision this package was built to take
+// away from them. The finding it states stays executable; it is just no
+// longer something production code can depend on.
+func kopiaMetadataReuse(prev, cur Entry) bool {
+	return prev.Path == cur.Path &&
+		prev.Size == cur.Size &&
+		prev.ModTimeNanos == cur.ModTimeNanos &&
+		prev.Mode == cur.Mode &&
+		prev.Owner == cur.Owner
+}
+
 // entry is the catalogue row shape these tests build by hand.
 func entry(path string, size int64, mtime int64, digest string) Entry {
 	return Entry{
@@ -39,13 +67,13 @@ func entry(path string, size int64, mtime int64, digest string) Entry {
 // The first case is the one that matters: identical metadata, different
 // content, REUSED. That is a changed file the engine would carry forward
 // from the previous snapshot unread.
-func TestKopiaMetadataReuseIsMetadataOnlyByConstruction(t *testing.T) {
+func TestTheKopiaReuseRuleIsMetadataOnlyByConstruction(t *testing.T) {
 	prev := entry("report.csv", 4096, 1_757_000_000_000_000_000, "aaaa")
 	same := prev
 	same.Digest = "bbbb" // different content, nothing else moved
 
-	if !KopiaMetadataReuse(prev, same) {
-		t.Fatal("KopiaMetadataReuse refused a pair kopia's metadataEquals accepts; the model of the engine is wrong, not the engine")
+	if !kopiaMetadataReuse(prev, same) {
+		t.Fatal("kopiaMetadataReuse refused a pair kopia's metadataEquals accepts; the model of the engine is wrong, not the engine")
 	}
 
 	for name, mutate := range map[string]func(e *Entry){
@@ -57,7 +85,7 @@ func TestKopiaMetadataReuseIsMetadataOnlyByConstruction(t *testing.T) {
 	} {
 		cur := prev
 		mutate(&cur)
-		if KopiaMetadataReuse(prev, cur) {
+		if kopiaMetadataReuse(prev, cur) {
 			t.Errorf("a changed %s was still reused", name)
 		}
 	}
@@ -74,13 +102,13 @@ func TestKopiaReuseSeesANanosecondButNotARestoredTimestamp(t *testing.T) {
 
 	oneNano := prev
 	oneNano.ModTimeNanos++
-	if KopiaMetadataReuse(prev, oneNano) {
+	if kopiaMetadataReuse(prev, oneNano) {
 		t.Error("a one-nanosecond difference was reused")
 	}
 
 	restored := prev
 	restored.Digest = "bbbb"
-	if !KopiaMetadataReuse(prev, restored) {
+	if !kopiaMetadataReuse(prev, restored) {
 		t.Error("a restored timestamp with changed content was not reused; this test's premise is that it is")
 	}
 }
@@ -95,7 +123,7 @@ func TestOnThePairKopiaWouldReuseAWeakSourceStillReads(t *testing.T) {
 	cur := prev
 	cur.Digest = "" // a fresh listing has metadata and no content yet
 
-	if !KopiaMetadataReuse(prev, cur) {
+	if !kopiaMetadataReuse(prev, cur) {
 		t.Fatal("the premise of this test is a pair the engine would reuse")
 	}
 
@@ -114,7 +142,7 @@ func TestUnknownTrustAlwaysReads(t *testing.T) {
 	prev := entry("a", 10, 1_757_000_000_000_000_000, "aaaa")
 	cur := prev
 
-	for _, preset := range []model.MetadataTrustPreset{model.PresetStrong, model.PresetConservative} {
+	for _, preset := range []model.MetadataTrustPreset{model.PresetTrustMetadata, model.PresetConservative} {
 		pol := model.VerificationPolicyFor(model.TrustUnknown, preset)
 		if got := Decide(prev, cur, pol, now); got.Action != ActionReadAndVerify {
 			t.Errorf("preset %q: action = %q (%s), want %q", preset, got.Action, got.Reason, ActionReadAndVerify)
@@ -131,7 +159,7 @@ func TestUnknownTrustAlwaysReads(t *testing.T) {
 // says remote hash and there is no remote hash for this object" is a real
 // per-object state and it has to fall to the cautious side.
 func TestRemoteHashPolicyRestsOnEvidenceAndReadsWhenThereIsNone(t *testing.T) {
-	pol := model.VerificationPolicyFor(model.TrustStrong, model.PresetStrong)
+	pol := model.VerificationPolicyFor(model.TrustStrong, model.PresetTrustMetadata)
 	prev := entry("obj", 4096, 1_757_000_000_000_000_000, "aaaa")
 	prev.GenerationID = "v1"
 
@@ -166,7 +194,7 @@ func TestRemoteHashPolicyRestsOnEvidenceAndReadsWhenThereIsNone(t *testing.T) {
 // are not a comparison, and treating a mismatch between them as a change
 // would re-read the whole source on the day a backend's default changed.
 func TestRemoteHashComparisonRequiresTheSameAlgorithm(t *testing.T) {
-	pol := model.VerificationPolicyFor(model.TrustStrong, model.PresetStrong)
+	pol := model.VerificationPolicyFor(model.TrustStrong, model.PresetTrustMetadata)
 
 	prev := entry("obj", 4096, 1_757_000_000_000_000_000, "aaaa")
 	prev.RemoteHash, prev.RemoteHashAlg = "d41d8", "md5"
@@ -197,7 +225,7 @@ func TestMovedMetadataForcesAReadUnderEveryPolicy(t *testing.T) {
 	prev.GenerationID = "v1"
 
 	for _, class := range []model.TrustClass{model.TrustStrong, model.TrustWeak, model.TrustUnknown} {
-		for _, preset := range []model.MetadataTrustPreset{model.PresetStrong, model.PresetConservative} {
+		for _, preset := range []model.MetadataTrustPreset{model.PresetTrustMetadata, model.PresetConservative} {
 			pol := model.VerificationPolicyFor(class, preset)
 			for name, mutate := range map[string]func(e *Entry){
 				"size":  func(e *Entry) { e.Size = 11 },
@@ -218,7 +246,7 @@ func TestMovedMetadataForcesAReadUnderEveryPolicy(t *testing.T) {
 // at, so a comparison written without this check reuses a file it has never
 // seen and stores whatever digest the zero value carried.
 func TestAPathWithNoPreviousRowIsRead(t *testing.T) {
-	pol := model.VerificationPolicyFor(model.TrustStrong, model.PresetStrong)
+	pol := model.VerificationPolicyFor(model.TrustStrong, model.PresetTrustMetadata)
 	cur := entry("new", 10, 1_757_000_000_000_000_000, "")
 	cur.GenerationID = "v1"
 
@@ -300,7 +328,7 @@ func TestSamplingSelectsRoughlyTheStatedFraction(t *testing.T) {
 // go unverified indefinitely, which is the "skip forever" the policy matrix
 // exists to prevent.
 func TestSampledPolicyStillReadsEveryPathOnceTheIntervalElapses(t *testing.T) {
-	pol := model.VerificationPolicyFor(model.TrustWeak, model.PresetStrong)
+	pol := model.VerificationPolicyFor(model.TrustWeak, model.PresetTrustMetadata)
 
 	var unsampled string
 	for i := range 10000 {
@@ -331,7 +359,7 @@ func TestSampledPolicyStillReadsEveryPathOnceTheIntervalElapses(t *testing.T) {
 // A sampled path is read on its turn even inside the interval, which is what
 // makes sampling a verification strategy rather than a slower timer.
 func TestSampledPathsAreReadInsideTheInterval(t *testing.T) {
-	pol := model.VerificationPolicyFor(model.TrustWeak, model.PresetStrong)
+	pol := model.VerificationPolicyFor(model.TrustWeak, model.PresetTrustMetadata)
 
 	var hit string
 	for i := range 10000 {
@@ -379,7 +407,7 @@ func TestEveryDecisionCarriesAReason(t *testing.T) {
 	prev.GenerationID = "v1"
 
 	for _, class := range []model.TrustClass{model.TrustStrong, model.TrustWeak, model.TrustUnknown} {
-		for _, preset := range []model.MetadataTrustPreset{model.PresetStrong, model.PresetConservative} {
+		for _, preset := range []model.MetadataTrustPreset{model.PresetTrustMetadata, model.PresetConservative} {
 			pol := model.VerificationPolicyFor(class, preset)
 			if got := Decide(prev, prev, pol, now); got.Reason == "" {
 				t.Errorf("%s/%s produced action %q with no reason", class, preset, got.Action)

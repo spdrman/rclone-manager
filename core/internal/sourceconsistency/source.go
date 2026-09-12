@@ -1,20 +1,56 @@
 package sourceconsistency
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// Stat is the three facts a capture compares across its own read window.
+// Kind is what a source says is at a path. It is part of Stat rather than
+// derived later because the reader has to know it BEFORE it opens anything:
+// reading a symlink's target is a decision about symlink semantics that
+// belongs to the backend capability matrix, and a reader that made it by
+// accident would be making it in the most expensive possible place.
+//
+// The empty Kind is not one of these values and is not treated as
+// "regular". A source that does not say what is at a path has not answered
+// the question, and the reader reports that loudly (OutcomeUnreadable)
+// rather than assuming the answer that costs a read.
+type Kind string
+
+const (
+	// KindRegular is a file with content to read. The only kind this reader
+	// captures bytes from.
+	KindRegular Kind = "regular"
+
+	// KindDir is a directory. Enumeration is not this package's decision.
+	KindDir Kind = "directory"
+
+	// KindSymlink is a symbolic link, reported as itself and never followed.
+	KindSymlink Kind = "symlink"
+
+	// KindOther is a socket, device, fifo or anything else a source can
+	// name. Grouped, because the reader's answer for all of them is the
+	// same: there is no content here to prove coherent.
+	KindOther Kind = "other"
+)
+
+func (k Kind) String() string { return string(k) }
+
+// Stat is the facts a capture compares across its own read window.
 // Deliberately not os.FileInfo: the comparison has to work the same way for
 // a local directory and for a remote source reached over a transport, and
 // most of os.FileInfo has no answer on the far side.
 type Stat struct {
+	// Kind is what the source says is at the path, and it is what decides
+	// whether there is content to capture at all.
+	Kind Kind
+
 	// Size is the length the source reports.
 	Size int64
 
@@ -44,9 +80,25 @@ type Stat struct {
 // handle rather than on the path on purpose: an fstat answers about the
 // object the bytes came from even after the path has been renamed onto,
 // which is exactly the case a path stat cannot distinguish.
+//
+// Every method that can block carries a context, which is why this is not
+// an io.Reader. The one source implementation in this package reads a local
+// file and can only check the context between reads; the implementations
+// this interface exists for reach a source over a transport, where a read
+// that never returns is an ordinary Tuesday and a run that cannot be
+// cancelled through it is a run that hangs forever. Handing the context to
+// the source is the only place that can be fixed.
 type File interface {
-	io.Reader
-	Stat() (Stat, error)
+	// Read fills p and must abandon the read when ctx is done.
+	Read(ctx context.Context, p []byte) (int, error)
+
+	// Stat answers about the object this handle was opened on, not about
+	// whatever the path names now.
+	Stat(ctx context.Context) (Stat, error)
+
+	// Close releases the handle. It takes no context: a close that hangs is
+	// a bug in the source, and giving a caller a way to abandon one would
+	// leak the handle rather than fix it.
 	Close() error
 }
 
@@ -55,14 +107,23 @@ type File interface {
 // order real mutations against a real reader without any test seam in the
 // reader itself.
 type Source interface {
-	Stat(path string) (Stat, error)
-	Open(path string) (File, error)
+	Stat(ctx context.Context, path string) (Stat, error)
+	Open(ctx context.Context, path string) (File, error)
 }
 
 // ErrEscapesRoot is returned for a path that resolves outside the source's
 // root. It is its own error rather than an os error because it is not the
 // filesystem's answer, it is this package refusing to ask the question.
 var ErrEscapesRoot = errors.New("path resolves outside the source root")
+
+// ErrNoRoot is returned by an OSSource that was built without one.
+//
+// It is a refusal rather than a default because the default is dangerous in
+// a way that is easy to miss: filepath.Join("", "etc/shadow") is
+// "etc/shadow", so an empty root silently relocates every path in a run to
+// whatever the process's working directory happens to be, and the lexical
+// containment check below would pass every one of them.
+var ErrNoRoot = errors.New("the source has no root directory")
 
 // OSSource is a local directory tree. Paths are relative to Root.
 //
@@ -72,13 +133,18 @@ var ErrEscapesRoot = errors.New("path resolves outside the source root")
 // name off a source as untrusted). It does NOT resolve symlinks, and that
 // is a deliberate boundary rather than an omission: whether a symlink is
 // stored, followed or skipped is the backend capability matrix's
-// symlink_semantics decision, and a reader that quietly followed one would
-// be making that decision by accident, in the most expensive possible place.
+// symlink_semantics decision. Stat reports a symlink as KindSymlink and
+// Open refuses to traverse one, so the decision cannot be made here by
+// accident.
 type OSSource struct {
 	Root string
 }
 
 func (s OSSource) resolve(path string) (string, error) {
+	if s.Root == "" {
+		return "", fmt.Errorf("%w, so %q cannot be resolved", ErrNoRoot, path)
+	}
+
 	if filepath.IsAbs(path) {
 		return "", fmt.Errorf("%w: %q is absolute", ErrEscapesRoot, path)
 	}
@@ -97,7 +163,13 @@ func (s OSSource) resolve(path string) (string, error) {
 	return full, nil
 }
 
-func (s OSSource) Stat(path string) (Stat, error) {
+// Stat lstats the path: a symlink is reported as a symlink, never as
+// whatever it points at.
+func (s OSSource) Stat(ctx context.Context, path string) (Stat, error) {
+	if err := ctx.Err(); err != nil {
+		return Stat{}, err
+	}
+
 	full, err := s.resolve(path)
 	if err != nil {
 		return Stat{}, err
@@ -111,13 +183,21 @@ func (s OSSource) Stat(path string) (Stat, error) {
 	return statOfFileInfo(fi), nil
 }
 
-func (s OSSource) Open(path string) (File, error) {
+// Open opens the path itself and not a link's target. The O_NOFOLLOW is the
+// second half of the symlink boundary: the reader checks the kind from a
+// stat first, and this is what refuses the race where a symlink is put in
+// place between that stat and this open.
+func (s OSSource) Open(ctx context.Context, path string) (File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	full, err := s.resolve(path)
 	if err != nil {
 		return nil, err
 	}
 
-	f, err := os.Open(full)
+	f, err := os.OpenFile(full, os.O_RDONLY|openNoFollow, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
@@ -129,10 +209,26 @@ type osFile struct {
 	f *os.File
 }
 
-func (o osFile) Read(p []byte) (int, error) { return o.f.Read(p) }
-func (o osFile) Close() error               { return o.f.Close() }
+// Read checks the context and then reads. A local read cannot be
+// interrupted once the syscall is in flight, so the check is between reads
+// and that is all this implementation can honestly offer; the contract
+// exists for the sources where it is the difference between a cancelled run
+// and a hung one.
+func (o osFile) Read(ctx context.Context, p []byte) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 
-func (o osFile) Stat() (Stat, error) {
+	return o.f.Read(p)
+}
+
+func (o osFile) Close() error { return o.f.Close() }
+
+func (o osFile) Stat(ctx context.Context) (Stat, error) {
+	if err := ctx.Err(); err != nil {
+		return Stat{}, err
+	}
+
 	fi, err := o.f.Stat()
 	if err != nil {
 		return Stat{}, fmt.Errorf("stat open file: %w", err)
@@ -143,9 +239,23 @@ func (o osFile) Stat() (Stat, error) {
 
 func statOfFileInfo(fi os.FileInfo) Stat {
 	return Stat{
+		Kind:         kindOfMode(fi.Mode()),
 		Size:         fi.Size(),
 		ModTimeNanos: fi.ModTime().UnixNano(),
 		Identity:     fileIdentity(fi),
+	}
+}
+
+func kindOfMode(mode fs.FileMode) Kind {
+	switch {
+	case mode.IsRegular():
+		return KindRegular
+	case mode.IsDir():
+		return KindDir
+	case mode&fs.ModeSymlink != 0:
+		return KindSymlink
+	default:
+		return KindOther
 	}
 }
 
@@ -159,6 +269,13 @@ func statOfFileInfo(fi os.FileInfo) Stat {
 func describeMovement(before, after Stat) string {
 	if before.Identity != "" && after.Identity != "" && before.Identity != after.Identity {
 		return fmt.Sprintf("the path stopped naming the object that was read (%s became %s), which is what a rename into place looks like", before.Identity, after.Identity)
+	}
+
+	// A kind change with no identity change is only reachable on a source
+	// that cannot name objects, which is exactly where it is the last
+	// remaining signal that the path is not what it was.
+	if before.Kind != after.Kind {
+		return fmt.Sprintf("the path named a %s before the read and a %s after it", before.Kind, after.Kind)
 	}
 
 	if before.Size != after.Size {

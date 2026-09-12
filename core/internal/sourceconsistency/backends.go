@@ -20,6 +20,21 @@ import "github.com/backupdproject/backupd/core/internal/model"
 // returns WITHOUT this manager reading the object. See its field
 // documentation in model; the narrowing is why local_volume and sftp carry
 // no hashes here even though rclone advertises md5 and sha1 for both.
+//
+// # This table is Phase 0 only
+//
+// It is a second home for facts the backend capability matrix owns, kept
+// separate here because the matrix lands on another Phase 0 branch and a
+// gate that could not be evaluated until two spikes merged would not be a
+// gate (ADR 0009 records the cost, which has already been paid once in
+// drift). Phase 1 retires it: ObjectGeneration below is derived from the
+// capability manifest key "generation_identity" - the strong-evidence
+// authority K0.3 adds, whose vocabulary is versioned | etag | none |
+// unknown - and the two remaining columns are derived from hash_support
+// and mtime_precision through the NAMED narrowings above rather than
+// copied. Nothing here imports backend, and nothing should until that
+// projection exists with a test per shipped backend asserting the
+// projected value rather than the declared one.
 var BundledSourceSignals = map[string]model.SourceSignals{
 	// A local filesystem: the richest metadata of the three and no content
 	// evidence at all. Sizes that mean what they say, full ownership and

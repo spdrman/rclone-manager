@@ -14,7 +14,8 @@
 //   - a change finer than a one-second timestamp;
 //   - a write landing in the middle of our read, which is what tears a file;
 //   - a rename onto the path, which is how every careful writer publishes;
-//   - a rename away and a delete, which is an ordinary event in a live tree.
+//   - a rename away and a delete, which is an ordinary event in a live tree;
+//   - a source that stops answering, which is what a hung remote is.
 //
 // The first case is the one with teeth, because no amount of metadata sees
 // it. It is the case kopia v0.23.1's cached-entry heuristic gets wrong by
@@ -26,6 +27,7 @@ package sourceconsistency
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +37,14 @@ import (
 	"github.com/backupdproject/backupd/core/internal/model"
 )
 
+// liveRun is a run under the mode that promises the least and the policy
+// that trusts the least, which is the right baseline for the completeness
+// assertions below: they are about what the captures prove, not about what
+// the operator arranged.
+func liveRun(mode model.ConsistencyMode) *Run {
+	return NewRun(mode, model.TrustWeak, model.VerificationPolicyFor(model.TrustWeak, model.PresetConservative))
+}
+
 // A file nobody touches is captured once, on the first attempt, and its
 // digest is the digest of its content. This is the baseline the other cases
 // are deviations from; without it, a harness that reported "incomplete" for
@@ -43,7 +53,8 @@ func TestQuietFileIsCapturedOnTheFirstAttempt(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "quiet", "the content")
 
-	got := Reader{Source: OSSource{Root: dir}}.Capture(context.Background(), "quiet")
+	r := NewReader(OSSource{Root: dir}, model.ModeLiveBestEffort, ReaderOptions{})
+	got := r.Capture(context.Background(), "quiet")
 
 	if got.Outcome != OutcomeStable {
 		t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeStable)
@@ -53,6 +64,9 @@ func TestQuietFileIsCapturedOnTheFirstAttempt(t *testing.T) {
 	}
 	if got.Attempts != 1 {
 		t.Errorf("attempts = %d, want 1", got.Attempts)
+	}
+	if got.Kind != KindRegular {
+		t.Errorf("kind = %q, want %q", got.Kind, KindRegular)
 	}
 	if got.Size != int64(len("the content")) {
 		t.Errorf("size = %d, want %d", got.Size, len("the content"))
@@ -80,7 +94,8 @@ func TestWriteDuringReadIsRetriedAndNeverRecordedTorn(t *testing.T) {
 		afterChunk:   func() { rewrite(t, path, strings.Repeat("b", 8192)) },
 	}
 
-	got := Reader{Source: src, ChunkSize: 64}.Capture(context.Background(), "torn")
+	r := NewReader(src, model.ModeLiveBestEffort, ReaderOptions{ChunkSize: 64})
+	got := r.Capture(context.Background(), "torn")
 
 	if got.Outcome != OutcomeRetried {
 		t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeRetried)
@@ -115,7 +130,8 @@ func TestASourceThatNeverSettlesMarksTheRunIncomplete(t *testing.T) {
 		},
 	}
 
-	got := Reader{Source: src, ChunkSize: 64, MaxAttempts: 3}.Capture(context.Background(), "busy")
+	r := NewReader(src, model.ModeLiveBestEffort, ReaderOptions{ChunkSize: 64, MaxAttempts: 3})
+	got := r.Capture(context.Background(), "busy")
 
 	if got.Outcome != OutcomeIncomplete {
 		t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeIncomplete)
@@ -127,7 +143,7 @@ func TestASourceThatNeverSettlesMarksTheRunIncomplete(t *testing.T) {
 		t.Errorf("attempts = %d, want exactly the 3 it was allowed", got.Attempts)
 	}
 
-	run := &Run{Mode: model.ModeLiveBestEffort}
+	run := liveRun(model.ModeLiveBestEffort)
 	run.Record(got)
 	if run.Complete() {
 		t.Fatal("a run holding an unverified capture reports itself complete")
@@ -152,7 +168,11 @@ func TestSameSizeContentChangeWithRestoredMtimeIsCaughtByTheConfirmRead(t *testi
 		afterChunk:   func() { rewritePreservingMetadata(t, path, strings.Repeat("b", 4096)) },
 	}
 
-	r := Reader{Source: src, ChunkSize: 64, ConfirmDigest: true}
+	r := NewReader(src, model.ModeLiveBestEffort, ReaderOptions{ChunkSize: 64})
+	if !r.ConfirmsDigest() {
+		t.Fatal("a live source's reader did not arm the confirm read; nothing below can be detected without it")
+	}
+
 	got := r.Capture(context.Background(), "sneaky")
 
 	if got.Outcome != OutcomeRetried {
@@ -162,19 +182,100 @@ func TestSameSizeContentChangeWithRestoredMtimeIsCaughtByTheConfirmRead(t *testi
 		t.Error("the recorded digest is not the digest of the settled content")
 	}
 
-	// And the honest half: without the confirm read the same mutation is
-	// invisible. This is asserted rather than left implicit because it is
-	// the exact cost of choosing the strong preset on a weak source, and
-	// the ADR publishes it.
+	// And the honest half: the ONE mode that switches the confirm read off
+	// is the one that claims the source cannot change at all, and this is
+	// what a false claim costs. It is asserted rather than left implicit
+	// because it is now the whole residual risk of the design, and the ADR
+	// publishes it.
 	rewritePreservingMetadata(t, path, strings.Repeat("a", 4096))
 	blind := &hookSource{
 		inner:        OSSource{Root: dir},
 		untilAttempt: 1,
 		afterChunk:   func() { rewritePreservingMetadata(t, path, strings.Repeat("b", 4096)) },
 	}
-	unconfirmed := Reader{Source: blind, ChunkSize: 64}.Capture(context.Background(), "sneaky")
+
+	frozen := NewReader(blind, model.ModeExternalSnapshot, ReaderOptions{ChunkSize: 64})
+	if frozen.ConfirmsDigest() {
+		t.Fatal("a frozen image's reader armed the confirm read; a second pass over an image that cannot change buys nothing")
+	}
+
+	unconfirmed := frozen.Capture(context.Background(), "sneaky")
 	if unconfirmed.Outcome != OutcomeStable {
 		t.Fatalf("without a confirm read the outcome was %q (%s); this test's premise is that metadata cannot see this mutation", unconfirmed.Outcome, unconfirmed.Reason)
+	}
+}
+
+// The confirm read is armed by the MODE and by nothing else, and this is the
+// case that says why. Under a policy that lets metadata skip content - the
+// sampled policy a weak source gets under the trust-metadata preset - most
+// paths are not read at all, and the ones that ARE read are the sample: the
+// only thing standing between that source and a silently stale restore
+// point. An earlier version of this package switched the confirm read off
+// for exactly those paths, on the theory that an operator who asked to read
+// less should not be charged twice, which left the sample unable to detect
+// the one mutation it exists to catch.
+//
+// So: a torn in-place rewrite with a restored timestamp, under a policy that
+// may skip content, on a path that was read. It must never be banked as
+// verified content.
+func TestAPathReadUnderASkipPolicyIsStillDigestConfirmed(t *testing.T) {
+	pol := model.VerificationPolicyFor(model.TrustWeak, model.PresetTrustMetadata)
+	if !pol.MetadataMaySkipContent() {
+		t.Fatalf("this test's premise is a policy that may skip content; %q may not", pol.Mode)
+	}
+
+	dir := t.TempDir()
+	path := writeFile(t, dir, "sampled", strings.Repeat("a", 4096))
+
+	settling := &hookSource{
+		inner:        OSSource{Root: dir},
+		untilAttempt: 1,
+		afterChunk:   func() { rewritePreservingMetadata(t, path, strings.Repeat("b", 4096)) },
+	}
+
+	r := NewReader(settling, model.ModeLiveBestEffort, ReaderOptions{ChunkSize: 64})
+	got := r.Capture(context.Background(), "sampled")
+
+	if got.Outcome != OutcomeRetried {
+		t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeRetried)
+	}
+	if got.Digest == sha256Hex([]byte(strings.Repeat("a", 4096))) {
+		t.Fatal("the torn first read was banked as the capture's content under a metadata-may-skip policy")
+	}
+	if got.Digest != sha256Hex([]byte(strings.Repeat("b", 4096))) {
+		t.Errorf("digest = %q, want the digest of the settled content", got.Digest)
+	}
+
+	// And the same mutation on every attempt: not verified, and the run says
+	// so. The alternative - a capture whose digest is a torn read - is a
+	// restore point that reports itself whole.
+	rewritePreservingMetadata(t, path, strings.Repeat("a", 4096))
+	relentless := &hookSource{
+		inner:        OSSource{Root: dir},
+		untilAttempt: 1000,
+		afterChunk: func() {
+			if strings.HasPrefix(readAll(t, path), "a") {
+				rewritePreservingMetadata(t, path, strings.Repeat("b", 4096))
+			} else {
+				rewritePreservingMetadata(t, path, strings.Repeat("a", 4096))
+			}
+		},
+	}
+
+	never := NewReader(relentless, model.ModeLiveBestEffort, ReaderOptions{ChunkSize: 64, MaxAttempts: 3}).
+		Capture(context.Background(), "sampled")
+
+	if never.Verified() {
+		t.Fatalf("outcome = %q (%s): a file rewritten under every attempt was banked as verified", never.Outcome, never.Reason)
+	}
+	if never.Outcome != OutcomeIncomplete {
+		t.Fatalf("outcome = %q (%s), want %q", never.Outcome, never.Reason, OutcomeIncomplete)
+	}
+
+	run := liveRun(model.ModeLiveBestEffort)
+	run.Record(never)
+	if run.Complete() {
+		t.Fatal("a run holding a file it could not prove reports itself complete")
 	}
 }
 
@@ -198,7 +299,8 @@ func TestSubSecondChangeInsideTheReadWindowIsDetected(t *testing.T) {
 		afterChunk:   func() { bumpModTime(t, path, 3*time.Millisecond) },
 	}
 
-	got := Reader{Source: src, ChunkSize: 64}.Capture(context.Background(), "subsecond")
+	r := NewReader(src, model.ModeLiveBestEffort, ReaderOptions{ChunkSize: 64})
+	got := r.Capture(context.Background(), "subsecond")
 
 	if got.Outcome != OutcomeRetried {
 		t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeRetried)
@@ -228,7 +330,8 @@ func TestRenameOntoThePathIsRetriedAndCapturesTheNewFile(t *testing.T) {
 		},
 	}
 
-	got := Reader{Source: src, ChunkSize: 4}.Capture(context.Background(), "published")
+	r := NewReader(src, model.ModeLiveBestEffort, ReaderOptions{ChunkSize: 4})
+	got := r.Capture(context.Background(), "published")
 
 	if got.Outcome != OutcomeRetried {
 		t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeRetried)
@@ -275,7 +378,8 @@ func TestRenameAwayAndDeleteLeaveAVanishedCaptureAndAnIncompleteRun(t *testing.T
 				afterChunk:   func() { tc.remove(t, dir, path) },
 			}
 
-			got := Reader{Source: src, ChunkSize: 64}.Capture(context.Background(), "going")
+			r := NewReader(src, model.ModeLiveBestEffort, ReaderOptions{ChunkSize: 64})
+			got := r.Capture(context.Background(), "going")
 
 			if got.Outcome != OutcomeVanished {
 				t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeVanished)
@@ -284,7 +388,7 @@ func TestRenameAwayAndDeleteLeaveAVanishedCaptureAndAnIncompleteRun(t *testing.T
 				t.Fatal("a file that is no longer there reports itself verified")
 			}
 
-			run := &Run{Mode: model.ModeLiveBestEffort}
+			run := liveRun(model.ModeLiveBestEffort)
 			run.Record(got)
 			if run.Complete() {
 				t.Fatal("a run that could not capture a selected file reports itself complete")
@@ -301,7 +405,8 @@ func TestRenameAwayAndDeleteLeaveAVanishedCaptureAndAnIncompleteRun(t *testing.T
 func TestAFileGoneBeforeTheReadIsVanishedNotUnreadable(t *testing.T) {
 	dir := t.TempDir()
 
-	got := Reader{Source: OSSource{Root: dir}}.Capture(context.Background(), "never-existed")
+	r := NewReader(OSSource{Root: dir}, model.ModeLiveBestEffort, ReaderOptions{})
+	got := r.Capture(context.Background(), "never-existed")
 
 	if got.Outcome != OutcomeVanished {
 		t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeVanished)
@@ -321,13 +426,128 @@ func TestACancelledContextStopsTheCaptureUnverified(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	got := Reader{Source: OSSource{Root: dir}, ChunkSize: 64}.Capture(ctx, "quiet")
+	r := NewReader(OSSource{Root: dir}, model.ModeLiveBestEffort, ReaderOptions{ChunkSize: 64})
+	got := r.Capture(ctx, "quiet")
 
 	if got.Verified() {
 		t.Fatalf("outcome = %q: a cancelled capture reports itself verified", got.Outcome)
 	}
-	if got.Outcome != OutcomeIncomplete {
-		t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeIncomplete)
+	if got.Outcome != OutcomeUnreadable {
+		t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeUnreadable)
+	}
+}
+
+// A source that stops answering mid-read is the case a bound on attempts
+// cannot help with: the reader is not retrying, it is waiting, and nothing
+// it knows about will ever come back. This is an ordinary remote failure -
+// an SSH session whose TCP connection is black-holed, an object store
+// holding a request open - and the only thing that gets the run back is the
+// context reaching the read.
+//
+// So the read I/O takes a context, and this test is what holds it there: a
+// source whose Read blocks until ctx is done, cancelled from outside, and a
+// Capture that returns promptly with an unverified outcome. Without the
+// context in Read there is nothing for a test to assert, because Capture
+// never returns at all.
+func TestACancelledContextUnblocksAHungRead(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "hung", strings.Repeat("a", 4096))
+
+	src := &blockingSource{inner: OSSource{Root: dir}, opened: make(chan struct{}, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan Capture, 1)
+	go func() {
+		r := NewReader(src, model.ModeLiveBestEffort, ReaderOptions{ChunkSize: 64})
+		done <- r.Capture(ctx, "hung")
+	}()
+
+	select {
+	case <-src.opened:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reader never opened the file")
+	}
+
+	select {
+	case got := <-done:
+		t.Fatalf("Capture returned %q (%s) before the context was cancelled; this test's premise is a read that never returns on its own", got.Outcome, got.Reason)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+
+	select {
+	case got := <-done:
+		if got.Verified() {
+			t.Fatalf("outcome = %q: a capture abandoned mid-read reports itself verified", got.Outcome)
+		}
+		if got.Outcome != OutcomeUnreadable {
+			t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeUnreadable)
+		}
+		if !strings.Contains(got.Reason, context.Canceled.Error()) {
+			t.Errorf("reason = %q, want it to name the cancellation", got.Reason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a cancelled context did not unblock a hung read; the context is not reaching the source's I/O")
+	}
+}
+
+// A symlink has no content this reader captures, and saying so is a
+// different answer from failing to capture it.
+//
+// The bug this pins is specific: Stat lstats the path (a symlink is a
+// symlink) and a read through it would fstat the TARGET, so the reader's own
+// identity check saw two different objects, retried three times and reported
+// every symlink in the tree as an incomplete capture. That is a false alarm
+// on an ordinary tree and it would hide the real ones.
+//
+// The answer is to name what is there and leave the decision where it
+// belongs: whether a symlink is stored, followed or skipped is the backend
+// capability matrix's symlink_semantics decision, not a content reader's.
+func TestASymlinkIsNamedNotReadThroughAndDoesNotFailTheRun(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "target", "the target's content")
+	if err := os.Symlink(filepath.Join(dir, "target"), filepath.Join(dir, "link")); err != nil {
+		t.Skipf("this platform will not create a symlink: %v", err)
+	}
+
+	r := NewReader(OSSource{Root: dir}, model.ModeLiveBestEffort, ReaderOptions{})
+	got := r.Capture(context.Background(), "link")
+
+	if got.Outcome != OutcomeNotAFile {
+		t.Fatalf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeNotAFile)
+	}
+	if got.Kind != KindSymlink {
+		t.Errorf("kind = %q, want %q", got.Kind, KindSymlink)
+	}
+	if got.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1: a symlink is not a file that failed to hold still", got.Attempts)
+	}
+	if got.Verified() {
+		t.Error("a symlink reports itself as verified content")
+	}
+	if got.Digest != "" || got.Size != 0 {
+		t.Errorf("the reader read through the symlink: digest %q, size %d", got.Digest, got.Size)
+	}
+	if got.Digest == sha256Hex([]byte("the target's content")) {
+		t.Error("the capture holds the target's content, which is the symlink decision made by accident")
+	}
+
+	run := liveRun(model.ModeExternallyQuiesced)
+	run.Record(got)
+	if !run.Complete() {
+		t.Fatalf("a symlink made the run incomplete: %v", run.IncompleteReasons())
+	}
+	if got := run.ContractViolations(); len(got) != 0 {
+		t.Errorf("a symlink was reported as a mutation under a promised mode: %v", got)
+	}
+
+	// A directory reaches the same answer by the same route, which is what
+	// makes the outcome about "there is no content here" rather than about
+	// symlinks specifically.
+	if dirCapture := r.Capture(context.Background(), "."); dirCapture.Outcome != OutcomeNotAFile || dirCapture.Kind != KindDir {
+		t.Errorf("a directory gave outcome %q kind %q (%s), want %q/%q", dirCapture.Outcome, dirCapture.Kind, dirCapture.Reason, OutcomeNotAFile, KindDir)
 	}
 }
 
@@ -344,49 +564,76 @@ func TestOSSourceRefusesToLeaveItsRoot(t *testing.T) {
 	t.Cleanup(func() { _ = os.Remove(outside) })
 
 	src := OSSource{Root: dir}
-	if _, err := src.Stat("../outside-the-root"); err == nil {
+	ctx := context.Background()
+	if _, err := src.Stat(ctx, "../outside-the-root"); err == nil {
 		t.Fatal("Stat followed a path out of the root")
 	}
-	if _, err := src.Open("../outside-the-root"); err == nil {
+	if _, err := src.Open(ctx, "../outside-the-root"); err == nil {
 		t.Fatal("Open followed a path out of the root")
 	}
 
-	got := Reader{Source: src}.Capture(context.Background(), "../outside-the-root")
+	got := NewReader(src, model.ModeLiveBestEffort, ReaderOptions{}).Capture(ctx, "../outside-the-root")
 	if got.Verified() {
 		t.Fatalf("outcome = %q: a path out of the root was captured as verified", got.Outcome)
 	}
 }
 
-// Whether a confirm read happens is a decision about the mode and the
-// policy, not a knob a caller sets by hand at each call site. Under a mode
-// that guarantees a point in time there is nothing to confirm: the source
-// cannot change, and a second full read would double the I/O of every run
-// for no information.
-func TestConfirmReadIsRequiredExactlyWhereItBuysSomething(t *testing.T) {
-	always := model.VerificationPolicyFor(model.TrustWeak, model.PresetConservative)
-	sampled := model.VerificationPolicyFor(model.TrustWeak, model.PresetStrong)
+// A source with no root at all reads whatever the process's working
+// directory happens to contain, because filepath.Join("", "x") is "x" and
+// the lexical containment check would then pass every path in the run. The
+// refusal is by sentinel error so a caller can tell a misconfigured source
+// from a hostile path.
+func TestOSSourceWithNoRootRefusesEveryPath(t *testing.T) {
+	src := OSSource{}
+	ctx := context.Background()
 
+	if _, err := src.Stat(ctx, "go.mod"); !errors.Is(err, ErrNoRoot) {
+		t.Errorf("Stat error = %v, want %v", err, ErrNoRoot)
+	}
+	if _, err := src.Open(ctx, "go.mod"); !errors.Is(err, ErrNoRoot) {
+		t.Errorf("Open error = %v, want %v", err, ErrNoRoot)
+	}
+
+	got := NewReader(src, model.ModeLiveBestEffort, ReaderOptions{}).Capture(ctx, "go.mod")
+	if got.Verified() {
+		t.Fatalf("outcome = %q: a rootless source captured a path as verified", got.Outcome)
+	}
+	if got.Outcome != OutcomeUnreadable {
+		t.Errorf("outcome = %q (%s), want %q", got.Outcome, got.Reason, OutcomeUnreadable)
+	}
+}
+
+// Whether a confirm read happens is a decision about the mode, and about
+// nothing else. It is off under exactly one mode - the one that says the
+// source cannot change while it is read - and on everywhere else, including
+// under every policy that lets metadata skip content, because a path that
+// IS read has to be proven whatever made it eligible to be skipped.
+func TestConfirmReadIsRequiredUnlessTheSourceCannotChange(t *testing.T) {
 	for _, tc := range []struct {
 		mode model.ConsistencyMode
-		pol  model.VerificationPolicy
 		want bool
 	}{
-		{model.ModeLiveBestEffort, always, true},
-		{model.ModeExternallyQuiesced, always, true},
-		{model.ModeExternalSnapshot, always, false},
-		{model.ModeLiveBestEffort, sampled, false},
+		{model.ModeLiveBestEffort, true},
+		{model.ModeExternallyQuiesced, true},
+		{model.ModeExternalSnapshot, false},
+		{model.ConsistencyMode("something new"), true},
 	} {
-		if got := ConfirmReadRequired(tc.mode, tc.pol); got != tc.want {
-			t.Errorf("ConfirmReadRequired(%s, %s) = %v, want %v", tc.mode, tc.pol.Mode, got, tc.want)
+		if got := ConfirmReadRequired(tc.mode); got != tc.want {
+			t.Errorf("ConfirmReadRequired(%s) = %v, want %v", tc.mode, got, tc.want)
 		}
 	}
 
-	r := NewReader(OSSource{Root: t.TempDir()}, model.ModeLiveBestEffort, always)
-	if !r.ConfirmDigest {
-		t.Error("NewReader did not arm the confirm read for a live source under an always-verify policy")
+	live := NewReader(OSSource{Root: t.TempDir()}, model.ModeLiveBestEffort, ReaderOptions{})
+	if !live.ConfirmsDigest() {
+		t.Error("a live source's reader did not arm the confirm read")
 	}
-	if r.MaxAttempts <= 0 {
+	if live.MaxAttempts() <= 0 {
 		t.Error("NewReader left the retry bound unset, which is an unbounded retry")
+	}
+
+	frozen := NewReader(OSSource{Root: t.TempDir()}, model.ModeExternalSnapshot, ReaderOptions{})
+	if frozen.ConfirmsDigest() {
+		t.Error("a frozen image's reader armed a second pass that cannot see anything")
 	}
 }
 
@@ -394,10 +641,17 @@ func TestConfirmReadIsRequiredExactlyWhereItBuysSomething(t *testing.T) {
 // promise being broken, and the run reports it separately from its own
 // completeness. An operator who quiesced the wrong service has a working
 // backup and a false belief, and the second one is what this tells them.
+//
+// An I/O failure is NOT such a mutation, and that is the other half of this
+// case: a file this manager could not read says nothing about whether
+// anybody wrote to the source, so it makes the run incomplete and leaves the
+// quiesce claim alone. Folding the two together reported a permission error
+// as evidence that the operator's arrangement had failed.
 func TestMutationsUnderAPromisedModeAreReportedAsContractViolations(t *testing.T) {
 	moved := Capture{Path: "moved", Outcome: OutcomeRetried, Attempts: 2, Reason: "size changed"}
+	unreadable := Capture{Path: "locked", Outcome: OutcomeUnreadable, Attempts: 1, Reason: "permission denied"}
 
-	live := &Run{Mode: model.ModeLiveBestEffort}
+	live := liveRun(model.ModeLiveBestEffort)
 	live.Record(moved)
 	if got := live.ContractViolations(); len(got) != 0 {
 		t.Errorf("live_best_effort reported %v as a violation; a live source changing is the mode, not a fault", got)
@@ -406,12 +660,60 @@ func TestMutationsUnderAPromisedModeAreReportedAsContractViolations(t *testing.T
 		t.Error("a run whose only capture settled on retry is not complete")
 	}
 
-	quiesced := &Run{Mode: model.ModeExternallyQuiesced}
+	quiesced := liveRun(model.ModeExternallyQuiesced)
 	quiesced.Record(moved)
 	if got := quiesced.ContractViolations(); len(got) != 1 {
 		t.Fatalf("ContractViolations() = %v, want exactly one", got)
 	}
 	if !quiesced.Complete() {
 		t.Error("the capture settled, so the run is complete even though the quiesce claim was false")
+	}
+
+	quiesced.Record(unreadable)
+	if got := quiesced.ContractViolations(); len(got) != 1 {
+		t.Errorf("ContractViolations() = %v: an unreadable file was reported as a mutation", got)
+	}
+	if quiesced.Complete() {
+		t.Error("a run holding a file it could not read reports itself complete")
+	}
+}
+
+// A run report is the record of what a run proved. A caller that was handed
+// the run's own slices could append to that record, or shorten it, after the
+// run was over - and the bug that produces is a report that says something
+// the run never observed, which is the one thing this package exists to
+// prevent.
+func TestRunAccessorsDoNotHandOutTheRunsOwnState(t *testing.T) {
+	run := liveRun(model.ModeExternallyQuiesced)
+	run.Record(Capture{Path: "a", Outcome: OutcomeRetried, Attempts: 2, Reason: "size changed"})
+	run.Record(Capture{Path: "b", Outcome: OutcomeIncomplete, Attempts: 3, Reason: "never settled"})
+
+	captures := run.Captures()
+	captures[0].Path = "not-a"
+	captures[0].Outcome = OutcomeStable
+
+	reasons := run.IncompleteReasons()
+	reasons[0] = "nothing to see here"
+
+	violations := run.ContractViolations()
+	violations[0] = "nothing to see here"
+
+	if got := run.Captures(); got[0].Path != "a" || got[0].Outcome != OutcomeRetried {
+		t.Errorf("a caller rewrote the run's captures: %+v", got[0])
+	}
+	if got := run.IncompleteReasons(); !strings.HasPrefix(got[0], "b: ") {
+		t.Errorf("a caller rewrote the run's incomplete reasons: %v", got)
+	}
+	if got := run.ContractViolations(); !strings.HasPrefix(got[0], "a ") {
+		t.Errorf("a caller rewrote the run's contract violations: %v", got)
+	}
+	if run.Mode() != model.ModeExternallyQuiesced {
+		t.Errorf("Mode() = %q, want %q", run.Mode(), model.ModeExternallyQuiesced)
+	}
+	if run.Trust() != model.TrustWeak {
+		t.Errorf("Trust() = %q, want %q", run.Trust(), model.TrustWeak)
+	}
+	if run.Policy().Mode != model.VerifyAlways {
+		t.Errorf("Policy().Mode = %q, want %q", run.Policy().Mode, model.VerifyAlways)
 	}
 }

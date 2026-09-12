@@ -66,6 +66,34 @@ func TestConsistencyModeAndTrustClassWireStringsArePinned(t *testing.T) {
 	}
 }
 
+// The preset is an operator-facing configuration value and a trust class is
+// a derived verdict, and no spelling may serve as both. They did once:
+// `strong` was a preset AND a class, so a run report that said "strong"
+// told nobody which of the two it meant and a source could be "weak under
+// strong". The vocabularies are asserted to be disjoint rather than merely
+// renamed, because the collision would come back the moment somebody added
+// a third value to either side.
+func TestPresetAndTrustClassVocabulariesDoNotCollide(t *testing.T) {
+	presets := map[MetadataTrustPreset]string{
+		PresetTrustMetadata: "trust_metadata",
+		PresetConservative:  "conservative",
+	}
+
+	for preset, want := range presets {
+		if got := preset.String(); got != want {
+			t.Errorf("MetadataTrustPreset string = %q, want %q", got, want)
+		}
+	}
+
+	for _, class := range []TrustClass{TrustStrong, TrustWeak, TrustUnknown} {
+		for preset := range presets {
+			if class.String() == preset.String() {
+				t.Errorf("%q is both a trust class and a metadata-trust preset", class)
+			}
+		}
+	}
+}
+
 // An unknown mode string must be refused rather than defaulted. The zero
 // ConsistencyMode is the empty string, and a parser that quietly answered
 // live_best_effort for a typo would give the weakest guarantee to an
@@ -250,11 +278,11 @@ func TestVerificationPolicyMatrix(t *testing.T) {
 		preset   MetadataTrustPreset
 		wantMode VerificationMode
 	}{
-		{TrustStrong, PresetStrong, VerifyRemoteHash},
+		{TrustStrong, PresetTrustMetadata, VerifyRemoteHash},
 		{TrustStrong, PresetConservative, VerifyPeriodic},
-		{TrustWeak, PresetStrong, VerifySampled},
+		{TrustWeak, PresetTrustMetadata, VerifySampled},
 		{TrustWeak, PresetConservative, VerifyAlways},
-		{TrustUnknown, PresetStrong, VerifyAlways},
+		{TrustUnknown, PresetTrustMetadata, VerifyAlways},
 		{TrustUnknown, PresetConservative, VerifyAlways},
 	} {
 		got := VerificationPolicyFor(tc.class, tc.preset)
@@ -274,7 +302,7 @@ func TestVerificationPolicyMatrix(t *testing.T) {
 // skipping.
 func TestNoPolicyEverPermitsSkippingContentForever(t *testing.T) {
 	classes := []TrustClass{TrustStrong, TrustWeak, TrustUnknown, TrustClass("something new")}
-	presets := []MetadataTrustPreset{PresetStrong, PresetConservative, MetadataTrustPreset("typo")}
+	presets := []MetadataTrustPreset{PresetTrustMetadata, PresetConservative, MetadataTrustPreset("typo")}
 
 	for _, class := range classes {
 		for _, preset := range presets {
@@ -313,7 +341,7 @@ func TestUnrecognisedPresetIsTreatedAsConservative(t *testing.T) {
 // be VerifyNever spelled differently and would pass the interval check above
 // while sampling nothing.
 func TestSampledPolicyNamesAUsableFraction(t *testing.T) {
-	pol := VerificationPolicyFor(TrustWeak, PresetStrong)
+	pol := VerificationPolicyFor(TrustWeak, PresetTrustMetadata)
 	if pol.Mode != VerifySampled {
 		t.Fatalf("mode = %q, want %q", pol.Mode, VerifySampled)
 	}

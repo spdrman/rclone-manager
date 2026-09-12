@@ -351,14 +351,23 @@ func ClassifyMetadataTrust(s SourceSignals) TrustClassification {
 // product trust what your source tells it". Two values, because a third
 // would be a number nobody can choose between: the question is really
 // "would you rather pay I/O or carry risk", and that has two ends.
+//
+// Neither value is named "strong", and that is deliberate rather than
+// awkward. "strong" is already a TrustClass - a DERIVED statement about
+// what a backend can prove - and a preset with the same spelling made
+// "strong" mean two unrelated things in the same sentence: a source could
+// be strong under the strong preset, or weak under it, and a run report
+// that said "strong" told an operator nothing about which half it meant.
+// The preset names what the operator is asking for; the class names what
+// the source can back up.
 type MetadataTrustPreset string
 
 const (
-	// PresetStrong takes the backend's metadata at close to face value and
-	// pays the least I/O. On a strong source it is the right default. On a
-	// weak one it is a deliberate, stated trade: sampled verification and a
-	// re-read floor, not proof.
-	PresetStrong MetadataTrustPreset = "strong"
+	// PresetTrustMetadata takes the backend's metadata at close to face
+	// value and pays the least I/O. On a source whose trust class is strong
+	// it is the right default. On a weak one it is a deliberate, stated
+	// trade: sampled verification and a re-read floor, not proof.
+	PresetTrustMetadata MetadataTrustPreset = "trust_metadata"
 
 	// PresetConservative spends read bandwidth instead of trusting
 	// metadata. On a weak or unknown source it re-reads and re-hashes every
@@ -420,7 +429,7 @@ const (
 	weakSampleInterval = 7 * 24 * time.Hour
 
 	// weakSampleFraction is the share of paths a weak source re-reads every
-	// run under the strong preset.
+	// run under the trust-metadata preset.
 	weakSampleFraction = 0.05
 )
 
@@ -472,7 +481,7 @@ func (p VerificationPolicy) MetadataMaySkipContent() bool {
 // unrecognised class as TrustUnknown, because a typo in a configuration key
 // must never buy a weaker policy than the one that was asked for.
 func VerificationPolicyFor(class TrustClass, preset MetadataTrustPreset) VerificationPolicy {
-	conservative := preset != PresetStrong
+	conservative := preset != PresetTrustMetadata
 
 	switch class {
 	case TrustStrong:

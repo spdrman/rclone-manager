@@ -44,19 +44,22 @@
 //   - Decide: the re-read decision, driven by a model.VerificationPolicy
 //     derived from the source's metadata-trust class. Where kopia would
 //     reuse on metadata alone and the class does not support it, this says
-//     read. KopiaMetadataReuse states the engine's rule in Go so the gap
-//     between the two is executable rather than a paragraph.
-//   - Reader: a capture that bounds its own window. It stats before the
-//     read, stats the OPEN DESCRIPTOR after it, re-stats the path, and -
-//     where the mode and policy call for it - reads a second time and
-//     compares digests, which is the only thing that catches a mutation
-//     whose metadata was put back. Every capture ends in a deterministic
-//     outcome: settled on the first attempt, settled after a bounded retry,
-//     or not verified. There is no path on which unproven bytes are recorded
-//     as proven.
+//     read. The engine's own rule is kopiaMetadataReuse in decide_test.go,
+//     which keeps the gap between the two executable without putting "what
+//     would kopia do" on this package's API surface.
+//   - Reader: a capture that bounds its own window. It classifies the path,
+//     stats before the read, stats the OPEN DESCRIPTOR after it, re-stats
+//     the path, and - unless the mode promises a frozen image - reads a
+//     second time and compares digests, which is the only thing that
+//     catches a mutation whose metadata was put back. Every capture ends in
+//     a deterministic outcome: settled on the first attempt, settled after
+//     a bounded retry, or not verified. There is no path on which unproven
+//     bytes are recorded as proven, and no way to build a Reader that skips
+//     the confirmation.
 //   - Run: the accumulator that makes a run's completeness a property of its
 //     captures, and that separates "this source moved" from "this source
-//     moved and the operator told us it could not".
+//     moved and the operator told us it could not", and both of those from
+//     "this source would not answer".
 //
 // # What this package deliberately does not do
 //
@@ -67,6 +70,9 @@
 // It also does not decide symlink or enumeration semantics. Whether a
 // symlink is stored, followed or skipped, and how a directory is listed
 // within a bounded memory budget, belong to the backend capability matrix
-// and the enumeration contract. The only capability facts read here are the
-// five that bear on trust, copied into model.SourceSignals.
+// and the enumeration contract. A symlink reaches a caller as a capture
+// whose Kind says what it is and whose outcome says there was no content to
+// prove; what happens to it next is the matrix's decision, not this
+// package's. The only capability facts read here are the five that bear on
+// trust, copied into model.SourceSignals.
 package sourceconsistency
