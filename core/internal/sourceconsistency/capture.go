@@ -35,6 +35,11 @@ const DefaultMaxAttempts = 3
 // concurrent run's memory.
 const defaultChunkSize = 128 << 10
 
+// minChunkSize is the floor bufferFor will not go below, so a tree of tiny
+// files does not pay an allocation per file that is smaller than the
+// allocator's own granularity anyway.
+const minChunkSize = 4 << 10
+
 // Outcome is how a capture ended. The set is closed and every member is
 // either verified or not; there is deliberately no "probably fine".
 type Outcome string
@@ -171,6 +176,35 @@ func (r Reader) chunkSize() int {
 	return defaultChunkSize
 }
 
+// bufferFor sizes the read buffer for a file the stat says is this long.
+//
+// It exists because measuring it mattered: a fixed defaultChunkSize buffer
+// per file costs 128 KiB of allocation whether the file is a gigabyte or
+// ten bytes, and a source tree is mostly small files. Over 20,000 ten-byte
+// files that was 2.5 GiB of garbage and it dominated the whole capture,
+// nearly tripling the per-file cost (the measurements are in
+// docs/adr/0009).
+//
+// The hint is only a hint: it comes from a stat that may already be stale,
+// which is the entire premise of this package. A buffer smaller than the
+// file simply means more iterations of a loop that reads to EOF, so a file
+// that grew between the stat and the read is still read in full.
+func (r Reader) bufferFor(hint int64) []byte {
+	size := r.chunkSize()
+
+	if hint >= 0 && hint < int64(size) {
+		// One byte over, so a file whose length the stat got exactly right
+		// still takes one Read to reach EOF rather than two.
+		if wanted := int(hint) + 1; wanted > minChunkSize {
+			size = wanted
+		} else {
+			size = minChunkSize
+		}
+	}
+
+	return make([]byte, size)
+}
+
 // Capture reads one file and reports what was proven about it.
 //
 // It never returns an error, for the reason sourcecheck.Run gives about its
@@ -264,7 +298,7 @@ func (r Reader) attempt(ctx context.Context, path string) (Capture, string, erro
 		return Capture{}, "", err
 	}
 
-	digest, read, after, err := r.readOnce(ctx, path)
+	digest, read, after, err := r.readOnce(ctx, path, before.Size)
 	if err != nil {
 		return Capture{}, "", err
 	}
@@ -287,7 +321,7 @@ func (r Reader) attempt(ctx context.Context, path string) (Capture, string, erro
 	}
 
 	if r.ConfirmDigest {
-		confirmed, _, _, err := r.readOnce(ctx, path)
+		confirmed, _, _, err := r.readOnce(ctx, path, after.Size)
 		if err != nil {
 			return Capture{}, "", err
 		}
@@ -310,7 +344,7 @@ func (r Reader) attempt(ctx context.Context, path string) (Capture, string, erro
 // digest, the byte count, and the stat of the descriptor the bytes came
 // from. The fstat is taken here, while the handle is still open, because
 // after the Close there is nothing left to ask.
-func (r Reader) readOnce(ctx context.Context, path string) (digest string, read int64, after Stat, err error) {
+func (r Reader) readOnce(ctx context.Context, path string, sizeHint int64) (digest string, read int64, after Stat, err error) {
 	f, err := r.Source.Open(path)
 	if err != nil {
 		return "", 0, Stat{}, err
@@ -318,7 +352,7 @@ func (r Reader) readOnce(ctx context.Context, path string) (digest string, read 
 	defer f.Close() //nolint:errcheck // a read-only handle's Close reports nothing this decision depends on
 
 	h := sha256.New()
-	buf := make([]byte, r.chunkSize())
+	buf := r.bufferFor(sizeHint)
 
 	for {
 		if err := ctx.Err(); err != nil {
