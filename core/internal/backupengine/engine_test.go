@@ -486,8 +486,10 @@ func TestLargeStreamIsBoundedInMemory(t *testing.T) {
 			biggest, where, streamBytes)
 	}
 
-	t.Logf("streamed %d bytes; peak heap %.1f MiB; repository %d bytes",
-		streamBytes, float64(peak)/(1<<20), dirSize(t, filepath.Join(root, "repo")))
+	biggest, _ := largestFile(t, filepath.Join(root, "repo"))
+	t.Logf("streamed %d bytes; peak heap %d bytes (%.1f MiB, %.2f%% of stream); repository %d bytes; largest blob %d bytes",
+		streamBytes, peak, float64(peak)/(1<<20), 100*float64(peak)/float64(streamBytes),
+		dirSize(t, filepath.Join(root, "repo")), biggest)
 }
 
 // TestCancellationClosesTheRemoteReader is the leak criterion. Cancelling
