@@ -1,13 +1,13 @@
 # The browser e2e signal
 
 The Playwright suite used to live in `ui/shared/e2e/`. It does not any
-more: issue #158 moved it to
+more: moved it to
 [`backupdproject/backupd-tests`](https://github.com/backupdproject/backupd-tests)
 as Suite B, so it tests this product the way an operator meets it, from
 outside, with nothing but a browser and a built artefact.
 
 This directory is what replaced it, and the replacement had to land in the
-same change as the removal. Issue #197 is why: before it, the suite had no
+same change as the removal. is why: before it, the suite had no
 automated execution anywhere. `nightly-e2e.yml`'s schedule was commented
 out, no workflow here triggered on anything at all, and
 `scripts/ci-local.sh` never invoked Playwright. So it ran when somebody
@@ -19,7 +19,7 @@ through four merges and was dismissed twice as an ordering flake.
 `scripts/ci-local.sh` runs `run-tests-repo-gate.sh` on every non-FAST run,
 which is every commit through `.husky/pre-commit`. That file is a four-line
 bash shim that execs `scripts/bdtools/e2e/run_tests_repo_gate.py`, which is
-the gate (#672); it stays a file at that path because
+the gate; it stays a file at that path because
 `scripts/tests/ci-local-gate.test.sh` fabricates a stand-in gate there inside a
 sandbox tree, and `ci-local.sh` keeps calling the shim so that stand-in is the
 thing that runs. The step:
@@ -85,7 +85,7 @@ change there and the pin bump in the same PR.
   matrix, still `workflow_dispatch`-only. It exists for a run on a clean
   machine with a downloadable trace, not as a gate: nothing triggers it.
   `ci.yml` is the one workflow here that does trigger on its own, on a
-  pull request into `release` (#575), and Suite B is not in it.
+  pull request into `release`, and Suite B is not in it.
 - **`backupd-tests` pins a build of this repository**, in its own
   `build-under-test.json`. The two pins point opposite ways on purpose. A
   new test cannot break in-flight work here until someone bumps this one,
@@ -97,7 +97,7 @@ specified and why, is in that repository's `docs/ci-signal.md`.
 
 ## The other thing in here: two throwaway machines and one real backup
 
-`two-machine-backup.sh` is issue #356, and it answers a different question
+`two-machine-backup.sh` is, and it answers a different question
 from everything above. Suite B asks whether the pages work. The CLI smoke
 slice asks whether the binary's contract holds. Neither can say that a
 fresh install, on a machine nobody has touched, pointed at another
@@ -120,7 +120,7 @@ this test exists not to do.
 The image under test is built from the working tree and moved across with
 `docker save | docker load`, so no registry is involved and the run proves
 this code. Every case asserts the engine reports the version and commit
-that were installed, which is #342's shape: a stale default installed
+that were installed, which is 's shape: a stale default installed
 0.1.0 once and the installer said "Installed."
 
 Four cases, and three of them exist because an issue was closed on
@@ -129,9 +129,9 @@ evidence that stopped short of a completed install:
 | case | what it settles |
 |---|---|
 | `plain` | the ordinary route: an explicit `--image`, and the canonical compose copied in from a checkout |
-| `no-arguments` | #347 and #346. `install` with no arguments at all, from one copied `install_docker_host.py` on a machine with no checkout: no `--compose-file`, no `--ssh-key`, no `--prefix`, no `--image`, running all the way to a serving stack and then a real backup |
-| `connection-cap` | #264. The source refuses a third simultaneous SSH connection from one address, with an `iptables` `connlimit` rule, which is the production rule restated. The case proves the cap bites before it trusts it |
-| `lifecycle` | #343's two counting criteria: an upgrade that preserves every user, backup set and catalogued artifact, counted before and after, and a factory reset proven by the resulting install issuing an enrollment link |
+| `no-arguments` | and `install` with no arguments at all, from one copied `install_docker_host.py` on a machine with no checkout: no `--compose-file`, no `--ssh-key`, no `--prefix`, no `--image`, running all the way to a serving stack and then a real backup |
+| `connection-cap` | The source refuses a third simultaneous SSH connection from one address, with an `iptables` `connlimit` rule, which is the production rule restated. The case proves the cap bites before it trusts it |
+| `lifecycle` | 's two counting criteria: an upgrade that preserves every user, backup set and catalogued artifact, counted before and after, and a factory reset proven by the resulting install issuing an enrollment link |
 
 Three outcomes rather than two, and the third is the point. A machine with
 no Docker, or one whose daemon refuses a privileged container, cannot
@@ -143,7 +143,7 @@ opt-out, and it ledgers too.
 ### Where it runs besides here
 
 All four cases run on every pull request into `release`, as the
-`two-machine-e2e` job in `.github/workflows/ci.yml` (issue #575). Merging
+`two-machine-e2e` job in `.github/workflows/ci.yml`. Merging
 into that branch publishes a signed image to a public registry, and this
 is the only test in the tree that says the thing being published works.
 
@@ -177,7 +177,7 @@ That used to be a range of line numbers, `sed -n '2,110p' "$0"`, so the help an
 operator reads was a set of coordinates rather than a piece of text: a comment
 inserted above the boundary rewrote it and deleting one truncated it, with
 nothing anywhere rendering either script's help. Both had already drifted by the
-time #514 was written, one of them to a sentence cut off inside a word.
+time was written, one of them to a sentence cut off inside a word.
 
 Edit the header freely; move a marker if you want the block to cover more or
 less. `scripts/tests/e2e-help.test.sh` renders both drivers and diffs them
@@ -186,9 +186,9 @@ against `scripts/tests/testdata/*.help.txt` on every gate run, the way
 somebody updates the golden on purpose. It also proves the property that used to
 be missing: a comment added above the block leaves the rendered help unchanged.
 
-## Reproducing #730 (the Activity fetch that throws)
+## Reproducing (the Activity fetch that throws)
 
-`backupd#730` is the Activity page's `fetch(/api/v1/activity)`
+`` is the Activity page's `fetch(/api/v1/activity)`
 throwing `TypeError: Failed to fetch` on a real 0.4.0 NAS, while `curl` to
 the same route answers cleanly. The client request is byte-for-byte the
 same relative, same-origin GET every other page makes (`ui/shared/src/api/
@@ -205,7 +205,7 @@ HTTP/1.1 and never exercises that transport.
 browser --TLS/HTTP2--> nginx (proxy-machine) --HTTP/1.1--> serve-ui --> serve
 ```
 
-Run it against the real published 0.4.0 image (the artefact #730 was seen
+Run it against the real published 0.4.0 image (the artefact was seen
 on), rather than a build from this tree:
 
 ```sh
@@ -220,9 +220,9 @@ RM_SEED_CYCLES=8 scripts/e2e/three-machine-web-ui.sh \
 
 The built-in `web-ui-smoke.mjs` client counts a failed request or an
 uncaught rejection on the Activity page as a failure, which is exactly
-#730's shape; `--suite ../backupd-tests/suites/web-ui` runs the full
+'s shape; `--suite../backupd-tests/suites/web-ui` runs the full
 Suite B, whose `real-path.spec.ts` asserts `getByRole("alert")` is absent
-on `/activity`. Either goes **red** if #730 reproduces over this transport.
+on `/activity`. Either goes **red** if reproduces over this transport.
 
 It is a genuine experiment, not a guaranteed repro. The proxy
 (`proxy-machine.Dockerfile`, `proxy.nginx.conf`) is a deliberately ordinary
@@ -233,9 +233,9 @@ if it stays green even here, the trigger is more specific to the operator's
 own front end (their proxy build, TLS stack, or browser), and the rig has
 narrowed it either way.
 
-## Reproducing #795 (the Activity page that shows nothing)
+## Reproducing (the Activity page that shows nothing)
 
-`backupd#795` is the other half of the same page failing, and unlike #730 it
+`` is the other half of the same page failing, and unlike it
 is not an experiment: the cause was known before the rig was asked to
 reproduce it. The web-ui container could not resolve the engine —
 `dial tcp: lookup rclone-manager: no such host` — so `serve-ui` answered

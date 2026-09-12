@@ -1,6 +1,6 @@
 # The `release` branch
 
-Issue #258. This is the policy the rest of the release path is built on, so it is
+ This is the policy the rest of the release path is built on, so it is
 worth reading before `.github/workflows/release.yml` or
 `scripts/release/publish-image.sh`, both of which assume it.
 
@@ -20,7 +20,7 @@ on it names the commit the shipped binaries were built from.
 **1. Append-only.** Never force-pushed, never rebased, never squash-merged into.
 
 This is the rule the other two exist to protect, and it is the direct answer to
-issue #174. That issue was a manifest pinning `c51a07f`, a commit made on a feature
+ That issue was a manifest pinning `c51a07f`, a commit made on a feature
 branch that GitHub's squash merge rewrote out of existence, leaving the manifest
 naming a SHA nobody could check out. Every parity check stated as "matches the
 release manifest" was comparing against a build that could not be reproduced.
@@ -63,7 +63,7 @@ dispatch was the only way in.
 - `scripts/release/verify-manifest-parity.sh` rebuilds each architecture and compares
   the extracted binaries' SHA-256 against the manifest, before the push. That is the
   half a SHA comparison cannot answer, and it is what replaced the guard that
-  compared the manifest's commit to `HEAD` (#260).
+  compared the manifest's commit to `HEAD`.
 
 ## What is policy rather than code
 
@@ -88,7 +88,7 @@ what makes rule 3 hold is the pull request being required at all, not a review n
 can give. The number is written down here rather than described, so that turning it up
 the day there is a second maintainer is a decision somebody makes on purpose.
 
-`required_status_checks` is issue #575, and it is the rule that makes any of this
+`required_status_checks` is, and it is the rule that makes any of this
 mean anything about the code: the other three are all about the shape of the
 history. The required context is exactly **`release gate`**, the aggregating job at
 the bottom of `.github/workflows/ci.yml`. It waits on every other job in that
@@ -201,10 +201,10 @@ check starts failing, loudly, on the next run rather than months later.
 1. Get the commit you want to publish onto `main`, green.
 2. Regenerate the manifest from a clean checkout of that commit:
    `VERSION=<x.y.z> scripts/release/record-release-hashes.sh`. It refuses a commit
-   that is not already on main, for #174's reason.
+   that is not already on main, for 's reason.
 3. Bump the version in `distribution/packaging/canonical.json` and let `derive.go`
    tell you every adapter that has to follow.
-4. Regenerate the compliance bundle: `(cd distribution && go run ./cmd/provenance -write)`.
+4. Regenerate the compliance bundle: `(cd distribution && go run./cmd/provenance -write)`.
 5. Prove it before you publish it: dispatch the Release workflow with `publish: false`.
    That path runs every guard and the parity rebuild against the real tree and stops
    before the registry.
@@ -228,8 +228,8 @@ check starts failing, loudly, on the next run rather than months later.
 than hiding.
 
 The pipeline that publishes a release is itself part of what `v0.1.0` shipped: the
-push trigger (#259), the guard that made the publish script satisfiable at all
-(#260), and this policy (#258). None of it was on `main` when the release was cut, so
+push trigger, the guard that made the publish script satisfiable at all
+, and this policy. None of it was on `main` when the release was cut, so
 the tree that published `v0.1.0` was a branch under review rather than `main`.
 
 What was kept, because it is the part that matters: the manifest pins `13ed710`,

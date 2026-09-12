@@ -533,7 +533,7 @@ regardless of everything above.
 **Hardware:** A UGREEN NAS running UGOS Pro
 **Deliverable:** `docs/submission/ugreen.md` (UGREEN App Center)
 
-**This section is written and not yet runnable.** EPIC D's #83 has produced no `.UPK`, so there is nothing to install. It is here so that #178 has the procedure waiting rather than writing a second one, and the preflight records every UGREEN row as not yet applicable rather than as a failure. Nothing in this section is EPIC B's to run, and nothing in it can hold Phase 5 open.
+**This section is written and not yet runnable.** 's has produced no `.UPK`, so there is nothing to install. It is here so that has the procedure waiting rather than writing a second one, and the preflight records every UGREEN row as not yet applicable rather than as a failure. Nothing in this section is 's to run, and nothing in it can hold Phase 5 open.
 
 ### UGOS Pro: install
 

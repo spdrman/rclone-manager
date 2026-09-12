@@ -39,7 +39,7 @@ those would move somebody's data or invalidate a release record for no gain.
 
 ## The authoritative runtime contract lives next door
 
-Since issue #167, `container/compose.yaml` is not just the shape a generic Docker
+Since, `container/compose.yaml` is not just the shape a generic Docker
 deployment happens to take: it is the **authoritative runtime definition** every other
 deployment artifact derives from, held to a machine-checkable contract by
 `distribution/compose`. Read [`docs/runtime-contract.md`](runtime-contract.md) for the
@@ -59,7 +59,7 @@ originally packaged ahead of: `run`, `daemon`, `check`, `status`, `sources`, `ar
 defaults to the real long-running process (`/backupd-web serve`, see "The generic
 Web host" below) and `container/Dockerfile`'s `HEALTHCHECK` tracks `backupd
 status`'s real exit code (HEALTHY vs DEGRADED/STALE/FAILING), not just process liveness
-(issue #82/B4.1). Headless-only deployment (no web listener at all) is still available
+. Headless-only deployment (no web listener at all) is still available
 by overriding `command` to `["/backupd", "daemon"]`.
 
 ## rclone is compiled in, not shelled out to
@@ -142,12 +142,12 @@ manager, no libc (none needed, see `CGO_ENABLED=0` above).
 
 Built and measured directly, both architectures:
 
-| Architecture  | Built | Ran | Image size |
+| Architecture | Built | Ran | Image size |
 |---------------|:-----:|:---:|-----------:|
-| linux/arm64   | yes   | yes, natively (this is an Apple Silicon host) | 17.3 MB |
-| linux/amd64   | yes   | yes, under QEMU emulation (no native amd64 host available here) | 18.5 MB |
+| linux/arm64 | yes | yes, natively (this is an Apple Silicon host) | 17.3 MB |
+| linux/amd64 | yes | yes, under QEMU emulation (no native amd64 host available here) | 18.5 MB |
 
-Both were built with `docker buildx build --platform linux/<arch> ...` from
+Both were built with `docker buildx build --platform linux/<arch>...` from
 `container/Dockerfile`, and both ran `backupd version` successfully and printed
 the expected version/commit/Go-version line. `docker compose build` (which does not
 cross-build; see below) plus `docker compose run --rm backupd` was also exercised
@@ -190,7 +190,7 @@ index, and read them back successfully.
 
 **Somewhere for temp files.** A genuinely read-only rootfs makes Go's default temp
 directory (`/tmp`, when `TMPDIR` is unset) unwritable — I checked this directly with a
-throwaway probe binary: `os.CreateTemp("", ...)` fails with "read-only file system" under
+throwaway probe binary: `os.CreateTemp("",...)` fails with "read-only file system" under
 `--read-only` with no `/tmp` mount, and succeeds once a `tmpfs` is mounted there.
 Interestingly, forcing `PRAGMA temp_store = FILE` and running `VACUUM` (a query that all
 but guarantees a real temp file in the C sqlite implementation) through
@@ -256,7 +256,7 @@ is owned by uid 65532 specifically, not by whatever `PUID` you set.
 - `/etc/backupd/known_hosts` (`:ro`): the pinned host keys (FR-6).
 
 The configuration mount is a writable directory rather than a read-only single file,
-and that is issue #196 rather than a preference. Adding a backup set, saving settings
+and that is rather than a preference. Adding a backup set, saving settings
 and first-run setup all replace `config.yaml` through a temp file created in its own
 directory; on a single-file mount that directory is the image's read-only rootfs, so
 all three failed at the write. A directory can also be empty, which is the only honest
@@ -290,7 +290,7 @@ immediately. For a one-shot check instead, use `docker compose run --rm backupd
 
 ## Health check
 
-`backupd status` (issue #26, FR-24) reports `HEALTHY`/`DEGRADED`/`STALE`/`FAILING`
+`backupd status` (, FR-24) reports `HEALTHY`/`DEGRADED`/`STALE`/`FAILING`
 per backup set and exits 0 only when every one of them is `HEALTHY`. `container/Dockerfile`'s
 `HEALTHCHECK` runs exactly that:
 
@@ -305,8 +305,8 @@ backup set is `DEGRADED` (no artifact ever discovered for it) reports Docker hea
 which exits 0 unconditionally and so reported `healthy` regardless of backup health — real
 (if minimal) process-liveness evidence, but not what FR-24's health states are for.
 
-Since issue #444 that verdict also covers where the backups are, not only how fresh they
-are. A deployment that declares a storage medium (EPIC E, FR-27) and whose relocations to
+Since that verdict also covers where the backups are, not only how fresh they
+are. A deployment that declares a storage medium (, FR-27) and whose relocations to
 it keep failing now reports `DEGRADED`, with the age of the oldest failing move and the
 reason the engine recorded on it, and therefore reports Docker health `unhealthy`. The
 backups themselves are untouched in that state, which is exactly why it needed saying out
@@ -326,7 +326,7 @@ be: the image's own `HEALTHCHECK` (so a plain `docker run` still reports it, and
 headless `daemon` command, which serves no HTTP and has no liveness endpoint to ask), the
 alerts block, and `docker compose exec backupd /backupd status`.
 
-Every packaged adapter declares the same start gate, and has to (issue #206). The image's
+Every packaged adapter declares the same start gate, and has to. The image's
 instruction and the canonical start gate are now deliberately different commands, so an
 adapter that declares nothing for the engine inherits the freshness verdict rather than the
 gate: `distribution/packaging`'s derivation gate allows that only where nothing waits on the
@@ -362,7 +362,7 @@ also renders `config.yaml`/`.env` for you from a private key and a remote host.
 
 ## The generic Web host: two containers, one image
 
-The "generic Web App host" (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2) is two
+The "generic Web App host" (, docs/EPIC-B-multi-nas.md §9.2) is two
 separate Docker containers, both running the exact same `/backupd-web` binary
 from the exact same image - only `command:` differs, the same "one canonical image,
 vary command" principle already applied to `/backupd` vs. `/backupd-web`
@@ -428,7 +428,7 @@ backupd-web: no administrator account exists yet. Open http://localhost:8080/enr
 
 `backupd` has no published port of its own (see above), so its own `--listen`
 address is never something an operator could actually open - printing a link against
-that address was a real bug fixed as part of issue #119's review: `--public-base-url`/
+that address was a real bug fixed as part of 's review: `--public-base-url`/
 `$PUBLIC_BASE_URL` tells `serve` what `web-ui`'s own externally-reachable address
 actually is, and `container/compose.yaml` sets it by default to
 `http://localhost:${LISTEN_PORT}`, which tracks whatever host port you actually
@@ -462,7 +462,7 @@ external client's. Left uncorrected, that collapses per-IP rate limiting on
 `/api/v1/auth/login` and `/api/v1/auth/enroll` into one shared bucket for every client
 on the internet-facing side (an attacker-usable denial-of-service against the admin's
 own login), and permanently prevents the session/CSRF cookies' `Secure` flag from ever
-being `true`, regardless of TLS in front of `web-ui`'s published port (issue #119's
+being `true`, regardless of TLS in front of `web-ui`'s published port ('s
 review, findings 1 and 4). `container/compose.yaml` sets
 `TRUST_FORWARDED_HEADERS=true` for `backupd` only, which makes it trust
 `X-Forwarded-For`/`X-Forwarded-Proto` from its one caller instead of its own
@@ -491,7 +491,7 @@ the only question that applies to a container whose entire job is "serve static 
 and proxy requests."
 
 **Headless mode is still just the other binary.** `/backupd daemon` (or `run`,
-`check`, ...) never binds a web listener at all — override `backupd`'s `command`
+`check`,...) never binds a web listener at all — override `backupd`'s `command`
 in `container/compose.yaml` to `["/backupd", "daemon"]` (and simply omit the
 `web-ui` service, or stop it) for a deployment that should never expose the API/UI at
 all. `backupd status` works identically either way, since it is always a fresh,
@@ -598,7 +598,7 @@ notification you already dismissed.
 
 ## Turning on diagnostics
 
-Some faults only happen on a real deployment. Issue #730 is the example this
+Some faults only happen on a real deployment. is the example this
 section exists for: one NAS whose Activity page failed with `TypeError: Failed to
 fetch` — no HTTP response reaching JavaScript at all — while `curl` against the
 same route answered cleanly, and a rig built from the shipped image never
@@ -627,7 +627,7 @@ unparseable value falls back to `info` rather than refusing to start — a typo 
 diagnostic knob must never take a backup host down.
 
 `RM_DEBUG=1` is that shortcut's deprecated old name, from before this project was
-renamed to backupd (issue #794). It is still honoured, so a deployment upgraded
+renamed to backupd. It is still honoured, so a deployment upgraded
 without its compose file being re-derived does not go quiet in the middle of a
 diagnosis, and it will be removed a release after `BACKUPD_DEBUG`. Either
 spelling alone turns diagnostics on — neither has ever had an "off" value, only
@@ -697,7 +697,7 @@ bash scripts/release/record-release-hashes.sh
 ```
 
 **Run it on a commit that is already on `main`, from a clean tree.** This is the whole
-lesson of issue #174. The manifest previously pinned `c51a07f`, recorded on a feature
+lesson of The manifest previously pinned `c51a07f`, recorded on a feature
 branch; GitHub squash merged that branch, which rewrote the commit, and the manifest
 was left describing a build no checkout could reproduce. Every parity check phrased as
 "matches the release manifest" was then comparing against a fiction, and nothing

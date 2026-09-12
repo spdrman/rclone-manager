@@ -23,7 +23,7 @@ file, one env file, one App Template and this page.
 
 Portainer's support model for a third-party application is a template plus a
 compose file, so building anything more would be building a second product to
-expose the first one. Issue #170 rules it out by name and
+expose the first one. rules it out by name and
 `distribution/packaging` fails the build if a `.go`, a `.ts` or a script appears
 under this directory.
 

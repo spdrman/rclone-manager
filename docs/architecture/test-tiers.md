@@ -1,6 +1,6 @@
 # Test tiers: which tests get a machine, and what only a fake can prove
 
-Issue #447. Rom asked for every test to run the way
+ Rom asked for every test to run the way
 `scripts/e2e/two-machine-backup.sh` does: two containers on a dedicated
 network, one playing the backupd machine and one playing the VPS being
 backed up. I put that to four adversarial perspectives before writing
@@ -20,11 +20,11 @@ rule, and the tier decides the directory.
 
 | tier | what the test needs | where it lives | how the gate runs it |
 |---|---|---|---|
-| unit | nothing outside the process: fakes, `t.TempDir()`, a real SQLite file, rclone's local backend, a subprocess of this repository's own code | the package under test, under `core/internal`, `core/service`, `core/cmd` | `go test -race ./internal/... ./service/... ./cmd/...`, including under `CI_LOCAL_FAST=1` |
-| integration | several real packages composed, or a real subprocess driven from outside, still with no container | `core/tests/<name>`, importing no machine package | the `go test -race ./...` step |
+| unit | nothing outside the process: fakes, `t.TempDir`, a real SQLite file, rclone's local backend, a subprocess of this repository's own code | the package under test, under `core/internal`, `core/service`, `core/cmd` | `go test -race./internal/..../service/..../cmd/...`, including under `CI_LOCAL_FAST=1` |
+| integration | several real packages composed, or a real subprocess driven from outside, still with no container | `core/tests/<name>`, importing no machine package | the `go test -race./...` step |
 | machine | a source machine, optionally a storage medium, on a dedicated network | `core/tests/<name>`, reached through `core/tests/machines` | the gotestwatch step, `-race` too, never a fixed `go test` timeout |
 
-Every tier runs under `-race` (#417). The detector is a flag on the steps
+Every tier runs under `-race`. The detector is a flag on the steps
 above rather than a fourth column, because it changes the binary and not the
 tier: a unit test and a machine test are still told apart by what they need,
 not by whether anybody asked the detector to look.
@@ -41,15 +41,15 @@ nothing about the boundary it claims to cover.
 ### The machine tier is the two-machine topology
 
 `core/tests/machines` is the Go half of what the shell script does, and
-since #450 it is the whole of it: `core/tests/sftpfixture` and
+since it is the whole of it: `core/tests/sftpfixture` and
 `core/tests/miniofixture` were folded into it, along with the three copies
-of the docker plumbing, the `INFRA:` verdict and the #456 refusal tests they
+of the docker plumbing, the `INFRA:` verdict and the refusal tests they
 each carried.
 
 `machines.Start(t)` creates a network for the test and nothing else.
 `m.Source(t)` starts the machine being backed up on it (a real sshd,
 chrooted, key-only, with iptables so it can carry the production connection
-cap from #264) the first time it is asked; `m.Medium(t)` joins a real S3 API
+cap from) the first time it is asked; `m.Medium(t)` joins a real S3 API
 to the same network the first time IT is asked; `m.AnotherSource(t)` gives a
 second, independent machine, which is what "this address has no known_hosts
 entry" needs to be a real second server rather than a rebuilt image. Nothing
@@ -58,7 +58,7 @@ MinIO suite runs eight tests, and an eagerly started source would have added
 an `ssh-keygen rsa 2048` and a container start to every one of them.
 
 Failure shapes and probes are methods: `LimitConnections` and
-`RemoveConnectionLimit` (#264), `Kill` (#161), `EstablishedConnections`,
+`RemoveConnectionLimit`, `Kill`, `EstablishedConnections`,
 `AcceptedLogins` and `ConnectionTable`, `AuthorizeKey`, `KnownHostsFor` and
 its negative control `DecoyKnownHostsFor`, and later a blackhole. The rule
 for adding one is in the last section: if the harness cannot do what a test
@@ -74,10 +74,10 @@ cannot sit on a bridge network, so by default the source publishes a port on
 have; the network still exists, the source is on it, and that is what the
 connection-cap probe and a medium use to reach the source by name. When the
 tests run inside a manager container on that network nothing publishes a
-port and the source is reached by alias. `Source.Addr()` answers correctly
+port and the source is reached by alias. `Source.Addr` answers correctly
 either way, so a test never has to know.
 
-`scripts/bdtools/e2e/run_machine_tier.py` (#451) is that second placement. It builds
+`scripts/bdtools/e2e/run_machine_tier.py` is that second placement. It builds
 a manager machine from a Go toolchain with a docker client, mounts the
 repository at the same absolute path inside as out, joins it to the network
 as an ordinary user, and runs the machine-tier packages inside it. The
@@ -110,12 +110,12 @@ parses rather than greps) and applies two rules:
 It also reads `scripts/ci-local.sh` and checks that every package importing
 the harness is named on the gotestwatch line and in the exclusion group of
 the plain `go test` step, so a machine-tier package cannot be run under a
-fixed timeout (the #256 shape) or not at all (the #160 shape).
+fixed timeout (the shape) or not at all (the shape).
 
 The ledger is empty. It held eight files when the guard landed: six
 container-backed tests in unit packages, moved to `core/tests/machinegate`
-by #448, and two integration tests that exec'd `docker` directly, given
-harness capabilities by #450 (`Source.Kill` and `Medium.HasBucket`). The
+by, and two integration tests that exec'd `docker` directly, given
+harness capabilities by (`Source.Kill` and `Medium.HasBucket`). The
 mechanism stays with an empty slice, because the next migration should find
 the shape already here.
 
@@ -136,7 +136,7 @@ toward containers has to argue with it rather than delete it by accident.
 |---|---|---|
 | a crash between the rename and the directory fsync inside `Commit` | `internal/lifecycle/commit_test.go`, through `testHookAfterRename` | two syscalls in one function; nothing outside the process can fault between them |
 | a copy that returns partial bytes then an error, or blocks until cancelled; a delete that errors after the server deleted | `internal/lifecycle/{transfer,verify,remotedelete}_test.go`, `fakeTransport.copyFunc` | a real server produces these rarely and non-deterministically, and the reconciliation they prove is the point of the journal |
-| a `DeleteRemote` that fails the test the instant it is called; an action at the exact instant a transfer is in flight; one backup set's remote unreachable while another's is fine | `internal/app/helpers_test.go` (`poison`, `beforeCopy`, `failForSourceID`) and its thirteen consumers, `service/validator_integration_test.go` | a server can show "the file is still there", which cannot distinguish "never called" from "called and refused" (#282), and has no rendezvous with the code under test (#350) |
+| a `DeleteRemote` that fails the test the instant it is called; an action at the exact instant a transfer is in flight; one backup set's remote unreachable while another's is fine | `internal/app/helpers_test.go` (`poison`, `beforeCopy`, `failForSourceID`) and its thirteen consumers, `service/validator_integration_test.go` | a server can show "the file is still there", which cannot distinguish "never called" from "called and refused", and has no rendezvous with the code under test |
 | a `Stat` or `RemoteHash` that fails for one named path | `internal/discovery/fake_transport_test.go` | per-path failure on a real server means breaking the server |
 | an archive-class object that needs a restore first (`InvalidObjectState`, FR-34) | `internal/transport/rclone/medium_test.go` | MinIO has no archive tier that answers it, and a real one costs money and hours per case |
 | a crash mid-migration against a real SQLite file; snapshot restore; migration immutability | `internal/state/*`, `service/startup_integration_test.go` | nothing about a container helps, and reading the journal back through `docker cp` hurts |
@@ -146,9 +146,9 @@ toward containers has to argue with it rather than delete it by accident.
 What survives in the machine tier and is better there: the server's own
 connection table and login counter (`Source.EstablishedConnections`,
 `Source.AcceptedLogins` and `Source.ConnectionTable`), the connection cap
-(#264), a network that
+, a network that
 blackholes (an iptables DROP on the source produces a real half-open TCP no
-fake can), and a container that dies mid-test (#161). The blackhole should
+fake can), and a container that dies mid-test. The blackhole should
 exist in both tiers: the fake for determinism in seconds, the DROP rule for
 the real TCP behaviour.
 
@@ -167,15 +167,15 @@ Read out of the gate logs rather than guessed. On a quiet machine
 | `core/tests/miniointegration` (8 tests) | 21 to 32s |
 | two-machine script | about 70s a case, four cases, plus the image build |
 
-After #448 and #450, on the same machine:
+After and, on the same machine:
 
 | suite | wall clock |
 |---|---|
 | `core/internal/transport/rclone`, now with no container in it at all | 23s |
 | `core/service`, same | 8s |
-| `go test ./internal/... ./service/... ./cmd/...` with no daemon reachable | 52s |
-| `core/tests/machines` (the harness and its own #161, #243 and #456 proofs) | 35s |
-| `core/tests/machinegate` (the six moved tests, plus #463's) | 107s |
+| `go test./internal/..../service/..../cmd/...` with no daemon reachable | 52s |
+| `core/tests/machines` (the harness and its own, and proofs) | 35s |
+| `core/tests/machinegate` (the six moved tests, plus 's) | 107s |
 | `core/tests/sftpintegration` | 121s |
 | `core/tests/miniointegration` | 16s |
 | every machine package inside a manager container, `-race`, under gotestwatch, warm | 164s |
@@ -188,7 +188,7 @@ per package would be thirty-five minutes of setup before a test ran, with
 260-module graph took over six minutes in CI. That is the number the
 "literal" option was rejected on, alongside the table above.
 
-#451 asked for that number to be measured here rather than inherited, and
+ asked for that number to be measured here rather than inherited, and
 it does not reproduce: the compile inside the manager container, from an
 empty module cache and an empty build cache, is 45 seconds with `-race` and
 about 76 without. Two
@@ -209,7 +209,7 @@ integration and lives under `core/tests/<name>`. If it needs a machine, it
 calls `machines.Start(t)`, lives under `core/tests/<name>`, and the gate
 runs it under gotestwatch, which the guard checks.
 
-Never write `exec.Command("docker", ...)` in a test. If the harness cannot
+Never write `exec.Command("docker",...)` in a test. If the harness cannot
 do what the test needs, the capability goes into the harness, where the
 watchdog and the sweep and the bounded calls apply to every test that
 comes after.

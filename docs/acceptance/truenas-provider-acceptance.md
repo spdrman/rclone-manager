@@ -73,7 +73,7 @@ side-loaded, also record the image ID and compare it against
 `container/release-manifest.json`'s `local_image_id_sha256` for the matching
 architecture.
 
-- [ ] Canonical image resolvable on the NAS, reference recorded
+- Canonical image resolvable on the NAS, reference recorded
 
 ### 0.2 Create the datasets
 
@@ -104,8 +104,8 @@ error either, because Docker creates a missing bind-mount source, so the app
 would start and write the retained artifacts onto the pool's root filesystem
 instead of into the dataset that is snapshotted and quota'd.
 
-- [ ] Four datasets exist
-- [ ] All four are mounted, checked immediately before install
+- Four datasets exist
+- All four are mounted, checked immediately before install
 
 ### 0.3 Own them by the uid/gid the app runs as
 
@@ -128,13 +128,13 @@ then `backups` is the retained backup store, and a recursive chown would rewrite
 the ownership of every artifact in it with no record of what the ownership was.
 Nothing in this app needs that, so nothing here does it.
 
-- [ ] `PUID`/`PGID` chosen and recorded
-- [ ] All four dataset mountpoints owned by that uid/gid
-- [ ] No recursive ownership change was made to the backups dataset
+- `PUID`/`PGID` chosen and recorded
+- All four dataset mountpoints owned by that uid/gid
+- No recursive ownership change was made to the backups dataset
 
 ### 0.4 Create the SSH key, the pinned known_hosts, and the config
 
-> **This step is packaging debt now, not engine behavior.** As of issue #176 the
+> **This step is packaging debt now, not engine behavior.** As of the
 > engine no longer needs a configuration to start: an instance with no
 > `config.yaml` serves a first-run setup flow, in the web UI, that writes one
 > for you. What still blocks that here is the package. The config is
@@ -143,8 +143,8 @@ Nothing in this app needs that, so nothing here does it.
 > missing source gets a directory created for it). Until the packaged config
 > mount becomes a writable **directory**, this platform keeps the hand-written
 > config, and this step keeps its shell commands for that reason and no other.
-> That same mount is already what makes the existing create-backup-set (#146)
-> and settings (#140) write paths inert in a packaged container, so it is one
+> That same mount is already what makes the existing create-backup-set
+> and settings write paths inert in a packaged container, so it is one
 > packaging fix for three things.
 >
 > Nothing else here survives that fix: once the mount is writable, the key is
@@ -153,17 +153,17 @@ Nothing in this app needs that, so nothing here does it.
 > at all.
 
 `/backupd-web serve` starts without a `config.yaml` and serves the
-first-run setup flow instead (#176), but a config file that EXISTS and does not
+first-run setup flow instead, but a config file that EXISTS and does not
 validate is still a hard startup failure. Given the read-only mount above,
 create all three before the first start.
 
-**What still requires this step, precisely (issue #196).** The configuration mount is
+**What still requires this step, precisely.** The configuration mount is
 now a writable directory the application owns, so the container can create and replace
 `config.yaml` itself, and an empty directory is a legitimate state rather than a broken
 deployment. Two things nonetheless keep this step here. The directory itself must exist
 and be owned by `PUID:PGID` before the first start, because a bind mount does not create
 or chown its source. And `/backupd-web serve` still refuses to start without a
-valid config: removing that refusal, and serving a first-run flow instead, is #176's
+valid config: removing that refusal, and serving a first-run flow instead, is 's
 work and is not merged. Once it is, everything below except creating and owning the
 directory becomes optional.
 
@@ -184,10 +184,10 @@ shape).
 
 **Never commit the private key, the config, or any transcript containing them.**
 
-- [ ] Key pair generated, mode 0600, owned by `PUID:PGID`
-- [ ] `known_hosts` pinned, fingerprint verified out of band
-- [ ] `/mnt/POOL/backupd/config` exists and is **writable** by `PUID:PGID`
-- [ ] `config.yaml` written inside it and readable by `PUID:PGID`
+- Key pair generated, mode 0600, owned by `PUID:PGID`
+- `known_hosts` pinned, fingerprint verified out of band
+- `/mnt/POOL/backupd/config` exists and is **writable** by `PUID:PGID`
+- `config.yaml` written inside it and readable by `PUID:PGID`
 
 ---
 
@@ -205,21 +205,21 @@ shape).
 
 Record: how long the install took, and the full text of any warning TrueNAS showed.
 
-- [ ] Install completed without error
-- [ ] TrueNAS shows the app, and both containers reach **running**
-- [ ] The engine container reaches Docker health **healthy** (it declares the
+- Install completed without error
+- TrueNAS shows the app, and both containers reach **running**
+- The engine container reaches Docker health **healthy** (it declares the
       liveness probe, `/backupd-web healthcheck --url
       http://127.0.0.1:8080/health/live`, and NOT the image's own
       `HEALTHCHECK`, `/backupd status`. The Web UI will not start until
       this reports healthy, and `status` is the backup-freshness verdict, which
       is non-zero on a fresh install that has backed nothing up)
-- [ ] The Web UI container reaches Docker health **healthy** (it overrides that
+- The Web UI container reaches Docker health **healthy** (it overrides that
       healthcheck with `/backupd-web healthcheck`, because it has no config
       file and no state database of its own to report on)
 
 If the Web UI container is unhealthy while the engine is healthy, the override did
 not apply; that is a package bug, not an environment problem. Capture
-`docker inspect --format '{{json .Config.Healthcheck}}' <web-ui container>` before
+`docker inspect --format '{{json.Config.Healthcheck}}' <web-ui container>` before
 changing anything.
 
 ---
@@ -229,10 +229,10 @@ changing anything.
 1. Open **Apps → Installed → backupd**.
 2. Click the **Web Portal** button.
 
-- [ ] The portal button exists and is not greyed out
-- [ ] It opens the shared Web UI on the published port, not a 404 and not the
+- The portal button exists and is not greyed out
+- It opens the shared Web UI on the published port, not a 404 and not the
       engine's own port
-- [ ] The URL matches what `apps/truenas/catalog/questions.yaml` declared as the
+- The URL matches what `apps/truenas/catalog/questions.yaml` declared as the
       portal, on whatever port you chose at install time
 
 ---
@@ -255,14 +255,14 @@ package ships no credential of its own.
 4. Log out. Log back in.
 5. Open the enrollment link a second time.
 
-- [ ] No account exists before enrollment (the UI offers enrollment, not login)
-- [ ] The enrollment token appears only in the container log, never in any file
+- No account exists before enrollment (the UI offers enrollment, not login)
+- The enrollment token appears only in the container log, never in any file
       under `apps/truenas/`
-- [ ] Enrollment succeeds
-- [ ] Logout then login succeeds
-- [ ] The enrollment link is refused the second time (single-use)
-- [ ] `GET /api/v1/system/capabilities` reports `nativeAuth: false`
-- [ ] `/mnt/POOL/backupd/state/local-auth.json` exists and contains an
+- Enrollment succeeds
+- Logout then login succeeds
+- The enrollment link is refused the second time (single-use)
+- `GET /api/v1/system/capabilities` reports `nativeAuth: false`
+- `/mnt/POOL/backupd/state/local-auth.json` exists and contains an
       Argon2id hash, never a plaintext password
 
 ---
@@ -297,16 +297,16 @@ find /mnt/POOL/backupd/backups -type f -printf '%p %s\n' | sort > /root/backupd-
 Keep `/root/backupd-acceptance` off the repository: the listing names your own backup
 sets. Record only that it was taken, and the canary's hash, in the evidence table.
 
-- [ ] At least one completed artifact is under the backups dataset
-- [ ] `state.db` (and its `-wal`/`-shm` siblings) are under the state dataset,
+- At least one completed artifact is under the backups dataset
+- `state.db` (and its `-wal`/`-shm` siblings) are under the state dataset,
       **not** under the backups dataset
-- [ ] `local-auth.json` is under the state dataset, not the backups dataset
-- [ ] No private key, `known_hosts`, or auth state anywhere under the backups
+- `local-auth.json` is under the state dataset, not the backups dataset
+- No private key, `known_hosts`, or auth state anywhere under the backups
       dataset (§19.2)
-- [ ] A sidecar recovery manifest sits next to the artifact and contains no
+- A sidecar recovery manifest sits next to the artifact and contains no
       secret material (§19.3)
-- [ ] `canary.bin` written into the backup root and its hash recorded outside it
-- [ ] A full `find` listing of the backup root recorded outside it
+- `canary.bin` written into the backup root and its hash recorded outside it
+- A full `find` listing of the backup root recorded outside it
 
 ---
 
@@ -331,15 +331,15 @@ already has real state from step 4.
    diff /tmp/before-update.txt /tmp/after-update.txt
    ```
 
-- [ ] Update completes and both containers return to healthy
-- [ ] `diff` of the retained-artifact listing is empty: the update moved no
+- Update completes and both containers return to healthy
+- `diff` of the retained-artifact listing is empty: the update moved no
       backup data
-- [ ] The administrator account still exists (no re-enrollment prompt)
-- [ ] The session cookie may be invalidated by the restart; logging back in with
+- The administrator account still exists (no re-enrollment prompt)
+- The session cookie may be invalidated by the restart; logging back in with
       the same password works
-- [ ] Every backup set from step 4 is still configured
-- [ ] Every artifact from step 4 is still present and still listed in the UI
-- [ ] `state.db`'s modification time changed but its content survived (the
+- Every backup set from step 4 is still configured
+- Every artifact from step 4 is still present and still listed in the UI
+- `state.db`'s modification time changed but its content survived (the
       catalog was migrated, not recreated empty)
 
 ---
@@ -355,10 +355,10 @@ docker rm -f <engine container> <web-ui container>
 
 Then let TrueNAS restart the app (or **Stop** then **Start** it in the UI).
 
-- [ ] Both containers come back healthy
-- [ ] Retained backup data survives untouched
-- [ ] The catalog survives (same artifact list, same backup sets)
-- [ ] The administrator account survives
+- Both containers come back healthy
+- Retained backup data survives untouched
+- The catalog survives (same artifact list, same backup sets)
+- The administrator account survives
 
 ---
 
@@ -372,7 +372,7 @@ up is a release blocker rather than a finding to triage.
 1. **Apps → Installed → backupd → Delete**.
 2. When TrueNAS asks, do **not** tick anything that deletes the app's datasets.
 
-- [ ] Both containers are gone
+- Both containers are gone
 
 Check the backup root against the baseline recorded in the storage step, before
 looking at anything else:
@@ -383,19 +383,19 @@ find /mnt/POOL/backupd/backups -type f -printf '%p %s\n' | sort > /root/backupd-
 diff /root/backupd-acceptance/backup-root.before /root/backupd-acceptance/backup-root.after
 ```
 
-- [ ] `sha256sum -c` reports the canary `OK`
-- [ ] The `diff` against the recorded listing is empty, so the backup root is
+- `sha256sum -c` reports the canary `OK`
+- The `diff` against the recorded listing is empty, so the backup root is
       untouched, byte for byte, and every artifact is still readable
-- [ ] The state dataset is either untouched or removed exactly as the dialog
+- The state dataset is either untouched or removed exactly as the dialog
       said it would be, with no surprise
-- [ ] Reinstalling with the same host paths adopts the existing catalog rather
+- Reinstalling with the same host paths adopts the existing catalog rather
       than starting empty
 
 Also run the destructive-safety half: repeat the delete with the "delete app data"
 option ticked, on a scratch install only, and confirm TrueNAS never touches a path
 outside the ones the package declared.
 
-- [ ] Deleting the app never removes anything outside the declared host paths
+- Deleting the app never removes anything outside the declared host paths
 
 ---
 
@@ -409,12 +409,12 @@ that check lives here.
 2. Copy `apps/truenas/catalog/` in as `ix-dev/community/backupd/`.
 3. Run that repository's own validation and render tooling.
 
-- [ ] The catalog validator accepts the app
-- [ ] The rendered compose matches `apps/truenas/compose/backupd.yaml`
+- The catalog validator accepts the app
+- The rendered compose matches `apps/truenas/compose/backupd.yaml`
       apart from values the questions supply
-- [ ] Every question in `questions.yaml` is consumed by the template, and every
+- Every question in `questions.yaml` is consumed by the template, and every
       template variable is answered by a question
-- [ ] The app installs from the rendered catalog entry, not only from the pasted
+- The app installs from the rendered catalog entry, not only from the pasted
       custom-app YAML
 
 ---

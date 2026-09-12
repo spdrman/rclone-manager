@@ -1,6 +1,6 @@
 # Phase 1 gate verdict
 
-Issue #2. This is the go/no-go call docs/EPIC.md's Delivery Plan Phase 1 asks for: prove
+ This is the go/no-go call docs/EPIC.md's Delivery Plan Phase 1 asks for: prove
 rclone can be embedded behind the manager-owned transport interface without leaning on
 unstable internals, or reassess toward a subprocess architecture (never a fork).
 
@@ -22,12 +22,12 @@ stable, exported rclone APIs. The subprocess fallback is not needed.
 
 | # | Requirement | Result | Evidence |
 |---|---|---|---|
-| 1 | A Go application embeds rclone successfully | PASS | `go build ./...` on this module; `cmd/backupd` links against the pinned rclone v1.75.0 with no CGO. |
+| 1 | A Go application embeds rclone successfully | PASS | `go build./...` on this module; `cmd/backupd` links against the pinned rclone v1.75.0 with no CGO. |
 | 2 | Only the local and SFTP backends are registered | PASS, with a documented exception | `local` and `sftp` are the only direct imports. `fs.Registry` also has `crypt`, registered transitively through `fs/operations` (needed for `operations.Copy`). Traced, measured (~2% of binary size) and accepted in `internal/transport/rclone/backends.go`, enforced by `TestRegisteredBackendsExactSet` so it can never widen silently. See "What did not pass outright" below for why this doesn't sink the gate. |
 | 3 | Remote listing works | PASS | `TestPhase1Gate/Listing` and `/Connects`, real `Adapter.List` against `tests/sftpfixture`'s Docker SFTP server. |
 | 4 | Single-file copy works | PASS | `TestPhase1Gate/CopyAndTransferStatistics` copies a 256KiB file over SFTP and compares it byte-for-byte against the source. |
 | 5 | Context cancellation works | PASS, with a caveat | A context cancelled before a chunked transfer starts, or mid-transfer, reliably aborts `CopyToLocal` (`TestPhase1Gate/ContextCancellation/*`). A context cancelled before a single quick `List` round trip does not reliably abort it, see below. |
-| 6 | Transfer statistics are accessible | PASS | `TestPhase1Gate/CopyAndTransferStatistics` reads `accounting.StatsGroup(ctx, group).GetBytes()` / `GetTransfers()` after a real SFTP copy and gets the real numbers back, not just the adapter's own return value. |
+| 6 | Transfer statistics are accessible | PASS | `TestPhase1Gate/CopyAndTransferStatistics` reads `accounting.StatsGroup(ctx, group).GetBytes` / `GetTransfers` after a real SFTP copy and gets the real numbers back, not just the adapter's own return value. |
 | 7 | Explicit remote delete works | PASS | `TestPhase1Gate/ExplicitDelete`: `DeleteRemote` over SFTP, checked two ways, the file is gone from the server's filesystem and gone from a follow-up `List`. |
 | 8 | Host-key verification works | PASS | `internal/transport/rclone/ssh_test.go`'s `TestSFTPHostKeyVerification`, merged with #6: a positive control, an unknown host key refused, and a changed host key (MITM) refused, all against a real Docker sshd. I didn't duplicate that here; `TestPhase1Gate/Connects` just confirms my own fixture and Source are wired correctly. |
 | 9 | The target UGREEN architecture builds and runs | PASS | `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build` produces a 21MiB static binary (matches the measurement in #5's PR). I went further than "builds" for this gate: I ran that exact binary, and the amd64 equivalent, inside `docker run --platform linux/arm64|amd64 alpine:3.20`, and both printed `backupd version` correctly. Building was already established before I started; running it is new. |
@@ -50,7 +50,7 @@ internals, not whether the registered backend count is exactly two. It can, cryp
 along is a configuration-surface cost, not evidence of an unstable or unisolatable API.
 
 **A single already-cancelled context doesn't reliably abort a plain `List`.** rclone's
-accounting layer checks `ctx.Err()` before every chunked read
+accounting layer checks `ctx.Err` before every chunked read
 (`fs/accounting.Account.checkReadBefore`), which is exactly why `CopyToLocal` cancellation
 is rock solid, a multi-GB backup artifact is many chunks, cancellation lands on one of them
 almost immediately. A directory listing is one round trip with no chunk boundary for that
@@ -71,10 +71,10 @@ lean on remote hashing at all. FR-13 already names the fallback: verify a checks
 producer supplies alongside the artifact. Worth flagging now, before retention or
 verification code gets written assuming a capability that won't be there in production.
 
-**The reusable transport contract suite (#30) isn't wired up against SFTP yet.** It runs
+**The reusable transport contract suite isn't wired up against SFTP yet.** It runs
 against the local backend today (`internal/transport/transport_test.go`), and its own doc
 comment names this issue as the one that should add an SFTP fixture. I looked into it and
-didn't do it here: `contract.Fixtures.SupportedHash()` has to name an algorithm the backend
+didn't do it here: `contract.Fixtures.SupportedHash` has to name an algorithm the backend
 can actually compute, and, per the finding above, a properly hardened SFTP account can't
 compute any of them. Wiring the generic suite against SFTP means either giving the fixture
 shell access it wouldn't have in production (weakening what the fixture proves) or changing
@@ -82,7 +82,7 @@ the contract interface to let a backend legitimately support zero hash algorithm
 to a shared file outside this issue's scope). Recording the tradeoff here instead of picking
 one silently.
 
-**`List` doesn't see subdirectories, for either backend.** Already documented by #30's
+**`List` doesn't see subdirectories, for either backend.** Already documented by 's
 `TestRcloneAdapter_List_DoesNotRecurseIntoSubdirectories`, not something I re-found. Noted
 here only because a future backup-set config that nests artifacts in subdirectories would
 hit it.
@@ -97,7 +97,7 @@ so the test can seed and inspect remote files directly from the host side withou
 through the adapter for setup. All of it lives under `tests/.run` while a test is running and
 is removed by `t.Cleanup`, gitignored as a backstop.
 
-`internal/transport/rclone/gate_test.go` drives the real `Adapter` (`New()`, no test double)
+`internal/transport/rclone/gate_test.go` drives the real `Adapter` (`New`, no test double)
 against that fixture for everything the checklist above marks PASS with fresh evidence:
 listing, stat, copy with content verification, transfer statistics, explicit delete, both
 cancellation shapes, and the remote-hash capability check. Mid-transfer cancellation uses

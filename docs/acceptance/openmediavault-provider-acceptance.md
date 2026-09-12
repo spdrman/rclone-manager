@@ -43,8 +43,8 @@ omv-extras   # enable the omv-extras repository if it is not already
 apt-get install openmediavault-compose
 ```
 
-- [ ] **Services → Compose** appears in the OMV Workbench
-- [ ] `docker --version` and `docker compose version` both work over SSH
+- **Services → Compose** appears in the OMV Workbench
+- `docker --version` and `docker compose version` both work over SSH
 
 ### 0.2 Make the canonical image resolvable
 
@@ -79,7 +79,7 @@ The compose file reads the image reference from a single `IMAGE` variable in
 `apps/openmediavault/compose/backupd.env`, so this is a one-line change in
 one file, never an edit scattered through the compose YAML.
 
-- [ ] Canonical image resolvable on the NAS, reference recorded
+- Canonical image resolvable on the NAS, reference recorded
 
 ### 0.3 Resolve the real filesystem paths
 
@@ -113,11 +113,11 @@ The backup root is `backupd` **inside** `$DISK/backups`, not that
 directory itself, which is very likely one you already use. Every step below
 creates, owns and later inspects only paths this procedure created.
 
-- [ ] Real `dev-disk-by-uuid-<UUID>` path recorded
-- [ ] `appdata/backupd/{state,config,secrets}` and
+- Real `dev-disk-by-uuid-<UUID>` path recorded
+- `appdata/backupd/{state,config,secrets}` and
       `backups/backupd` exist
-- [ ] The UUID appears in exactly one place on the NAS, the env file's `DISK`
-- [ ] Starting the stack with `DISK` unset fails loudly rather than creating
+- The UUID appears in exactly one place on the NAS, the env file's `DISK`
+- Starting the stack with `DISK` unset fails loudly rather than creating
       paths (try it once, on purpose)
 
 ### 0.4 Own them by the uid/gid the app runs as
@@ -138,13 +138,13 @@ Only paths this procedure created, and the backup root non-recursively. A
 already in it, fights the Workbench's own shared-folder ACL management, and on a
 reinstall would rewrite the retained backup store.
 
-- [ ] `PUID`/`PGID` chosen, recorded, and set in the env file
-- [ ] appdata tree and `backups/backupd` owned by that uid/gid
-- [ ] Nothing else under `$DISK/backups` had its ownership changed
+- `PUID`/`PGID` chosen, recorded, and set in the env file
+- appdata tree and `backups/backupd` owned by that uid/gid
+- Nothing else under `$DISK/backups` had its ownership changed
 
 ### 0.5 Create the SSH key, the pinned known_hosts, and the config
 
-> **This step is packaging debt now, not engine behavior.** As of issue #176 the
+> **This step is packaging debt now, not engine behavior.** As of the
 > engine no longer needs a configuration to start: an instance with no
 > `config.yaml` serves a first-run setup flow, in the web UI, that writes one
 > for you. What still blocks that here is the package. The config is
@@ -153,8 +153,8 @@ reinstall would rewrite the retained backup store.
 > missing source gets a directory created for it). Until the packaged config
 > mount becomes a writable **directory**, this platform keeps the hand-written
 > config, and this step keeps its shell commands for that reason and no other.
-> That same mount is already what makes the existing create-backup-set (#146)
-> and settings (#140) write paths inert in a packaged container, so it is one
+> That same mount is already what makes the existing create-backup-set
+> and settings write paths inert in a packaged container, so it is one
 > packaging fix for three things.
 >
 > Nothing else here survives that fix: once the mount is writable, the key is
@@ -163,18 +163,18 @@ reinstall would rewrite the retained backup store.
 > at all.
 
 `/backupd-web serve` starts without a `config.yaml` and serves the
-first-run setup flow instead (#176), but a config file that EXISTS and does not
+first-run setup flow instead, but a config file that EXISTS and does not
 validate is still a hard startup failure. Given the read-only mount above, create
 all three before the first start.
 
-**What still requires this step, precisely (issue #196).** The configuration mount is
+**What still requires this step, precisely.** The configuration mount is
 now a writable directory the application owns, so the container can create and replace
 `config.yaml` itself, and an empty directory is a legitimate state rather than a broken
 deployment. Two things nonetheless keep this step here. The directory itself must exist
 and be owned by the app's uid/gid before the first start, because a bind mount does not
 create or chown its source. And `/backupd-web serve` still refuses to start
 without a valid config: removing that refusal, and serving a first-run flow instead, is
-#176's work and is not merged. Once it is, everything below except creating and owning
+'s work and is not merged. Once it is, everything below except creating and owning
 the directory becomes optional.
 
 ```bash
@@ -190,10 +190,10 @@ Verify the host key fingerprint out of band. Then write
 
 **Never commit the private key, the config, or any transcript containing them.**
 
-- [ ] Key pair generated, mode 0600, owned by `PUID:PGID`
-- [ ] `known_hosts` pinned, fingerprint verified out of band
-- [ ] `$DISK/appdata/backupd/config` exists and is **writable** by `PUID:PGID`
-- [ ] `config.yaml` written inside it and readable by `PUID:PGID`
+- Key pair generated, mode 0600, owned by `PUID:PGID`
+- `known_hosts` pinned, fingerprint verified out of band
+- `$DISK/appdata/backupd/config` exists and is **writable** by `PUID:PGID`
+- `config.yaml` written inside it and readable by `PUID:PGID`
 
 ---
 
@@ -206,27 +206,27 @@ Verify the host key fingerprint out of band. Then write
    substitutions, into the **Environment** field.
 5. Save, then **Up**.
 
-- [ ] The compose file saves with no validation error
-- [ ] `Up` completes and both services reach **running**
-- [ ] The engine service reaches health **healthy** (it declares the
+- The compose file saves with no validation error
+- `Up` completes and both services reach **running**
+- The engine service reaches health **healthy** (it declares the
       liveness probe, `/backupd-web healthcheck --url
       http://127.0.0.1:8080/health/live`, and NOT the image's own
       `HEALTHCHECK`, `/backupd status`. The Web UI will not start until
       this reports healthy, and `status` is the backup-freshness verdict, which
       is non-zero on a fresh install that has backed nothing up)
-- [ ] The Web UI service reaches health **healthy** via its own
+- The Web UI service reaches health **healthy** via its own
       `/backupd-web healthcheck` override, not the image's
       `/backupd status` (which would fail: no config, no state database)
-- [ ] The engine service publishes no port (`docker compose ps` shows a port
+- The engine service publishes no port (`docker compose ps` shows a port
       mapping only for the Web UI service)
 
 ---
 
 ## Step 2 — Verify from the Workbench
 
-- [ ] **Services → Compose → Files** lists `backupd` with status up
-- [ ] The plugin's **Logs** action shows both services' output
-- [ ] No error, warning or orphan-container notice appears in
+- **Services → Compose → Files** lists `backupd` with status up
+- The plugin's **Logs** action shows both services' output
+- No error, warning or orphan-container notice appears in
       **System → Notifications**
 
 ---
@@ -238,13 +238,13 @@ to find it must therefore be in the documentation.
 
 1. Open `http://<omv-host>:<published port>/` in a browser.
 
-- [ ] The shared Web UI loads
-- [ ] `apps/openmediavault/README.md` states the exact URL shape, states that the
+- The shared Web UI loads
+- `apps/openmediavault/README.md` states the exact URL shape, states that the
       port is set in one place in the env file, and states plainly that there is
       no OMV navigation entry and why
-- [ ] The published port does not collide with OMV's own Workbench port, and the
+- The published port does not collide with OMV's own Workbench port, and the
       README says what to change if it does
-- [ ] Nothing in OMV's own navigation tree, dashboard or service list was
+- Nothing in OMV's own navigation tree, dashboard or service list was
       modified by this install
 
 ---
@@ -263,15 +263,15 @@ Web host provides (§13A).
 2. Open it, enrol an administrator with a password you generate now, log out, log
    back in, then open the enrollment link a second time.
 
-- [ ] No account exists before enrollment
-- [ ] The token appears only in the service log, never in any file under
+- No account exists before enrollment
+- The token appears only in the service log, never in any file under
       `apps/openmediavault/`
-- [ ] Enrollment succeeds, logout then login succeeds
-- [ ] The enrollment link is refused the second time
-- [ ] `GET /api/v1/system/capabilities` reports `nativeAuth: false`
-- [ ] `$DISK/appdata/backupd/state/local-auth.json` holds an Argon2id
+- Enrollment succeeds, logout then login succeeds
+- The enrollment link is refused the second time
+- `GET /api/v1/system/capabilities` reports `nativeAuth: false`
+- `$DISK/appdata/backupd/state/local-auth.json` holds an Argon2id
       hash, never a plaintext password
-- [ ] Backupd's login is completely independent of the OMV Workbench
+- Backupd's login is completely independent of the OMV Workbench
       login, and neither can log into the other
 
 ---
@@ -304,16 +304,16 @@ find "$DISK/backups/backupd" -type f -printf '%p %s\n' | sort > /root/backupd-ac
 Keep `/root/backupd-acceptance` off the repository: the listing names your own backup
 sets. Record only that it was taken, and the canary's hash, in the evidence table.
 
-- [ ] At least one completed artifact is under `$DISK/backups/backupd`
-- [ ] `state.db` and `local-auth.json` are under appdata, **not** under the
+- At least one completed artifact is under `$DISK/backups/backupd`
+- `state.db` and `local-auth.json` are under appdata, **not** under the
       backup root
-- [ ] No private key, `known_hosts`, or auth state anywhere under
+- No private key, `known_hosts`, or auth state anywhere under
       `$DISK/backups/backupd` (§19.2)
-- [ ] Nothing was written anywhere else under `$DISK/backups`
-- [ ] A sidecar recovery manifest sits next to the artifact and contains no
+- Nothing was written anywhere else under `$DISK/backups`
+- A sidecar recovery manifest sits next to the artifact and contains no
       secret material (§19.3)
-- [ ] `canary.bin` written into the backup root and its hash recorded outside it
-- [ ] A full `find` listing of the backup root recorded outside it
+- `canary.bin` written into the backup root and its hash recorded outside it
+- A full `find` listing of the backup root recorded outside it
 
 ---
 
@@ -333,14 +333,14 @@ sets. Record only that it was taken, and the canary's hash, in the evidence tabl
    diff /tmp/before-update.txt /tmp/after-update.txt
    ```
 
-- [ ] Pull and Up both complete, and both services return to healthy
-- [ ] `diff` of the retained-artifact listing is empty: the update moved no
+- Pull and Up both complete, and both services return to healthy
+- `diff` of the retained-artifact listing is empty: the update moved no
       backup data
-- [ ] The administrator account still exists (no re-enrollment prompt)
-- [ ] Logging back in with the same password works
-- [ ] Every backup set is still configured
-- [ ] Every artifact is still present and still listed
-- [ ] The old image can be pruned without affecting the running deployment
+- The administrator account still exists (no re-enrollment prompt)
+- Logging back in with the same password works
+- Every backup set is still configured
+- Every artifact is still present and still listed
+- The old image can be pruned without affecting the running deployment
 
 ---
 
@@ -354,10 +354,10 @@ docker compose -p backupd down
 docker compose -p backupd up -d
 ```
 
-- [ ] Both services come back healthy
-- [ ] Retained backup data survives untouched
-- [ ] The catalog survives
-- [ ] The administrator account survives
+- Both services come back healthy
+- Retained backup data survives untouched
+- The catalog survives
+- The administrator account survives
 
 ---
 
@@ -371,7 +371,7 @@ than a finding to triage.
 1. **Services → Compose → Files → backupd → Down**.
 2. Then **Delete** the file entry.
 
-- [ ] Both containers are gone
+- Both containers are gone
 
 Check the backup root against the baseline recorded in the storage step, before
 looking at anything else:
@@ -382,14 +382,14 @@ find "$DISK/backups/backupd" -type f -printf '%p %s\n' | sort > /root/backupd-ac
 diff /root/backupd-acceptance/backup-root.before /root/backupd-acceptance/backup-root.after
 ```
 
-- [ ] `sha256sum -c` reports the canary `OK`
-- [ ] The `diff` against the recorded listing is empty, so the backup root is
+- `sha256sum -c` reports the canary `OK`
+- The `diff` against the recorded listing is empty, so the backup root is
       untouched, byte for byte, and every artifact is still readable
-- [ ] `$DISK/appdata/backupd` is untouched
-- [ ] Nothing elsewhere under `$DISK/backups` changed
-- [ ] Nothing outside the declared host paths was touched, and no OMV
+- `$DISK/appdata/backupd` is untouched
+- Nothing elsewhere under `$DISK/backups` changed
+- Nothing outside the declared host paths was touched, and no OMV
       configuration was modified
-- [ ] Re-adding the same compose file with the same paths adopts the existing
+- Re-adding the same compose file with the same paths adopts the existing
       catalog rather than starting empty
 
 Also run the destructive half on a scratch install: `docker compose down -v` and
@@ -397,7 +397,7 @@ confirm no named volume ever held retained backup data (every persistent path in
 this profile is a bind mount to a host path you chose, precisely so that `-v`
 cannot reach it).
 
-- [ ] `down -v` removes nothing under `$DISK/backups/backupd`
+- `down -v` removes nothing under `$DISK/backups/backupd`
 
 ---
 

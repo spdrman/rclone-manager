@@ -25,7 +25,7 @@ build does.
 
 ## What used to be here
 
-`PR_BODY.md` was the pull request description for #108, committed to the tree by
+`PR_BODY.md` was the pull request description for, committed to the tree by
 accident along with the frontend it described. Every product decision in it is
 recorded properly somewhere else: the dependency and provider-isolation
 invariants in `docs/EPIC-B-multi-nas.md` §7.1, service health versus backup

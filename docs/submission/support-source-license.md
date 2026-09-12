@@ -28,9 +28,9 @@ they ask for them.
 Not yet stated, and deliberately left blank here rather than filled in with a guess.
 
 Choosing the licence a project is published under is the project owner's decision, and
-B5.2 (#88) is the work package that makes it, along with the software bill of materials
+B5.2 is the work package that makes it, along with the software bill of materials
 and the third-party licence inventory that go with it. This preflight records the licence
-row as blocked on #88 rather than inventing an answer, and the submission gate reports it
+row as blocked on rather than inventing an answer, and the submission gate reports it
 as undecided rather than letting a green run imply a licence nobody chose.
 
 Every store on this project's list requires a licence before it will accept a submission,
@@ -41,7 +41,7 @@ it needs a decision, not an implementation.
 
 `container/release-manifest.json` pins a commit that is on the main branch, so the hashes
 it records describe a build that is in this history and the preflight decides
-`artifact-provenance` for every target. That was not true while #174 was open: the manifest
+`artifact-provenance` for every target. That was not true while was open: the manifest
 pinned a commit only a feature branch ever had, and the preflight reported every target
 undecided rather than claiming a parity nobody could check. This paragraph is here so a
 reviewer reading the submission materials is told the same thing the gate is, in either

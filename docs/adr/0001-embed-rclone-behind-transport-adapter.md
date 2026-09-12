@@ -131,7 +131,7 @@ cleaner than it is.
   monitor than the two backends we actually asked for would suggest.
 - **"Only two backends" was never quite true.** The adapter imports
   `fs/operations` for `operations.Copy`, and that package imports
-  `backend/crypt`, which self-registers via `init()`. So three backends are
+  `backend/crypt`, which self-registers via `init`. So three backends are
   registered at runtime, not two, and nothing in a casual read of the
   adapter's blank imports would tell you that. This is a category error
   that's easy to make and we made it: module graph size, linked binary size,

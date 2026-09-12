@@ -1,6 +1,6 @@
 # The canonical runtime contract
 
-Issue #167 (B6.3), EPIC B #81 Phase 6.
+ (B6.3), Phase 6.
 
 `container/compose.yaml` is the authoritative definition of how this product
 runs. Every other deployment artifact in this repository derives from it, and
@@ -28,7 +28,7 @@ prove the check can actually see it go.
 | `command-and-runtime-profile` | both services | the command **and** `--profile=<name>`, standardised as one field |
 | `listen-port` | web UI | the one published port; the engine deliberately publishes none |
 | `health-check` | both services | declared here, not inherited from the image and described in a comment |
-| `start-gate-liveness` | engine | the engine's healthcheck asks `/health/live`, never backup freshness: `web-ui` waits on it. Checked on every derived artifact too, not only here (issue #206) |
+| `start-gate-liveness` | engine | the engine's healthcheck asks `/health/live`, never backup freshness: `web-ui` waits on it. Checked on every derived artifact too, not only here |
 | `graceful-shutdown-period` | both services | `stop_grace_period`: 30s for the engine, 15s for the UI host |
 | `restart-policy` | both services | `unless-stopped` |
 | `ownership` | both services | explicit `user: PUID:PGID` |
@@ -36,7 +36,7 @@ prove the check can actually see it go.
 | `timezone` | engine | `TZ`, because retention is evaluated against calendar boundaries |
 | `private-state-mount` | engine | `/data/state` |
 | `backup-data-mount` | engine | `/data/backups` |
-| `configuration-mount` | engine | `/etc/backupd/config`, a writable directory holding `config.yaml` (issue #196) |
+| `configuration-mount` | engine | `/etc/backupd/config`, a writable directory holding `config.yaml` |
 | `secret-file-mount` | engine | `/etc/backupd/id_ed25519`, read-only |
 | `resource-expectations` | document | `x-canonical-runtime.resources` |
 | `supported-architectures` | document | `x-canonical-runtime.architectures` |
@@ -99,7 +99,7 @@ backupd-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 \
                             --ui-root=/usr/share/backupd/ui
 ```
 
-Seven profiles exist: `generic`, `ugos`, and the five issue #169 added when it
+Seven profiles exist: `generic`, `ugos`, and the five added when it
 converted the shipped platform packaging (`truenas`, `unraid`,
 `openmediavault`, `proxmox`, `synology`). Those five declare no capability and
 no gateway, and that is the finding rather than an omission: every one of them
@@ -205,13 +205,13 @@ rather than a bare header name, and the engine strips as well so nothing
 downstream of it, a handler or a log line or a middleware added later, can read
 a value that was never trusted.
 
-EPIC C's #92 proves the same boundary against the real UGOS gateway on real
+'s proves the same boundary against the real UGOS gateway on real
 hardware. This side needs no UGREEN device: the synthetic trusted peer is
 loopback and the synthetic untrusted peer is everything else.
 
 ## Runtime-selected UI bundles
 
-Issue #180. `serve-ui` used to embed one bundle with `go:embed` and offer no
+ `serve-ui` used to embed one bundle with `go:embed` and offer no
 alternative, and `ui/shared/vite.config.ts` picks the provider shell at build
 time from `VITE_PLATFORM`. Together those meant shipping Synology's bridge
 required compiling a Synology-specific binary, and section 3.7 requires every
@@ -245,7 +245,7 @@ change.
 
 ### Which carrier each adapter uses
 
-Issue #169 packaged this, and there are exactly three carriers because there
+ packaged this, and there are exactly three carriers because there
 are exactly three kinds of thing that can hold a bundle.
 
 | Carrier | Who uses it | How the bundle is selected |
@@ -263,22 +263,22 @@ another provider, because a package that installs cleanly and shows the wrong
 interface is the failure mode this whole issue is about.
 
 **Five bundles in the image, and not seven.** `generic` is already compiled
-into the binary and duplicating it buys nothing. `ugos` is EPIC D's, and its
+into the binary and duplicating it buys nothing. `ugos` is 's, and its
 UPK carries its own. The rest is arithmetic against a gated budget: measured
 on `darwin-arm64-mac17-2`, `linux/arm64`, the image goes from 43,008,762 bytes
 to **44,811,244** bytes, which is +1,802,482 (+4.19%) against a ceiling of
 45,159,200 (1.05x). That leaves 347,956 bytes of headroom, which is less than
 one more bundle: this image can carry these five and not a sixth. Shipping all
-seven, as #167 estimated, would have been roughly 2.4 MB and outside the gate.
+seven, as estimated, would have been roughly 2.4 MB and outside the gate.
 
-That paragraph is #180's measurement and it is left as it was taken. Both sides
-of it have since moved, and #635 re-measured them on the same host and platform
+That paragraph is 's measurement and it is left as it was taken. Both sides
+of it have since moved, and re-measured them on the same host and platform
 on 2026-09-08: the five bundles now hold 3,503,996 bytes rather than 1,802,482,
-because #632 put 139,744 bytes of woff2 into each one and EPIC F, G and H grew
+because put 139,744 bytes of woff2 into each one and, G and H grew
 the JS chunk.
 
 **The arithmetic no longer decides the count, and the count is unchanged for a
-different reason.** #180's sum worked because the baseline it measured against
+different reason.** 's sum worked because the baseline it measured against
 was an image carrying no bundles, so each one had to be paid for out of the
 headroom. The baseline was re-captured at 69,704,266 with these five inside it,
 which means charging them to the 5% counts them twice. Re-derived there it points
@@ -287,7 +287,7 @@ puts five over by 18,783, and not charging them leaves 3,485,213 against
 1,401,598 for the two missing bundles, so seven would fit with 2,083,615 spare.
 
 What actually settles it is that `generic` is compiled into the binary and `ugos`
-ships in EPIC D's UPK. Those two have a carrier, so a directory for either is
+ships in 's UPK. Those two have a carrier, so a directory for either is
 bytes nobody serves. That holds whatever the image weighs. A reader sizing a
 sixth bundle should take the image size from `docs/perf/` and the count from that
 sentence, and not use either as an argument for the other.
@@ -306,9 +306,9 @@ serve-ui --profile=ugos    --ui-root /ui/bundles  ->  refuses to start:
 The third line is the one worth reading twice. A missing bundle is a hard
 start failure, never a silent fall back to the generic bridge, which is why
 carrying too FEW bundles is a loud failure and not a quiet reappearance of
-#180.
 
-**The four adapters #170 adds share the first row with `generic`, and the
+
+**The four adapters adds share the first row with `generic`, and the
 arithmetic above is why.** 347,956 bytes of headroom is less than one 352 KB
 bundle, so the image that carries five cannot carry six, let alone nine.
 Portainer, Dockge, CasaOS and ZimaOS therefore ship no frontend bridge at all:
@@ -320,7 +320,7 @@ That is not only a budget decision, and it would be the same decision with room
 to spare. A bridge for any of the four would need its platform id in the
 `/api/v1` contract, the capability table, the profile table and the bundle list,
 which is core and shared-UI code in four adapters whose own contract forbids
-exactly that: #170 states it for two of them as "no CasaOS or ZimaOS import
+exactly that: states it for two of them as "no CasaOS or ZimaOS import
 appears in either". None of the four has host-dependent behaviour for a profile
 to select, either. No native identity gateway, no notification bridge, no launch
 bridge, so a profile per platform would be four rows that change nothing but the
@@ -334,7 +334,7 @@ become the cheap way out of the pin.
 
 ## Deriving an adapter instead of authoring one
 
-Issue #169. Phase 4 shipped five platforms that agree with the canonical
+ Phase 4 shipped five platforms that agree with the canonical
 runtime by review: each states its own image reference, its own mounts, its
 own port and its own health check, and nothing compared those statements to a
 single source. Five independently authored copies of one runtime definition is
@@ -366,7 +366,7 @@ per-role tests so `derive.go` can hold four metadata formats to them, including
 an Unraid XML template no Compose parser can read, and
 `TestTheCanonicalDefinitionIsWhereTheHealthChecksAreDecided` fails the build
 when the restatement stops matching. Nothing compared those two before issue
-#206, which is how the canonical definition came to declare a liveness probe
+, which is how the canonical definition came to declare a liveness probe
 while every adapter derived the backup-freshness verdict from a copy nobody
 had changed, for three work packages, with every suite green.
 
@@ -412,7 +412,7 @@ One mount is redeclared, and the host side of it does not move either:
 | mode | `ro` | writable |
 
 The file an operator already has stays exactly where it is; what the adapter
-mounts is its parent directory, writable, which is issue #196. The directory
+mounts is its parent directory, writable, which is The directory
 has to be writable by the container's uid/gid before the first start, because
 a bind mount does not chown its source, and each platform's acceptance
 procedure step 0 now says so.
@@ -440,7 +440,7 @@ on ENOTDIR with a message naming neither the mount nor the migration.
 Two things close that. The TrueNAS question carries a new identifier, so there
 is no answer to carry forward. And the engine now recognises the shape: when
 the configuration path's parent is a file rather than a directory it says so,
-names issue #196 and points here, instead of reporting "not a directory".
+names and points here, instead of reporting "not a directory".
 Unraid gets the same message, which is the only thing that can help there,
 because retiring an operator's existing mapping is not something a template
 can do.
@@ -472,7 +472,7 @@ canonical Go executable per architecture, no production Node server). The
 performance contract prohibits **adding** a data-path hop, and "one process
 wherever practical" is explicitly qualified.
 
-What #167 owed was the measurement, because an already-shipped hop whose cost
+What owed was the measurement, because an already-shipped hop whose cost
 nobody has measured is indistinguishable from one that is fine.
 
 `apps/generic/tests/perfbaseline/proxycost_test.go` (`PERF_PROXY_COST=1`) runs
@@ -497,7 +497,7 @@ end-to-end budget is dominated by the browser and the network in front of it.
 
 Two things worth noting rather than burying:
 
-- The number lines up with `docs/perf/gate.json`'s own reasoning. #165 set the
+- The number lines up with `docs/perf/gate.json`'s own reasoning. set the
   API-read noise floor at 0.05 ms and justified it as "below the cost of the
   cheapest structural regression this gate exists to catch, an added loopback
   proxy hop." The measured hop is 0.047 ms, which is just under that floor. The
@@ -514,10 +514,10 @@ second proxy would double a cost that is already about half the read.
 
 ## Performance evidence for this change
 
-All seven metrics EPIC B #81's performance contract names, measured with
+All seven metrics 's performance contract names, measured with
 `python3 scripts/bdtools/perf/capture_baseline.py --repeat 5` on the designated benchmark host
 `darwin-arm64-mac17-2`, workload `phase6-baseline-v1`, and compared against
-#165's committed baseline with `scripts/perf/check-baseline.sh --compare`.
+'s committed baseline with `scripts/perf/check-baseline.sh --compare`.
 Nothing was re-baselined.
 
 | metric | gated | baseline | this change | threshold | result |
@@ -533,7 +533,7 @@ Nothing was re-baselined.
 Two of those deserve more than a tick.
 
 **`api_read_p95_ms` moved 14.6% in ratio terms, and passed on the noise floor
-rather than on the ratio.** That is the gate working as #165 designed it, not a
+rather than on the ratio.** That is the gate working as designed it, not a
 gate being lenient: the absolute movement is 0.019 ms, and the within-run
 capture-to-capture spread of that same median was 62% of the median in this
 very run. At 0.13 ms a 10% budget is smaller than the measurement's own
@@ -550,7 +550,7 @@ the two-service topology leaking into the direct path.
 **`image_size_bytes` grew by 65,536 bytes.** That is the profile table, the
 gateway authenticator and the bundle resolver compiled into
 `/backupd-web`. It is 0.15% of the image against a 5% budget, and it is
-real growth rather than noise: #165 recorded that two independent builds of the
+real growth rather than noise: recorded that two independent builds of the
 same commit produced byte-identical image sizes, so there is no noise here to
 hide in and no reason to describe 64 KiB as anything but 64 KiB.
 

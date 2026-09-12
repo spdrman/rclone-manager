@@ -2,13 +2,13 @@
 
 ## Status
 
-**Type:** EPIC / Detailed implementation specification  
-**Repository:** `iasbuilt/iac`  
-**Parent / predecessor EPIC:** `Embedded-rclone NAS Backup Lifecycle Manager — UI-Ready Architecture`  
-**Primary implementation root:** `tools/backupd/`  
-**Target platform:** UGREEN NAS / UGOS Pro  
-**Primary UI distribution:** UGOS Pro Docker Application packaged as `.UPK`  
-**Secondary distribution:** headless Docker image/package for terminal operation  
+**Type:** EPIC / Detailed implementation specification
+**Repository:** `iasbuilt/iac`
+**Parent / predecessor EPIC:** `Embedded-rclone NAS Backup Lifecycle Manager — UI-Ready Architecture`
+**Primary implementation root:** `tools/backupd/`
+**Target platform:** UGREEN NAS / UGOS Pro
+**Primary UI distribution:** UGOS Pro Docker Application packaged as `.UPK`
+**Secondary distribution:** headless Docker image/package for terminal operation
 **Initial architectures:** `linux/amd64`, `linux/arm64`
 
 ---
@@ -60,7 +60,7 @@ Required corrections:
 - accept UGOS identity headers only from a verified trusted gateway source;
 - strip/ignore forwarded identity headers from all untrusted peers;
 - prohibit release if the Docker service cannot be isolated or the proxy source cannot be authenticated;
-- use authenticated polling for v1 operation progress; optionally evaluate `fetch()` streaming later;
+- use authenticated polling for v1 operation progress; optionally evaluate `fetch` streaming later;
 - never place authentication tokens in query strings;
 - store SSH keys only in private application state;
 - reject deletion of keys referenced by active backup sets;
@@ -1551,7 +1551,7 @@ The v1 frontend SHALL observe long-running operation state through authenticated
 
 Native `EventSource` SHALL NOT be used because the documented UGOS authentication flow requires the custom `Ugreen-Ttk` header and native `EventSource` cannot reliably attach arbitrary authentication headers.
 
-A future streaming implementation MAY use authenticated `fetch()` response streaming only after UGOS gateway buffering/streaming behavior is validated.
+A future streaming implementation MAY use authenticated `fetch` response streaming only after UGOS gateway buffering/streaming behavior is validated.
 
 Authentication tokens MUST NEVER be placed in URLs/query strings.
 
@@ -1637,7 +1637,7 @@ A preview response SHALL include:
 }
 ```
 
-`POST .../retention/apply` MUST require the `plan_id` the administrator actually reviewed.
+`POST.../retention/apply` MUST require the `plan_id` the administrator actually reviewed.
 
 The server MUST apply **exactly that plan** only if its inventory/config preconditions remain valid. If backups or policy changed, return a conflict such as `RETENTION_PLAN_STALE` and require a new preview/confirmation.
 
@@ -2140,7 +2140,7 @@ scope it actually has. There is no per-set run: one run cycle walks every
 enabled backup set in a single pass, and core exposes no operation that runs one
 set on its own. This line read `Run now` and sat among the per-set actions
 around it, which is how the shipped page came to render one such button per
-card, each starting the whole deployment (#231). A control rendered inside a
+card, each starting the whole deployment. A control rendered inside a
 backup set's card SHALL NOT submit a deployment-wide action, whatever its label
 says, and any control that does SHALL carry a tooltip stating how far it
 reaches.
@@ -3088,7 +3088,7 @@ The server operation SHALL continue if:
 
 Explicit cancellation, if supported, SHALL create a server-side cancellation request and propagate through the operation's own context. It SHALL NOT be coupled to the HTTP request context that originally created the job.
 
-A future authenticated `fetch()` streaming transport MAY be added after UGOS gateway validation.
+A future authenticated `fetch` streaming transport MAY be added after UGOS gateway validation.
 
 Native `EventSource` and query-string authentication tokens are prohibited.
 
@@ -3653,10 +3653,10 @@ TDD architecture tests SHALL prove:
 
 ### Acceptance
 
-- [ ] provider-neutral core is independently buildable/testable.
-- [ ] UGOS SDK imports exist only under `apps/ugos/`.
-- [ ] shared UI contains no UGOS imports.
-- [ ] adding/removing a provider app requires no lifecycle changes.
+- provider-neutral core is independently buildable/testable.
+- UGOS SDK imports exist only under `apps/ugos/`.
+- shared UI contains no UGOS imports.
+- adding/removing a provider app requires no lifecycle changes.
 
 ## Work Package 1.2 — Developer Environment + Minimal UPK
 
@@ -3674,10 +3674,10 @@ Implement:
 
 ### Acceptance
 
-- [ ] Minimal `.UPK` installs on real UGOS hardware.
-- [ ] App opens inside UGOS.
-- [ ] React/JSSDK initializes.
-- [ ] Hardware test evidence is recorded.
+- Minimal `.UPK` installs on real UGOS hardware.
+- App opens inside UGOS.
+- React/JSSDK initializes.
+- Hardware test evidence is recorded.
 
 ## Work Package 1.3 — UGOS Authentication + Trusted Proxy Boundary
 
@@ -3693,11 +3693,11 @@ Implement/prove:
 
 ### Acceptance
 
-- [ ] UGOS-authenticated requests succeed.
-- [ ] unauthenticated requests fail.
-- [ ] spoofed identity headers from direct LAN fail.
-- [ ] backend trusts only the proven gateway path.
-- [ ] destructive APIs remain disabled until this gate passes.
+- UGOS-authenticated requests succeed.
+- unauthenticated requests fail.
+- spoofed identity headers from direct LAN fail.
+- backend trusts only the proven gateway path.
+- destructive APIs remain disabled until this gate passes.
 
 ## Work Package 1.4 — Private State + Storage + Canonical Image
 
@@ -3714,11 +3714,11 @@ Implement/prove:
 
 ### Acceptance
 
-- [ ] private state and backup data are separate.
-- [ ] retained backups are not stored with SSH private keys.
-- [ ] update/disable/enable behavior is documented.
-- [ ] uninstall behavior is documented from hardware evidence.
-- [ ] canonical image builds for required architectures.
+- private state and backup data are separate.
+- retained backups are not stored with SSH private keys.
+- update/disable/enable behavior is documented.
+- uninstall behavior is documented from hardware evidence.
+- canonical image builds for required architectures.
 
 ## Work Package 1.5 — Minimal API + Durable Operations Skeleton
 
@@ -3735,11 +3735,11 @@ Implement:
 
 ### Acceptance
 
-- [ ] API invokes `BackupService`.
-- [ ] operation survives browser/request disconnect.
-- [ ] duplicate idempotency key does not create duplicate work.
-- [ ] stale config revision returns conflict.
-- [ ] API exposes no rclone/SQLite implementation types.
+- API invokes `BackupService`.
+- operation survives browser/request disconnect.
+- duplicate idempotency key does not create duplicate work.
+- stale config revision returns conflict.
+- API exposes no rclone/SQLite implementation types.
 
 ### Phase 1 Exit Gate
 
@@ -3789,9 +3789,9 @@ Implement:
 
 ### Acceptance
 
-- [ ] operator can determine backup health without CLI.
-- [ ] stale backup is visibly distinct from a healthy running process.
-- [ ] browser reload resumes operation-status display.
+- operator can determine backup health without CLI.
+- stale backup is visibly distinct from a healthy running process.
+- browser reload resumes operation-status display.
 
 ## Work Package 2.2 — Backup Set Management
 
@@ -3808,9 +3808,9 @@ Implement:
 
 ### Acceptance
 
-- [ ] stale edits are rejected.
-- [ ] deleting config does not delete retained backups.
-- [ ] disabled sources do not schedule work.
+- stale edits are rejected.
+- deleting config does not delete retained backups.
+- disabled sources do not schedule work.
 
 ## Work Package 2.3 — Six-Step Add/Edit Backup Wizard
 
@@ -3833,12 +3833,12 @@ Include:
 
 ### Acceptance
 
-- [ ] source can be configured entirely from UI.
-- [ ] private key is never returned after persistence.
-- [ ] referenced key cannot be deleted.
-- [ ] changed host key blocks operation.
-- [ ] connection test never deletes remote data.
-- [ ] remote-source deletion behavior is explicitly acknowledged.
+- source can be configured entirely from UI.
+- private key is never returned after persistence.
+- referenced key cannot be deleted.
+- changed host key blocks operation.
+- connection test never deletes remote data.
+- remote-source deletion behavior is explicitly acknowledged.
 
 ## Work Package 2.4 — Backups + Artifact Detail
 
@@ -3856,9 +3856,9 @@ Implement:
 
 ### Acceptance
 
-- [ ] `.partial` and quarantined artifacts are not presented as valid backups.
-- [ ] lifecycle status comes from backend.
-- [ ] monthly/weekly/protected classifications display correctly.
+- `.partial` and quarantined artifacts are not presented as valid backups.
+- lifecycle status comes from backend.
+- monthly/weekly/protected classifications display correctly.
 
 ## Work Package 2.5 — Manual Run + Validation + Quarantine
 
@@ -3873,10 +3873,10 @@ Implement:
 
 ### Acceptance
 
-- [ ] manual run uses normal lifecycle invariants.
-- [ ] validation failure preserves remote source.
-- [ ] quarantined artifact cannot be treated as valid backup.
-- [ ] no "delete remote anyway" shortcut exists.
+- manual run uses normal lifecycle invariants.
+- validation failure preserves remote source.
+- quarantined artifact cannot be treated as valid backup.
+- no "delete remote anyway" shortcut exists.
 
 ## Work Package 2.6 — Activity + Settings
 
@@ -3949,10 +3949,10 @@ AND RETENTION_PLAN_STALE is returned
 
 ### Acceptance
 
-- [ ] UI never decides deletability.
-- [ ] exact confirmed plan is applied or nothing is deleted.
-- [ ] last-known-good remains protected.
-- [ ] retention cannot escape managed root.
+- UI never decides deletability.
+- exact confirmed plan is applied or nothing is deleted.
+- last-known-good remains protected.
+- retention cannot escape managed root.
 
 ## Work Package 3.2 — Validation Hardening + Completion Assurance
 
@@ -3968,9 +3968,9 @@ Stable-size mode SHALL remain visibly weaker and MAY require an additional delay
 
 ### Acceptance
 
-- [ ] required validation failure prevents remote deletion.
-- [ ] changed/incomplete artifact is preserved remotely.
-- [ ] stable-size mode cannot silently masquerade as producer-confirmed completion.
+- required validation failure prevents remote deletion.
+- changed/incomplete artifact is preserved remotely.
+- stable-size mode cannot silently masquerade as producer-confirmed completion.
 
 ## Work Package 3.3 — Catalog Reconstruction + State-Loss Recovery
 
@@ -3984,10 +3984,10 @@ Implement:
 
 ### Acceptance
 
-- [ ] deleting/loss of SQLite does not make retained backup files unusable.
-- [ ] rebuild is non-destructive.
-- [ ] secrets are not stored in recovery manifests.
-- [ ] rebuilt catalog preserves retention-relevant timestamps/identity.
+- deleting/loss of SQLite does not make retained backup files unusable.
+- rebuild is non-destructive.
+- secrets are not stored in recovery manifests.
+- rebuilt catalog preserves retention-relevant timestamps/identity.
 
 ## Work Package 3.4 — Upgrade/Migration Safety + Storage Pressure
 
@@ -4003,10 +4003,10 @@ Implement:
 
 ### Acceptance
 
-- [ ] migration failure starts no destructive daemon work.
-- [ ] unsupported downgrade fails closed.
-- [ ] insufficient disk prevents unsafe transfer start.
-- [ ] retention policy is not silently violated to free space.
+- migration failure starts no destructive daemon work.
+- unsupported downgrade fails closed.
+- insufficient disk prevents unsafe transfer start.
+- retention policy is not silently violated to free space.
 
 ## Work Package 3.5 — Proactive Alerting
 
@@ -4081,14 +4081,14 @@ Implement:
 
 ### Acceptance
 
-- [ ] generic Docker works without any NAS provider.
-- [ ] headless mode remains available.
-- [ ] generic Web UI is authenticated.
-- [ ] binary/image hashes are recorded.
+- generic Docker works without any NAS provider.
+- headless mode remains available.
+- generic Web UI is authenticated.
+- binary/image hashes are recorded.
 
 ## Work Package 4.2 — UGOS Provider App / UPK
 
-> Re-homed. This work package left EPIC B in the UGOS split and is EPIC D's #83
+> Re-homed. This work package left in the UGOS split and is 's
 > (D1.2). It is not a Phase 4 deliverable and the Phase 4 Exit Gate below is not
 > computed over it. The requirements here still stand; they are answered there.
 
@@ -4112,10 +4112,10 @@ Include:
 
 ### Acceptance
 
-- [ ] core/shared UI contain no UGOS code.
-- [ ] UPK embeds canonical OCI image.
-- [ ] trusted-gateway auth passes.
-- [ ] install/update/disable/uninstall/reinstall are safe.
+- core/shared UI contain no UGOS code.
+- UPK embeds canonical OCI image.
+- trusted-gateway auth passes.
+- install/update/disable/uninstall/reinstall are safe.
 
 ## Work Package 4.3 — TrueNAS + Unraid + OpenMediaVault Container Provider Packages
 
@@ -4164,10 +4164,10 @@ Do NOT implement a native OMV plugin in v1.
 
 ### Acceptance
 
-- [ ] all three use the exact canonical OCI image.
-- [ ] no provider-specific lifecycle code exists.
-- [ ] install/start/update/remove workflows are documented/tested.
-- [ ] retained backup data survives app/container replacement.
+- all three use the exact canonical OCI image.
+- no provider-specific lifecycle code exists.
+- install/start/update/remove workflows are documented/tested.
+- retained backup data survives app/container replacement.
 
 ## Work Package 4.4 — Synology DSM SPK Provider App
 
@@ -4195,12 +4195,12 @@ Native DSM SSO/session integration requires its own security gate and is not req
 
 ### Acceptance
 
-- [ ] SPK contains the exact release core binary hash.
-- [ ] package installs manually in DSM Package Center.
-- [ ] DSM desktop launcher opens the shared Web UI.
-- [ ] state persists across package update.
-- [ ] uninstall behavior does not unexpectedly delete retained backup data.
-- [ ] supported architecture/model matrix is documented.
+- SPK contains the exact release core binary hash.
+- package installs manually in DSM Package Center.
+- DSM desktop launcher opens the shared Web UI.
+- state persists across package update.
+- uninstall behavior does not unexpectedly delete retained backup data.
+- supported architecture/model matrix is documented.
 
 ## Work Package 4.5 — Proxmox VE Deployment Profile + Cross-Provider Conformance
 
@@ -4229,10 +4229,10 @@ Then execute the common provider conformance suite across all in-scope providers
 
 ### Acceptance
 
-- [ ] supported PVE deployment is reproducible.
-- [ ] PVE host management plane is not modified by unsupported UI/plugin hacks.
-- [ ] common provider conformance suite passes for each claimed provider.
-- [ ] unsupported capabilities are explicitly reported.
+- supported PVE deployment is reproducible.
+- PVE host management plane is not modified by unsupported UI/plugin hacks.
+- common provider conformance suite passes for each claimed provider.
+- unsupported capabilities are explicitly reported.
 
 ### Phase 4 Exit Gate
 
@@ -4250,11 +4250,11 @@ Proxmox VE
 at the support tier defined by this EPIC.
 
 Six targets, and UGOS is deliberately not one of them. UGOS deployability is EPIC
-D's gate against the shipped `.UPK` in #83 (D1.2), which is where work package 4.2
+D's gate against the shipped `.UPK` in (D1.2), which is where work package 4.2
 went. Nothing was dropped: the cross-provider conformance matrix still carries a
 UGOS column, checked on the same terms as every other one and reported with its
 blockers in `docs/conformance/phase-4-matrix.md`. It is read here as information,
-and this gate closes with EPIC C and EPIC D untouched. #86 and #81 both state the
+and this gate closes with and untouched. and both state the
 same six.
 
 ---
@@ -4298,8 +4298,8 @@ Test:
 
 ### Acceptance
 
-- [ ] no unresolved critical/high security issue.
-- [ ] every discovered defect has a permanent regression test.
+- no unresolved critical/high security issue.
+- every discovered defect has a permanent regression test.
 
 ## Work Package 5.2 — Supply Chain + Compliance
 
@@ -4317,10 +4317,10 @@ Produce:
 
 ### Acceptance
 
-- [ ] App Center-required compliance metadata exists.
-- [ ] source/privacy/license/support links are valid.
-- [ ] UPK built from known canonical image digest.
-- [ ] release can be reproduced from tagged source.
+- App Center-required compliance metadata exists.
+- source/privacy/license/support links are valid.
+- UPK built from known canonical image digest.
+- release can be reproduced from tagged source.
 
 ## Work Package 5.3 — Resource + Hardware Certification
 
@@ -4335,8 +4335,8 @@ Measure/test:
 
 ### Acceptance
 
-- [ ] each architecture claimed certified has real hardware evidence.
-- [ ] app does not materially interfere with ordinary NAS use while idle.
+- each architecture claimed certified has real hardware evidence.
+- app does not materially interfere with ordinary NAS use while idle.
 
 ## Work Package 5.4 — Provider Store/Catalog Submission Preflight
 
@@ -4379,27 +4379,27 @@ In addition to functional completion, every applicable child issue SHALL demonst
 
 This EPIC is complete when:
 
-- [ ] the predecessor backupd core remains the only lifecycle engine;
-- [ ] one canonical provider-neutral core binary exists per release/architecture;
-- [ ] container-based providers use the canonical OCI image built from that core binary;
-- [ ] Synology SPK proves the embedded core binary hash;
-- [ ] Generic Docker, UGOS, TrueNAS, Unraid, OMV, and container-based Proxmox profiles use the expected canonical image digest;
-- [ ] UGOS authentication cannot be spoofed from direct LAN access;
-- [ ] local-auth mode is secure for non-integrated providers;
-- [ ] private app state and retained backup data are separate;
-- [ ] UI covers normal configuration and monitoring without terminal use;
-- [ ] remote-source deletion behavior is explicitly disclosed;
-- [ ] retention applies only the exact confirmed immutable plan;
-- [ ] stale retention plans delete nothing;
-- [ ] catalog reconstruction works after state loss;
-- [ ] migration/downgrade failure is safe;
-- [ ] proactive stale/failure alerting exists;
-- [ ] headless Docker operation is independently usable;
-- [ ] provider-specific install/update/remove flows are verified at the claimed support tier;
-- [ ] claimed providers/architectures have appropriate certification evidence;
-- [ ] security/destructive-safety suites pass;
-- [ ] OSS/privacy/source/support compliance artifacts exist;
-- [ ] every applicable child issue followed mandatory TDD.
+- the predecessor backupd core remains the only lifecycle engine;
+- one canonical provider-neutral core binary exists per release/architecture;
+- container-based providers use the canonical OCI image built from that core binary;
+- Synology SPK proves the embedded core binary hash;
+- Generic Docker, UGOS, TrueNAS, Unraid, OMV, and container-based Proxmox profiles use the expected canonical image digest;
+- UGOS authentication cannot be spoofed from direct LAN access;
+- local-auth mode is secure for non-integrated providers;
+- private app state and retained backup data are separate;
+- UI covers normal configuration and monitoring without terminal use;
+- remote-source deletion behavior is explicitly disclosed;
+- retention applies only the exact confirmed immutable plan;
+- stale retention plans delete nothing;
+- catalog reconstruction works after state loss;
+- migration/downgrade failure is safe;
+- proactive stale/failure alerting exists;
+- headless Docker operation is independently usable;
+- provider-specific install/update/remove flows are verified at the claimed support tier;
+- claimed providers/architectures have appropriate certification evidence;
+- security/destructive-safety suites pass;
+- OSS/privacy/source/support compliance artifacts exist;
+- every applicable child issue followed mandatory TDD.
 
 ---
 
@@ -4745,41 +4745,41 @@ Every issue SHALL use the mandatory TDD template.
 
 ## Phase 1 — Core / Provider Architecture + UGOS Proof
 
-- [ ] **P1.1 — Extract Provider-Neutral Core + Public Application Contracts**
-- [ ] **P1.2 — Extract Shared React UI + Platform Bridge Contract**
-- [ ] **P1.3 — Generic Web Host + Secure Local Authentication**
-- [ ] **P1.4 — UGOS Provider Adapter + Trusted-Proxy Authentication PoC**
-- [ ] **P1.5 — UGOS Private State + Minimal UPK + Durable Operations/API PoC**
+- **P1.1 — Extract Provider-Neutral Core + Public Application Contracts**
+- **P1.2 — Extract Shared React UI + Platform Bridge Contract**
+- **P1.3 — Generic Web Host + Secure Local Authentication**
+- **P1.4 — UGOS Provider Adapter + Trusted-Proxy Authentication PoC**
+- **P1.5 — UGOS Private State + Minimal UPK + Durable Operations/API PoC**
 
 ## Phase 2 — Shared Functional UI MVP
 
-- [ ] **P2.1 — Dashboard, Health, and Durable Operation Progress**
-- [ ] **P2.2 — Backup Set Management**
-- [ ] **P2.3 — Six-Step Backup Setup Wizard + SSH/Host Trust**
-- [ ] **P2.4 — Backups List + Artifact Detail**
-- [ ] **P2.5 — Manual Run, Validation, and Quarantine**
-- [ ] **P2.6 — Activity, Settings, and Redacted Configuration Export**
+- **P2.1 — Dashboard, Health, and Durable Operation Progress**
+- **P2.2 — Backup Set Management**
+- **P2.3 — Six-Step Backup Setup Wizard + SSH/Host Trust**
+- **P2.4 — Backups List + Artifact Detail**
+- **P2.5 — Manual Run, Validation, and Quarantine**
+- **P2.6 — Activity, Settings, and Redacted Configuration Export**
 
 ## Phase 3 — Safety + Recovery
 
-- [ ] **P3.1 — Immutable Retention Preview/Plan/Apply**
-- [ ] **P3.2 — Validation Hardening + Completion Assurance**
-- [ ] **P3.3 — Catalog Rebuild + State-Loss Recovery**
-- [ ] **P3.4 — Migration/Downgrade Safety + Disk Pressure**
-- [ ] **P3.5 — Shared Alert Contract + Proactive Failure/Staleness Alerting**
+- **P3.1 — Immutable Retention Preview/Plan/Apply**
+- **P3.2 — Validation Hardening + Completion Assurance**
+- **P3.3 — Catalog Rebuild + State-Loss Recovery**
+- **P3.4 — Migration/Downgrade Safety + Disk Pressure**
+- **P3.5 — Shared Alert Contract + Proactive Failure/Staleness Alerting**
 
 ## Phase 4 — Provider Packaging
 
-- [ ] **P4.1 — Canonical Binary + Multi-Arch OCI + Generic Docker Distribution**
-- [ ] **P4.2 — UGOS Provider Production UPK + Lifecycle Certification**
-- [ ] **P4.3 — TrueNAS + Unraid + OpenMediaVault Container Provider Packages**
-- [ ] **P4.4 — Synology DSM SPK Provider App**
-- [ ] **P4.5 — Proxmox VE Deployment Profile + Provider Conformance Suite**
+- **P4.1 — Canonical Binary + Multi-Arch OCI + Generic Docker Distribution**
+- **P4.2 — UGOS Provider Production UPK + Lifecycle Certification**
+- **P4.3 — TrueNAS + Unraid + OpenMediaVault Container Provider Packages**
+- **P4.4 — Synology DSM SPK Provider App**
+- **P4.5 — Proxmox VE Deployment Profile + Provider Conformance Suite**
 
 ## Phase 5 — Hardening / Release
 
-- [ ] **P5.1 — Cross-Provider Security + Destructive-Safety Red Team**
-- [ ] **P5.2 — Supply Chain, Compliance, Provider Certification, and Store/Catalog Readiness**
+- **P5.1 — Cross-Provider Security + Destructive-Safety Red Team**
+- **P5.2 — Supply Chain, Compliance, Provider Certification, and Store/Catalog Readiness**
 
 Provider-specific follow-on integrations such as DSM SSO, native OMV plugin UI, or Proxmox host-UI plugins SHALL be separate issues/EPICs unless they become necessary to meet the support tier promised here.
 
@@ -4881,58 +4881,58 @@ For the same version/architecture, both paths MUST execute the same canonical im
 
 The implementation team SHALL re-check these documents at development and release time because UGOS developer interfaces can evolve.
 
-- UGREEN NAS Developer Platform  
+- UGREEN NAS Developer Platform
   https://developer.ugnas.com/
 
-- Development preparation  
+- Development preparation
   https://developer.ugnas.com/en/doc/backend/quick-start/prepare
 
-- Docker Application packaging  
+- Docker Application packaging
   https://developer.ugnas.com/doc/backend/quick-start/develop-docker-app.html
 
-- `project.yaml` configuration  
+- `project.yaml` configuration
   https://developer.ugnas.com/doc/tools/project-yaml.html
 
-- Application open mode  
+- Application open mode
   https://developer.ugnas.com/doc/backend/application/open-type.html
 
-- UGOS login authentication integration  
+- UGOS login authentication integration
   https://developer.ugnas.com/doc/backend/system-capabilities/login-auth.html
 
-- Application runtime environment / permissions  
+- Application runtime environment / permissions
   https://developer.ugnas.com/doc/backend/application/runtime-environment.html
 
-- UGREEN frontend samples  
+- UGREEN frontend samples
   https://developer.ugnas.com/en/doc/backend/quick-start/my-apps.html
 
-- `@ugreen-nas/builder-open`  
+- `@ugreen-nas/builder-open`
   https://developer.ugnas.com/en/doc/frontend/ugos-builder/
 
-- UGOS Core frontend SDK  
+- UGOS Core frontend SDK
   https://developer.ugnas.com/doc/frontend/ugos-core/install.html
 
-- App testing  
+- App testing
   https://developer.ugnas.com/doc/backend/quick-start/testing.html
 
-- UGOS App Center manual installation  
+- UGOS App Center manual installation
   https://support.ugnas.com/detail/article/en-US/116
 
-- UGREEN Docker  
+- UGREEN Docker
   https://support.ugnas.com/detail/article/en-US/236
 
-- UGREEN container applications  
+- UGREEN container applications
   https://support.ugnas.com/detail/article/en-US/539
 
-- App review / developer rules  
+- App review / developer rules
   https://developer.ugnas.com/doc/review/app-review/audit-key-points.html
 
-- Runtime environment / app data behavior  
+- Runtime environment / app data behavior
   https://developer.ugnas.com/doc/backend/application/runtime-environment.html
 
-- Open-source/compliance fields in `project.yaml`  
+- Open-source/compliance fields in `project.yaml`
   https://developer.ugnas.com/doc/tools/project-yaml.html
 
-- rclone license (MIT)  
+- rclone license (MIT)
   https://github.com/rclone/rclone/blob/master/docs/content/licence.md
 
 ---
@@ -4941,34 +4941,34 @@ The implementation team SHALL re-check these documents at development and releas
 
 ## Additional Provider References
 
-- Synology DSM Package Developer Guide  
+- Synology DSM Package Developer Guide
   https://help.synology.com/developer-guide/
 
-- Synology `.spk` package structure  
+- Synology `.spk` package structure
   https://help.synology.com/developer-guide/synology_package/introduction.html
 
-- Synology Package Toolkit  
+- Synology Package Toolkit
   https://help.synology.com/developer-guide/toolkit/toolkit.html
 
-- TrueNAS Custom Apps / Docker Compose  
+- TrueNAS Custom Apps / Docker Compose
   https://apps.truenas.com/managing-apps/installing-custom-apps/
 
-- TrueNAS Apps contribution model  
+- TrueNAS Apps contribution model
   https://github.com/truenas/apps/blob/master/CONTRIBUTIONS.md
 
-- Unraid Community Applications  
+- Unraid Community Applications
   https://docs.unraid.net/unraid-os/manual/applications/
 
-- Unraid Docker overview  
+- Unraid Docker overview
   https://docs.unraid.net/unraid-os/using-unraid-to/run-docker-containers/overview/
 
-- OpenMediaVault plugins  
+- OpenMediaVault plugins
   https://docs.openmediavault.org/en/8.x/plugins.html
 
-- OpenMediaVault plugin development  
+- OpenMediaVault plugin development
   https://docs.openmediavault.org/en/7.x/development/plugins.html
 
-- Proxmox VE Administration Guide  
+- Proxmox VE Administration Guide
   https://pve.proxmox.com/pve-docs/pve-admin-guide.pdf
 
 ---

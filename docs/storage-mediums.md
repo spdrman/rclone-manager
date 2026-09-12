@@ -21,24 +21,24 @@ an archive class is not a place a tier can deliver to.
 | What | State |
 | --- | --- |
 | `storage_mediums` and a tier's `medium` key are accepted, validated and round-tripped by a settings save | Landed |
-| Credentials are resolved from a file, an environment variable or a command | Landed (#235) |
-| Artifacts are recorded as living somewhere, and the recovery manifest says where | Landed (#236): migration 0007 and the manifest's `placements` |
-| Verification classes, and revalidation that knows about mediums | Landed (#237) |
+| Credentials are resolved from a file, an environment variable or a command | Landed |
+| Artifacts are recorded as living somewhere, and the recovery manifest says where | Landed: migration 0007 and the manifest's `placements` |
+| Verification classes, and revalidation that knows about mediums | Landed |
 | Artifacts actually MOVE between mediums when a tier says so | Landed, including a chain with two medium tiers |
-| Retention plans, previews and prune understand mediums | Landed, including across the HTTP boundary: the preview carries every move with both mediums, and every deletion with the medium it happens on (#430) |
+| Retention plans, previews and prune understand mediums | Landed, including across the HTTP boundary: the preview carries every move with both mediums, and every deletion with the medium it happens on |
 | The API and the UI show placements, access states and the disclosure | Landed |
-| A tier's destination is reachable from `backupd`, not only the browser | Landed (#595): `retention --tier-medium NAME=MEDIUM_ID` previews a supplied chain against the destinations it names, `settings patch --policy-file` replaces the deployment's whole chain, and `backup-set retention --policy-file` already did one set's |
-| A medium can be proved to work before a cycle carries a real backup to it | Landed (#443): `backupd medium test-connection` (`preflight` still works, see below), and a button on the settings form |
-| A medium can be DECLARED without hand-editing config.yaml, and proved before it is | Landed (#594): a wizard on the settings page, and `backupd medium list/show/import-credentials/add/edit/remove` |
-| The drive backups already land on is a destination like any other, a tier picks one without leaving the tier, and one destination is the default | Landed (#622): a picker under every tier in both editors, a `local` entry in the destinations list, `backupd medium default` and `settings patch --tier-medium` |
+| A tier's destination is reachable from `backupd`, not only the browser | Landed: `retention --tier-medium NAME=MEDIUM_ID` previews a supplied chain against the destinations it names, `settings patch --policy-file` replaces the deployment's whole chain, and `backup-set retention --policy-file` already did one set's |
+| A medium can be proved to work before a cycle carries a real backup to it | Landed: `backupd medium test-connection` (`preflight` still works, see below), and a button on the settings form |
+| A medium can be DECLARED without hand-editing config.yaml, and proved before it is | Landed: a wizard on the settings page, and `backupd medium list/show/import-credentials/add/edit/remove` |
+| The drive backups already land on is a destination like any other, a tier picks one without leaving the tier, and one destination is the default | Landed: a picker under every tier in both editors, a `local` entry in the destinations list, `backupd medium default` and `settings patch --tier-medium` |
 | Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class is refused when the config loads, see below |
-| Backends are declared by a bundled manifest the engine loads at startup, refusing a malformed one loudly | Landed (#665), nothing reads it yet |
+| Backends are declared by a bundled manifest the engine loads at startup, refusing a malformed one loudly | Landed, nothing reads it yet |
 
 One limit is worth knowing before you write a chain, and it is the manager
 refusing to do something rather than doing it badly:
 
 - **A tier whose medium names `GLACIER` or `DEEP_ARCHIVE` cannot take
-  delivery of an artifact, and the config will not load** (#428, #442). The
+  delivery of an artifact, and the config will not load**. The
   manager will not delete a copy against a destination it could not read
   back, an archived object cannot be read back, and there is no
   `upload_verification` mode that says "existence is enough". So the pairing
@@ -53,7 +53,7 @@ refusing to do something rather than doing it badly:
 
 A chain with two medium tiers, which is the shape this document opens with
 (daily local, monthly `s3`, annual on a colder readable class), works end to
-end (#429). The second hop is a move from one medium to another, and the
+end. The second hop is a move from one medium to another, and the
 manager does it by reading the artifact down to a `.moves` directory under
 the backup set's own `local_path`, checking that what arrived hashes to what
 it recorded at ingestion, uploading that, and removing it. So a chain like
@@ -183,7 +183,7 @@ even runs. That refusal is deliberate and is not going to be softened.
 
 There is a fourth way to arrive at one of the three, for an operator who has
 just been handed an access key by their provider and has none of them yet
-(#594). It does not add a schema field and does not soften the refusal above:
+. It does not add a schema field and does not soften the refusal above:
 
 ```
 backupd medium import-credentials --stdin
@@ -229,7 +229,7 @@ non-zero when any check fails, so it composes into a deployment script.
 
 The verb used to be `preflight` and still is: the same entry in the same
 dispatch table, kept as an alias so anything scripted against it goes on
-working. What changed in #622 is which name the product says first. The same
+working. What changed in is which name the product says first. The same
 idea was called "Verify" in the browser, `preflight` on the command line and
 "Test connection" on the source side of this same product, and one operator
 learning three words for one button is two words too many.
@@ -256,7 +256,7 @@ step, weighed against your own `capacity.safety_margin_bytes` and
 `capacity.critical_free_bytes` rather than against a figure this product
 invented, because a transfer already refuses to start into less than the margin.
 
-Since #594 the same eight checks also run against a destination that is **not
+Since the same eight checks also run against a destination that is **not
 declared yet**, which is what lets a destination be proved before it is written
 down rather than after:
 
@@ -272,13 +272,13 @@ non-interactive equivalent of the wizard's Save button staying disabled;
 
 ### A destination nobody ever proved says so, until somebody proves it
 
-Until #636 that paragraph described only the first-party clients. The check
+Until that paragraph described only the first-party clients. The check
 lived in `medium add` and in the wizard, so `POST /storage-mediums` accepted a
 destination nobody had verified and answered 201, and there was no mark either:
 a destination written unproven and one checked against a real bucket were the
 same destination in every list, on every screen and in every command's output,
-forever. That is the state #624 calls a hole rather than an escape hatch, on the
-source side of the same product, and #628 had already closed it there.
+forever. That is the state calls a hole rather than an escape hatch, on the
+source side of the same product, and had already closed it there.
 
 So the check is the engine's now. `CreateStorageMedium` and
 `UpdateStorageMedium` run the eight steps themselves and refuse with
@@ -460,7 +460,7 @@ The rules that matter:
   gives it for free, in the cycle report, every cycle, rather than uploading and
   discarding a copy to find out. That matters because `DEEP_ARCHIVE` has a
   180-day minimum billable duration: a copy deleted the second after it lands is
-  still charged for six months. Issue #428 tracks what the eventual answer
+  still charged for six months. tracks what the eventual answer
   should be.
 
 ### `upload_verification: attested` and rclone's s3 backend
@@ -471,7 +471,7 @@ copy to be deleted against a bad upload.
 
 It also does not work on `s3` in this build, and **the config is now refused at
 load rather than at the move**. rclone v1.75.0's s3 backend reports exactly one
-hash capability, MD5 (`backend/s3.Fs.Hashes()` returns `hash.Set(hash.MD5)`), so
+hash capability, MD5 (`backend/s3.Fs.Hashes` returns `hash.Set(hash.MD5)`), so
 it cannot produce a full-object SHA-256 attestation at all. There is nothing an
 s3 medium could ever do to satisfy the class.
 
@@ -491,7 +491,7 @@ MD5, so the product does not treat it as content in any code path.
 `GLACIER` and `DEEP_ARCHIVE` are cheap because reading them is slow and billed.
 The manager tells you what it knows and refuses to invent the rest.
 
-**Read #428 before configuring a tier on one of these.** The vocabulary below
+**Read before configuring a tier on one of these.** The vocabulary below
 is real and the restore operation is real, and they apply to a copy that is
 already on an archive class. What does not work yet is getting a copy THERE
 through a tier's `medium` key, because the move would have to delete a local

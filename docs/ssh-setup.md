@@ -24,7 +24,7 @@ at all unless:
   "don't check host keys at all." Both would otherwise let rclone accept any
   host key silently, which is the exact failure FR-6 exists to prevent.
 - when the key source is `key_file`, the file's mode is exactly `0600`, the
-  same check on every connection attempt, not only at import (issue #293).
+  same check on every connection attempt, not only at import.
   Neither rclone's embedded sftp backend nor the `golang.org/x/crypto/ssh`
   library underneath it looks at a key file's permissions at all, unlike a
   real OpenSSH client, so without this check a key that drifted wider after
@@ -156,7 +156,7 @@ chmod 440 /srv/backupd/incoming/backups/some-artifact.dump.zst
 ```
 
 With that combination, `backupsvc` can `list`, `get`, and `rm` the artifact
-over SFTP (directory permissions allow it), but `open()`-ing it for write
+over SFTP (directory permissions allow it), but `open`-ing it for write
 fails (file permissions block it), so a compromised or buggy
 `backupd` process can delete a stale backup once it's confirmed
 durably copied elsewhere, but it can never quietly corrupt or replace one in
@@ -210,7 +210,7 @@ it stands up a real SFTP server, records its key, swaps in a second server
 with a different one on the same address, and checks that the connection is
 refused rather than silently reconnecting to whatever answered.
 
-## Choosing a key source (#74)
+## Choosing a key source
 
 Everything above produces one thing: a private key file. What you point
 backupd at is a separate decision, and there are three ways to make
@@ -276,7 +276,7 @@ There is no field anywhere in this configuration for pasting key bytes
 directly into YAML, and there never will be: `key.file`, `key.env` and
 `key.command` all name WHERE the key lives, none of them carry it.
 
-## Encrypting the key store at rest (#298)
+## Encrypting the key store at rest
 
 Everything above defends the key in transit and defends the account it
 authenticates. It says nothing about the key FILE itself once it's sitting
@@ -382,7 +382,7 @@ sources:
         remote_path: /backups
 ```
 
-(Or, per "Choosing a key source" above, `key: {file: ...}`, `key: {env: ...}`
+(Or, per "Choosing a key source" above, `key: {file:...}`, `key: {env:...}`
 or `key: {command: [...]}` instead of the bare `key_file` line.)
 
 Mount `backup_key` and `known_hosts` read-only into wherever backupd
@@ -392,7 +392,7 @@ nothing to mount for either, since the key never lives in a file backupd
 reads on this host at all.)
 
 If this remote's host, port or account name must never appear in a log line
-or a journal detail (issue #295), for example a deployment where the port
+or a journal detail, for example a deployment where the port
 itself is treated as a credential, add `sensitive_endpoint: true` alongside
 the fields above. It defaults to false: most deployments would rather a
 connection failure said what it couldn't reach, so this is something a
@@ -404,7 +404,7 @@ A hardened host often refuses a third simultaneous SSH connection from one
 address rather than queueing it, whether through `sshd_config`'s
 `MaxStartups` or an iptables `connlimit` rule. Against a host like that,
 opening one connection too many is not slow, it is a failed backup, and it
-surfaces as a bare `connection refused` that points at nothing (issue #264).
+surfaces as a bare `connection refused` that points at nothing.
 
 backupd stays under such a limit on its own: every operation it
 performs (list, stat, copy, hash, delete) opens one connection and hands it

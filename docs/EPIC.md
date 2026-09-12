@@ -19,27 +19,27 @@ mechanism, or implement SSH/SFTP itself.
 
 The application owns the backup-specific control plane:
 
--   backup-set configuration;
--   completed-artifact discovery;
--   durable lifecycle state;
--   copy/verification/commit/delete sequencing;
--   GFS retention;
--   last-known-good protection;
--   validation/quarantine;
--   backup freshness;
--   health and observability;
--   reconciliation after failure.
+- backup-set configuration;
+- completed-artifact discovery;
+- durable lifecycle state;
+- copy/verification/commit/delete sequencing;
+- GFS retention;
+- last-known-good protection;
+- validation/quarantine;
+- backup freshness;
+- health and observability;
+- reconciliation after failure.
 
 rclone owns the generic data plane:
 
--   SFTP and local filesystem backends;
--   remote filesystem abstractions;
--   object listing;
--   copying;
--   hashing where supported;
--   deletion primitives;
--   transfer accounting;
--   retry/error primitives where appropriate.
+- SFTP and local filesystem backends;
+- remote filesystem abstractions;
+- object listing;
+- copying;
+- hashing where supported;
+- deletion primitives;
+- transfer accounting;
+- retry/error primitives where appropriate.
 
 The initial use case is:
 
@@ -64,11 +64,11 @@ UGREEN NAS filesystem
 
 Default retention:
 
-  Tier                   Default
+  Tier Default
   --------- --------------------
-  Daily                   7 days
-  Weekly       3 calendar months
-  Monthly     12 calendar months
+  Daily 7 days
+  Weekly 3 calendar months
+  Monthly 12 calendar months
 
 The overriding safety rule is:
 
@@ -129,13 +129,13 @@ Additional backends MAY be added later deliberately.
 A fork would make this project responsible for continuously integrating
 upstream:
 
--   security fixes;
--   SSH/SFTP changes;
--   Go/runtime changes;
--   dependency updates;
--   backend fixes;
--   core filesystem behavior;
--   transfer/accounting changes.
+- security fixes;
+- SSH/SFTP changes;
+- Go/runtime changes;
+- dependency updates;
+- backend fixes;
+- core filesystem behavior;
+- transfer/accounting changes.
 
 The backup-specific functionality is small relative to rclone's full
 codebase. Maintaining a fork would therefore create disproportionate
@@ -148,15 +148,15 @@ SHALL NOT be the primary architecture.
 
 Embedding provides:
 
--   one deployable binary;
--   typed Go errors instead of parsing process output;
--   direct `context.Context` cancellation;
--   direct object/filesystem APIs;
--   direct transfer statistics;
--   no subprocess lifecycle;
--   no CLI-output compatibility contract;
--   tighter testing;
--   explicit control over destructive operations.
+- one deployable binary;
+- typed Go errors instead of parsing process output;
+- direct `context.Context` cancellation;
+- direct object/filesystem APIs;
+- direct transfer statistics;
+- no subprocess lifecycle;
+- no CLI-output compatibility contract;
+- tighter testing;
+- explicit control over destructive operations.
 
 ## Important boundary: do not use rclone `move` as the backup transaction
 
@@ -185,18 +185,18 @@ operation after durable commit.
 
 # Goals
 
-1.  Produce a small standalone Go binary suitable for UGREEN NAS
+1. Produce a small standalone Go binary suitable for UGREEN NAS
     deployment.
-2.  Embed rclone rather than fork it.
-3.  Pin the rclone dependency to an explicitly tested version.
-4.  Initially compile only the local and SFTP backends required by this
+2. Embed rclone rather than fork it.
+3. Pin the rclone dependency to an explicitly tested version.
+4. Initially compile only the local and SFTP backends required by this
     use case.
-5.  Pull completed backup artifacts from remote servers.
-6.  Maintain a durable SQLite lifecycle journal.
-7.  Guarantee manager-controlled copy → verify → commit → delete
+5. Pull completed backup artifacts from remote servers.
+6. Maintain a durable SQLite lifecycle journal.
+7. Guarantee manager-controlled copy → verify → commit → delete
     ordering.
-8.  Recover deterministically after interruption at any step.
-9.  Enforce deterministic GFS retention.
+8. Recover deterministically after interruption at any step.
+9. Enforce deterministic GFS retention.
 10. Protect the last known-good restore point.
 11. Support backup-specific validation and quarantine.
 12. Expose operational health independently from process liveness.
@@ -209,18 +209,18 @@ operation after durable commit.
 
 # Non-Goals
 
--   Forking rclone.
--   Modifying upstream rclone unless a generally useful upstream
+- Forking rclone.
+- Modifying upstream rclone unless a generally useful upstream
     contribution is warranted.
--   Building SSH/SFTP.
--   Calling the rclone CLI for normal data movement.
--   Creating the application/database backups.
--   Becoming a general-purpose synchronization application.
--   Replacing Borg/restic-style backup repositories.
--   Re-encoding canonical backup artifacts into a proprietary format.
--   Continuous replication.
--   Initial NAS-to-cloud replication.
--   A web UI in the initial release.
+- Building SSH/SFTP.
+- Calling the rclone CLI for normal data movement.
+- Creating the application/database backups.
+- Becoming a general-purpose synchronization application.
+- Replacing Borg/restic-style backup repositories.
+- Re-encoding canonical backup artifacts into a proprietary format.
+- Continuous replication.
+- Initial NAS-to-cloud replication.
+- A web UI in the initial release.
 
 ------------------------------------------------------------------------
 
@@ -254,19 +254,19 @@ same use cases.
 
 A future UI SHOULD be able to expose:
 
--   overall `HEALTHY`, `DEGRADED`, `STALE`, or `FAILING` state;
--   configured sources and backup sets;
--   newest known-good restore point;
--   backup and validation history;
--   active transfer progress;
--   daily/weekly/monthly retention classification;
--   quarantined artifacts;
--   pending remote deletions;
--   disk utilization;
--   manual backup execution;
--   validation;
--   retention preview and execution;
--   diagnostics.
+- overall `HEALTHY`, `DEGRADED`, `STALE`, or `FAILING` state;
+- configured sources and backup sets;
+- newest known-good restore point;
+- backup and validation history;
+- active transfer progress;
+- daily/weekly/monthly retention classification;
+- quarantined artifacts;
+- pending remote deletions;
+- disk utilization;
+- manual backup execution;
+- validation;
+- retention preview and execution;
+- diagnostics.
 
 The full web UI is OUT OF SCOPE for this EPIC.
 
@@ -355,12 +355,12 @@ Business logic SHALL be shared between both modes.
 
 The daemon SHALL:
 
--   handle `SIGTERM`/`SIGINT`;
--   use Go context cancellation;
--   prevent overlapping processing for the same backup set;
--   continue processing unrelated sources after a source failure;
--   recover from transient network errors;
--   shut down without initiating unsafe source deletion.
+- handle `SIGTERM`/`SIGINT`;
+- use Go context cancellation;
+- prevent overlapping processing for the same backup set;
+- continue processing unrelated sources after a source failure;
+- recover from transient network errors;
+- shut down without initiating unsafe source deletion.
 
 ------------------------------------------------------------------------
 
@@ -372,14 +372,14 @@ Upgrades SHALL NOT use an unconstrained/latest dependency.
 
 Each rclone upgrade SHALL require:
 
-1.  dependency update;
-2.  compilation;
-3.  unit tests;
-4.  transport contract tests;
-5.  SFTP integration tests;
-6.  crash/reconciliation tests involving transfer operations;
-7.  destructive-safety tests;
-8.  release notes/changelog review.
+1. dependency update;
+2. compilation;
+3. unit tests;
+4. transport contract tests;
+5. SFTP integration tests;
+6. crash/reconciliation tests involving transfer operations;
+7. destructive-safety tests;
+8. release notes/changelog review.
 
 The project SHOULD document the currently certified rclone version in
 the README.
@@ -429,12 +429,12 @@ Exact signatures may change.
 
 Requirements:
 
--   lifecycle code SHALL depend on the manager-owned interface;
--   rclone-specific types SHALL NOT leak into lifecycle/retention/state
+- lifecycle code SHALL depend on the manager-owned interface;
+- rclone-specific types SHALL NOT leak into lifecycle/retention/state
     packages;
--   destructive operations SHALL be explicit;
--   no generic `Move()` method SHALL be exposed to lifecycle code;
--   test doubles SHALL be available.
+- destructive operations SHALL be explicit;
+- no generic `Move` method SHALL be exposed to lifecycle code;
+- test doubles SHALL be available.
 
 ------------------------------------------------------------------------
 
@@ -442,17 +442,17 @@ Requirements:
 
 Initial production build SHALL include:
 
--   local filesystem;
--   SFTP.
+- local filesystem;
+- SFTP.
 
 Do not import all rclone backends merely for convenience.
 
 This reduces:
 
--   binary size;
--   dependency surface;
--   initialization complexity;
--   accidental configuration exposure.
+- binary size;
+- dependency surface;
+- initialization complexity;
+- accidental configuration exposure.
 
 Future backends require an explicit feature/architecture decision.
 
@@ -555,13 +555,13 @@ Configuration SHALL be validated before destructive processing begins.
 
 The embedded rclone SFTP backend SHALL use:
 
--   SSH key authentication, mandatory rather than merely preferred;
--   host-key verification;
--   explicit known-host configuration;
--   no automatic acceptance of changed/unknown production host keys.
+- SSH key authentication, mandatory rather than merely preferred;
+- host-key verification;
+- explicit known-host configuration;
+- no automatic acceptance of changed/unknown production host keys.
 
 "Mandatory" is stronger than "by default" on purpose. The adapter SHALL refuse
-a source with none of `key_file`, `key.env` or `key.command` set (#74) rather
+a source with none of `key_file`, `key.env` or `key.command` set rather
 than letting the backend fall back to a running ssh-agent, and SHALL NOT set
 the backend's password, prompt or use-agent options, so password and agent
 authentication have no path into this program at all. `transport.Source`
@@ -580,14 +580,14 @@ directly; see "Key source" below.
 
 The remote account SHOULD:
 
--   be dedicated to backups;
--   be SFTP-only where practical;
--   have no general interactive shell;
--   be confined to backup directories;
--   be able to list/read eligible artifacts;
--   be able to delete eligible artifacts;
--   be unable to modify/replace completed artifacts where practical;
--   have no unrelated server privileges.
+- be dedicated to backups;
+- be SFTP-only where practical;
+- have no general interactive shell;
+- be confined to backup directories;
+- be able to list/read eligible artifacts;
+- be able to delete eligible artifacts;
+- be unable to modify/replace completed artifacts where practical;
+- have no unrelated server privileges.
 
 Credentials MUST NOT be stored in Git.
 
@@ -606,14 +606,14 @@ copy of its own that could drift from the operator's.
 
 That boundary is deliberate, and it decides who owns what:
 
--   the key's generation, its filesystem permissions, its rotation, and any
+- the key's generation, its filesystem permissions, its rotation, and any
     backup of the key itself are the OPERATOR's, outside this program;
--   the key file SHOULD be mounted read-only into the runtime, so the manager
+- the key file SHOULD be mounted read-only into the runtime, so the manager
     cannot modify it even if compromised;
--   because the manager holds no copy, rotating the key means replacing one
+- because the manager holds no copy, rotating the key means replacing one
     file on the host and restarting, with nothing to migrate and no stale
     duplicate left behind;
--   a key that the manager cannot read is a startup failure, not a warning to
+- a key that the manager cannot read is a startup failure, not a warning to
     be worked around, since the alternative is a backup run that appears
     configured and silently transfers nothing.
 
@@ -629,16 +629,16 @@ public key will fail authentication rather than falling back to anything.
 `docs/ssh-setup.md` is the operational procedure, and `docs/deployment.md`
 covers mounting the key into the container.
 
-### Key at rest: optional encryption (#298)
+### Key at rest: optional encryption
 
 An imported key (the wizard's "Import key" step, `core/service/backupsets
 .go`'s `ImportSSHKey`) IS a case where the manager stores key material of
 its own, on disk, alongside the deployment's configuration -- unlike the
-operator-provisioned `key_file` custody model above. Before #298 that file
+operator-provisioned `key_file` custody model above. Before that file
 was defended only by filesystem permissions (FR-6's account-hardening
-requirements below, and #293's permission-drift detection); nothing
+requirements below, and 's permission-drift detection); nothing
 encrypted it. Two real incidents on the same live deployment -- a
-permission drift to world-writable (#293), and a plaintext copy reachable
+permission drift to world-writable, and a plaintext copy reachable
 through an SMB/AFP share exported from the same NAS volume -- showed that
 permission hardening alone does not close the reported exposure: an
 SMB/AFP share can bypass Unix owner-only file-mode bits entirely depending
@@ -650,7 +650,7 @@ the same shape `key` and `key.passphrase` already use) SHALL be the
 optional mechanism for encrypting such a key file at rest, with AES-GCM
 authenticated encryption and a key resolved through that block. It is
 opt-in and config-wide: a `config.yaml` with no `key_encryption` block
-(every one written before #298, and any deployment that has not chosen to
+(every one written before, and any deployment that has not chosen to
 opt in) behaves exactly as before, an unencrypted PEM file on disk. A key
 already on disk in plaintext from before this was configured SHALL be
 migrated to at-rest encryption transparently, in place, the first time a
@@ -670,12 +670,12 @@ tree, gives back exactly the exposure this feature exists to close.
 this trade-off in full and is the operational guidance for where the
 `key_encryption` source itself belongs.
 
-A future medium credential of the same shape (EPIC E's S3 keys, #235) is
+A future medium credential of the same shape ('s S3 keys,) is
 expected to answer "how is a secret this manager itself persists to disk
 protected at rest" by reusing this same `key_encryption` mechanism, rather
 than each credential type inventing its own.
 
-### Key source: file, environment, or command (#74)
+### Key source: file, environment, or command
 
 A source's private key is named exactly one of three ways:
 
@@ -748,16 +748,16 @@ A candidate MUST be proven complete before ingestion.
 
 Supported strategies SHOULD include:
 
-1.  producer atomic rename;
-2.  producer completion/manifest marker;
-3.  stable size/modification metadata for a configured period.
+1. producer atomic rename;
+2. producer completion/manifest marker;
+3. stable size/modification metadata for a configured period.
 
 Producer-controlled atomic completion SHOULD be preferred.
 
 Remote filenames and metadata SHALL be treated as untrusted input.
 
 The manifest marker strategy's directory-level marker filename is
-configurable (`completion.manifest_marker`, issue #291). It defaults to
+configurable (`completion.manifest_marker`,). It defaults to
 `_SUCCESS`, the well-known Hadoop/Spark convention this manager recognized
 unconditionally before this field existed, so a configuration written
 before this field existed keeps recognising exactly the marker it
@@ -786,19 +786,19 @@ SQLite SHALL be mandatory.
 
 It SHALL persist:
 
--   artifact identity;
--   backup set;
--   remote path;
--   local path;
--   remote metadata;
--   lifecycle state;
--   timestamps;
--   transfer results;
--   hashes;
--   validation results;
--   retry information;
--   remote deletion status;
--   retention classification.
+- artifact identity;
+- backup set;
+- remote path;
+- local path;
+- remote metadata;
+- lifecycle state;
+- timestamps;
+- transfer results;
+- hashes;
+- validation results;
+- retry information;
+- remote deletion status;
+- retention classification.
 
 Schema migrations SHALL be version-controlled.
 
@@ -839,7 +839,7 @@ QUARANTINED
 
 Transitions SHALL be durable and idempotent.
 
-### Leaving quarantine (issue #220, ADR 0004)
+### Leaving quarantine (, ADR 0004)
 
 A quarantined artifact SHALL have a way back that does not require re-fetching
 it from the remote source. Re-ingesting (QUARANTINED to DISCOVERED) is the right
@@ -927,9 +927,9 @@ backup-2026-08-27.dump.zst.partial
 
 A `.partial` artifact SHALL:
 
--   never participate in retention;
--   never satisfy last-known-good protection;
--   never be presented as a valid restore point.
+- never participate in retention;
+- never satisfy last-known-good protection;
+- never be presented as a valid restore point.
 
 Final-name collisions SHALL fail safely rather than overwrite a
 known-good backup.
@@ -942,10 +942,10 @@ known-good backup.
 
 At minimum:
 
--   rclone copy returned success;
--   destination exists;
--   expected size matches;
--   local file can be opened/read.
+- rclone copy returned success;
+- destination exists;
+- expected size matches;
+- local file can be opened/read.
 
 ### Hash verification
 
@@ -984,13 +984,13 @@ Invalid artifacts SHOULD enter `QUARANTINED`.
 
 Before `COMMITTED`, the manager SHALL:
 
-1.  complete transfer to `.partial`;
-2.  complete required verification;
-3.  flush/synchronize the file to durable storage using appropriate OS
+1. complete transfer to `.partial`;
+2. complete required verification;
+3. flush/synchronize the file to durable storage using appropriate OS
     primitives;
-4.  atomically rename it to the final path;
-5.  synchronize the containing directory where applicable;
-6.  persist `COMMITTED` in SQLite.
+4. atomically rename it to the final path;
+5. synchronize the containing directory where applicable;
+6. persist `COMMITTED` in SQLite.
 
 The implementation SHALL document behavior and limitations of the target
 NAS filesystem.
@@ -1001,7 +1001,7 @@ No remote deletion is permitted before `COMMITTED`.
 
 ## FR-15 --- Remote Delete Safety
 
-`DeleteRemote()` is security-sensitive and SHALL only be called by the
+`DeleteRemote` is security-sensitive and SHALL only be called by the
 lifecycle transition responsible for:
 
 ``` text
@@ -1010,11 +1010,11 @@ COMMITTED → REMOTE_DELETE_PENDING → COMPLETE
 
 Before deletion, the manager SHALL revalidate that:
 
--   the database artifact is `COMMITTED` or `REMOTE_DELETE_PENDING`;
--   the artifact has never been reinstated out of quarantine;
--   the expected local final file exists;
--   local identity/size is consistent;
--   the remote object still corresponds to the artifact originally
+- the database artifact is `COMMITTED` or `REMOTE_DELETE_PENDING`;
+- the artifact has never been reinstated out of quarantine;
+- the expected local final file exists;
+- local identity/size is consistent;
+- the remote object still corresponds to the artifact originally
     discovered.
 
 If the remote artifact appears to have changed since discovery, deletion
@@ -1025,7 +1025,7 @@ This protects against deleting a newly replaced remote file that reused
 an old pathname.
 
 I added the reinstatement check above, and it is the price FR-10's
-reinstatement edges pay for existing (issue #220, ADR 0004). An artifact that
+reinstatement edges pay for existing (, ADR 0004). An artifact that
 was distrusted and later re-trusted was re-trusted on a local re-check, which is
 a weaker thing than the full FR-13 verification chain it passed on its way to
 COMMITTED the first time, and not enough to authorise destroying the last
@@ -1077,33 +1077,33 @@ and remote state.
 Required scenarios include:
 
   -----------------------------------------------------------------------
-  Remote          Local           Journal                 Required
+  Remote Local Journal Required
                                                           behavior
   --------------- --------------- ----------------------- ---------------
-  exists          absent          DISCOVERED              transfer
+  exists absent DISCOVERED transfer
 
-  exists          partial         TRANSFERRING            safe
+  exists partial TRANSFERRING safe
                                                           retry/restart
 
-  exists          final           COMMITTED               verify and
+  exists final COMMITTED verify and
                                                           proceed toward
                                                           delete
 
-  absent          final           REMOTE_DELETE_PENDING   reconcile
+  absent final REMOTE_DELETE_PENDING reconcile
                                                           COMPLETE
 
-  absent          final           COMPLETE                no-op
+  absent final COMPLETE no-op
 
-  exists          invalid final   any                     preserve
+  exists invalid final any preserve
                                                           remote;
                                                           quarantine
                                                           local
 
-  absent          invalid final   any                     quarantine,
+  absent invalid final any quarantine,
                                                           unrecoverable
 
-  changed         final           delete pending          refuse delete;
-  identity                                                investigate
+  changed final delete pending refuse delete;
+  identity investigate
   -----------------------------------------------------------------------
 
 I added the "absent / invalid final" row above: the original table had no
@@ -1133,13 +1133,13 @@ semi-annual, annual, or an arbitrary custom period.
 
 Each tier has:
 
-  Field              Meaning
+  Field Meaning
   ------------------ -----------------------------------------------------
-  `name`             lower_snake_case identifier, unique within the chain
-  `granularity`      the calendar bucket the tier groups artifacts into
-  `keep`             how many of that tier's own buckets to look back over
-  `window_unit`      optional: measure the look-back in this unit instead
-  `period_days`      only for `granularity: days`, the custom period length
+  `name` lower_snake_case identifier, unique within the chain
+  `granularity` the calendar bucket the tier groups artifacts into
+  `keep` how many of that tier's own buckets to look back over
+  `window_unit` optional: measure the look-back in this unit instead
+  `period_days` only for `granularity: days`, the custom period length
 
 `granularity` is one of `day`, `week`, `month`, `quarter`, `half_year`,
 `year`, or `days` (with `period_days: N`, the escape hatch for any period
@@ -1167,11 +1167,11 @@ bucket", and the answer is two of them.
 
 Default chain:
 
-  Tier      Granularity   Look-back
+  Tier Granularity Look-back
   --------- ------------- -------------------
-  daily     day           7 days
-  weekly    week          3 calendar months
-  monthly   month         12 calendar months
+  daily day 7 days
+  weekly week 3 calendar months
+  monthly month 12 calendar months
 
 For each backup set, with `tiers` the configured chain:
 
@@ -1195,10 +1195,10 @@ two selections rather than one. The next section says what those two are.
 Two consequences follow, and are stated here rather than left to be
 inferred:
 
--   The chain does not have to be contiguous. `daily` plus `annual` with
+- The chain does not have to be contiguous. `daily` plus `annual` with
     nothing in between is a legal policy, and every artifact falling in
     the gap between the two windows is a DELETE candidate.
--   An artifact older than the longest configured window is a DELETE
+- An artifact older than the longest configured window is a DELETE
     candidate, regardless of how many tiers there are.
 
 Tier order is the order the administrator writes the chain in. It is
@@ -1227,14 +1227,14 @@ A tier's buckets are calendar buckets, so something has to place an
 artifact on a calendar. Two timestamps could, and they are not the same
 thing:
 
--   the **discovery timestamp**: the moment this manager first observed
+- the **discovery timestamp**: the moment this manager first observed
     the artifact on the remote (`state.Record.DiscoveredAt`). It comes
     from this manager's own clock and nothing outside the manager can
     move it. Note that this is *not* the recovery manifest's
     `received_timestamp`, which records when the artifact finished
     committing locally; the manifest field carrying this one is
     `retention_timestamp`.
--   the **producer timestamp**: the remote object's own modification time
+- the **producer timestamp**: the remote object's own modification time
     as captured at discovery. It describes when the backup was actually
     taken, and FR-8 requires it to be treated as untrusted input.
 
@@ -1271,9 +1271,9 @@ they differ only in which timestamp puts an artifact where.
 
 A producer timestamp is **admissible** only when all three hold:
 
--   the backend reported one at all (many do not);
--   it is not the zero time (a missing value, not a date);
--   it is **not after** the discovery timestamp.
+- the backend reported one at all (many do not);
+- it is not the zero time (a missing value, not a date);
+- it is **not after** the discovery timestamp.
 
 The third is a refusal, not a clamp. A completed artifact cannot have been
 produced after the moment this manager first observed it, so a timestamp
@@ -1290,18 +1290,18 @@ placement is untouched.
 
 Three properties follow, and SHALL hold:
 
--   **The producer term may only add.** For any set of artifacts, and
+- **The producer term may only add.** For any set of artifacts, and
     for every tier, every artifact the discovery pass selects is still
     selected when producer timestamps are read. No producer timestamp,
     absent or wrong or hostile, can take a tier away from an artifact or
     move one from KEEP to DELETE. This is what makes it safe for
     retention to read a value FR-8 calls untrusted at all: being wrong
     about a producer timestamp costs disk, never a backup.
--   **The most recently discovered artifact is always kept.** It is
+- **The most recently discovered artifact is always kept.** It is
     placed by the discovery pass on today's date, today falls inside
     every enabled tier's window by construction, so it is always some
     bucket's representative whatever any producer claims.
--   **Each bucket still selects at most one artifact per pass.** Two
+- **Each bucket still selects at most one artifact per pass.** Two
     passes mean one bucket can contribute up to two artifacts to KEEP, so
     a chain can retain up to twice what its bucket count nominally
     implies. That is bounded, and it is in the fail-safe direction.
@@ -1372,7 +1372,7 @@ configuration error, not a silent precedence rule: an operator who writes
 both is asking two different questions and deserves to be told so rather
 than have one answer quietly discarded.
 
-An explicitly empty `tiers: []` is not distinguishable from an absent key
+An explicitly empty `tiers: ` is not distinguishable from an absent key
 and reads the same way: the three scalars, which resolve to 7/3/12. So
 emptying the chain does **not** spell "keep nothing", it reinstates the
 default daily/weekly/monthly policy. There is deliberately no "keep
@@ -1387,7 +1387,7 @@ not running a retention pass.
 GFS retention assumes one artifact is one restore point. A producer that
 instead writes a restore point as several files sharing one run's
 timestamp (a portable archive alongside a native database dump, in issue
-#292's own reproduction) breaks that assumption: within one backup set,
+'s own reproduction) breaks that assumption: within one backup set,
 GFS still selects at most one representative per bucket per tier, so one
 file of the run is kept and the rest become DELETE candidates.
 
@@ -1442,12 +1442,12 @@ database-managed files.
 
 Before deletion:
 
--   canonicalize the path;
--   prove it is beneath the configured backup-set root;
--   ensure it is a final managed artifact;
--   ensure no retention tier selects it;
--   ensure it is not last-known-good;
--   reject symlink/path traversal escape.
+- canonicalize the path;
+- prove it is beneath the configured backup-set root;
+- ensure it is a final managed artifact;
+- ensure no retention tier selects it;
+- ensure it is not last-known-good;
+- reject symlink/path traversal escape.
 
 A dry-run is mandatory:
 
@@ -1465,10 +1465,10 @@ Monitor destination filesystem capacity.
 
 Support:
 
--   warning threshold;
--   critical threshold;
--   incoming artifact size;
--   configurable safety margin.
+- warning threshold;
+- critical threshold;
+- incoming artifact size;
+- configurable safety margin.
 
 Do not begin a transfer known not to fit safely.
 
@@ -1507,22 +1507,22 @@ Cancellation SHALL propagate through Go contexts.
 
 Structured logs SHALL cover:
 
--   startup/version;
--   configured rclone version;
--   cycle start/end;
--   discovery;
--   lifecycle transitions;
--   transfer statistics;
--   hashes;
--   validation;
--   durable commit;
--   remote deletion;
--   reconciliation;
--   retention;
--   retries;
--   stale backups;
--   disk pressure;
--   errors.
+- startup/version;
+- configured rclone version;
+- cycle start/end;
+- discovery;
+- lifecycle transitions;
+- transfer statistics;
+- hashes;
+- validation;
+- durable commit;
+- remote deletion;
+- reconciliation;
+- retention;
+- retries;
+- stale backups;
+- disk pressure;
+- errors.
 
 Secrets MUST never be logged.
 
@@ -1548,18 +1548,18 @@ FAILING
 
 Expose at minimum:
 
--   last successful poll;
--   last completed backup;
--   age of newest known-good backup;
--   stale threshold;
--   current transfer;
--   pending deletes;
--   failures;
--   quarantined count;
--   last retention;
--   free space;
--   binary version;
--   embedded rclone version.
+- last successful poll;
+- last completed backup;
+- age of newest known-good backup;
+- stale threshold;
+- current transfer;
+- pending deletes;
+- failures;
+- quarantined count;
+- last retention;
+- free space;
+- binary version;
+- embedded rclone version.
 
 CLI:
 
@@ -1586,13 +1586,13 @@ upstream API evolution is an explicit project risk.
 
 The project SHALL minimize that risk through:
 
-1.  a narrow `internal/transport/rclone` adapter;
-2.  pinned module versions;
-3.  no rclone types outside the adapter;
-4.  transport contract tests;
-5.  destructive-operation integration tests;
-6.  explicit dependency upgrade PRs;
-7.  rollback capability.
+1. a narrow `internal/transport/rclone` adapter;
+2. pinned module versions;
+3. no rclone types outside the adapter;
+4. transport contract tests;
+5. destructive-operation integration tests;
+6. explicit dependency upgrade PRs;
+7. rollback capability.
 
 The project SHALL prefer stable/high-level rclone APIs over reaching
 into implementation details.
@@ -1610,15 +1610,15 @@ Decision Record because it creates fork-like maintenance obligations.
 
 # Security Requirements
 
-1.  Dedicated SSH key.
-2.  Host-key verification mandatory.
-3.  Restricted SFTP account preferred.
-4.  No credentials in Git.
-5.  Credentials mounted read-only where practical.
-6.  Remote metadata treated as hostile.
-7.  No shell interpolation of remote filenames.
-8.  Path traversal rejected.
-9.  Unsafe symlinks rejected.
+1. Dedicated SSH key.
+2. Host-key verification mandatory.
+3. Restricted SFTP account preferred.
+4. No credentials in Git.
+5. Credentials mounted read-only where practical.
+6. Remote metadata treated as hostile.
+7. No shell interpolation of remote filenames.
+8. Path traversal rejected.
+9. Unsafe symlinks rejected.
 10. Destructive remote operation available only through explicit adapter
     API.
 11. Remote object identity rechecked before deletion.
@@ -1627,7 +1627,7 @@ Decision Record because it creates fork-like maintenance obligations.
 14. Architecture should permit future immutable/off-site copies.
 15. rclone dependency security updates SHALL be tracked.
 16. A manager-stored key file MAY be encrypted at rest (`key_encryption`,
-    #298); when configured, the encryption key's own storage location MUST
+    ); when configured, the encryption key's own storage location MUST
     NOT be reachable from the same SMB/AFP share or backup root as the key
     file it protects.
 
@@ -1635,18 +1635,18 @@ Decision Record because it creates fork-like maintenance obligations.
 
 # Failure-Safety Invariants
 
-1.  **Never delete the remote source before a verified, durably
+1. **Never delete the remote source before a verified, durably
     committed local copy exists.**
-2.  **Never use rclone move as a shortcut around manager-controlled
+2. **Never use rclone move as a shortcut around manager-controlled
     commit sequencing.**
-3.  **Never treat `.partial` as a restore point.**
-4.  **Never overwrite a known-good backup with an unverified transfer.**
-5.  **Never delete a remote pathname if the object appears to have
+3. **Never treat `.partial` as a restore point.**
+4. **Never overwrite a known-good backup with an unverified transfer.**
+5. **Never delete a remote pathname if the object appears to have
     changed since discovery.**
-6.  **Never prune outside the managed local backup root.**
-7.  **Never prune the last known-good backup solely because of age.**
-8.  **Every lifecycle operation must be restart-safe.**
-9.  **Retries must be idempotent.**
+6. **Never prune outside the managed local backup root.**
+7. **Never prune the last known-good backup solely because of age.**
+8. **Every lifecycle operation must be restart-safe.**
+9. **Retries must be idempotent.**
 10. **Network uncertainty preserves data.**
 11. **Required validation failure preserves the remote source.**
 12. **Lifecycle policy must not depend on parsing rclone log/error
@@ -1685,18 +1685,18 @@ executable.
 
 Container requirements:
 
--   pinned Go build;
--   pinned rclone module;
--   reproducible build;
--   minimal runtime image;
--   non-root where practical;
--   no privileged mode;
--   read-only application filesystem;
--   persistent SQLite state;
--   mounted backup storage;
--   read-only credentials/configuration;
--   restart policy;
--   health check.
+- pinned Go build;
+- pinned rclone module;
+- reproducible build;
+- minimal runtime image;
+- non-root where practical;
+- no privileged mode;
+- read-only application filesystem;
+- persistent SQLite state;
+- mounted backup storage;
+- read-only credentials/configuration;
+- restart policy;
+- health check.
 
 Builds SHOULD target the architecture used by the UGREEN NAS, with
 `linux/amd64` and/or `linux/arm64` supported as required.
@@ -1743,19 +1743,19 @@ build commit
 
 Test:
 
--   state machine;
--   artifact identity;
--   duplicate detection;
--   TOCTOU identity comparison;
--   rclone error translation;
--   retention buckets;
--   overlapping retention;
--   last-known-good;
--   timezones;
--   DST;
--   leap years;
--   path safety;
--   configuration.
+- state machine;
+- artifact identity;
+- duplicate detection;
+- TOCTOU identity comparison;
+- rclone error translation;
+- retention buckets;
+- overlapping retention;
+- last-known-good;
+- timezones;
+- DST;
+- leap years;
+- path safety;
+- configuration.
 
 ## Transport Contract Tests
 
@@ -1782,17 +1782,17 @@ Use a disposable SFTP server.
 
 Cover:
 
--   authentication;
--   host-key verification;
--   listing;
--   copy;
--   interruption;
--   cancellation;
--   hashing where supported;
--   explicit delete;
--   permission denial;
--   remote object replacement;
--   multiple sources.
+- authentication;
+- host-key verification;
+- listing;
+- copy;
+- interruption;
+- cancellation;
+- hashing where supported;
+- explicit delete;
+- permission denial;
+- remote object replacement;
+- multiple sources.
 
 ## Crash Matrix
 
@@ -1819,22 +1819,22 @@ Restart/reconcile and prove safe convergence.
 
 A dependency upgrade SHALL execute:
 
--   full unit suite;
--   transport contract suite;
--   SFTP integration suite;
--   destructive safety suite;
--   crash/reconciliation suite.
+- full unit suite;
+- transport contract suite;
+- SFTP integration suite;
+- destructive safety suite;
+- crash/reconciliation suite.
 
 ## Destructive Safety
 
 Prove that:
 
--   malicious paths;
--   symlinks;
--   replaced remote objects;
--   malformed configuration;
--   stale journal state;
--   adapter errors;
+- malicious paths;
+- symlinks;
+- replaced remote objects;
+- malformed configuration;
+- stale journal state;
+- adapter errors;
 
 cannot cause unauthorized local or remote deletion.
 
@@ -1844,26 +1844,26 @@ cannot cause unauthorized local or remote deletion.
 
 `README.md` SHALL document:
 
--   why rclone is embedded;
--   why rclone is not forked;
--   why the CLI is not normally invoked;
--   pinned rclone version;
--   dependency upgrade procedure;
--   adapter architecture;
--   SSH/SFTP setup;
--   restricted remote account;
--   lifecycle state machine;
--   verification;
--   durable commit;
--   TOCTOU protection;
--   GFS retention;
--   last-known-good protection;
--   reconciliation;
--   quarantine;
--   UGREEN deployment;
--   status/health;
--   recovery;
--   restore procedure.
+- why rclone is embedded;
+- why rclone is not forked;
+- why the CLI is not normally invoked;
+- pinned rclone version;
+- dependency upgrade procedure;
+- adapter architecture;
+- SSH/SFTP setup;
+- restricted remote account;
+- lifecycle state machine;
+- verification;
+- durable commit;
+- TOCTOU protection;
+- GFS retention;
+- last-known-good protection;
+- reconciliation;
+- quarantine;
+- UGREEN deployment;
+- status/health;
+- recovery;
+- restore procedure.
 
 An ADR SHOULD record:
 
@@ -1879,15 +1879,15 @@ ADR: Embed rclone behind transport adapter rather than fork or subprocess
 
 Before implementing the full manager, prove:
 
--   Go application embeds rclone successfully;
--   only local + SFTP backends are registered;
--   remote listing works;
--   single-file copy works;
--   context cancellation works;
--   transfer statistics are accessible;
--   explicit remote delete works;
--   host-key verification works;
--   target UGREEN architecture builds/runs.
+- Go application embeds rclone successfully;
+- only local + SFTP backends are registered;
+- remote listing works;
+- single-file copy works;
+- context cancellation works;
+- transfer statistics are accessible;
+- explicit remote delete works;
+- host-key verification works;
+- target UGREEN architecture builds/runs.
 
 **Exit gate:** proceed only if the required rclone APIs can be isolated
 behind the manager-owned transport interface without extensive use of
@@ -1900,93 +1900,93 @@ any fork.
 
 Implement:
 
--   configuration;
--   SQLite/migrations;
--   artifact identity;
--   discovery;
--   completion detection;
--   state machine;
--   transfer;
--   verification;
--   durable commit;
--   explicit remote delete;
--   reconciliation.
+- configuration;
+- SQLite/migrations;
+- artifact identity;
+- discovery;
+- completion detection;
+- state machine;
+- transfer;
+- verification;
+- durable commit;
+- explicit remote delete;
+- reconciliation.
 
 ## Phase 3 --- Retention and operations
 
 Implement:
 
--   GFS;
--   last-known-good;
--   dry-run;
--   disk capacity;
--   health;
--   status;
--   daemon;
--   container deployment.
+- GFS;
+- last-known-good;
+- dry-run;
+- disk capacity;
+- health;
+- status;
+- daemon;
+- container deployment.
 
 ## Phase 4 --- Validation hardening
 
 Implement:
 
--   checksums;
--   validators;
--   quarantine;
--   scheduled validation/restore-test hooks.
+- checksums;
+- validators;
+- quarantine;
+- scheduled validation/restore-test hooks.
 
 ## Phase 5 --- Security/resilience extensions
 
 Potential:
 
--   immutable NAS snapshots;
--   off-site copy;
--   separate ingestion/retention privileges;
--   alerts;
--   metrics;
--   WORM/immutable storage.
+- immutable NAS snapshots;
+- off-site copy;
+- separate ingestion/retention privileges;
+- alerts;
+- metrics;
+- WORM/immutable storage.
 
 ------------------------------------------------------------------------
 
 # Acceptance Criteria
 
--   [ ] Tool lives in its own repository, `backupdproject/backupd`.
--   [ ] Implementation is Go.
--   [ ] rclone is embedded as Go modules.
--   [ ] rclone is not forked.
--   [ ] Normal operation does not require the rclone executable.
--   [ ] Only required rclone backends are registered initially.
--   [ ] rclone dependency is explicitly pinned.
--   [ ] rclone is isolated behind a manager-owned transport interface.
--   [ ] No rclone-specific types leak into lifecycle/state/retention.
--   [ ] No generic transport `Move` operation is exposed to lifecycle
+- Tool lives in its own repository, `backupdproject/backupd`.
+- Implementation is Go.
+- rclone is embedded as Go modules.
+- rclone is not forked.
+- Normal operation does not require the rclone executable.
+- Only required rclone backends are registered initially.
+- rclone dependency is explicitly pinned.
+- rclone is isolated behind a manager-owned transport interface.
+- No rclone-specific types leak into lifecycle/state/retention.
+- No generic transport `Move` operation is exposed to lifecycle
     logic.
--   [ ] Phase-1 embedding feasibility gate passes.
--   [ ] SFTP key authentication works.
--   [ ] Host-key verification works.
--   [ ] Completed backup discovery works.
--   [ ] SQLite lifecycle journal works.
--   [ ] Explicit lifecycle state machine works.
--   [ ] Transfer uses a `.partial` destination.
--   [ ] Transfer verification works.
--   [ ] Required validation can block deletion.
--   [ ] Local durable commit occurs before remote deletion.
--   [ ] Remote delete is separately invoked after `COMMITTED`.
--   [ ] Remote object identity is rechecked before deletion.
--   [ ] Changed/replaced remote objects are not deleted.
--   [ ] Restart/reconciliation is safe at every lifecycle stage.
--   [ ] GFS retention works.
--   [ ] Last-known-good protection works.
--   [ ] Retention cannot escape the managed root.
--   [ ] Dry-run explains retention decisions.
--   [ ] Disk-pressure handling works.
--   [ ] Backup freshness is reported independently of daemon liveness.
--   [ ] UGREEN container deployment works.
--   [ ] Transport contract tests pass.
--   [ ] SFTP integration tests pass.
--   [ ] Crash matrix passes.
--   [ ] Destructive-safety tests pass.
--   [ ] rclone upgrade procedure is documented.
--   [ ] No credentials are committed.
+- Phase-1 embedding feasibility gate passes.
+- SFTP key authentication works.
+- Host-key verification works.
+- Completed backup discovery works.
+- SQLite lifecycle journal works.
+- Explicit lifecycle state machine works.
+- Transfer uses a `.partial` destination.
+- Transfer verification works.
+- Required validation can block deletion.
+- Local durable commit occurs before remote deletion.
+- Remote delete is separately invoked after `COMMITTED`.
+- Remote object identity is rechecked before deletion.
+- Changed/replaced remote objects are not deleted.
+- Restart/reconciliation is safe at every lifecycle stage.
+- GFS retention works.
+- Last-known-good protection works.
+- Retention cannot escape the managed root.
+- Dry-run explains retention decisions.
+- Disk-pressure handling works.
+- Backup freshness is reported independently of daemon liveness.
+- UGREEN container deployment works.
+- Transport contract tests pass.
+- SFTP integration tests pass.
+- Crash matrix passes.
+- Destructive-safety tests pass.
+- rclone upgrade procedure is documented.
+- No credentials are committed.
 
 ------------------------------------------------------------------------
 
@@ -2005,12 +2005,12 @@ backup validity.
 
 The design must retain:
 
--   producer completion semantics;
--   explicit verification levels;
--   application-specific validation;
--   quarantine;
--   GFS retention;
--   last-known-good protection.
+- producer completion semantics;
+- explicit verification levels;
+- application-specific validation;
+- quarantine;
+- GFS retention;
+- last-known-good protection.
 
 ### Required change
 
@@ -2035,13 +2035,13 @@ A remote pathname may also be replaced between discovery and deletion.
 
 ### Required changes
 
--   expose no generic `Move` method;
--   isolate `DeleteRemote`;
--   restrict deletion to lifecycle commit transitions;
--   re-stat/re-identify the remote object before deletion;
--   fail closed on identity uncertainty;
--   use restricted SFTP credentials;
--   track rclone dependency security updates.
+- expose no generic `Move` method;
+- isolate `DeleteRemote`;
+- restrict deletion to lifecycle commit transitions;
+- re-stat/re-identify the remote object before deletion;
+- fail closed on identity uncertainty;
+- use restricted SFTP credentials;
+- track rclone dependency security updates.
 
 ### Final position
 
@@ -2059,13 +2059,13 @@ direct imports could still create significant maintenance cost.
 
 ### Required changes
 
--   one narrow adapter package;
--   no rclone types outside it;
--   pinned versions;
--   contract tests;
--   explicit upgrade workflow;
--   avoid unstable internals;
--   prefer upstream contributions over local patches.
+- one narrow adapter package;
+- no rclone types outside it;
+- pinned versions;
+- contract tests;
+- explicit upgrade workflow;
+- avoid unstable internals;
+- prefer upstream contributions over local patches.
 
 ### Final position
 
@@ -2086,14 +2086,14 @@ remote pathname after discovery.
 
 ### Required changes
 
--   copy only;
--   manager-controlled verification;
--   durable local commit;
--   SQLite `COMMITTED`;
--   separate delete;
--   remote identity persisted at discovery;
--   remote identity checked again before deletion;
--   crash matrix around every boundary.
+- copy only;
+- manager-controlled verification;
+- durable local commit;
+- SQLite `COMMITTED`;
+- separate delete;
+- remote identity persisted at discovery;
+- remote identity checked again before deletion;
+- crash matrix around every boundary.
 
 ### Final position
 
@@ -2116,12 +2116,12 @@ unstable.
 
 Add a Phase-1 feasibility gate proving:
 
--   build for target NAS;
--   SFTP listing/copy/delete;
--   cancellation;
--   host-key verification;
--   transfer statistics;
--   narrow adapter feasibility.
+- build for target NAS;
+- SFTP listing/copy/delete;
+- cancellation;
+- host-key verification;
+- transfer statistics;
+- narrow adapter feasibility.
 
 If the gate fails, prefer reverting to a subprocess adapter rather than
 forking rclone.
@@ -2145,19 +2145,19 @@ All five reviewers converge on the following architecture:
 
 The reviewers further agree that:
 
-1.  rclone is an implementation dependency, not the owner of backup
+1. rclone is an implementation dependency, not the owner of backup
     lifecycle policy;
-2.  rclone APIs must be quarantined behind the transport adapter;
-3.  SQLite is the authoritative lifecycle journal;
-4.  remote deletion must remain an explicit manager-controlled
+2. rclone APIs must be quarantined behind the transport adapter;
+3. SQLite is the authoritative lifecycle journal;
+4. remote deletion must remain an explicit manager-controlled
     transaction step;
-5.  remote object replacement/TOCTOU must be detected before deletion;
-6.  rclone upgrades require full transport and destructive-safety
+5. remote object replacement/TOCTOU must be detected before deletion;
+6. rclone upgrades require full transport and destructive-safety
     regression testing;
-7.  a Phase-1 embedding feasibility gate is mandatory;
-8.  failure of that gate should lead to a subprocess architecture, **not
+7. a Phase-1 embedding feasibility gate is mandatory;
+8. failure of that gate should lead to a subprocess architecture, **not
     a fork**;
-9.  backup validation, GFS retention, last-known-good protection and
+9. backup validation, GFS retention, last-known-good protection and
     freshness monitoring remain first-class manager responsibilities;
 10. the architecture should make generic improvements upstreamable to
     rclone rather than accumulating local rclone patches.

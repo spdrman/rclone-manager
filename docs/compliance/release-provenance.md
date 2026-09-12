@@ -1,6 +1,6 @@
 # Release provenance, signing and the SBOM
 
-Issue #88 (B5.2). What a release records, how it is produced, how a signature
+ (B5.2). What a release records, how it is produced, how a signature
 is made without this project ever holding a key, and what is deliberately left
 as an operator action.
 
@@ -13,7 +13,7 @@ the compliance half. This document is the operator-facing side of both.
 produced: the commit, the build version, the SHA-256 of both shipped binaries
 per architecture, the local image ID and the registry digest. Nothing goes in it
 that a build did not produce. `scripts/release/record-release-hashes.sh` writes
-it, and #174 gave that script five refusals that between them stop a manifest
+it, and gave that script five refusals that between them stop a manifest
 being recorded against a commit nobody can check out.
 
 `provenance/release-provenance.json` records everything derivable without a
@@ -26,7 +26,7 @@ along with `NOTICE`, `provenance/third-party-licenses.json`,
 The split follows one line: did a build produce this. Putting the compliance
 fields into the manifest would mean either running a two-architecture Docker
 build to change one string, or opening a no-build write path into the file that
-carries the build record. The second is a hole in exactly the guard #174 put
+carries the build record. The second is a hole in exactly the guard put
 there, so the record is two files and they are tied together by the manifest's
 own SHA-256, recorded in the bundle. Regenerate one without the other and
 `TestProvenanceBundleIsTiedToTheReleaseManifest` goes red.
@@ -83,7 +83,7 @@ section that it does. It is checked by running it, not by reading it.
 The ref half of that identity is `refs/heads/release` because a push to `release` is
 what publishes (see the header of `.github/workflows/release.yml`). GitHub builds the
 certificate SAN out of the ref the run was triggered on, so the trigger decides the
-identity, and the two have to move together. Issue #510 is what happens when they do
+identity, and the two have to move together. is what happens when they do
 not: this printed a regexp anchored on `@refs/tags/` for long enough that the command
 above would answer
 
@@ -115,7 +115,7 @@ asking about, out of the workflow file itself.
 
 Without it, one dispatch from a feature branch would put an image in a public registry
 signed under that branch's ref: an artifact this record does not describe and this
-command rejects, which is #510's failure mode again except that a pushed image cannot
+command rejects, which is 's failure mode again except that a pushed image cannot
 be taken back the way a wrong sentence can.
 
 The tag in that example is `0.3.3` rather than the `0.4.0` this tree declares, because
@@ -193,7 +193,7 @@ It is an operator action on purpose. It publishes a semantic version to a public
 registry, which is not a thing that is taken back cleanly; it needs a registry
 credential this repository does not and must not hold; and pushing from a branch
 would put an image in the registry built from a commit that is not on `main`,
-which is #174's failure moved somewhere no ancestry check can reach. Guard 2
+which is 's failure moved somewhere no ancestry check can reach. Guard 2
 refuses that last one by requiring `HEAD` to be the commit the release manifest
 records.
 
@@ -220,7 +220,7 @@ Two edits, in this order:
 2. `container/release-manifest.json`: each architecture's `registry_digest`
    null to the digest read back out of the registry.
 
-Then regenerate the bundle (`(cd distribution && go run ./cmd/provenance -write)`)
+Then regenerate the bundle (`(cd distribution && go run./cmd/provenance -write)`)
 and run the gate. Doing one edit and not the other fails, which is the point:
 a published flag with no digest and a digest with no published flag are both
 half-truths.
@@ -254,11 +254,11 @@ from that one field rather than asserted per link. §73 WP5.2's link criterion i
 met.
 
 That value went stale once and the note above it claimed it had been measured,
-which is how issue #484 found it: the repository was made public and nothing came
+which is how found it: the repository was made public and nothing came
 back to re-read the field, so the record said private for a repository anyone
 could open. Re-run `gh repo view backupdproject/backupd --json visibility` rather
 than trusting the note, and regenerate the bundle with
-`go run ./cmd/provenance -write` from `distribution/`.
+`go run./cmd/provenance -write` from `distribution/`.
 
 `docs/compliance/source-offer.md` stays either way. A link resolving is not the
 same as an offer having been made, and Apache-2.0 §4a is an obligation to whoever
@@ -279,10 +279,10 @@ digests, and the image additionally by its signature.
 
 Stated here rather than left to be discovered:
 
-- **The performance evidence is pending.** The seven metric names #81 lists are
+- **The performance evidence is pending.** The seven metric names lists are
   pinned as a set so one cannot be dropped quietly, and every value is null,
-  naming the issue that will produce it. #165, #167 and #170 have not merged.
-- **Reproducibility is proven for the binaries, not yet for the image.** #174
+  naming the issue that will produce it., and have not merged.
+- **Reproducibility is proven for the binaries, not yet for the image.**
   showed that two runs of the hash recorder from the same clean checkout produce
   byte-identical `binary_sha256` values on both architectures. A digest-identical
   OCI image additionally needs the image's own layer metadata to be

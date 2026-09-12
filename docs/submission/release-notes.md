@@ -29,7 +29,7 @@ than a diff.
 
 ### Removing a backup set
 
-Four things an administrator will notice, all from the same change (issue #391), and
+Four things an administrator will notice, all from the same change, and
 worth saying here rather than leaving to be found.
 
 - "Remove set configuration" on a backup set's page now removes the set. It used to close

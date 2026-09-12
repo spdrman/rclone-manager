@@ -6,7 +6,7 @@ Accepted.
 
 ## Context
 
-Issue #29 (A5.1) covers the whole of Phase 5. `docs/EPIC.md`'s Delivery Plan lists Phase 5
+ (A5.1) covers the whole of Phase 5. `docs/EPIC.md`'s Delivery Plan lists Phase 5
 as "Potential" and names six candidates: immutable NAS snapshots, an off-site copy, separate
 ingestion/retention privileges, alerts, metrics, and WORM/immutable storage. None of it is
 committed scope. The one concrete architectural obligation Phase 5 creates ahead of time is
@@ -15,7 +15,7 @@ is a constraint on today's design, not a mandate to build the feature now.
 
 Before weighing the six candidates, it matters what state the rest of the codebase is
 actually in, because that changes which of them are even ripe. I read the code rather than
-trusted the README's framing, and the two agree: as of this ADR, `go test ./...` covers real,
+trusted the README's framing, and the two agree: as of this ADR, `go test./...` covers real,
 tested logic in `internal/lifecycle`, `internal/discovery`, `internal/retention`,
 `internal/state`, `internal/health`, `internal/obs`, `internal/capacity`, `internal/reconcile`,
 `internal/revalidate`, and `internal/quarantine`, and none of it is wired to anything that
@@ -23,7 +23,7 @@ runs continuously:
 
 - `cmd/backupd/main.go` is 25 lines and understands exactly one subcommand,
   `version`. There is no `run`, `daemon`, `status`, `retention`, or `reconcile` subcommand.
-  Issues #25 (execution modes) and #26 (the CLI surface) are both still open.
+   (execution modes) and (the CLI surface) are both still open.
 - `internal/obs`'s structured logger has zero callers anywhere in this repository, including
   its own tests' subjects. Nothing logs through it yet, so FR-23 is a library, not an
   observed system.
@@ -36,15 +36,15 @@ runs continuously:
 - FR-20, local deletion safety, does not exist as code at all. `internal/retention.GFSDecide`
   and `ApplyLastKnownGood` classify artifacts into keep/not-kept; nothing deletes a local
   file anywhere in this repository (`grep` for `os.Remove` outside `internal/lifecycle` turns
-  up nothing, and `docs/recovery.md` says as much directly). Issue #21 is open.
+  up nothing, and `docs/recovery.md` says as much directly). is open.
 - The crash-matrix/destructive-safety test suite that would substantiate "the core is
-  trustworthy" is issue #31, phase 2, and it is still open.
+  trustworthy" is, phase 2, and it is still open.
 - `container/Dockerfile` and `container/compose.yaml` are explicit that they are "packaging
   ahead of" the daemon: the shipped command is `["version"]`, restart policy is documented
   as wrong until a real long-running command exists, and both files carry `TODO(daemon)`
   markers.
 
-So four earlier-phase issues (#21, #25, #26, #31) sit strictly before #29 in the delivery
+So four earlier-phase issues sit strictly before in the delivery
 plan and are still open. That is the first-order fact this ADR has to respect: Phase 5 is
 not next in line by the project's own plan, and several of its candidates are specifically
 about hardening or extending pieces (a live process to alert from, a delete path to make
@@ -113,14 +113,14 @@ do with an artifact that is `COMMITTED` locally but only half-copied off-site); 
 destination needs its own `internal/config` schema (a second `Remote`, its own credentials);
 and the journal needs new columns via a migration. None of that is small, and layering a new
 destructive-adjacent state machine surface on top of a lifecycle engine whose own
-crash-matrix and destructive-safety suite (#31) has not landed yet is the wrong order to do
+crash-matrix and destructive-safety suite has not landed yet is the wrong order to do
 it in.
 
 **Recommendation: not now.** The architecture genuinely does permit it (requirement 14's bar
 is "should permit future," not "already includes," and that bar is met), and of the two
 "potential storage feature" candidates (this one and WORM), this is the one closest to
 buildable. Revisit once there's a concrete off-site target (a specific second remote and its
-own credentials, not a hypothetical one) and #31 is green.
+own credentials, not a hypothetical one) and is green.
 
 ### 3. Separate ingestion and retention privileges
 
@@ -170,7 +170,7 @@ boundary actually needs to sit (config, process, container) rather than guessing
 ### 4. Alerts
 
 `internal/health.BackupSetHealth` already carries a `State` (`HEALTHY`/`DEGRADED`/
-`STALE`/`FAILING`) and a human-readable `Reason` for every backup set, and `State.OK()`
+`STALE`/`FAILING`) and a human-readable `Reason` for every backup set, and `State.OK`
 already answers "does this need attention" with one call. `remotedelete.go`'s own doc
 comment names the one genuine gap directly: turning "an artifact has been stuck at
 `REMOTE_DELETE_PENDING` past some age" into a health signal is called out as intentional
@@ -187,11 +187,11 @@ configured notification channel, no on-call concept, and no stated preference be
 loudly" and "page a human," and guessing at that shape produces exactly the kind of
 infrastructure nobody asked for that this issue warns against building. A new package that
 re-derives "is this backup set unhealthy" from `health.State != Healthy` would just be
-`State.OK()` under a different name.
+`State.OK` under a different name.
 
 **Recommendation: not now**, and this is the clearest "no" of the six: building alert
 *delivery* without a named channel is guessing, and the alert *signal* already exists in a
-package I'm not allowed to touch here. Revisit once #25/#26 give this project a live process
+package I'm not allowed to touch here. Revisit once give this project a live process
 worth alerting from, and once there's an actual answer to "alert whom, how."
 
 ### 5. Metrics
@@ -241,7 +241,7 @@ conservative, less precise substitute for GFS's actual per-run, per-bucket recom
 (`gfs.go`'s package doc is explicit that "protected" and tier membership are recomputed
 every run against current state, not fixed at write time). That's a real, nontrivial design
 problem, not a checkbox, and it can't be scoped sensibly before two things are true: FR-20
-(actual local deletion, issue #21) exists in code at all, since WORM is a constraint on a delete
+(actual local deletion,) exists in code at all, since WORM is a constraint on a delete
 capability that doesn't exist yet, and a specific storage backend is chosen, since the
 mechanism (a filesystem attribute vs. an object-lock API call) is backend-specific and
 would live in a place this project hasn't built yet.
@@ -265,7 +265,7 @@ too; an unset value omits that metric series rather than fabricating a zero).
 
 It is deliberately a pure, dependency-free, standard-library-only transformation with no
 new call site anywhere else in the repository. Wiring it into a `backupd status
---prometheus` flag or an HTTP handler is issue #25/#26's job, once a daemon or a CLI exists
+--prometheus` flag or an HTTP handler is 's job, once a daemon or a CLI exists
 to call it from; this package is written so that wiring, whenever it lands, is a few lines
 calling `metrics.Render`, not a redesign.
 
@@ -278,7 +278,7 @@ calling `metrics.Render`, not a redesign.
   file scope does not let me touch. Recorded here so it isn't lost: whoever next touches
   `internal/health` should read that package's `remotedelete.go` comment first.
 - No off-site copy, no new `Transport` method, no new lifecycle state, no config or journal
-  schema change. Real, incremental, and premature ahead of #31.
+  schema change. Real, incremental, and premature ahead of
 - No privilege-separation change to `config.Remote`, `transport.Source`, or the container's
   credential mounts.
 - No snapshot- or WORM-related code, and no attempt to guess at a storage backend for either.
@@ -290,7 +290,7 @@ sites yet, the same position `internal/health`, `internal/obs`, and `internal/ca
 already in. That's a known, accepted shape in this codebase, not a new kind of risk.
 
 Deferring the other five candidates means Phase 5 stays open after this PR, which is the
-correct outcome given four earlier-phase issues (#21, #25, #26, #31) are still open ahead of
-it. This ADR is the record of why, so the next time #29 or a related issue is picked up, the
+correct outcome given four earlier-phase issues are still open ahead of
+it. This ADR is the record of why, so the next time or a related issue is picked up, the
 reasoning doesn't have to be redone: check whether the trigger named under each candidate
 above has actually occurred before building it.

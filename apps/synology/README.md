@@ -1,6 +1,6 @@
 # Synology DSM provider app
 
-Issue #85 / work package B4.4, `docs/EPIC-B-multi-nas.md` §72, the
+ / work package B4.4, `docs/EPIC-B-multi-nas.md` §72, the
 Synology entry in §4A, and D-5 in §5.
 
 Synology is the one platform in Phase 4 that cannot consume the canonical
@@ -55,8 +55,8 @@ docker cp "${cid}:/backupd-web" release/amd64/backupd-web
 docker rm "${cid}"
 ```
 
-The package also carries this provider's own UI bundle (issue #180,
-packaged by #169), which is built from the shared UI rather than extracted
+The package also carries this provider's own UI bundle (,
+packaged by), which is built from the shared UI rather than extracted
 from the image:
 
 ```sh
@@ -92,7 +92,7 @@ fails the parity check.
 
 ## Two ways to install this release on DSM, and how to choose
 
-Since issue #169 there are two, and neither replaces the other.
+Since there are two, and neither replaces the other.
 
 | | `.spk` (this directory's `spk/`) | Container Manager project (`compose/`) |
 |---|---|---|
@@ -107,7 +107,7 @@ Since issue #169 there are two, and neither replaces the other.
 Take the `.spk` if you want the DSM desktop launcher and Package Center
 lifecycle. Take the Container Manager project if you would rather run the
 same image every other platform runs, or you already keep your containers
-there. The Container Manager path is also the one EPIC B's support table
+there. The Container Manager path is also the one 's support table
 names for Synology; the `.spk` predates it and is not being retired, which
 is a product decision and not this issue's to make.
 
@@ -209,12 +209,12 @@ scan reads every file in both archives on every build.
 ## Known gaps
 
 1. ~~**The embedded UI is the generic provider bridge.**~~ **Closed by
-   issues #167 and #169.** It used to be true, and it used to be
+   ** It used to be true, and it used to be
    unavoidable: `serve-ui` served a bundle compiled into the release
    binary through `go:embed` with no flag to serve one from disk, so
    shipping the Synology bridge would have meant a Synology-specific
-   binary, which §3.7 forbids. #167 made the bundle a run-time choice
-   (`--ui-dir`), and #169 packaged it: the `.spk` now carries
+   binary, which §3.7 forbids. made the bundle a run-time choice
+   (`--ui-dir`), and packaged it: the `.spk` now carries
    `ui/shared/dist-bundles/synology` in its payload and
    `start-stop-status` serves it, with the release binary unchanged.
    `spk.Build` refuses a package built without that bundle, or with one

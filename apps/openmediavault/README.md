@@ -12,7 +12,7 @@ on an OMV system. Run
 to change that.
 
 
-## Converted to a thin adapter (issue #169)
+## Converted to a thin adapter
 
 Everything here is now **derived** from the one authoritative Compose runtime
 definition rather than authored beside it. `distribution/packaging`'s
@@ -26,10 +26,10 @@ that means in practice for this directory:
   build-time constant;
 - the Web UI container sets `UI_ROOT=/ui/bundles`, so it serves this
   platform's own frontend bridge out of the canonical image rather than the
-  generic one (issue #180). A missing bundle is a hard start failure, never a
+  generic one. A missing bundle is a hard start failure, never a
   silent fall back;
 - the configuration mount is a writable **directory** holding `config.yaml`
-  instead of a read-only single file (issue #196).
+  instead of a read-only single file.
 
 The upgrade path from the Phase 4 packaging, including the one renamed mount,
 is in
@@ -128,7 +128,7 @@ whether a container starts.
 | Known hosts | `$DISK/appdata/backupd/secrets/known_hosts` | `/etc/backupd/known_hosts` | ro |
 
 `config` is a writable **directory** holding `config.yaml`, not a read-only single
-file (issue #196). Adding a backup set, saving settings and first-run setup all
+file. Adding a backup set, saving settings and first-run setup all
 replace that file through a temp file created in its own directory, and the engine
 keeps `ssh_keys/` and `known_hosts.d/` beside it, so a single-file mount silently
 disables all three. It may be empty on a fresh install. The SSH key and
@@ -186,7 +186,7 @@ credential, and `distribution/packaging` scans for one on every commit.
 
 ## config.yaml
 
-The engine no longer needs a configuration to start: as of issue #176 an instance
+The engine no longer needs a configuration to start: as of an instance
 with no `config.yaml` serves a first-run setup flow in the web UI that writes one
 for you. A config file that EXISTS and does not validate is still a hard start
 failure, deliberately, because replacing a configuration somebody already wrote

@@ -11,7 +11,7 @@
 > multi-provider spec has room for, and that detail is needed the moment anyone
 > actually builds the UGOS app.
 >
-> Read it as backing material for these EPIC B issues, not as work in its own
+> Read it as backing material for these issues, not as work in its own
 > right: B1.2 (developer environment and the minimal UPK proof), B1.3 (UGOS
 > authentication and the trusted-proxy boundary), and B4.2 (the UGOS provider
 > app and its UPK). Where the two documents disagree, `docs/EPIC-B-multi-nas.md`
@@ -27,14 +27,14 @@
 
 ## Status
 
-**Type:** Reference material for EPIC B's UGOS provider work  
-**Repository:** `backupdproject/backupd`  
-**Parent / predecessor EPIC:** `Embedded-rclone NAS Backup Lifecycle Manager` (EPIC A, complete)  
-**Active EPIC:** `docs/EPIC-B-multi-nas.md`  
-**Primary implementation root:** repository root (the `tools/backupd/` path this originally assumed was corrected when EPIC A moved into its own repository)  
-**Target platform:** UGREEN NAS / UGOS Pro  
-**Primary UI distribution:** UGOS Pro Docker Application packaged as `.UPK`  
-**Secondary distribution:** headless Docker image/package for terminal operation  
+**Type:** Reference material for 's UGOS provider work
+**Repository:** `backupdproject/backupd`
+**Parent / predecessor EPIC:** `Embedded-rclone NAS Backup Lifecycle Manager` (, complete)
+**Active EPIC:** `docs/EPIC-B-multi-nas.md`
+**Primary implementation root:** repository root (the `tools/backupd/` path this originally assumed was corrected when moved into its own repository)
+**Target platform:** UGREEN NAS / UGOS Pro
+**Primary UI distribution:** UGOS Pro Docker Application packaged as `.UPK`
+**Secondary distribution:** headless Docker image/package for terminal operation
 **Initial architectures:** `linux/amd64`, `linux/arm64`
 
 ---
@@ -86,7 +86,7 @@ Required corrections:
 - accept UGOS identity headers only from a verified trusted gateway source;
 - strip/ignore forwarded identity headers from all untrusted peers;
 - prohibit release if the Docker service cannot be isolated or the proxy source cannot be authenticated;
-- use authenticated polling for v1 operation progress; optionally evaluate `fetch()` streaming later;
+- use authenticated polling for v1 operation progress; optionally evaluate `fetch` streaming later;
 - never place authentication tokens in query strings;
 - store SSH keys only in private application state;
 - reject deletion of keys referenced by active backup sets;
@@ -1116,7 +1116,7 @@ The v1 frontend SHALL observe long-running operation state through authenticated
 
 Native `EventSource` SHALL NOT be used because the documented UGOS authentication flow requires the custom `Ugreen-Ttk` header and native `EventSource` cannot reliably attach arbitrary authentication headers.
 
-A future streaming implementation MAY use authenticated `fetch()` response streaming only after UGOS gateway buffering/streaming behavior is validated.
+A future streaming implementation MAY use authenticated `fetch` response streaming only after UGOS gateway buffering/streaming behavior is validated.
 
 Authentication tokens MUST NEVER be placed in URLs/query strings.
 
@@ -1202,7 +1202,7 @@ A preview response SHALL include:
 }
 ```
 
-`POST .../retention/apply` MUST require the `plan_id` the administrator actually reviewed.
+`POST.../retention/apply` MUST require the `plan_id` the administrator actually reviewed.
 
 The server MUST apply **exactly that plan** only if its inventory/config preconditions remain valid. If backups or policy changed, return a conflict such as `RETENTION_PLAN_STALE` and require a new preview/confirmation.
 
@@ -2606,7 +2606,7 @@ The server operation SHALL continue if:
 
 Explicit cancellation, if supported, SHALL create a server-side cancellation request and propagate through the operation's own context. It SHALL NOT be coupled to the HTTP request context that originally created the job.
 
-A future authenticated `fetch()` streaming transport MAY be added after UGOS gateway validation.
+A future authenticated `fetch` streaming transport MAY be added after UGOS gateway validation.
 
 Native `EventSource` and query-string authentication tokens are prohibited.
 
@@ -3149,16 +3149,16 @@ Verify current requirements for:
 
 ### Phase 0 Acceptance
 
-- [ ] Minimal Docker App `.UPK` installs.
-- [ ] App opens inside UGOS desktop.
-- [ ] UGREEN frontend SDK initializes.
-- [ ] UGOS user authentication reaches backend.
-- [ ] Direct-port auth bypass is resolved.
-- [ ] Private state and user backup storage are separate and documented.
-- [ ] Trusted UGOS gateway source is proven and enforced.
-- [ ] Docker App Compose constraints are validated.
-- [ ] App Center OSS/privacy metadata requirements are documented.
-- [ ] At least one real UGREEN device passes the PoC.
+- Minimal Docker App `.UPK` installs.
+- App opens inside UGOS desktop.
+- UGREEN frontend SDK initializes.
+- UGOS user authentication reaches backend.
+- Direct-port auth bypass is resolved.
+- Private state and user backup storage are separate and documented.
+- Trusted UGOS gateway source is proven and enforced.
+- Docker App Compose constraints are validated.
+- App Center OSS/privacy metadata requirements are documented.
+- At least one real UGREEN device passes the PoC.
 
 ---
 
@@ -3235,14 +3235,14 @@ Implement authenticated operation polling. Streaming is deferred until UGOS prox
 
 ### Phase 1 Acceptance
 
-- [ ] API is versioned.
-- [ ] API invokes `BackupService`.
-- [ ] UGOS auth middleware exists.
-- [ ] Destructive routes require authorization.
-- [ ] API exposes no rclone types.
-- [ ] Long-running work returns operation IDs.
-- [ ] Durable operation polling works across browser reload/disconnect.
-- [ ] API contract tests pass.
+- API is versioned.
+- API invokes `BackupService`.
+- UGOS auth middleware exists.
+- Destructive routes require authorization.
+- API exposes no rclone types.
+- Long-running work returns operation IDs.
+- Durable operation polling works across browser reload/disconnect.
+- API contract tests pass.
 
 ---
 
@@ -3310,13 +3310,13 @@ Integrate Vite build into Go `embed`.
 
 ### Phase 2 Acceptance
 
-- [ ] UI opens inside UGOS.
-- [ ] UI authenticates via UGOS.
-- [ ] UI calls API.
-- [ ] UI build is embedded in production Go binary.
-- [ ] Production image contains no Node runtime.
-- [ ] Version mismatch handling works.
-- [ ] Basic accessibility checks pass.
+- UI opens inside UGOS.
+- UI authenticates via UGOS.
+- UI calls API.
+- UI build is embedded in production Go binary.
+- Production image contains no Node runtime.
+- Version mismatch handling works.
+- Basic accessibility checks pass.
 
 ---
 
@@ -3356,12 +3356,12 @@ Implement event/history view.
 
 ### Phase 3 Acceptance
 
-- [ ] Operators can determine whether backups are healthy without CLI.
-- [ ] Operators can inspect newest known-good restore point.
-- [ ] Retention classifications are visible.
-- [ ] Transfer progress is visible.
-- [ ] Quarantined artifacts are visible.
-- [ ] Process health and backup freshness are distinct.
+- Operators can determine whether backups are healthy without CLI.
+- Operators can inspect newest known-good restore point.
+- Retention classifications are visible.
+- Transfer progress is visible.
+- Quarantined artifacts are visible.
+- Process health and backup freshness are distinct.
 
 ---
 
@@ -3418,16 +3418,16 @@ Non-destructive.
 
 ### Phase 4 Acceptance
 
-- [ ] A new source can be configured entirely from UI.
-- [ ] No SSH private key is exposed back to browser after persistence.
-- [ ] Changed host key blocks operation.
-- [ ] Connection testing is non-destructive.
-- [ ] Retention preview is server-calculated and bound to inventory/config revision.
-- [ ] Retention application uses the exact confirmed `plan_id`; stale plans delete nothing.
-- [ ] Manual run uses normal lifecycle safety.
-- [ ] Configuration deletion does not delete retained backups.
-- [ ] Remote-source deletion behavior is explicitly acknowledged during setup.
-- [ ] Referenced SSH keys cannot be deleted.
+- A new source can be configured entirely from UI.
+- No SSH private key is exposed back to browser after persistence.
+- Changed host key blocks operation.
+- Connection testing is non-destructive.
+- Retention preview is server-calculated and bound to inventory/config revision.
+- Retention application uses the exact confirmed `plan_id`; stale plans delete nothing.
+- Manual run uses normal lifecycle safety.
+- Configuration deletion does not delete retained backups.
+- Remote-source deletion behavior is explicitly acknowledged during setup.
+- Referenced SSH keys cannot be deleted.
 
 ---
 
@@ -3471,12 +3471,12 @@ Add container health endpoint/check.
 
 ### Phase 5 Acceptance
 
-- [ ] Canonical image runs independently under Docker.
-- [ ] Image has exact version.
-- [ ] No `latest` dependency.
-- [ ] The same image supports headless daemon mode and UGOS UI/API/daemon mode safely.
-- [ ] Clean shutdown leaves state recoverable.
-- [ ] Both architecture images build.
+- Canonical image runs independently under Docker.
+- Image has exact version.
+- No `latest` dependency.
+- The same image supports headless daemon mode and UGOS UI/API/daemon mode safely.
+- Clean shutdown leaves state recoverable.
+- Both architecture images build.
 
 ---
 
@@ -3544,16 +3544,16 @@ Install version N, create state, update to N+1.
 
 ### Phase 6 Acceptance
 
-- [ ] amd64 UPK is generated.
-- [ ] arm64 UPK is generated or clearly marked uncertified pending hardware.
-- [ ] UPK installs through App Center manual installation.
-- [ ] Icon appears on desktop.
-- [ ] App opens in `inner` window.
-- [ ] Upgrade preserves state/backups.
-- [ ] Disable/enable is safe.
-- [ ] Uninstall does not unexpectedly delete user backup data.
-- [ ] Logs are accessible through documented UGOS path/tooling.
-- [ ] The image digest bundled in each UPK matches the published OCI release for that architecture.
+- amd64 UPK is generated.
+- arm64 UPK is generated or clearly marked uncertified pending hardware.
+- UPK installs through App Center manual installation.
+- Icon appears on desktop.
+- App opens in `inner` window.
+- Upgrade preserves state/backups.
+- Disable/enable is safe.
+- Uninstall does not unexpectedly delete user backup data.
+- Logs are accessible through documented UGOS path/tooling.
+- The image digest bundled in each UPK matches the published OCI release for that architecture.
 
 ---
 
@@ -3596,12 +3596,12 @@ Use the project's selected registry.
 
 ### Phase 7 Acceptance
 
-- [ ] Canonical image runs headlessly without UGOS.
-- [ ] `check`, `run`, `daemon`, `status`, `retention`, `reconcile`, and `version` work.
-- [ ] Docker Compose example works.
-- [ ] Version-pinned images are published.
-- [ ] State survives container replacement.
-- [ ] Exact architecture-specific image digest matches the corresponding UPK-bundled image.
+- Canonical image runs headlessly without UGOS.
+- `check`, `run`, `daemon`, `status`, `retention`, `reconcile`, and `version` work.
+- Docker Compose example works.
+- Version-pinned images are published.
+- State survives container replacement.
+- Exact architecture-specific image digest matches the corresponding UPK-bundled image.
 
 ---
 
@@ -3691,15 +3691,15 @@ Measure:
 
 ### Phase 8 Acceptance
 
-- [ ] Security review has no unresolved critical/high issue.
-- [ ] No auth bypass is known.
-- [ ] Secrets are redacted.
-- [ ] SBOM/checksums produced.
-- [ ] Upgrade failure is safe.
-- [ ] Unsupported downgrade fails closed.
-- [ ] Catalog can be rebuilt non-destructively after state loss.
-- [ ] At least one proactive failure/staleness alert path exists for App Center 1.0.
-- [ ] App does not materially interfere with ordinary NAS operation while idle.
+- Security review has no unresolved critical/high issue.
+- No auth bypass is known.
+- Secrets are redacted.
+- SBOM/checksums produced.
+- Upgrade failure is safe.
+- Unsupported downgrade fails closed.
+- Catalog can be rebuilt non-destructively after state loss.
+- At least one proactive failure/staleness alert path exists for App Center 1.0.
+- App does not materially interfere with ordinary NAS operation while idle.
 
 ---
 
@@ -3766,12 +3766,12 @@ Track requested changes as separate issues.
 
 ### Phase 9 Acceptance
 
-- [ ] App Center submission checklist is complete.
-- [ ] Release UPKs reproduce from tagged source.
-- [ ] Privacy/support metadata exists.
-- [ ] Required developer identity/materials are available.
-- [ ] No application code is downloaded outside the reviewed update mechanism.
-- [ ] App is ready for UGREEN submission.
+- App Center submission checklist is complete.
+- Release UPKs reproduce from tagged source.
+- Privacy/support metadata exists.
+- Required developer identity/materials are available.
+- No application code is downloaded outside the reviewed update mechanism.
+- App is ready for UGREEN submission.
 
 ---
 
@@ -3781,31 +3781,31 @@ In addition to functional completion, every applicable child issue SHALL demonst
 
 This EPIC is complete when:
 
-- [ ] The predecessor backupd core remains the only lifecycle engine.
-- [ ] The UI communicates only through the application service/API.
-- [ ] The UGOS edition is packaged as a Docker Application `.UPK`.
-- [ ] The headless Docker edition is separately consumable.
-- [ ] Both distributions use the same architecture-specific canonical OCI image digest.
-- [ ] UGOS authentication is used rather than a second local password database.
-- [ ] The UPK release is admin-only initially.
-- [ ] Direct access cannot bypass UGOS authentication.
-- [ ] The UI supports source configuration, host trust, retention, status, operations, restore-point visibility, and quarantine.
-- [ ] The UI cannot directly trigger arbitrary remote deletion.
-- [ ] Remote source deletion remains governed by predecessor lifecycle invariants.
-- [ ] UPK images are bundled and version-pinned.
-- [ ] UPK runtime does not self-update application code.
-- [ ] amd64 build works.
-- [ ] arm64 build works.
-- [ ] At least one target UGOS device has completed developer UPK testing.
-- [ ] Each architecture claimed as certified has been tested on representative hardware.
-- [ ] UPK updates preserve state and backups.
-- [ ] App state loss does not make retained backup artifacts unusable; catalog reconstruction is supported.
-- [ ] Headless Docker container survives update/replacement with mounted state.
-- [ ] UI/API/daemon terminate safely.
-- [ ] Security test suite passes.
-- [ ] Documentation covers both distributions.
-- [ ] App Center readiness documentation includes OSS/privacy/source-link requirements.
-- [ ] App Center 1.0 has proactive stale/failure alerting.
+- The predecessor backupd core remains the only lifecycle engine.
+- The UI communicates only through the application service/API.
+- The UGOS edition is packaged as a Docker Application `.UPK`.
+- The headless Docker edition is separately consumable.
+- Both distributions use the same architecture-specific canonical OCI image digest.
+- UGOS authentication is used rather than a second local password database.
+- The UPK release is admin-only initially.
+- Direct access cannot bypass UGOS authentication.
+- The UI supports source configuration, host trust, retention, status, operations, restore-point visibility, and quarantine.
+- The UI cannot directly trigger arbitrary remote deletion.
+- Remote source deletion remains governed by predecessor lifecycle invariants.
+- UPK images are bundled and version-pinned.
+- UPK runtime does not self-update application code.
+- amd64 build works.
+- arm64 build works.
+- At least one target UGOS device has completed developer UPK testing.
+- Each architecture claimed as certified has been tested on representative hardware.
+- UPK updates preserve state and backups.
+- App state loss does not make retained backup artifacts unusable; catalog reconstruction is supported.
+- Headless Docker container survives update/replacement with mounted state.
+- UI/API/daemon terminate safely.
+- Security test suite passes.
+- Documentation covers both distributions.
+- App Center readiness documentation includes OSS/privacy/source-link requirements.
+- App Center 1.0 has proactive stale/failure alerting.
 
 ---
 
@@ -4125,76 +4125,76 @@ This EPIC SHOULD be decomposed into child issues approximately as follows:
 
 Each issue below MUST include a prewritten automated test or hardware acceptance procedure.
 
-- [ ] UGOS developer environment and authorized test device
-- [ ] Minimal Docker App UPK PoC
-- [ ] UGOS `inner` React/JSSDK PoC
-- [ ] UGOS gateway authentication PoC
-- [ ] Direct-port authentication bypass test
-- [ ] UGOS persistent-path/update/uninstall experiment
-- [ ] amd64/arm64 packaging experiment
+- UGOS developer environment and authorized test device
+- Minimal Docker App UPK PoC
+- UGOS `inner` React/JSSDK PoC
+- UGOS gateway authentication PoC
+- Direct-port authentication bypass test
+- UGOS persistent-path/update/uninstall experiment
+- amd64/arm64 packaging experiment
 
 ### API/Core Adapter
 
-- [ ] Establish API contract-test harness and TDD fixtures
-- [ ] Establish SQLite durable-operation test fixtures
-- [ ] Establish trusted-proxy/auth spoof test fixtures
-- [ ] Establish idempotency/config-revision test fixtures
-- [ ] Establish retention-plan immutable-token test fixtures
-- [ ] Finalize `BackupService` UI use-case surface
-- [ ] HTTP API skeleton
-- [ ] UGOS authenticator/authorizer
-- [ ] Operations model
-- [ ] Durable operations + idempotency
-- [ ] Authenticated operation polling
-- [ ] Retention plan-id / inventory-revision contract
-- [ ] Configuration revision / optimistic concurrency
-- [ ] API contract and security tests
+- Establish API contract-test harness and TDD fixtures
+- Establish SQLite durable-operation test fixtures
+- Establish trusted-proxy/auth spoof test fixtures
+- Establish idempotency/config-revision test fixtures
+- Establish retention-plan immutable-token test fixtures
+- Finalize `BackupService` UI use-case surface
+- HTTP API skeleton
+- UGOS authenticator/authorizer
+- Operations model
+- Durable operations + idempotency
+- Authenticated operation polling
+- Retention plan-id / inventory-revision contract
+- Configuration revision / optimistic concurrency
+- API contract and security tests
 
 ### Frontend
 
-- [ ] Establish frontend component-test harness and mock API
-- [ ] Establish Playwright E2E harness
-- [ ] React/UGOS frontend scaffold
-- [ ] API client + UGOS token integration
-- [ ] App shell/navigation
-- [ ] Dashboard
-- [ ] Backup Sets list/detail
-- [ ] Add/Edit Backup Set wizard
-- [ ] SSH key management UI
-- [ ] Host-key trust UI
-- [ ] Backups and artifact detail
-- [ ] Retention editor/preview/apply
-- [ ] Activity/operations
-- [ ] Quarantine
-- [ ] Settings/Diagnostics
-- [ ] UI E2E tests
+- Establish frontend component-test harness and mock API
+- Establish Playwright E2E harness
+- React/UGOS frontend scaffold
+- API client + UGOS token integration
+- App shell/navigation
+- Dashboard
+- Backup Sets list/detail
+- Add/Edit Backup Set wizard
+- SSH key management UI
+- Host-key trust UI
+- Backups and artifact detail
+- Retention editor/preview/apply
+- Activity/operations
+- Quarantine
+- Settings/Diagnostics
+- UI E2E tests
 
 ### Packaging
 
-- [ ] Establish package/image verification test harness
-- [ ] Canonical production OCI image
-- [ ] Headless publication profile using canonical image
-- [ ] Multi-arch build
-- [ ] UGOS `project.yaml`
-- [ ] UGOS Docker Compose
-- [ ] UGOS icon
-- [ ] UPK staging automation
-- [ ] `ugcli pack` CI
-- [ ] UPK update/disable/uninstall tests
-- [ ] Headless Docker Compose example
-- [ ] Registry publication
+- Establish package/image verification test harness
+- Canonical production OCI image
+- Headless publication profile using canonical image
+- Multi-arch build
+- UGOS `project.yaml`
+- UGOS Docker Compose
+- UGOS icon
+- UPK staging automation
+- `ugcli pack` CI
+- UPK update/disable/uninstall tests
+- Headless Docker Compose example
+- Registry publication
 
 ### Release/App Center
 
-- [ ] Establish release acceptance checklist/test runner
-- [ ] SBOM/checksum/release provenance
-- [ ] Security review
-- [ ] App Center metadata
-- [ ] Privacy/help/release documentation
-- [ ] OSS license/source-code-link compliance
-- [ ] Catalog rebuild/state-loss recovery
-- [ ] Proactive alerting
-- [ ] UGREEN submission preflight
+- Establish release acceptance checklist/test runner
+- SBOM/checksum/release provenance
+- Security review
+- App Center metadata
+- Privacy/help/release documentation
+- OSS license/source-code-link compliance
+- Catalog rebuild/state-loss recovery
+- Proactive alerting
+- UGREEN submission preflight
 
 ---
 
@@ -4258,58 +4258,58 @@ For the same version/architecture, both paths MUST execute the same canonical im
 
 The implementation team SHALL re-check these documents at development and release time because UGOS developer interfaces can evolve.
 
-- UGREEN NAS Developer Platform  
+- UGREEN NAS Developer Platform
   https://developer.ugnas.com/
 
-- Development preparation  
+- Development preparation
   https://developer.ugnas.com/en/doc/backend/quick-start/prepare
 
-- Docker Application packaging  
+- Docker Application packaging
   https://developer.ugnas.com/doc/backend/quick-start/develop-docker-app.html
 
-- `project.yaml` configuration  
+- `project.yaml` configuration
   https://developer.ugnas.com/doc/tools/project-yaml.html
 
-- Application open mode  
+- Application open mode
   https://developer.ugnas.com/doc/backend/application/open-type.html
 
-- UGOS login authentication integration  
+- UGOS login authentication integration
   https://developer.ugnas.com/doc/backend/system-capabilities/login-auth.html
 
-- Application runtime environment / permissions  
+- Application runtime environment / permissions
   https://developer.ugnas.com/doc/backend/application/runtime-environment.html
 
-- UGREEN frontend samples  
+- UGREEN frontend samples
   https://developer.ugnas.com/en/doc/backend/quick-start/my-apps.html
 
-- `@ugreen-nas/builder-open`  
+- `@ugreen-nas/builder-open`
   https://developer.ugnas.com/en/doc/frontend/ugos-builder/
 
-- UGOS Core frontend SDK  
+- UGOS Core frontend SDK
   https://developer.ugnas.com/doc/frontend/ugos-core/install.html
 
-- App testing  
+- App testing
   https://developer.ugnas.com/doc/backend/quick-start/testing.html
 
-- UGOS App Center manual installation  
+- UGOS App Center manual installation
   https://support.ugnas.com/detail/article/en-US/116
 
-- UGREEN Docker  
+- UGREEN Docker
   https://support.ugnas.com/detail/article/en-US/236
 
-- UGREEN container applications  
+- UGREEN container applications
   https://support.ugnas.com/detail/article/en-US/539
 
-- App review / developer rules  
+- App review / developer rules
   https://developer.ugnas.com/doc/review/app-review/audit-key-points.html
 
-- Runtime environment / app data behavior  
+- Runtime environment / app data behavior
   https://developer.ugnas.com/doc/backend/application/runtime-environment.html
 
-- Open-source/compliance fields in `project.yaml`  
+- Open-source/compliance fields in `project.yaml`
   https://developer.ugnas.com/doc/tools/project-yaml.html
 
-- rclone license (MIT)  
+- rclone license (MIT)
   https://github.com/rclone/rclone/blob/master/docs/content/licence.md
 
 ---

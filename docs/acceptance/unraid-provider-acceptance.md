@@ -65,7 +65,7 @@ scp backupd.tar.gz root@<unraid>:/mnt/user/
 ssh root@<unraid> 'gunzip -c /mnt/user/backupd.tar.gz | docker load'
 ```
 
-- [ ] Canonical image resolvable on the NAS, reference recorded
+- Canonical image resolvable on the NAS, reference recorded
 
 ### 0.2 Create the user-defined network
 
@@ -74,8 +74,8 @@ docker network create backupd
 docker network inspect backupd --format '{{.Driver}} {{.Name}}'
 ```
 
-- [ ] A user-defined bridge network named `backupd` exists
-- [ ] It appears in the **Network Type** dropdown in Unraid's Docker template editor
+- A user-defined bridge network named `backupd` exists
+- It appears in the **Network Type** dropdown in Unraid's Docker template editor
 
 ### 0.3 Create the appdata and backup shares
 
@@ -100,9 +100,9 @@ else, and this procedure creates directories, owns them and later checks nothing
 outside them changed. Keeping the app inside a directory of its own means every
 one of those steps only ever touches paths this procedure created.
 
-- [ ] `appdata/backupd/{state,config,secrets}` exist
-- [ ] A `backups` user share exists and is writable
-- [ ] `backups/backupd` exists and was created by this step
+- `appdata/backupd/{state,config,secrets}` exist
+- A `backups` user share exists and is writable
+- `backups/backupd` exists and was created by this step
 
 ### 0.4 Own them by the uid/gid the app runs as
 
@@ -122,13 +122,13 @@ any other tool has ever put in that share, is not reversible without an ownershi
 record nobody took, and crawls the `/mnt/user` FUSE layer for as long as that
 takes. On a reinstall the same command would rewrite the retained backup store.
 
-- [ ] `PUID`/`PGID` chosen and recorded
-- [ ] appdata tree and `backups/backupd` owned by that uid/gid
-- [ ] Nothing else in the `backups` share had its ownership changed
+- `PUID`/`PGID` chosen and recorded
+- appdata tree and `backups/backupd` owned by that uid/gid
+- Nothing else in the `backups` share had its ownership changed
 
 ### 0.5 Create the SSH key, the pinned known_hosts, and the config
 
-> **This step is packaging debt now, not engine behavior.** As of issue #176 the
+> **This step is packaging debt now, not engine behavior.** As of the
 > engine no longer needs a configuration to start: an instance with no
 > `config.yaml` serves a first-run setup flow, in the web UI, that writes one
 > for you. What still blocks that here is the package. The config is
@@ -137,8 +137,8 @@ takes. On a reinstall the same command would rewrite the retained backup store.
 > missing source gets a directory created for it). Until the packaged config
 > mount becomes a writable **directory**, this platform keeps the hand-written
 > config, and this step keeps its shell commands for that reason and no other.
-> That same mount is already what makes the existing create-backup-set (#146)
-> and settings (#140) write paths inert in a packaged container, so it is one
+> That same mount is already what makes the existing create-backup-set
+> and settings write paths inert in a packaged container, so it is one
 > packaging fix for three things.
 >
 > Nothing else here survives that fix: once the mount is writable, the key is
@@ -147,18 +147,18 @@ takes. On a reinstall the same command would rewrite the retained backup store.
 > at all.
 
 `/backupd-web serve` starts without a `config.yaml` and serves the
-first-run setup flow instead (#176), but a config file that EXISTS and does not
+first-run setup flow instead, but a config file that EXISTS and does not
 validate is still a hard startup failure. Given the read-only mount above, create
 all three before the first start.
 
-**What still requires this step, precisely (issue #196).** The configuration mount is
+**What still requires this step, precisely.** The configuration mount is
 now a writable directory the application owns, so the container can create and replace
 `config.yaml` itself, and an empty directory is a legitimate state rather than a broken
 deployment. Two things nonetheless keep this step here. The directory itself must exist
 and be owned by the app's uid/gid before the first start, because a bind mount does not
 create or chown its source. And `/backupd-web serve` still refuses to start
 without a valid config: removing that refusal, and serving a first-run flow instead, is
-#176's work and is not merged. Once it is, everything below except creating and owning
+'s work and is not merged. Once it is, everything below except creating and owning
 the directory becomes optional.
 
 ```bash
@@ -174,10 +174,10 @@ in `apps/unraid/README.md`.
 
 **Never commit the private key, the config, or any transcript containing them.**
 
-- [ ] Key pair generated, mode 0600, owned by `PUID:PGID`
-- [ ] `known_hosts` pinned, fingerprint verified out of band
-- [ ] `/mnt/user/appdata/backupd/config` exists and is **writable** by `PUID:PGID`
-- [ ] `config.yaml` written inside it and readable by `PUID:PGID`
+- Key pair generated, mode 0600, owned by `PUID:PGID`
+- `known_hosts` pinned, fingerprint verified out of band
+- `/mnt/user/appdata/backupd/config` exists and is **writable** by `PUID:PGID`
+- `config.yaml` written inside it and readable by `PUID:PGID`
 
 ---
 
@@ -192,17 +192,17 @@ in `apps/unraid/README.md`.
    supplied. Change nothing you did not have to.
 4. Apply.
 
-- [ ] The template loads in the editor with no missing or blank required field
-- [ ] Every `Config` element renders with the right type (Port, Path, Variable)
+- The template loads in the editor with no missing or blank required field
+- Every `Config` element renders with the right type (Port, Path, Variable)
       and the right default
-- [ ] The container starts
-- [ ] It reaches Docker health **healthy** (it inherits the image's own
+- The container starts
+- It reaches Docker health **healthy** (it inherits the image's own
       `HEALTHCHECK`, `/backupd status`, which is the right answer here:
       an Unraid template declares no start-ordering dependency, so nothing waits
       on this verdict and it is the backup-freshness badge FR-24 means it to be.
       On a fresh install it will be red until the first backup lands)
-- [ ] It has **no published port** (`docker port <engine>` prints nothing)
-- [ ] It is attached to the `backupd` network
+- It has **no published port** (`docker port <engine>` prints nothing)
+- It is attached to the `backupd` network
 
 ---
 
@@ -213,29 +213,29 @@ in `apps/unraid/README.md`.
 2. **Docker → Add Container**, pick `backupd-ui`.
 3. Apply.
 
-- [ ] The container starts and reaches Docker health **healthy** via its own
+- The container starts and reaches Docker health **healthy** via its own
       `/backupd-web healthcheck` override, not the image's
       `/backupd status` (which would fail: this container has no config
       file and no state database)
-- [ ] It publishes exactly one port
-- [ ] It is attached to the `backupd` network
-- [ ] It has **no** volume mappings at all: it never reads the config, the key,
+- It publishes exactly one port
+- It is attached to the `backupd` network
+- It has **no** volume mappings at all: it never reads the config, the key,
       `known_hosts`, or either data directory
 
 If it is unhealthy while the engine is healthy, the healthcheck override did not
-apply. Capture `docker inspect --format '{{json .Config.Healthcheck}}' <ui>` before
+apply. Capture `docker inspect --format '{{json.Config.Healthcheck}}' <ui>` before
 changing anything; that is a package bug.
 
 ---
 
 ## Step 3 — WebUI link
 
-- [ ] The container's Unraid context menu shows **WebUI**
-- [ ] Clicking it opens the shared Web UI, not a 404
-- [ ] The resolved URL matches the template's `<WebUI>` value with `[IP]` and
+- The container's Unraid context menu shows **WebUI**
+- Clicking it opens the shared Web UI, not a 404
+- The resolved URL matches the template's `<WebUI>` value with `[IP]` and
       `[PORT:8080]` substituted, and matches
       `apps/unraid/frontend/webui.json`'s `webui` field
-- [ ] The engine container's own context menu has **no** WebUI entry (it has no
+- The engine container's own context menu has **no** WebUI entry (it has no
       published port and must never be opened directly)
 
 ---
@@ -254,15 +254,15 @@ generic Web host provides (§13A).
 2. Open it, enrol an administrator with a password you generate now, log out, log
    back in, then open the enrollment link a second time.
 
-- [ ] No account exists before enrollment
-- [ ] The token appears only in the container log, never in any file under
+- No account exists before enrollment
+- The token appears only in the container log, never in any file under
       `apps/unraid/`
-- [ ] Enrollment succeeds, logout then login succeeds
-- [ ] The enrollment link is refused the second time
-- [ ] `GET /api/v1/system/capabilities` reports `nativeAuth: false`
-- [ ] `/mnt/user/appdata/backupd/state/local-auth.json` holds an Argon2id
+- Enrollment succeeds, logout then login succeeds
+- The enrollment link is refused the second time
+- `GET /api/v1/system/capabilities` reports `nativeAuth: false`
+- `/mnt/user/appdata/backupd/state/local-auth.json` holds an Argon2id
       hash, never a plaintext password
-- [ ] Backupd's login is completely independent of Unraid's own root
+- Backupd's login is completely independent of Unraid's own root
       password, and neither can log into the other
 
 ---
@@ -295,16 +295,16 @@ find /mnt/user/backups/backupd -type f -printf '%p %s\n' | sort > /root/backupd-
 Keep `/root/backupd-acceptance` off the repository: the listing names your own backup
 sets. Record only that it was taken, and the canary's hash, in the evidence table.
 
-- [ ] At least one completed artifact is under `/mnt/user/backups/backupd`
-- [ ] `state.db` and `local-auth.json` are under appdata, **not** under the
+- At least one completed artifact is under `/mnt/user/backups/backupd`
+- `state.db` and `local-auth.json` are under appdata, **not** under the
       backup root
-- [ ] No private key, `known_hosts`, or auth state anywhere under
+- No private key, `known_hosts`, or auth state anywhere under
       `/mnt/user/backups/backupd` (§19.2)
-- [ ] Nothing was written anywhere else in the `backups` share
-- [ ] A sidecar recovery manifest sits next to the artifact and contains no
+- Nothing was written anywhere else in the `backups` share
+- A sidecar recovery manifest sits next to the artifact and contains no
       secret material (§19.3)
-- [ ] `canary.bin` written into the backup root and its hash recorded outside it
-- [ ] A full `find` listing of the backup root recorded outside it
+- `canary.bin` written into the backup root and its hash recorded outside it
+- A full `find` listing of the backup root recorded outside it
 
 ---
 
@@ -328,14 +328,14 @@ the case most likely to lose state.
    diff /tmp/before-update.txt /tmp/after-update.txt
    ```
 
-- [ ] Both containers recreate and return to healthy
-- [ ] `diff` of the retained-artifact listing is empty: the update moved no
+- Both containers recreate and return to healthy
+- `diff` of the retained-artifact listing is empty: the update moved no
       backup data
-- [ ] The administrator account still exists (no re-enrollment prompt)
-- [ ] Logging back in with the same password works
-- [ ] Every backup set is still configured
-- [ ] Every artifact is still present and still listed
-- [ ] Unraid's own **Update Available** indicator clears afterwards
+- The administrator account still exists (no re-enrollment prompt)
+- Logging back in with the same password works
+- Every backup set is still configured
+- Every artifact is still present and still listed
+- Unraid's own **Update Available** indicator clears afterwards
 
 ---
 
@@ -350,11 +350,11 @@ docker rm -f <engine container> <ui container>
 
 Re-add both from the same user templates, changing nothing.
 
-- [ ] Both containers come back healthy
-- [ ] Retained backup data survives untouched
-- [ ] The catalog survives
-- [ ] The administrator account survives
-- [ ] The re-added containers pick up the saved template values, so nothing had
+- Both containers come back healthy
+- Retained backup data survives untouched
+- The catalog survives
+- The administrator account survives
+- The re-added containers pick up the saved template values, so nothing had
       to be retyped
 
 ---
@@ -369,7 +369,7 @@ than a finding to triage.
 1. **Docker → backupd → Remove**, and remove the image too.
 2. Repeat for `backupd-ui`.
 
-- [ ] Both containers are gone
+- Both containers are gone
 
 Check the backup root against the baseline recorded in the storage step, before
 looking at anything else:
@@ -380,14 +380,14 @@ find /mnt/user/backups/backupd -type f -printf '%p %s\n' | sort > /root/backupd-
 diff /root/backupd-acceptance/backup-root.before /root/backupd-acceptance/backup-root.after
 ```
 
-- [ ] `sha256sum -c` reports the canary `OK`
-- [ ] The `diff` against the recorded listing is empty, so the backup root is
+- `sha256sum -c` reports the canary `OK`
+- The `diff` against the recorded listing is empty, so the backup root is
       untouched, byte for byte, and every artifact is still readable
-- [ ] `/mnt/user/appdata/backupd` is untouched (Unraid does not delete
+- `/mnt/user/appdata/backupd` is untouched (Unraid does not delete
       appdata on container removal, and the package must not either)
-- [ ] Nothing elsewhere in the `backups` share changed
-- [ ] Nothing outside the declared host paths was touched
-- [ ] Reinstalling with the same paths adopts the existing catalog rather than
+- Nothing elsewhere in the `backups` share changed
+- Nothing outside the declared host paths was touched
+- Reinstalling with the same paths adopts the existing catalog rather than
       starting empty
 
 ---
@@ -398,14 +398,14 @@ Community Applications lists templates from a GitHub repository that CA's own
 feed indexes. That submission is an external step CA maintainers control, and no
 part of it can run on a developer laptop, so it lives here.
 
-- [ ] The templates pass CA's own template checks
-- [ ] `<TemplateURL>`, `<Project>`, `<Support>`, `<Icon>` and `<Overview>` all
+- The templates pass CA's own template checks
+- `<TemplateURL>`, `<Project>`, `<Support>`, `<Icon>` and `<Overview>` all
       resolve to real, reachable URLs
-- [ ] `<Category>` is a category CA actually recognises
-- [ ] `<Requires>` states the `docker network create backupd`
+- `<Category>` is a category CA actually recognises
+- `<Requires>` states the `docker network create backupd`
       prerequisite from step 0.2 clearly enough that a first-time installer sees
       it before installing
-- [ ] Installing from CA (not from a hand-copied file) produces the same result
+- Installing from CA (not from a hand-copied file) produces the same result
       as steps 1 and 2
 
 ---

@@ -1,12 +1,12 @@
-# EPIC E: Alternative Storage Mediums per Retention Tier, S3 First
+# Alternative Storage Mediums per Retention Tier, S3 First
 
 ## Status
 
 **Type:** EPIC / Detailed implementation specification
 **Repository:** `backupdproject/backupd`
-**Parent / predecessor EPICs:** EPIC A (#1, backup engine), EPIC B (#81, provider-neutral core and multi-NAS apps)
+**Parent / predecessor EPICs:** (#1, backup engine), (, provider-neutral core and multi-NAS apps)
 **Primary implementation root:** `core/`
-**Tracker issue:** #232 (sub-issues #233 through #242)
+**Tracker issue:** (sub- through)
 **FR numbering:** this specification continues the product's FR series at **FR-27**. FR-1 through FR-24 are defined in `docs/EPIC.md`; FR-26 is claimed by the `version` command in `core/cmd/backupd` and `core/internal/app`. Nothing here renumbers an existing FR.
 
 ---
@@ -21,7 +21,7 @@ Same discipline as `docs/EPIC-B-multi-nas.md`: each reviewer was instructed to r
 
 Critical findings:
 
-1. The draft never said which medium an artifact selected by TWO tiers with different mediums lives on. KEEP is a union (FR-18, settled by #215), so daily-selects-it and monthly-selects-it is the common case, not a corner.
+1. The draft never said which medium an artifact selected by TWO tiers with different mediums lives on. KEEP is a union (FR-18, settled by), so daily-selects-it and monthly-selects-it is the common case, not a corner.
 2. Chain order was documented as cosmetic ("order never changes which artifacts are kept"), and the draft silently gave it a second, load-bearing meaning without saying so.
 3. The draft allowed a move for any managed-complete artifact, which lets a migration race FR-15's pre-delete local-file checks in `COMMITTED` and `REMOTE_DELETE_PENDING`.
 4. "Move" was underspecified as one operation when it is three (copy, verify, delete) with three failure modes.
@@ -50,7 +50,7 @@ Required corrections, all adopted:
 
 - credentials reuse the SSH key custody model byte for byte: file, env or command sources, `obs.Secret` wrapping, shape validation before use, no inline spelling in the schema at all (FR-33);
 - the move's pre-delete verification defaults to read-back (download and re-hash against the journal's recorded hash); provider checksum attestation is a per-medium opt-in that names its trust assumption (FR-31);
-- no value read from a medium may ever place an artifact on the retention calendar, widen DELETE, or displace anything from KEEP; the #215 union direction is the law here too (FR-32);
+- no value read from a medium may ever place an artifact on the retention calendar, widen DELETE, or displace anything from KEEP; the union direction is the law here too (FR-32);
 - catalog rebuild from a medium proposes and never deletes, same as the existing rebuild contract (FR-32).
 
 ### Consensus position: APPROVE AFTER REVISION
@@ -82,7 +82,7 @@ Required corrections, all adopted:
 Critical findings:
 
 1. A Glacier restore presented like a local read is a lie with an hours-long punchline. The draft had one "available" boolean.
-2. The draft floated a cost estimate column. The backend has no price list, no negotiated rates and no way to compute one honestly; #211 removed nine fields for exactly this sin.
+2. The draft floated a cost estimate column. The backend has no price list, no negotiated rates and no way to compute one honestly; removed nine fields for exactly this sin.
 3. Deleting the NAS copy after an upload is the most consequential behavior in this EPIC and was buried in a config reference.
 4. Automatic revalidation that silently downloads from S3 turns a safety feature into a surprise bill.
 
@@ -123,7 +123,7 @@ Required corrections, all adopted:
 
 # 1. Purpose
 
-Today an artifact's durable copy lives in exactly one place: the backup set's `local_path` on the NAS (`core/internal/config.BackupSet.LocalPath`). FR-18's generalized retention chain (B3.8, #156) lets an operator chain any number of tiers, daily then weekly then monthly then semi-annual then annual, but every tier's artifacts sit on the same local disk.
+Today an artifact's durable copy lives in exactly one place: the backup set's `local_path` on the NAS (`core/internal/config.BackupSet.LocalPath`). FR-18's generalized retention chain (B3.8,) lets an operator chain any number of tiers, daily then weekly then monthly then semi-annual then annual, but every tier's artifacts sit on the same local disk.
 
 This EPIC makes the storage medium selectable **per retention tier**, with S3 as the first non-local medium:
 
@@ -209,13 +209,13 @@ Validation (in `core/internal/config`, the one place that owns config truth):
 - `RetentionTier.Medium` SHALL be empty (meaning `local`) or name a declared medium; a dangling reference is a validation error;
 - a declared medium no tier references is legal (an operator staging config), not an error;
 - `medium` is only expressible in the `tiers` spelling; the three legacy scalars cannot name one, and do not need to, because adopting mediums means adopting the tiers spelling;
-- every new field carries `omitempty`, for the same wizard round-trip reason `tiers` itself does: a config that never heard of mediums must come back from a settings save without a `storage_mediums: []` or `medium: ""` injected into it.
+- every new field carries `omitempty`, for the same wizard round-trip reason `tiers` itself does: a config that never heard of mediums must come back from a settings save without a `storage_mediums: ` or `medium: ""` injected into it.
 
 **The home-medium rule.** An artifact's REQUIRED medium is decided by the retention chain: the **first tier in chain order that currently selects the artifact** names its home. When no tier selects it (an artifact kept only by FR-19's protection, or an artifact awaiting deletion), it stays where it is; absence of a selecting tier never triggers a move. This gives chain order a second meaning beyond presentation, and this spec says so plainly rather than letting it be discovered: order still never changes WHICH artifacts are kept (KEEP is a union), but it now decides WHERE a multiply-selected artifact lives. Operators write chains fine-to-coarse, so the first selecting tier is the warmest, which is the behavior the daily-local-monthly-S3 story needs.
 
 **Consent.** Writing a tier-to-medium mapping is a configuration change through the existing settings flow (optimistic concurrency, config revision), and the UI and CLI SHALL present an explicit disclosure before the first save that maps any tier of a backup-affecting chain to a non-local medium: artifacts selected only by that tier will live only on that medium, and the NAS copy will be deleted after verified upload. This is the remote-source-deletion disclosure pattern applied to the other end of the pipeline. After that consent, moves execute automatically as declared policy, exactly as FR-15's remote delete does.
 
-**"The first save" is read per tier** (#240, which built the gate). A configuration that already sends `monthly` to `offsite_s3` has consented to monthly's artifacts leaving, and to nothing else: a later save that also sends `daily` somewhere asks again, because that is a different set of artifacts, on a medium that may be on a storage class with entirely different access behaviour. A save that changes anything else about a chain whose mappings are already in the file does NOT ask, and that half matters as much as the first: a product that asked every time teaches an operator to tick the box without reading it, which is worse than not asking. The gate is server-side (`core/service.UpdateSettings`, refusing with `MEDIUM_DISCLOSURE_REQUIRED`) and the refusal message carries the disclosure text itself, so a client that renders it has shown the right words by construction rather than by keeping its own copy of them. A form disabling its own Save button is a courtesy on top of that, never the gate. "Any tier of a backup-affecting chain" includes a backup set's own chain (#333's per-set override), which can name a medium per tier exactly as the deployment's policy can, so the same gate stands in front of `PUT /backup-sets/{source}/{set}/retention` and the CLI's `backup-set retention --policy-file`, decided against the chain currently deciding for that set.
+**"The first save" is read per tier** (, which built the gate). A configuration that already sends `monthly` to `offsite_s3` has consented to monthly's artifacts leaving, and to nothing else: a later save that also sends `daily` somewhere asks again, because that is a different set of artifacts, on a medium that may be on a storage class with entirely different access behaviour. A save that changes anything else about a chain whose mappings are already in the file does NOT ask, and that half matters as much as the first: a product that asked every time teaches an operator to tick the box without reading it, which is worse than not asking. The gate is server-side (`core/service.UpdateSettings`, refusing with `MEDIUM_DISCLOSURE_REQUIRED`) and the refusal message carries the disclosure text itself, so a client that renders it has shown the right words by construction rather than by keeping its own copy of them. A form disabling its own Save button is a courtesy on top of that, never the gate. "Any tier of a backup-affecting chain" includes a backup set's own chain ('s per-set override), which can name a medium per tier exactly as the deployment's policy can, so the same gate stands in front of `PUT /backup-sets/{source}/{set}/retention` and the CLI's `backup-set retention --policy-file`, decided against the chain currently deciding for that set.
 
 ## FR-28, The S3 Medium Is the Embedded rclone Behind the FR-3 Boundary
 
@@ -238,13 +238,13 @@ type MediumStore interface {
 }
 ```
 
-  Two of these landed differently, and this paragraph is the correction rather than a note about it (E2.4, #241).
+  Two of these landed differently, and this paragraph is the correction rather than a note about it (E2.4,).
 
   `RestoreStatus` returns a **pointer**, `(*RestoreState, error)`. A value could not express "the medium reports no restore status for this object at all", which is what S3 answers both for an object nobody ever asked about and for one whose restored window has been reaped; a zero value would have read as "a finished restore with no expiry", which is a different and more encouraging fact. What nil must never also mean is "there is no such object", so a key the medium does not hold is a NotFound-classified error instead.
 
   `InitiateRestore` carries an obligation the sketch does not: it acts on **exactly one object**. rclone's own `restore` backend command is addressed by a remote, enumerates everything beneath it and restores every archived object it walks, so an implementation that hands it a bucket-rooted `Fs` restores the bucket, at a per-object retrieval charge the provider accepts before anything here can intervene and that nothing afterwards can cancel. An implementation that cannot confine its backend command to one object refuses rather than approximates.
 
-  Exact signatures may change. The FR-3 rules carry over verbatim: lifecycle and retention code depend on this interface, rclone types never leak past the adapter, destructive operations are explicit, and there is **no generic `Move()`**: a migration is `UploadFromLocal` plus verification plus a separate local delete, composed by the move engine (FR-30), never a transport primitive.
+  Exact signatures may change. The FR-3 rules carry over verbatim: lifecycle and retention code depend on this interface, rclone types never leak past the adapter, destructive operations are explicit, and there is **no generic `Move`**: a migration is `UploadFromLocal` plus verification plus a separate local delete, composed by the move engine (FR-30), never a transport primitive.
 - Error classification extends `transport.Category` mapping for the S3 backend: throttling and 5xx are Transient, `NoSuchBucket` and endpoint resolution failures are Configuration, `AccessDenied` and signature failures are Auth, `NoSuchKey` is NotFound. The existing contract-test shape (`core/internal/transport/contract`) gains a MediumStore suite, run against the local backend in-tree and against a MinIO fixture in integration.
 - The key layout inside a medium is deterministic and mirrors FR-7's backup-set isolation: `<prefix>/<source>/<set>/<artifact-name>`, plus `<prefix>/<source>/<set>/.manifest/<artifact-name>.json` for the recovery sidecar (FR-29). No timestamps, no random components, so re-running an interrupted upload targets the same key idempotently.
 
@@ -263,7 +263,7 @@ The same migration SHALL backfill one `ACTIVE` `local` placement for every exist
 
 **`QUARANTINED` is a lineage, not a state.** Every other state in the durable set answers "is `local_path` finished?" on its own. `QUARANTINED` does not: `internal/lifecycle`'s transition table admits it from five places, and two of them (`VERIFYING`, `FAILED`) are before the commit rename, so those artifacts sit in `QUARANTINED` with `local_path` still naming a `.partial`. A predicate reading the state alone would hand an `ACTIVE` placement to exactly the half-written file the durable-only rule exists to keep out. So a `QUARANTINED` artifact SHALL be backfilled only when the edge that most recently carried *it* into quarantine came from a durable state, read from the append-only transition log, which is the same per-artifact resolution `reinstatementTargetForArtifact` already does and for the same reason. No lineage recorded means no row: absent evidence falls to the conservative side, like every other guess in this migration. `QUARANTINED_LOST` needs none of this, its sole entry being `COMPLETE`.
 
-**Why the predicate guesses in this direction, and how to reverse it.** Issue #236 says "backfills one `ACTIVE` `local` placement for every existing artifact row", and this migration deliberately does not: it takes only the durable states. That departure was made on the shape of the two possible mistakes, not on a reading of the words, and it is recorded here so nobody has to reconstruct it.
+**Why the predicate guesses in this direction, and how to reverse it.** says "backfills one `ACTIVE` `local` placement for every existing artifact row", and this migration deliberately does not: it takes only the durable states. That departure was made on the shape of the two possible mistakes, not on a reading of the words, and it is recorded here so nobody has to reconstruct it.
 
 If the durable-only predicate is wrong, an in-flight `.partial` has no placement row. FR-30's move engine cannot then confirm a durable copy for that artifact, and its standing invariant already tells it what to do with a copy it cannot confirm: preserve the source. The cost is a source that is not reclaimed until the next cycle looks again.
 
@@ -273,7 +273,7 @@ The two mistakes are not the same size, so there is only one safe direction to g
 
 `state.Record` gains its placements; `LocalPath` keeps meaning what it means today (the ingestion landing path) and stays valid while a local placement is ACTIVE. Code that asks "can I read this artifact locally" SHALL ask the placements, not assume `LocalPath` readable, and the compiler-assisted sweep of those call sites (lifecycle verify, revalidate, prune, recovery manifest, health) is part of this FR's scope.
 
-Recovery metadata (EPIC B section 19.3) extends in both directions: the local sidecar manifest records the artifact's placements, and every uploaded artifact gets a sidecar object under `.manifest/` carrying the same non-secret recovery fields the local manifest carries today, so `catalog rebuild` can reconstruct from a medium when local state is lost. Sidecars carry no credentials, no endpoints and no secret material, same rule as today.
+Recovery metadata ( section 19.3) extends in both directions: the local sidecar manifest records the artifact's placements, and every uploaded artifact gets a sidecar object under `.manifest/` carrying the same non-secret recovery fields the local manifest carries today, so `catalog rebuild` can reconstruct from a medium when local state is lost. Sidecars carry no credentials, no endpoints and no secret material, same rule as today.
 
 ## FR-30, Tier Transitions Are Journaled Moves
 
@@ -310,9 +310,9 @@ Rules:
 
 - A move reaches `VERIFIED` only at `content` class by default: download and re-hash against the journal's recorded hash, at the last moment the local truth still exists. A medium may opt into `attested` via `upload_verification: attested`, and the config documentation SHALL name the trust assumption in plain words: an endpoint that lies about checksums can then cause the local copy to be deleted against a bad upload. `existence` is never sufficient to delete a source.
 - Where the endpoint or the embedded rclone version cannot produce a full-object checksum attestation, `attested` SHALL fail with an explicit capability result, never silently degrade to something weaker: FR-13's "explicit capability result rather than silently weakening configured verification" applies verbatim.
-- **Measured, against rclone v1.75.0: no s3 medium can reach `attested` at all.** `backend/s3`'s `Fs.Hashes()` returns exactly `hash.MD5` and `Object.Hash` refuses every other algorithm, so a full-object SHA-256 attestation is not obtainable through this build. It was proven against a real MinIO endpoint, not inferred from the source. The digest an S3 endpoint offers for free is the ETag, which stops being a whole-object MD5 the moment an upload is multipart, and comparing it to a recorded SHA-256 is the exact thing FR-32 forbids. `MediumStore.ObjectChecksum` therefore speaks SHA-256 and nothing else, so there is no way to ask this boundary for an ETag by accident, and the ladder refuses any attestation that comes back under a different algorithm rather than compare it: a digest of the wrong algorithm compared against the recorded hash produces a MISMATCH, which reads on every surface as corruption and quarantines a perfectly good backup. The consequences are binding on the move engine (FR-30, #238): a medium configured `upload_verification: attested` cannot be served on this rclone and SHALL be refused loudly at the point the move is planned, never quietly served as `existence` or as an unverified pass. Re-measure this when rclone is upgraded; the assertion lives in the MinIO integration suite so an upgrade that changes it fails the gate.
+- **Measured, against rclone v1.75.0: no s3 medium can reach `attested` at all.** `backend/s3`'s `Fs.Hashes` returns exactly `hash.MD5` and `Object.Hash` refuses every other algorithm, so a full-object SHA-256 attestation is not obtainable through this build. It was proven against a real MinIO endpoint, not inferred from the source. The digest an S3 endpoint offers for free is the ETag, which stops being a whole-object MD5 the moment an upload is multipart, and comparing it to a recorded SHA-256 is the exact thing FR-32 forbids. `MediumStore.ObjectChecksum` therefore speaks SHA-256 and nothing else, so there is no way to ask this boundary for an ETag by accident, and the ladder refuses any attestation that comes back under a different algorithm rather than compare it: a digest of the wrong algorithm compared against the recorded hash produces a MISMATCH, which reads on every surface as corruption and quarantines a perfectly good backup. The consequences are binding on the move engine (FR-30,): a medium configured `upload_verification: attested` cannot be served on this rclone and SHALL be refused loudly at the point the move is planned, never quietly served as `existence` or as an unverified pass. Re-measure this when rclone is upgraded; the assertion lives in the MinIO integration suite so an upgrade that changes it fails the gate.
 - Periodic revalidation (`core/internal/revalidate`) becomes placement-aware. Local placements keep today's behavior. Medium placements are `existence`-checked by default on the revalidation interval; `attested` and `content` re-verification of a medium placement are operator-initiated operations, because anything that costs egress must never happen silently. A revalidation pass that could only achieve `existence` SHALL be recorded and reported as `existence`, never as the artifact having been "revalidated" in today's sense; the checked-vs-passed distinction `revalidate` already draws (a pass that verified nothing must not reset the due-ness clock as if it had) extends to classes. The restore-test hook (`config.Revalidation.Command`) opens the artifact, so running it against a medium placement is a download and falls under the same rule; it does not run automatically there, and the pass SHALL name the tier that did not run rather than report a green result for a check that silently stopped happening. An artifact that still has an ACTIVE local placement, which is where a move leaves it between the upload and the source delete, keeps today's local check unchanged and is not downgraded to `existence` for the duration of the move.
-- The operator-initiated door FR-31 keeps talking about is `backupd validate <source/backup-set/artifact>` (issue #435). Given an artifact with no ACTIVE local placement and at least one ACTIVE medium placement, it verifies the medium copies through `MediumStore` and the configured resolver: by default at the strongest class that costs nothing, which is `attested` where the endpoint can attest and `existence` where it cannot, with the step-down named in the result rather than taken quietly; and at `content` when `--content` is passed, which is the download FR-31 says must never happen on a schedule. A copy that could not be asked, because the endpoint did not answer or because the configuration no longer declares that medium, is reported as an ERROR rather than as a failed verdict, and the artifact is left exactly as it was: an unreachable bucket is not evidence that a backup is gone. A deployment with no `MediumStore` at all still gets the refusal issue #434 introduced.
+- The operator-initiated door FR-31 keeps talking about is `backupd validate <source/backup-set/artifact>`. Given an artifact with no ACTIVE local placement and at least one ACTIVE medium placement, it verifies the medium copies through `MediumStore` and the configured resolver: by default at the strongest class that costs nothing, which is `attested` where the endpoint can attest and `existence` where it cannot, with the step-down named in the result rather than taken quietly; and at `content` when `--content` is passed, which is the download FR-31 says must never happen on a schedule. A copy that could not be asked, because the endpoint did not answer or because the configuration no longer declares that medium, is reported as an ERROR rather than as a failed verdict, and the artifact is left exactly as it was: an unreachable bucket is not evidence that a backup is gone. A deployment with no `MediumStore` at all still gets the refusal introduced.
 - An artifact on an archive storage class (`GLACIER`, `DEEP_ARCHIVE`) is `existence`-checkable only, until an explicit restore (FR-34) makes stronger classes possible. The status surfaces say exactly that.
 - FR-19 last-known-good eligibility is unchanged in form (managed-complete, validation passed), and the protection continues to refuse deletion regardless of medium. The health surface reports the protected artifact's verification class and its age, so "protected by a copy nobody has content-verified in a year" is visible instead of implied.
 - Quarantine becomes placement-scoped: a medium placement failing verification marks that placement, and the ARTIFACT enters `QUARANTINED`/`QUARANTINED_LOST` only when no other ACTIVE verified placement remains (`QUARANTINED_LOST` when the remote source is also confirmed gone, the existing meaning of that state).
@@ -322,8 +322,8 @@ Rules:
 FR-8's rule ("remote filenames and metadata SHALL be treated as untrusted input") applies to everything a medium reports: ETags, LastModified, user metadata, list results, sidecar objects. Specifically:
 
 - An ETag is never a content hash. Multipart uploads and encrypted objects make it not one, so nothing in this product compares an ETag to a recorded hash, ever.
-- S3 `LastModified` is upload time, not backup time, and is **never admissible as a producer timestamp**. FR-18's two placements (discovery timestamp, and the producer's own where admissible, per #215) are captured once at original discovery and live in the journal; a move copies journal truth and never re-derives it from the destination. An artifact's retention bucketing is therefore invariant under movement, by construction, and there is a test that pins it: move an artifact, recompute the verdicts, assert bit-identical placement.
-- The #215 union direction is the law for medium-supplied data too: nothing read from a medium may move an artifact out of KEEP, widen DELETE, or displace a KEEP selection. Medium data may only ever add safety (for example, a sidecar found during rebuild proposing a catalog entry).
+- S3 `LastModified` is upload time, not backup time, and is **never admissible as a producer timestamp**. FR-18's two placements (discovery timestamp, and the producer's own where admissible, per) are captured once at original discovery and live in the journal; a move copies journal truth and never re-derives it from the destination. An artifact's retention bucketing is therefore invariant under movement, by construction, and there is a test that pins it: move an artifact, recompute the verdicts, assert bit-identical placement.
+- The union direction is the law for medium-supplied data too: nothing read from a medium may move an artifact out of KEEP, widen DELETE, or displace a KEEP selection. Medium data may only ever add safety (for example, a sidecar found during rebuild proposing a catalog entry).
 - Catalog rebuild from a medium (`catalog rebuild` extension) treats keys and sidecar contents as untrusted proposals: dry-run first, reconstruction never deletes anything local or remote, conflicts with existing journal rows are reported rather than resolved silently, and a sidecar can never overwrite an existing row's timestamps or hashes.
 
 ## FR-33, Credential Custody
@@ -333,7 +333,7 @@ S3 credentials follow the SSH key custody model in `core/internal/config.Key` an
 - Three sources, exactly one set per medium: `credentials.file` (preferred: an AWS shared-credentials format file that rclone reads itself, so the secret never enters this process's memory), `credentials.env`, `credentials.command` (argv array, never a shell string, bounded timeout, minimal environment).
 - There is **no schema field for a literal key**. `access_key_id:` or `secret_access_key:` inline in the config is an unknown field, refused by `Load`'s `KnownFields(true)` before validation even runs, and a test pins that refusal.
 - Whatever `env` or `command` produce is validated by shape before use, wrapped in `obs.Secret`, and never echoed: a resolver failure is reported by the shape of the problem, never by the content that failed.
-- Credential files live under private state (`/var/lib/backupd`, EPIC B section 19.1), never under the backup root, and the API import flow mirrors SSH key import: the secret goes into private state, and the config holds a path.
+- Credential files live under private state (`/var/lib/backupd`, section 19.1), never under the backup root, and the API import flow mirrors SSH key import: the secret goes into private state, and the config holds a path.
 - The following SHALL never contain a credential, in whole or in part: `config.yaml` values, any log line at any level, any error message, any API response (the mediums surface returns id, type, bucket, region, class, never key material), the redacted config export, recovery manifests and sidecar objects, and bucket object metadata.
 - The enforcement is a canary: an integration test resolves a known canary secret through each source and asserts its absence from every observable output above. The planted violation for this guard is a build that logs the resolved medium config verbatim; the canary gate fails it, and that failing run is recorded in the landing PR.
 
@@ -344,27 +344,27 @@ A colder storage class can take hours to restore and costs money to read. The pr
 - Each placement carries an `access` state from a closed vocabulary, derived only from held facts: `immediate` (local, or a non-archive class), `requires_restore` (archive class, no restore in progress), `restoring` (restore initiated; S3 reports no percentage, so none is shown), `unreachable` (the medium cannot currently be reached; distinct from the artifact being gone).
 - Restore is an explicit durable operation (`submitOperation` family): it names the artifact, the placement, and the restore window in days, records the operation before acting, and survives restarts like every other operation. Reads never initiate a restore as a side effect.
 - When S3 reports a restore's expiry date, it is shown; until then the surface says a restore is in progress and that the provider reports no progress. No ETA is invented.
-- No cost figures are served anywhere. The backend cannot compute egress or restore pricing honestly (no price list, no negotiated rates), so per the #211 rule it serves what it holds: bytes, storage class, and a plain statement that retrieval from this class is billed by the provider. If a future FR adds operator-entered price tables, that is its own decision; nothing here fakes it.
+- No cost figures are served anywhere. The backend cannot compute egress or restore pricing honestly (no price list, no negotiated rates), so per the rule it serves what it holds: bytes, storage class, and a plain statement that retrieval from this class is billed by the provider. If a future FR adds operator-entered price tables, that is its own decision; nothing here fakes it.
 - The CLI mirrors the same vocabulary (`backupd artifacts`, artifact detail), so a terminal operator and a UI operator read the same truth.
 
 ## FR-35, Compatibility
 
 - A configuration with no `storage_mediums` key and no `medium` key on any tier SHALL behave byte for byte as today: identical validation outcomes, identical retention verdicts (the existing golden tests run unmodified against the migrated schema and pass unmodified), identical API responses except for additive fields, identical CLI output except for additive columns that render only when a non-local placement exists.
 - Migration 0007's backfill SHALL leave every existing deployment reading as "every artifact with a durable local copy has one ACTIVE local placement naming it", with no behavioral difference observable through any surface. An artifact still in flight has no placement, which is what it already means: no durable copy yet.
-- A wizard or settings save SHALL NOT inject `storage_mediums: []` or `medium: ""` into a config that never configured them (the `omitempty` round-trip rule, same trap `tiers` already documented and avoided).
+- A wizard or settings save SHALL NOT inject `storage_mediums: ` or `medium: ""` into a config that never configured them (the `omitempty` round-trip rule, same trap `tiers` already documented and avoided).
 - An older binary opening a database at schema version 7 fails closed with the existing unsupported-downgrade behavior; nothing here weakens it.
 - This FR is a Phase 2 exit gate line, not an aspiration, and its planted violation is defined there.
 
 # 4. TDD Contract
 
-EPIC B's section 4B contract applies to every child issue here unchanged: SPECIFY, RED, GREEN, REFACTOR, INTEGRATE, REGRESSION, ACCEPT, with the section 82 child-issue template mandatory, and production code alone never completing an issue. The invariants in EPIC B section 4C apply with particular force to invariants 3 (destructive behavior needs positive and negative safety tests), 6 (migrations need forward and failure tests), 8 (filesystem deletion needs containment tests) and 9 (remote deletion needs TOCTOU refusal tests before success tests), because this EPIC adds instances of all four.
+'s section 4B contract applies to every child issue here unchanged: SPECIFY, RED, GREEN, REFACTOR, INTEGRATE, REGRESSION, ACCEPT, with the section 82 child-issue template mandatory, and production code alone never completing an issue. The invariants in section 4C apply with particular force to invariants 3 (destructive behavior needs positive and negative safety tests), 6 (migrations need forward and failure tests), 8 (filesystem deletion needs containment tests) and 9 (remote deletion needs TOCTOU refusal tests before success tests), because this EPIC adds instances of all four.
 
 **Every guard this EPIC adds must be shown to fire.** This repository has hit fifteen cases of a check passing for the wrong reason, so each gate below names its planted violation, and the landing PR for the issue that builds a gate records the planted violation actually failing:
 
 | Guard | Planted violation that proves it fires |
 |---|---|
 | Source survives every move uncertainty | A mutation that issues the source delete before `VERIFIED` is durably recorded; the crash-injection suite must fail it |
-| Medium data only ever adds (FR-32) | A mutation that admits S3 `LastModified` as a producer timestamp; the KEEP-superset invariant test from #215 must fail it |
+| Medium data only ever adds (FR-32) | A mutation that admits S3 `LastModified` as a producer timestamp; the KEEP-superset invariant test from must fail it |
 | Bucketing invariant under movement | A mutation that rewrites the journal's discovery timestamp from the destination object during a move; the bit-identical-verdict test must fail it |
 | Credential canary (FR-33) | A build that logs the resolved medium config verbatim; the canary gate must fail it |
 | Inline secret refusal (FR-33) | A config with a literal `secret_access_key:`; `Load` must refuse it as an unknown field |
@@ -389,8 +389,8 @@ Phase 1 builds every load-bearing wall: schema, transport, state, verification. 
 
 ### Phase 1 entry gate
 
-- [ ] This specification is merged.
-- [ ] The EPIC issue and its sub-issues exist with the section 82 template.
+- This specification is merged.
+- The EPIC issue and its sub-issues exist with the section 82 template.
 
 ### Phase 1 exit gate
 
@@ -400,7 +400,7 @@ directions, by `TestTheSpecsExitGateBoxesAgreeWithTheMatrix` in
 `core/tests/compat`: a `PASS` row's box has to be ticked, and a row that is
 anything else has to be left unticked. Ticking one by hand is a failing test,
 and so is leaving one unticked after its row earns its PASS, which is what
-happened here (#522).
+happened here.
 
 - [x] A config declaring an `s3` medium and a tier `medium` reference validates, round-trips through a settings save without injecting fields into a legacy config, and a config naming neither behaves identically to today (the existing config test suite passes unmodified).
 - [x] A config with an inline literal credential fails `Load` with an unknown-field error, proven by test.
@@ -409,7 +409,7 @@ happened here (#522).
 - [x] The credential canary test passes for all three sources, and its planted violation (verbatim config logging) demonstrably fails it.
 - [x] Migration 0007 backfills a local placement for every pre-existing artifact row in a durable state and for no other, checked in both directions; the golden retention tests and the full existing suite pass unmodified against the migrated schema.
 - [x] Revalidation reports `existence` class for a medium placement and never a stronger class it did not achieve, proven by the class-string assertion test.
-- [x] Nothing in this phase can delete an artifact copy anywhere: the destructive-safety suite diff shows no new deletion path. (`TestOnlyTheMoveEngineDeletesFromAMedium` is the whole-module scan that held this line; #238 moved it forward by exactly one package rather than taking an exemption, so it now reads "exactly one production package deletes from a medium, and it is the move engine". See matrix row P1.8.)
+- [x] Nothing in this phase can delete an artifact copy anywhere: the destructive-safety suite diff shows no new deletion path. (`TestOnlyTheMoveEngineDeletesFromAMedium` is the whole-module scan that held this line; moved it forward by exactly one package rather than taking an exemption, so it now reads "exactly one production package deletes from a medium, and it is the move engine". See matrix row P1.8.)
 
 ## Phase 2, movement, retention integration, and the operator surface
 
@@ -421,17 +421,17 @@ happened here (#522).
 
 ### Phase 2 entry gate
 
-- [ ] Every Phase 1 exit line holds.
-- [ ] The crash-injection harness design (which phases are interruptible, how injection is done) is written into E2.1 before its RED step, because a crash suite designed after the engine tests the engine's habits rather than its contract.
+- Every Phase 1 exit line holds.
+- The crash-injection harness design (which phases are interruptible, how injection is done) is written into E2.1 before its RED step, because a crash suite designed after the engine tests the engine's habits rather than its contract.
 
 ### Phase 2 exit gate
 
-- [x] A three-tier chain (daily local, monthly `s3`, annual `s3` cold) runs end to end against MinIO: ingest, age, move, verify, prune, with every move journaled and the standing invariant (at least one ACTIVE verified placement per managed-complete artifact) asserted continuously by the harness, not sampled. **Except the word `cold`**, which cannot be run here and should not be: this MinIO answers `InvalidStorageClass` to six of the seven classes the config accepts, and since #442 a config pairing a retention tier with an archive-class medium does not load at all. Both facts are checks rather than caveats (`archiveboundary_test.go`, `TestAnArchiveClassTierIsRefusedAtLoad`), so the day either changes the suite says so. See matrix row P2.1.
+- [x] A three-tier chain (daily local, monthly `s3`, annual `s3` cold) runs end to end against MinIO: ingest, age, move, verify, prune, with every move journaled and the standing invariant (at least one ACTIVE verified placement per managed-complete artifact) asserted continuously by the harness, not sampled. **Except the word `cold`**, which cannot be run here and should not be: this MinIO answers `InvalidStorageClass` to six of the seven classes the config accepts, and since a config pairing a retention tier with an archive-class medium does not load at all. Both facts are checks rather than caveats (`archiveboundary_test.go`, `TestAnArchiveClassTierIsRefusedAtLoad`), so the day either changes the suite says so. See matrix row P2.1.
 - [x] The crash matrix passes: a forced crash at every move phase boundary, followed by restart reconciliation, ends with the invariant intact and the move either completed or abandoned with the source intact; the planted violation (delete before durable `VERIFIED`) demonstrably fails the suite.
 - [x] Moving an artifact does not change its retention bucketing: verdicts before and after a move are bit-identical, and the planted timestamp-rewrite violation demonstrably fails the test.
 - [x] Prune against a medium refuses on identity mismatch (the swapped-object fixture) and the mandatory dry-run names the medium for every proposed deletion.
 - [x] A tier-to-medium settings save without the disclosure acknowledgment is refused by the API, with allow and deny tests (TDD invariant 4).
-- [ ] An artifact on an archive class shows `requires_restore`, a restore is a durable operation surviving restart, and no surface anywhere renders a cost figure or an invented ETA (asserted by the contract tests on the response schemas: the fields do not exist). PARTIAL, and deliberately not ticked: the no-cost half, the access-state derivation, the verification ceiling that follows from it and the load refusal are all asserted and all watched to fail. The END TO END archive half cannot be run here at all, because no archived object can be created against this fixture to observe or restore. See matrix row P2.6.
+- An artifact on an archive class shows `requires_restore`, a restore is a durable operation surviving restart, and no surface anywhere renders a cost figure or an invented ETA (asserted by the contract tests on the response schemas: the fields do not exist). PARTIAL, and deliberately not ticked: the no-cost half, the access-state derivation, the verification ceiling that follows from it and the load refusal are all asserted and all watched to fail. The END TO END archive half cannot be run here at all, because no archived object can be created against this fixture to observe or restore. See matrix row P2.6.
 - [x] FR-35 holds: a deployment upgraded with a medium-free config shows zero behavioral diff through config validation, retention verdicts, API responses (minus additive fields) and CLI output; the planted backfill violation demonstrably fails the golden suite.
 - [x] `scripts/api/check-contract-drift.sh` and `check-client-paths.sh` pass with the new operations; the layer manifest classifies every new file; `verify-core-without-distribution.sh` still passes, since nothing here touches an adapter.
 
@@ -441,8 +441,8 @@ happened here (#522).
 - **Client-side encryption of medium artifacts.** rclone's `crypt` backend is already registered transitively and is the obvious lever, but key custody for an encryption key is its own custody problem with its own recovery story (lose the key, lose every offsite artifact), and bolting it on here would rush exactly the part that must not be rushed.
 - **A restore browser and restore-to-NAS workflows** beyond the explicit restore operation verification needs. FR-34 ships the honest status and the durable restore operation; a full restore UX is future work.
 - **Managed bucket lifecycle** (S3 lifecycle rules, object lock, versioning). The manager stays the only retention authority; delegating deletion to bucket rules would fork retention truth into a system FR-18 cannot see.
-- **Cost accounting.** Nothing renders a number the backend cannot compute (the #211 rule). Operator-entered price tables could make estimates honest one day; that is a separate decision.
-- **Per-backup-set medium overrides.** Retention policy is global by the #111 decision; mediums bind to tiers, and tiers are global. Per-set overrides are the same "separate, larger change" #111 already deferred, and they stay deferred together.
+- **Cost accounting.** Nothing renders a number the backend cannot compute (the rule). Operator-entered price tables could make estimates honest one day; that is a separate decision.
+- **Per-backup-set medium overrides.** Retention policy is global by the decision; mediums bind to tiers, and tiers are global. Per-set overrides are the same "separate, larger change" already deferred, and they stay deferred together.
 - **Automatic content re-verification of medium placements.** Silent egress is a surprise bill; `existence` checks are the automatic ceiling, and stronger re-verification is operator-initiated.
 
 # 7. Compatibility and migration summary

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted and implemented (issue #731, EPIC I / #664). Extends FR-4's
+Accepted and implemented (, /). Extends FR-4's
 "each backend is an architecture decision, not an import line" rather
 than superseding it. It is the ADR `core/internal/backend/doc.go` asked a
 future reviewer for in its "What was genuinely weakened" section.
@@ -15,23 +15,23 @@ FR-4's toll on a new rclone backend is a blank import in
 That toll was designed when a backend meant one thing: somewhere this
 product READS backup artifacts from.
 
-Issue #665 split that in two. A storage destination is now declared by a
+ split that in two. A storage destination is now declared by a
 manifest under `core/internal/backend/bundled/`, and a manifest's
 `rclone_backend` has to be in `backend.SupportedRcloneBackends`, which is
-a deliberately narrower list than `RequiredBackends`. #665 also wrote
+a deliberately narrower list than `RequiredBackends`. also wrote
 down what that arrangement weakens, in so many words: sftp was already
 linked, already registered and already dialed, because a backup SOURCE is
 read over it. So offering SFTP as a DESTINATION costs a JSON file and one
 map entry. No import, no dependency, no binary-size delta to measure,
 because every one of those was already paid for a different reason.
 
-#665 named the gap and left it open, with `SupportedRcloneBackends` at
+ named the gap and left it open, with `SupportedRcloneBackends` at
 `{local, s3}` and one test
 (`TestSupportedRcloneBackendsIsNarrowerThanRequiredBackends`) refusing a
 list that had become equal to `RequiredBackends`, as a proxy for
 "somebody reused the source list instead of writing this one".
 
-Issue #731 is the diff that walks through the gap. It registers sftp as a
+ is the diff that walks through the gap. It registers sftp as a
 destination: `bundled/sftp.json`, `sftp` in `SupportedRcloneBackends`,
 and a third `Role`.
 
@@ -46,7 +46,7 @@ implementation.** Concretely:
    name for name by `TestSupportedRcloneBackendsIsItsOwnReviewedList` in
    `core/internal/transport/rclone`. A fourth entry fails a named test,
    whether or not the backend behind it was already linked. That test
-   replaces #665's equality proxy, which expired the moment a source
+   replaces 's equality proxy, which expired the moment a source
    backend was legitimately promoted and the two lists coincided.
 2. The toll for a destination is NOT a binary-size measurement, because
    for an already-linked backend there is nothing to measure. It is this
@@ -61,7 +61,7 @@ implementation.** Concretely:
 3. Registering a destination does NOT mean the engine can write to it
    yet. `Role` stays closed in Go, and `internal/app`'s `mediumType`
    dispatches on it; a role no `transport.MediumType` answers refuses at
-   the moment a destination is about to be reached. #731 adds
+   the moment a destination is about to be reached. adds
    `RoleRemoteFilesystem` and no dialer, so the layers say so in order:
    `config.expressibleBackendIDs` does not accept `type: sftp` until
    `StorageMedium` grows the fields the manifest requires,
@@ -99,7 +99,7 @@ implementation.** Concretely:
 - Role is a third member of a closed enum, so
   `api/v1/openapi.json`'s `role` enum, both generated bindings and
   `ui/shared`'s `BackendRole` union move with it. That is the
-  compiler-enforced blast radius #665 promised; it is a real cost and it
+  compiler-enforced blast radius promised; it is a real cost and it
   is paid once per role, not once per backend.
 - An `sftp` destination cannot be declared in `config.yaml` or saved
   through the wizard yet, because neither `config.StorageMedium` nor
@@ -108,7 +108,7 @@ implementation.** Concretely:
   dropping a field. Growing those two tables (and a `MediumStore` that
   dials it) is the follow-on work this ADR deliberately does not do,
   because doing it would make the FR-4 question above impossible to
-  review on its own. It is tracked in #235.
+  review on its own. It is tracked in
 - Because of that, the manifest declares `"configurable": false`, which
   is served on `/api/v1/backends` and rendered as a disabled row. A
   registered backend a surface offers and no layer can save is a dead
@@ -120,16 +120,16 @@ implementation.** Concretely:
 - The `host` pattern and the `path` / `known_hosts` kinds are therefore
   unreachable in this build, and they are left as they are rather than
   refined against a dialer that does not exist. Both carry a
-  `TODO(#235)` where they are pinned (`core/internal/backend/
+  `TODO` where they are pinned (`core/internal/backend/
   sftp_test.go`): a host rule belongs next to the code that resolves
   one, and whether a directory on a far host is the same KIND as a file
-  on this one is a question #235 answers with a dialer in hand.
+  on this one is a question answers with a dialer in hand.
 
 ## Alternatives considered
 
 ### Leave `SupportedRcloneBackends` at `{local, s3}`
 
-The status quo #665 chose. It keeps the decision unmade, which is
+The status quo chose. It keeps the decision unmade, which is
 defensible exactly once: the second time somebody asks for SFTP as a
 destination, "we already ship the code, we have not decided to let you
 use it" is not an answer, it is a deferral wearing one.
