@@ -101,6 +101,23 @@
   a diagnosis. Set `BACKUPD_DEBUG` on new deployments; `RM_DEBUG` will be
   removed a release after this one.
 
+- **The session and CSRF cookies are named `backupd_session` and
+  `backupd_csrf`** (#794). They were `bm_session` and `bm_csrf`, named for
+  a brand two renames ago. Both new names are the only ones the runtime
+  WRITES; both old names are still READ for one release, so upgrading in
+  place does not sign every open console out and does not break a client
+  mid-session — a rename is not a reason to invalidate a credential. The
+  CSRF cookie needed more than a fallback: its client half is page
+  JavaScript that reads the cookie by name, so an upgrade is guaranteed to
+  have already-cached bundles in the field echoing whatever they found
+  under the old name. A request carrying only the old name therefore has
+  that exact token re-issued under the new one rather than being handed a
+  second, different token — two names holding two values would mean
+  whichever one the double-submit check preferred would refuse the other
+  with 403 `CSRF_TOKEN_MISMATCH`. Nothing an operator configures changes,
+  and the old names disappear from the wire on their own as each client is
+  issued the current one.
+
 ### Fixed
 
 - **`scripts/api/check-client-paths.sh` runs again** (#730). The diagnostics
