@@ -5524,12 +5524,16 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
     substitutes, and compared line for line.
 
     The enrolment line is a different surface and gets a different
-    source. The installer never prints it - the engine mints the token
-    during startup and writes the notice to its own log, which is why the
-    epilog prints the command that greps it back out - so the sentence is
-    held to the Fprintf format in apps/common/auth/local/service.go, with
-    the name it opens with read out of core/cliecho, where WebBinary is
-    derived from Binary precisely so the two cannot drift.
+    source. The installer does not mint it - the engine mints the token
+    during startup and writes the notice to its own log, which the
+    install reads back and prints as its last line (#803) - so the
+    sentence is held to the Fprintf format in
+    apps/common/auth/local/service.go, with the name it opens with read
+    out of core/cliecho, where WebBinary is derived from Binary
+    precisely so the two cannot drift. Both blocks on the page that show
+    it are rendered from that format against the token the page shows,
+    so the install block and the fallback's own output cannot disagree
+    about the sentence either.
 
     That last pin is #688 as a test. The installer used to print
     `http://localhost:8080/enroll?token=...`, which on a laptop reading it
@@ -5544,6 +5548,11 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
     # printed verbatim, which is what makes comparing them worth doing.
     SAMPLE_PREFIX = "/home/you/backupd"
     SAMPLE_BASE_URL = "http://10.0.0.10:8080"
+    # The token index.html shows in the link the install prints. Fixed
+    # here as well as on the page because the install block is compared
+    # line for line: the notice rendered for it has to carry the token
+    # the page carries, or the comparison is of two different links.
+    SAMPLE_TOKEN = "4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6"
 
     ENROL_SECTION = "first-run.html#enrol"
 
@@ -5596,7 +5605,7 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
         """
         return " ".join(html.unescape(re.sub(r"<[^>]+>", "", region_text)).split())
 
-    def epilog(self, render):
+    def epilog(self, render, *rest):
         """One of the installer's epilogs, rendered against the page's
         sample values.
 
@@ -5605,13 +5614,30 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
         every block names it. The configuration directory is a path that
         does not exist, because both install blocks are a FIRST install
         and a real directory is what first_run_epilog asks about.
+
+        Anything after the renderer is passed on to it, which is how the
+        install epilog is rendered both ways: with the notice the
+        install now hands over, and without one, which is the fallback
+        that prints the command instead.
         """
         fx = Fixture(self)
         args = fx.args(command="install")
         args.prefix = Path(self.SAMPLE_PREFIX)
         args.config_dir = Path(fx.tmp.name) / "never-configured"
         args.public_base_url = self.SAMPLE_BASE_URL
-        return render(args)
+        return render(args, *rest)
+
+    def sample_notice(self):
+        """The notice the install block shows, as the engine writes it.
+
+        Rendered rather than quoted, for the reason every other line in
+        that block is rendered: the sentence belongs to
+        apps/common/auth/local/service.go, and a copy of it typed into
+        this file would let the page and the engine drift together while
+        this test stayed green. Stripped because the installer prints
+        the log line it read, and reading it strips it.
+        """
+        return enrolment_notice(self.SAMPLE_BASE_URL, self.SAMPLE_TOKEN).strip()
 
     def notice_and_token(self, name):
         shown = self.sentence(self.region(name, "ENROL-LOG-LINE"))
@@ -5622,13 +5648,30 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
         return shown, found.group(1)
 
     def test_the_install_output_block_is_the_epilog_this_installer_prints(self):
-        printed = self.epilog(installer.installed_epilog)
+        """Rendered WITH a notice, because that is what a fresh install
+        prints now (#803): the link is the last thing on the screen, and
+        the page showing the fallback instead would send every reader to
+        a shell for something they were already handed."""
+        printed = self.epilog(installer.installed_epilog, self.sample_notice())
         shown = self.block_lines(self.region("index.html", "INSTALL-OUTPUT"))
         self.assertEqual(shown, self.block_lines("\n".join(printed)),
                          "docs/site/index.html shows an install epilog this installer does not "
                          "print. The page is what is wrong here: it exists to tell a reader which "
                          "part of their screen matters, and it cannot do that with output that is "
                          "only nearly right.")
+
+    def test_the_install_block_shows_the_link_rather_than_a_command_to_fetch_it(self):
+        """The point of #803, as the page's own claim. A block ending in
+        a `docker compose ... logs` invocation is the old install, and a
+        reader comparing it against their screen would go looking for a
+        command that is no longer printed."""
+        shown = self.block_lines(self.region("index.html", "INSTALL-OUTPUT"))
+        self.assertTrue(any(installer.ENROLL_NOTICE_MARKER in line for line in shown),
+                        "the install block on docs/site/index.html carries no enrolment notice, so "
+                        "it is not showing the link the install now hands over")
+        self.assertNotIn("grep enroll", "\n".join(shown),
+                         "the install block ends by telling the reader to grep the engine's log; "
+                         "that is the fallback, and the page shows it separately as one")
 
     def test_the_cli_only_output_block_is_the_epilog_a_fresh_cli_only_install_prints(self):
         printed = self.epilog(installer.cli_only_staged_epilog)
@@ -5661,17 +5704,24 @@ class TestTheSiteShowsTheOutputThisInstallerPrints(unittest.TestCase):
                          enrolment_notice(self.SAMPLE_BASE_URL, found.group(1)).strip(),
                          "the notice enroll-link is shown printing is not the one the engine emits")
 
-    def test_the_command_the_epilog_prints_is_the_command_the_page_then_runs(self):
-        """The block shows the grep command's result, so the prompt line
-        above that result has to be the command the epilog just told the
-        reader to run. Two hand-typed copies of one long invocation is
-        exactly where an elision gets introduced."""
-        epilog = self.epilog(installer.installed_epilog)
-        instruction = epilog[-1].strip()
+    def test_the_fallback_command_the_page_shows_is_the_one_the_epilog_falls_back_to(self):
+        """The page shows this command as what an install prints when the
+        notice never arrived, so it has to be the line that install
+        really prints: the last line of the epilog rendered with no
+        notice. Two hand-typed copies of one long invocation is exactly
+        where an elision gets introduced, and a fallback nobody reaches
+        on a healthy host is where a wrong one would survive longest.
+        """
+        fallback = self.epilog(installer.installed_epilog, "")
+        instruction = fallback[-1].strip()
+        self.assertIn("grep enroll", instruction,
+                       "the epilog rendered without a notice no longer ends in the command that "
+                       "reads the link out of the log; docs/site/index.html shows that command as "
+                       "the fallback, so this test is reading the wrong line or the fallback moved")
         echoed = self.sentence(self.region("index.html", "ENROL-COMMAND"))
         self.assertEqual(echoed, instruction,
-                         "the command echoed above the enrolment line is not the one the install "
-                         "epilog prints")
+                         "the fallback command shown above the enrolment line is not the one the "
+                         "install epilog prints when it has no link to hand over")
 
     def test_the_cli_only_output_block_carries_no_enrolment_link(self):
         """The absence is the point of the block, not an oversight in it.

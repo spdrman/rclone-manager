@@ -128,7 +128,7 @@
     <h2 id="contents">The screens</h2>
     <div class="toc">
       <ol>
-        <li><a href="#log">The enrolment link in the log</a></li>
+        <li><a href="#log">The enrolment link the install prints</a></li>
         <li><a href="#enrol">Create the administrator</a></li>
         <li><a href="#unconfigured">The application with nothing in it</a></li>
         <li><a href="#step1">Step 1: Source</a></li>
@@ -147,10 +147,11 @@
 
   <section>
     <span class="step-eyebrow">Screen 0</span>
-    <h2 id="log">The enrolment link in the log</h2>
-    <p>There is no screen for this one. On first start, before any browser is involved, the engine prints a one-time enrolment secret to its own stdout. Read it from the engine container, not the web one:</p>
+    <h2 id="log">The enrolment link the install prints</h2>
+    <p>There is no screen for this one. On first start, before any browser is involved, the engine prints a one-time enrolment secret to its own stdout. If you installed with <code>install_docker_host.py</code>, you already have it: the installer waits for that line and prints it as the last thing a fresh install says, so scroll up in the install output rather than going looking for it.</p>
+    <p>If it is not there &mdash; the notice landed after the installer stopped waiting, or you stood the stack up by hand &mdash; read it from the engine container, not the web one:</p>
     <pre><code>docker compose logs backupd | grep enroll</code></pre>
-    <p>What comes back looks like this:</p>
+    <p>Either way, the line looks like this:</p>
     <pre><code><!-- BEGIN ENROL-LOG-LINE --><span class="cm">backupd-web: no administrator account exists yet. Open</span>
 <span class="cm">http://10.0.0.10:8080/enroll?token=</span>&lt;a long random string&gt;<span class="cm"> to create one</span>
 <span class="cm">(valid 30 minutes, single use).</span><!-- END ENROL-LOG-LINE --></code></pre>

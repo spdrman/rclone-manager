@@ -121,11 +121,16 @@
 
     No config.yaml was written, on purpose. Issue #176 shipped a first-run setup flow
     precisely so that a fresh install does not need one hand-written before it starts.
-    Open the Web UI and follow it. The enrollment link is in the engine's log:
-      docker compose -p backupd --env-file /home/you/backupd/.env -f /home/you/backupd/compose.yaml -f /home/you/backupd/compose.image.yaml logs backupd | grep enroll<!-- END INSTALL-OUTPUT --></code></pre>
+    Open this link and follow it:
+
+    backupd-web: no administrator account exists yet. Open http://10.0.0.10:8080/enroll?token=4zj7VCpcYLIeVNN1oZJZPaCErYXOc6s6 to create one (valid 30 minutes, single use).
+
+    If it lapses before you get to it, `enroll-link` issues another.<!-- END INSTALL-OUTPUT --></code></pre>
 
     <p>That is the whole of it. The installer picks every path for you (<code>~/backupd</code>, with <code>backups</code>, <code>state</code>, <code>config</code> and <code>secrets</code> under it), generates the SSH key the engine will use, pins the exact image it was built against, and refuses before it changes anything if the machine cannot run it. Nothing needs deciding up front, and everything it chose can be changed afterwards.</p>
-    <p>That last line is a command rather than a result, and it is the one that matters. The installer does not print the enrolment link itself: the engine mints the token during startup and writes the notice to its own log, so the epilog prints the line that fetches it back out. Run it &mdash; every path in it is the one the install just chose:</p>
+    <p>The last lines are the ones that matter, and they are output rather than something to run. The engine mints the enrolment token during startup and writes the notice to its own log, so the installer waits for that line and hands it over itself (<a href="https://github.com/backupdproject/backupd/issues/803">#803</a>): a fresh install ends with the link, and opening it is the next step. Nothing has to be fetched by hand.</p>
+
+    <p>If no link appeared there &mdash; the notice had not been written by the time the installer stopped waiting, on a deployment already behaving oddly &mdash; the install prints this instead, and it reads the same line back out of the engine's log. Every path in it is the one the install just chose:</p>
     <pre><code><!-- BEGIN ENROL-COMMAND -->docker compose -p backupd --env-file /home/you/backupd/.env -f /home/you/backupd/compose.yaml -f /home/you/backupd/compose.image.yaml logs backupd | grep enroll<!-- END ENROL-COMMAND --></code></pre>
 
     <p class="io-label">Output</p>
@@ -197,7 +202,7 @@ backupd-web: no administrator account exists yet. Open http://10.0.0.10:8080/enr
 
   <a href="first-run.html" class="clipping">
     <span class="clipping-tag">Tutorial</span>
-    <p>Setting one up for the first time means an enrolment link printed to a container log, an administrator account that is not your NAS login, and a six-step wizard whose answers become a <code>config.yaml</code> you will live with. The first-run walkthrough shows every screen, with an example for every field and a sentence on what that entry actually causes the product to do.</p>
+    <p>Setting one up for the first time means a one-time enrolment link the install hands you, an administrator account that is not your NAS login, and a six-step wizard whose answers become a <code>config.yaml</code> you will live with. The first-run walkthrough shows every screen, with an example for every field and a sentence on what that entry actually causes the product to do.</p>
     <span class="clipping-read">Walk the first run &rarr;</span>
   </a>
 
