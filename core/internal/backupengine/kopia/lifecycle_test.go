@@ -368,7 +368,7 @@ func TestNoSubprocess(t *testing.T) {
 
 		checked++
 
-		for _, forbidden := range []string{`"os/exec"`, "exec.Command", "exec.CommandContext", "syscall.Exec"} {
+		for _, forbidden := range subprocessNeedles() {
 			if bytes.Contains(src, []byte(forbidden)) {
 				t.Errorf("%s references %s; the adapter must drive the engine in process, not as a subprocess",
 					e.Name(), forbidden)
@@ -378,6 +378,28 @@ func TestNoSubprocess(t *testing.T) {
 
 	if checked == 0 {
 		t.Fatal("found no .go files to check; this guard is looking in the wrong place")
+	}
+}
+
+// subprocessNeedles assembles what TestNoSubprocess searches for.
+//
+// The fragments are concatenated at run time so this file scans itself
+// without matching itself. The alternative, exempting *_test.go from the
+// scan, would leave the obvious cheat available: a test helper that shells
+// out to a CLI and feeds its output to the adapter.
+func subprocessNeedles() []string {
+	const (
+		ex   = "ex"
+		ec   = "ec"
+		call = "Command"
+	)
+
+	return []string{
+		`"os/` + ex + ec + `"`,
+		ex + ec + "." + call,
+		ex + ec + "." + call + "Context",
+		"syscall." + ex + ec,
+		"Start" + "Process",
 	}
 }
 
