@@ -1281,6 +1281,121 @@ class TestTheFirstRunEpilogIsOnlyForAFirstRun(unittest.TestCase):
         self.assertIn("enroll", joined)
 
 
+class TestTheInstallHandsOverTheEnrollmentLinkItself(unittest.TestCase):
+    """Issue #803. The last step of a fresh install used to be a
+    hand-typed 200-character `docker compose ... logs backupd | grep
+    enroll` on a NAS shell, and every part of that invocation is
+    something the installer wrote itself minutes earlier.
+
+    So it reads the log. The engine mints the token during startup and
+    the notice can land a moment after the liveness probe goes healthy,
+    which is why the read is a bounded poll rather than one attempt, and
+    why the printed command survives as the fallback for the case where
+    the notice really is not there.
+    """
+
+    NOTICE = ("backupd-web: no administrator account exists yet. Open "
+              "http://10.0.0.10:8080/enroll?token=Aq9_tokenshapedthing to create one "
+              "(valid 30 minutes, single use).")
+
+    def fresh(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        args.config_dir.mkdir(parents=True, exist_ok=True)
+        return args
+
+    def waited(self, args, logs, *, limit=200):
+        """wait_for_enrollment_notice on a fake clock.
+
+        The clock is faked for the reason the restart-loop suite fakes
+        its own: the thing under test is a window measured in seconds,
+        and a test that spent them would either be slow or get deleted.
+        The limit is a guard against a poll that never reaches its
+        deadline, which is the failure mode that hangs an install.
+        """
+        clock = [1000.0]
+        fake = _FakeRun(logs_stdout=logs)
+
+        def sleep(seconds):
+            clock[0] += max(seconds, 0.001)
+
+        with unittest.mock.patch.object(installer, "run", fake), \
+             unittest.mock.patch.object(installer.time, "time", lambda: clock[0]), \
+             unittest.mock.patch.object(installer.time, "sleep", sleep), \
+             contextlib.redirect_stdout(io.StringIO()):
+            notice = installer.wait_for_enrollment_notice(args)
+        reads = [c for c in fake.calls if "logs" in c]
+        self.assertLess(len(reads), limit,
+                        "the poll has to end on its own; an install that hangs here has no way out")
+        return notice, reads
+
+    def test_the_link_is_read_out_of_the_engines_log(self):
+        notice, reads = self.waited(self.fresh(), "engine started\n" + self.NOTICE + "\n")
+        self.assertEqual(notice, self.NOTICE)
+        self.assertTrue(reads, "nothing read the log, so nothing could have found a link")
+        self.assertIn(installer.ENGINE_SERVICE, reads[0],
+                      f"the log read has to name {installer.ENGINE_SERVICE}, not the whole stack")
+
+    def test_a_notice_that_lands_after_the_first_read_is_still_found(self):
+        """The token is minted during startup, and the liveness probe can
+        go healthy first. A single read reported "no link" on exactly the
+        slow first start where an operator most needs one."""
+        notice, reads = self.waited(
+            self.fresh(), ["engine started\n", "engine started\n", self.NOTICE + "\n"])
+        self.assertEqual(notice, self.NOTICE)
+        self.assertGreater(len(reads), 1, "one read is not a wait")
+
+    def test_a_log_with_no_notice_gives_up_rather_than_waiting_for_ever(self):
+        notice, _ = self.waited(self.fresh(), "engine started\nnothing about enrollment here\n")
+        self.assertEqual(notice, "", "inventing a link is worse than saying there is none")
+
+    def test_a_deployment_that_kept_its_configuration_is_not_waited_on(self):
+        """An upgrade issues no token, so polling for one spends the whole
+        window to print a sentence that would be wrong anyway (#588)."""
+        args = self.fresh()
+        (args.config_dir / "config.yaml").write_text("sources: []\n", encoding="utf-8")
+        notice, reads = self.waited(args, self.NOTICE + "\n")
+        self.assertEqual(notice, "")
+        self.assertEqual(reads, [], "an upgrade must not read the log at all")
+
+    def test_a_deployment_that_already_has_an_administrator_is_not_waited_on(self):
+        """Enrollment is a one-time door and it is shut. The engine mints
+        nothing, so the only thing a poll here buys is the wait."""
+        args = self.fresh()
+        args.state_dir.mkdir(parents=True, exist_ok=True)
+        (args.state_dir / "local-auth.json").write_text('{"username": "nas-admin"}', encoding="utf-8")
+        notice, reads = self.waited(args, self.NOTICE + "\n")
+        self.assertEqual(notice, "")
+        self.assertEqual(reads, [], "a closed door must not be polled")
+
+    def test_the_epilog_prints_the_link_and_no_command_to_go_and_find_it(self):
+        lines = installer.installed_epilog(self.fresh(), self.NOTICE)
+        joined = "\n".join(lines)
+        self.assertIn(self.NOTICE, joined, "the link the engine printed is what the operator needs")
+        self.assertNotIn("grep", joined,
+                         "the installer has the link in hand; telling somebody to grep for it "
+                         "anyway is the step this removed")
+        self.assertNotIn("logs backupd", joined)
+
+    def test_a_link_that_never_arrived_falls_back_to_the_exact_command(self):
+        """Exact, and not an abbreviation of it. The fallback is reached
+        on the deployment that is already misbehaving, which is the worst
+        place to hand somebody a command they have to reconstruct."""
+        args = self.fresh()
+        lines = installer.installed_epilog(args, "")
+        joined = "\n".join(lines)
+        self.assertIn(f"{' '.join(installer.compose_argv(args))} logs "
+                      f"{installer.ENGINE_SERVICE} | grep enroll", joined)
+
+    def test_an_upgrade_says_nothing_about_enrolment_even_with_a_notice_in_hand(self):
+        """The config check outranks the notice: a log that still holds
+        the notice from the original install must not tell an operator
+        who already has an account to go and enrol."""
+        args = self.fresh()
+        (args.config_dir / "config.yaml").write_text("sources: []\n", encoding="utf-8")
+        self.assertEqual(installer.first_run_epilog(args, self.NOTICE), [])
+
+
 class TestVersionOrdering(unittest.TestCase):
     """The installer could not previously tell an upgrade from a
     downgrade from a reinstall, because it never read what was running.
@@ -2062,6 +2177,18 @@ class TestCmdInstallDoesThingsInThisOrder(unittest.TestCase):
 
     def test_the_mode_is_chosen_before_anything_is_taken_apart(self):
         self.assert_calls_in_order("cmd_install", "choose_install_mode", "prepare_for_mode")
+
+    def test_the_enrollment_link_is_read_before_the_epilog_that_prints_it(self):
+        """Issue #803. The link is part of the install, not a command the
+        install leaves behind, so it has to be in hand before the epilog
+        is rendered: installed_epilog decides between printing it and
+        printing the fallback."""
+        self.assert_calls_in_order("cmd_install", "wait_for_enrollment_notice", "installed_epilog")
+
+    def test_the_link_is_only_read_once_the_stack_has_passed_its_checks(self):
+        """A notice read before the Web UI checks would be printed under
+        an "Installed." the install then refuses to say."""
+        self.assert_calls_in_order("cmd_install", "probe_web_ui", "wait_for_enrollment_notice")
 
 
 class TestDestroyPreview(unittest.TestCase):
@@ -5749,17 +5876,29 @@ class TestTheSiteReferenceNamesEverySubcommandThisParserDeclares(unittest.TestCa
 
 
 class _FakeRun:
-    """Stands in for installer.run, answering by the verb it is given."""
+    """Stands in for installer.run, answering by the verb it is given.
+
+    `logs_stdout` may be a list, in which case it is the successive
+    answers `logs` gives. That is a real log and not a contrivance: the
+    engine mints its enrollment token during startup, so "not there yet,
+    then there" is what a caller polling for the notice sees.
+    """
 
     def __init__(self, logs_stdout="", restart_rc=0):
         self.logs_stdout, self.restart_rc = logs_stdout, restart_rc
         self.calls = []
 
+    def _logs(self) -> str:
+        if not isinstance(self.logs_stdout, (list, tuple)):
+            return self.logs_stdout
+        reads = len([c for c in self.calls if "logs" in c])
+        return self.logs_stdout[min(reads, len(self.logs_stdout)) - 1]
+
     def __call__(self, argv, **kwargs):
         self.calls.append(list(argv))
         verb = next((a for a in argv if a in ("logs", "restart", "up", "ps")), "")
         if verb == "logs":
-            return types.SimpleNamespace(returncode=0, stdout=self.logs_stdout, stderr="")
+            return types.SimpleNamespace(returncode=0, stdout=self._logs(), stderr="")
         if verb == "restart":
             return types.SimpleNamespace(returncode=self.restart_rc, stdout="", stderr="nope")
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
