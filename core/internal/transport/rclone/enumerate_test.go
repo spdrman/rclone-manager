@@ -308,9 +308,9 @@ func TestStreamingCostsFarLessThanListAtScale(t *testing.T) {
 
 	src := transport.Source{Type: "local", Root: root}
 
-	streamed, streamPeak, streamFirst := 0, uint64(0), time.Duration(0)
+	streamed, streamFirst := 0, time.Duration(0)
 	streamStart := time.Now()
-	streamPeak = peakHeapDuring(t, func() {
+	streamPeak, streamGoroutines := peakDuring(t, func() {
 		if err := New().Enumerate(context.Background(), src,
 			transport.EnumerateOptions{ChunkEntries: 4096},
 			func(transport.RemoteArtifact) error {
@@ -330,7 +330,7 @@ func TestStreamingCostsFarLessThanListAtScale(t *testing.T) {
 
 	listStart := time.Now()
 	var listed int
-	listPeak := peakHeapDuring(t, func() {
+	listPeak, listGoroutines := peakDuring(t, func() {
 		out, err := New().List(context.Background(), src)
 		if err != nil {
 			t.Fatalf("List: %v", err)
@@ -348,10 +348,10 @@ func TestStreamingCostsFarLessThanListAtScale(t *testing.T) {
 		t.Fatalf("List returned %d entries, want %d", listed, entries)
 	}
 
-	t.Logf("stream: peak_heap=%.1fMiB total=%s first_entry=%s",
-		float64(streamPeak)/(1<<20), streamTotal.Round(time.Millisecond), streamFirst.Round(time.Microsecond))
-	t.Logf("List:   peak_heap=%.1fMiB total=%s first_entry=%s (nothing is delivered until the walk finishes)",
-		float64(listPeak)/(1<<20), listTotal.Round(time.Millisecond), listTotal.Round(time.Millisecond))
+	t.Logf("stream: peak_heap=%.1fMiB peak_goroutines=%d total=%s first_entry=%s",
+		float64(streamPeak)/(1<<20), streamGoroutines, streamTotal.Round(time.Millisecond), streamFirst.Round(time.Microsecond))
+	t.Logf("List:   peak_heap=%.1fMiB peak_goroutines=%d total=%s first_entry=%s (nothing is delivered until the walk finishes)",
+		float64(listPeak)/(1<<20), listGoroutines, listTotal.Round(time.Millisecond), listTotal.Round(time.Millisecond))
 
 	if streamPeak >= listPeak {
 		t.Errorf("streaming peak heap %.1fMiB is not below List's %.1fMiB; the streaming path is not buying anything",
@@ -363,15 +363,22 @@ func TestStreamingCostsFarLessThanListAtScale(t *testing.T) {
 	}
 }
 
-// peakHeapDuring samples HeapAlloc while f runs and returns the highest
-// reading above the baseline.
-func peakHeapDuring(t *testing.T, f func()) uint64 {
+// peakDuring samples HeapAlloc and the goroutine count while f runs, and
+// returns the highest heap reading above the baseline together with the
+// highest goroutine count seen.
+//
+// The goroutine number is half of #792's question about fan-out: rclone's
+// walk runs one goroutine per --checkers over a backend with no native
+// recursive listing (oneConnectionAtATime pins that at 1 for connection
+// reasons, see adapter.go), and the chunked enumerator runs none of its
+// own. The sampler itself is one goroutine and is counted in both
+// figures, so they are comparable to each other rather than absolute.
+func peakDuring(t *testing.T, f func()) (peakHeap uint64, peakGoroutines int) {
 	t.Helper()
 	runtime.GC()
 	var base runtime.MemStats
 	runtime.ReadMemStats(&base)
 
-	var peak uint64
 	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
@@ -382,8 +389,11 @@ func peakHeapDuring(t *testing.T, f func()) uint64 {
 				return
 			case <-time.After(2 * time.Millisecond):
 				runtime.ReadMemStats(&ms)
-				if ms.HeapAlloc > peak {
-					peak = ms.HeapAlloc
+				if ms.HeapAlloc > peakHeap {
+					peakHeap = ms.HeapAlloc
+				}
+				if n := runtime.NumGoroutine(); n > peakGoroutines {
+					peakGoroutines = n
 				}
 			}
 		}
@@ -391,15 +401,15 @@ func peakHeapDuring(t *testing.T, f func()) uint64 {
 	f()
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
-	if after.HeapAlloc > peak {
-		peak = after.HeapAlloc
+	if after.HeapAlloc > peakHeap {
+		peakHeap = after.HeapAlloc
 	}
 	close(stop)
 	<-done
-	if peak < base.HeapAlloc {
-		return 0
+	if peakHeap < base.HeapAlloc {
+		return 0, peakGoroutines
 	}
-	return peak - base.HeapAlloc
+	return peakHeap - base.HeapAlloc, peakGoroutines
 }
 
 // hashByName resolves an rclone hash type by its own name, so this file

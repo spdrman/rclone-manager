@@ -92,10 +92,10 @@ func TestEveryBundledManifestDeclaresTheWholeCapabilityMatrix(t *testing.T) {
 //     PlanEnumeration).
 //   - local_volume's case_sensitivity is "unknown", not "sensitive". A
 //     local volume on this product's target hardware is whatever
-//     filesystem an operator plugged in - APFS, exFAT on a USB disk, ext4
-//     - and the process cannot know which without probing the specific
-//     path. A matrix that guessed "sensitive" here would be wrong on the
-//     first Mac and on every FAT-formatted stick.
+//     filesystem an operator plugged in (APFS, exFAT on a USB disk,
+//     ext4), and the process cannot know which without probing the
+//     specific path. A matrix that guessed "sensitive" here would be
+//     wrong on the first Mac and on every FAT-formatted stick.
 func TestTheBundledCapabilityValuesAreHonest(t *testing.T) {
 	reg, err := Bundled()
 	if err != nil {

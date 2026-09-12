@@ -120,6 +120,42 @@
 //     core/internal/retention never imports this package and never
 //     will.
 //
+// # A third kind of statement: the capability matrix (issue #792)
+//
+// A manifest says three separate things about a backend and they are not
+// interchangeable. Fields are what a PERSON types. Probe is what a
+// connection test proves about ONE configured instance. Capabilities,
+// added by #792 and owned by capability.go, are what the BACKEND is:
+// facts about the protocol and the code that speaks it, identical for
+// every instance, and not discoverable from any configuration an
+// operator could supply. Ten keys, closed in Go (CapabilityKeys),
+// consumed inside EPIC #779 by the bounded enumerator
+// (core/internal/transport.LocalEnumerator) and by #793's
+// metadata-trust classification.
+//
+// It breaks this format's own default-shaped habit on purpose, and that
+// is the thing to read before changing it. Configurable defaults to TRUE
+// because the ordinary manifest is one somebody is shipping. Capabilities
+// have no ordinary answer - "can a directory here be listed without
+// holding all of it" is true of an object store, false of sftp, and true
+// of a local disk only because this process reads one in chunks - so a
+// default would be a guess, and the optimistic guess is an out-of-memory
+// kill that only ever arrives in production, on the first directory that
+// got big. Hence: a manifest that declares no capabilities is
+// UNQUALIFIED, Manifest.PlanEnumeration refuses it by name, and the zero
+// Capabilities value is the least capable backend the type can describe
+// rather than a blank one. A declared block must answer the whole
+// vocabulary (validateManifestCapabilities), because a missing key and a
+// declared false are different statements and a consumer cannot tell
+// them apart afterwards.
+//
+// The matrix is NOT served on /api/v1/backends. core/service's
+// projectManifest is a longhand copy and simply does not carry it, which
+// is what keeps an internal engineering fact out of a published
+// contract until something on a surface actually needs it.
+// docs/adr/0008-bounded-source-enumeration-and-capability-matrix.md is
+// the decision, the per-backend values and the measurements behind them.
+//
 // # What was genuinely weakened, on the record (issue #665, section 4.2; issue #731)
 //
 // sftp is already in rclone.RequiredBackends, because a backup SOURCE is
