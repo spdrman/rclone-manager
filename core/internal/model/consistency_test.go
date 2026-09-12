@@ -192,8 +192,8 @@ func TestMissingSignalsClassifyUnknownRatherThanWeak(t *testing.T) {
 // evidence the class rests on is not the timestamp.
 func TestStrongEvidenceOutranksPoorMetadata(t *testing.T) {
 	got := ClassifyMetadataTrust(SourceSignals{
-		MTimePrecision:  MTimePrecisionUnknown,
-		MetadataSupport: MetadataNone,
+		MTimePrecision:   MTimePrecisionUnknown,
+		MetadataSupport:  MetadataNone,
 		ObjectGeneration: true,
 	})
 	if got.Class != TrustStrong {

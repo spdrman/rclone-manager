@@ -11,11 +11,22 @@
 package sourceconsistency
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+// sha256Hex is what a capture's digest is expected to be, computed the
+// obvious way so a test asserts against the content rather than against the
+// reader's own arithmetic.
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+
+	return hex.EncodeToString(sum[:])
+}
 
 // hookSource wraps a Source and runs a function at one of the two moments a
 // mutation can be interesting: just after the file is opened (before any
