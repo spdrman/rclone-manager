@@ -291,6 +291,20 @@ make_full_tree() {
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/perf/$perf.sh"
   done
 
+  # The brand-drift guard and its own mutation self-test (#794), stubbed for
+  # the same reason as everything above, and with the same failure mode
+  # without it: both run unconditionally, FAST included, so a gate step
+  # pointed at a path this fixture does not have exits 127 under `set -e`
+  # and every case below it dies for a reason that has nothing to do with
+  # what it measures. The real guard greps every tracked file in a real
+  # repository against an allowlist, and the real self-test builds a dozen
+  # throwaway git repositories; a synthetic tree has neither and no reason
+  # to have either.
+  mkdir -p "$tree/scripts/rename"
+  for rename in check-brand-drift selftest; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/rename/$rename.sh"
+  done
+
   # The /api/v1 contract drift check, the client-path check (#211) and
   # their shared mutation self-test (#166). Same reason again, and the same
   # failure mode if any of them is missing: they run unconditionally, FAST

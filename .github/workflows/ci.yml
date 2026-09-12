@@ -459,6 +459,33 @@ jobs:
       # needing one tool, not this workflow taking on the linting the local
       # gate does.
 
+  brand-drift:
+    name: no new RM_/BM_/bm_/rbm_ identifier (#794)
+    runs-on: ubuntu-latest
+    # Its own job rather than a step inside somebody else's, for the same
+    # reason the gofmt sweep above has one: it is not a module's question.
+    # It reads every tracked file in the repository, source in six
+    # languages plus compose files, workflow files and documentation.
+    #
+    # No toolchain at all: `git grep` and three fixed lists. Two seconds
+    # for the guard and its mutation self-test together, which is why the
+    # self-test runs here too -- a guard whose only evidence is that it
+    # passes on the tree it ships with has proven nothing.
+    #
+    # This project has been renamed twice (rclone-manager -> backup-manager
+    # -> backupd) and both previous names left runtime identifiers behind.
+    # #794 renamed them; this is what stops the third rename from finding
+    # a fresh crop.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: no old-brand identifier outside the allowlist
+        run: bash scripts/rename/check-brand-drift.sh
+
+      - name: the guard can actually fail (mutation self-test)
+        run: bash scripts/rename/selftest.sh
+
   api-contract:
     name: /api/v1 contract drift (#166)
     runs-on: ubuntu-latest
@@ -765,6 +792,7 @@ jobs:
       - frontend
       - provider-conformance
       - gofmt
+      - brand-drift
       - api-contract
       - dependency-rules
       - gate-guards
