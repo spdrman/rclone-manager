@@ -150,6 +150,21 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
     };
   }
 
+  // Issue #795. A refusal with a gateway status and no typed envelope in
+  // it did not come from the service: it came from something answering
+  // ON the service's behalf, which in this product is serve-ui's own
+  // reverse proxy failing to reach the engine (a bodyless 502 from
+  // apps/common/webhost/serve/ui.go's ErrorHandler). Read before the
+  // code switch below, because the code on one of those is `unknown` by
+  // construction and `unknown` falls to the default arm, which shows the
+  // client's own "the backup service returned an unexpected response" —
+  // the one machine in the deployment that had not answered at all.
+  //
+  // Gated on there being no recognised code, so this never speaks over a
+  // service that answered a 503 WITH a reason: its own sentence says
+  // more than anything written here could.
+  if (isGatewayRefusal(api)) return describeGatewayRefusal(api);
+
   const correlationId = api.correlationId;
   switch (api.code) {
     case "RATE_LIMITED":
@@ -176,6 +191,46 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
     default:
       return { message: api.message || fallbackMessage, correlationId };
   }
+}
+
+/**
+ * Issue #795's two halves of one question: is this refusal the service's,
+ * or is it something in front of the service answering because the
+ * service could not be reached.
+ *
+ * The reported deployment is the reason there is a difference worth
+ * drawing. Its web-ui container could not resolve the engine's name
+ * ("dial tcp: lookup rclone-manager: no such host"), so every /api/v1
+ * call was answered 502 by the proxy inside serve-ui with no body on it
+ * at all, and the Activity page told the operator that the backup
+ * service had returned something unexpected. It had returned nothing; it
+ * had never been spoken to. The next step for that fault is in the OTHER
+ * container, and the sentence on screen pointed away from it.
+ */
+function isGatewayRefusal(api: ApiError): boolean {
+  // `unknown` is what toApiErrorCode produces for a body that was not a
+  // typed envelope, which a bodyless 502 always is. A recognised code
+  // means the service itself refused and named the reason, whatever the
+  // status was carried on.
+  if (api.code !== "unknown") return false;
+  return api.status === 502 || api.status === 503 || api.status === 504;
+}
+
+function describeGatewayRefusal(api: ApiError): OperatorFailure {
+  return {
+    message: "Backupd's web interface could not reach the Backupd service.",
+    // Says which half is known to be working, because that is what makes
+    // this actionable: the operator is reading a page, so the web
+    // interface is up, and the thing to go and look at is the service
+    // container behind it.
+    remediation:
+      "The page you are reading was served, so Backupd's web interface is running. It could not reach the service behind it, which is where this answer had to come from. Check that the Backupd service is running and that the web interface can still resolve it, then try again.",
+    // A real id, unlike the no-response case: the web interface answered,
+    // and it wrote this same id into its own log line for the failure
+    // (webhost's proxy_error event).
+    correlationId: api.correlationId,
+    detail: detailOf(api.status === undefined ? undefined : "status " + api.status, buildLine())
+  };
 }
 
 /**

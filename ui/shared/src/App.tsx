@@ -50,12 +50,13 @@ import { CatalogRecoveryPage } from "@shared/pages/CatalogRecoveryPage";
 import { ConfigurationSavedPage } from "@shared/pages/ConfigurationSavedPage";
 import { LoginPage } from "@shared/auth/LoginPage";
 import { EnrollmentPage } from "@shared/auth/EnrollmentPage";
+import { ServiceUnreachablePage } from "@shared/pages/ServiceUnreachablePage";
 
 const THEME_KEY = "backupd.theme";
 
 export function App() {
   const api = useApi();
-  const { auth, authLoading, refreshAuth, bridge } = usePlatform();
+  const { auth, authError, authLoading, refreshAuth, bridge } = usePlatform();
   const navigate = useNavigate();
 
   const [theme, setTheme] = useState<"light" | "dark">(() => {
@@ -153,6 +154,21 @@ export function App() {
   const readOnly = useCausl(readOnlyNode);
 
   if (authLoading) return <Splash />;
+
+  // Issue #795, and it sits ABOVE the sign-in gate because it is the
+  // reason the gate below would otherwise be reached. A browser whose
+  // session check could not be MADE is not a browser that is signed
+  // out, and the deployment this was reported from proved how far apart
+  // those two are: the engine container was unreachable from the web-ui
+  // container, every /api/v1 call was answered 502 by serve-ui's own
+  // proxy, and the operator was shown a sign-in form. Signing in is the
+  // one action that could not possibly have worked, since the form
+  // posts down the same broken hop.
+  //
+  // authError is set only when the check failed for a reason that is
+  // not an answer about the session (PlatformContext.refetchAuth); a
+  // 401 still lands on the login page below, as it must.
+  if (authError) return <ServiceUnreachablePage error={authError} onRetry={refreshAuth} />;
 
   if (!auth?.authenticated) {
     return (

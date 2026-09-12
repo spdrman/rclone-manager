@@ -141,6 +141,54 @@ func TestUI_UnreachableUpstreamIsLogged(t *testing.T) {
 	}
 }
 
+// TestUI_UnreachableUpstreamAnswersWithCorrelationID is issue #795's half
+// of the same failure: not what this process writes down, but what the
+// browser is handed.
+//
+// The reported deployment could not resolve the engine's name from the
+// web-ui container, so every /api/v1 call was answered by the
+// ErrorHandler above rather than by the engine. That answer is a bodyless
+// 502, and the frontend reads it as a refusal nobody typed
+// (ui/shared/src/api/client.ts, which then says the web interface could
+// not reach the service). The ONE thing that makes that banner worth
+// quoting is the correlation id on it, because the proxy_error line the
+// test above pins names the same id.
+//
+// Nothing asserted that before this. The ErrorHandler writes only a
+// status; the header is inherited from webhost.RequestScope, which wraps
+// the whole UI handler and sets it on the ResponseWriter before the proxy
+// ever runs. That is a load-bearing ordering and nothing here would have
+// noticed it being rearranged.
+func TestUI_UnreachableUpstreamAnswersWithCorrelationID(t *testing.T) {
+	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
+		Upstream: deadUpstream(t),
+		StaticFS: uiShell(),
+		Logger:   &recordingLogger{},
+	}))
+	t.Cleanup(ui.Close)
+
+	res, err := http.Get(ui.URL + "/api/v1/activity")
+	if err != nil {
+		t.Fatalf("GET through the proxy: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusBadGateway)
+	}
+	id := res.Header.Get(webhost.CorrelationHeader)
+	if id == "" {
+		t.Fatalf("the 502 carried no %s, so the operator reading the browser's banner has nothing to grep the service log for", webhost.CorrelationHeader)
+	}
+	// Exactly one. ReverseProxy ADDS an upstream's headers to the ones
+	// already set here, and ModifyResponse deletes the upstream's copy
+	// for that reason; a failure that never reached an upstream must not
+	// grow a second copy some other way.
+	if got := res.Header.Values(webhost.CorrelationHeader); len(got) != 1 {
+		t.Errorf("%s appeared %d times (%v), want exactly 1", webhost.CorrelationHeader, len(got), got)
+	}
+}
+
 // TestUI_UpstreamTraceIsSilentByDefault is the opt-in half. A deployment
 // that set nothing must produce byte-identical output to the one before
 // this instrumentation existed, on the path that actually works.

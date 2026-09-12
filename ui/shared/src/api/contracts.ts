@@ -100,6 +100,15 @@ export interface ApiError {
    *  so a literal one buys an operator a panel to open with a string in it
    *  that appears in no log anywhere. Optional so "no id" is expressible. */
   correlationId?: string;
+  /** The HTTP status the refusal arrived with, and ABSENT when no
+   *  response arrived at all. Carried because a gateway status is the one
+   *  fact that separates "the service refused" from "something in front
+   *  of the service answered for it": a bodyless 502 means serve-ui's
+   *  reverse proxy could not reach the engine (#795), and without the
+   *  status that is indistinguishable here from a service that answered
+   *  something unreadable. Never rendered on its own — api/failure.ts is
+   *  the only reader. */
+  status?: number;
   /** The technical facts behind this failure, for the Advanced details
    *  panel and the copy button beside it: an exception's own name and
    *  message, the request path, the response status and content type where

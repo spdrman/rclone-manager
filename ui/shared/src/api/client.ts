@@ -341,6 +341,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // this file picking one shape and getting the other's errors back
     // as silently-undefined fields.
     let api: ApiError;
+    // Issue #795. The status travels with every refusal from here on.
+    // It is the only fact that separates a service that refused from
+    // something in FRONT of the service answering on its behalf: when
+    // serve-ui's reverse proxy cannot reach the engine it writes a
+    // bodyless 502 (apps/common/webhost/serve/ui.go's ErrorHandler),
+    // which lands in the catch below and used to arrive on screen as
+    // "the backup service returned an unexpected response" — naming the
+    // one machine that had not answered at all, with no next step under
+    // it. api/failure.ts reads this and says which hop failed.
     try {
       const body = (await res.json()) as Record<string, unknown>;
       const headerCorrelationId = res.headers.get("x-correlation-id") ?? undefined;
@@ -350,20 +359,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         api = {
           code: toApiErrorCode(err.code),
           message: err.message as string,
-          correlationId: headerCorrelationId
+          correlationId: headerCorrelationId,
+          status: res.status
         };
       } else {
         api = {
           code: toApiErrorCode(body.code),
           message: body.message as string,
-          correlationId: (body.correlationId as string) ?? headerCorrelationId
+          correlationId: (body.correlationId as string) ?? headerCorrelationId,
+          status: res.status
         };
       }
     } catch {
       api = {
         code: "unknown",
         message: "The backup service returned an unexpected response.",
-        correlationId: res.headers.get("x-correlation-id") ?? undefined
+        correlationId: res.headers.get("x-correlation-id") ?? undefined,
+        status: res.status
       };
     }
     // #730: the correlation id is the one string that joins this refusal

@@ -1,4 +1,5 @@
 import type { AuthContext, PlatformBridge } from "@shared/types/platform";
+import type { ApiError } from "@shared/api/contracts";
 import { describeCapabilities } from "@shared/platform/capabilities";
 import type { CapabilityCopy } from "@shared/platform/capabilities";
 import { graph, registerInput } from "./graph";
@@ -21,6 +22,19 @@ export const bridgeNode = registerInput<PlatformBridge | null>("platform.bridge"
 
 /** The signed-in identity, or null before the first auth check resolves. */
 export const authNode = registerInput<AuthContext | null>("platform.auth", null);
+
+/**
+ * Why the last auth check failed, when it failed for a reason that is
+ * NOT an answer about this browser's session (#795).
+ *
+ * Null on every ordinary path, including a signed-out browser: the
+ * service answering 401 is an answer, and `authNode` already carries it.
+ * This holds the other case — the check could not be made at all,
+ * because the service did not answer or because serve-ui's proxy could
+ * not reach it — which used to be committed as "not signed in" and put
+ * a sign-in form in front of an operator whose session was fine.
+ */
+export const authErrorNode = registerInput<ApiError | null>("platform.authError", null);
 
 /** True until the first getAuthContext() call settles (success or
  *  failure) — the splash-screen gate in App.tsx. */

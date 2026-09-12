@@ -28,6 +28,8 @@
 // config, a config would want a baseURL, and this file would then be
 // asserting things about the configuration it was handed rather than about
 // the stack. It reads four environment variables and nothing else.
+import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { chromium, expect } from "@playwright/test";
 
 const baseURL = req("RM_BASE_URL");
@@ -35,6 +37,10 @@ const username = req("RM_ADMIN_USERNAME");
 const password = req("RM_ADMIN_PASSWORD");
 const backupSet = process.env.RM_BACKUP_SET ?? "";
 const artifacts = process.env.RM_ARTIFACTS_DIR ?? "/artifacts";
+// Issue #795. Set by three-machine-web-ui.sh --break-engine, together
+// with the directory the break is driven from. Unset, everything below
+// that reads them is skipped and this file is the check it was.
+const engineControl = process.env.RM_ENGINE_UNREACHABLE === "1" ? req("RM_ENGINE_CONTROL") : null;
 
 function req(name) {
   const v = process.env[name];
@@ -73,9 +79,18 @@ function log(msg) {
 //   actually needed would render empty, and every step already requires
 //   something specific to be on the screen.
 //
+//   ANYTHING, WHILE THE ENGINE IS DELIBERATELY DOWN (#795). --break-engine
+//   takes the engine away on purpose, so the 502s, the failed requests and
+//   the console errors during that window are the fault this run ASKED
+//   for. Counting them would make the mode unable to pass; not counting
+//   them is safe because the window is bounded by two explicit calls and
+//   because the assertions inside it are stricter than the ones outside:
+//   a page that went blank instead of complaining fails there.
+//
 // Everything else counts, and an uncaught exception counts unconditionally.
 const complaints = [];
 let signedIn = false;
+let engineDown = false;
 
 function record(kind, text, { alwaysCounts = false } = {}) {
   const abort = text.includes("net::ERR_ABORTED");
@@ -83,8 +98,41 @@ function record(kind, text, { alwaysCounts = false } = {}) {
   complaints.push({
     kind,
     text,
-    counts: alwaysCounts || !(abort || unauthorisedWhileSignedOut)
+    counts: !engineDown && (alwaysCounts || !(abort || unauthorisedWhileSignedOut))
   });
+}
+
+/**
+ * Issue #795's control channel, the client half.
+ *
+ * This container has no Docker socket on purpose — a browser that can
+ * stop containers is not the browser under test — so the engine is taken
+ * away by asking the harness on the host for it. Four empty files, and
+ * the ack is only written once the work has finished (for "start", once
+ * the engine's own healthcheck passes), which is the whole reason to
+ * wait for one rather than sleeping.
+ *
+ * The ack about to be waited for is removed BEFORE the request goes out.
+ * Otherwise the leavings of the previous cycle answer this one instantly
+ * and the run continues against a stack in the opposite state to the one
+ * it believes it is in.
+ */
+async function engine(action, budgetMs) {
+  const ack = `${engineControl}/${action === "stop" ? "stopped" : "started"}`;
+  rmSync(ack, { force: true });
+  writeFileSync(`${engineControl}/${action}`, "");
+  const deadline = Date.now() + budgetMs;
+  while (!existsSync(ack)) {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the harness did not acknowledge "${action}" within ${budgetMs}ms: ` +
+          `nothing appeared at ${ack}. The watcher in scripts/e2e/three-machine-web-ui.sh is what writes it.`
+      );
+    }
+    await sleep(200);
+  }
+  engineDown = action === "stop";
+  log(`the engine is ${engineDown ? "stopped, and serve-ui is still up in front of it" : "running again"}`);
 }
 
 const browser = await chromium.launch({
@@ -188,6 +236,94 @@ try {
         : "")
   );
   for (const c of excused) log(`  not counted: ${c.kind}: ${c.text}`);
+
+  // ------------------------------- the engine goes away underneath it
+  //
+  // Issue #795, and only when the harness asked for it. Everything above
+  // ran against a working stack; this takes the engine out from under a
+  // browser that is already signed in and holding the app, which is the
+  // shape the fault was reported in: the container was renamed under a
+  // loaded SPA, so serve-ui stayed up and answered every /api/v1 call 502
+  // on behalf of a service it could no longer reach.
+  //
+  // What is asserted is not that the page fails. It is that the failure
+  // ARRIVES: the page that showed nothing on a real NAS has to put
+  // something on screen that names what went wrong, or this mode is
+  // measuring a blank page and calling it a pass.
+  if (engineControl) {
+    const nav = page.getByRole("navigation", { name: "Sections" });
+    const surfaced = page.getByRole("alert").filter({ hasText: /did not answer|could not reach/i });
+
+    await engine("stop", 60_000);
+
+    // Leave and come back rather than reloading. A reload would re-run the
+    // session check against the same broken hop and land on the
+    // service-unreachable screen, which is a different (also correct)
+    // surface; the one #795 is about is the page re-fetching inside a
+    // session that is already established.
+    await nav.getByRole("link", { name: /Dashboard/i }).click();
+    await nav.getByRole("link", { name: /Activity/i }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible({ timeout: 20_000 });
+
+    await expect(surfaced.first()).toBeVisible({ timeout: 30_000 });
+    const said = await surfaced.first().innerText();
+    log(`with the engine gone, the Activity page says: ${said.split("\n")[0]}`);
+
+    // The two wordings are different problems for whoever is fixing them
+    // (#598), and this is the one that is NOT "the answer could not be
+    // read": nothing the browser received came from the engine at all.
+    if (/could not read the answer/i.test(said)) {
+      throw new Error(
+        "the Activity page called an unreachable engine an unreadable answer, which sends whoever reads it looking at the wrong machine:\n      " +
+          said.replace(/\n/g, "\n      ")
+      );
+    }
+    // The literal string #598 removed, checked on the whole page rather
+    // than the banner: an id that appears in no log is worse than no id,
+    // and this is the one place it could come back.
+    const pageText = await page.locator("body").innerText();
+    if (/correlation id unavailable/i.test(pageText)) {
+      throw new Error("the failure offered the literal correlation id \"unavailable\", which matches nothing in any log (#598).");
+    }
+    // And it is a FAILURE on screen, not an empty feed. "Nothing has
+    // happened in this window" on a NAS whose engine is unreachable is
+    // the exact lie this whole reproduction exists to catch.
+    await expect(page.getByText("No matching events")).toHaveCount(0);
+
+    // Try again, against a service that is still down. The button has to
+    // really re-issue: one that looks inert is one people press harder.
+    await page.getByRole("button", { name: /try again/i }).first().click();
+    await expect(page.getByText(/Tried again at /)).toBeVisible({ timeout: 30_000 });
+    await expect(surfaced.first()).toBeVisible();
+    log("Try again re-issued the request and the page said so rather than going quiet");
+
+    // The dashboard's own panel is the quieter half of the same bug: it
+    // ran the identical fetch and used to draw empty, which is
+    // indistinguishable from a NAS where nothing has ever happened.
+    await nav.getByRole("link", { name: /Dashboard/i }).click();
+    await expect(surfaced.first()).toBeVisible({ timeout: 30_000 });
+    log("and the dashboard surfaces it too rather than drawing an empty panel");
+
+    // ------------------------------------------------ and it recovers
+    await engine("start", 180_000);
+    await nav.getByRole("link", { name: /Activity/i }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible({ timeout: 20_000 });
+    // A banner that never goes away is its own defect: an operator who
+    // fixed the deployment has to be able to see that they fixed it.
+    await expect(surfaced).toHaveCount(0, { timeout: 30_000 });
+    log("the engine came back and the Activity page went back to rendering the feed");
+
+    // Nothing may have gone wrong AFTER the break was healed. Complaints
+    // recorded during the window were excused at the moment they were
+    // recorded, so anything counted here happened on a working stack.
+    const afterBreak = complaints.filter((c) => c.counts);
+    if (afterBreak.length > 0) {
+      throw new Error(
+        "the browser complained on a stack that was working again, so the recovery is not clean:\n" +
+          afterBreak.map((c) => `      ${c.kind}: ${c.text}`).join("\n")
+      );
+    }
+  }
 } catch (err) {
   failure = err;
 }

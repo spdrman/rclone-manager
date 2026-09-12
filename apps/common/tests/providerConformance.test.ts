@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ALL_BRIDGES } from "./bridges";
 import { NO_CAPABILITIES } from "@shared/platform/capabilities";
 import { PlatformProvider, usePlatform } from "@shared/platform/PlatformContext";
+import { readLocalAccountSession } from "@shared/platform/localSession";
 import { resetGraphForTests } from "@shared/state/graph";
 import type { PlatformBridge } from "@shared/types/platform";
 
@@ -36,6 +37,24 @@ describe("provider conformance", () => {
           const ctx = await bridge.getAuthContext().catch(() => null);
           if (ctx) expect(ctx.mode).toBe("local-account");
         }
+      });
+
+      /**
+       * Issue #795. Every local-account provider held a byte-identical
+       * copy of the session read, and every copy turned ANY refusal into
+       * "not signed in" — so a deployment whose web-ui container could
+       * not reach the engine told its operator they had been signed out
+       * and offered a form that posts down the same broken hop.
+       *
+       * There is one reader now (ui/shared/src/platform/localSession.ts),
+       * and this is what stops a seventh copy being written: identity,
+       * not behaviour, because a re-implementation that happened to agree
+       * on the three cases a test enumerates would still be the thing
+       * that drifts.
+       */
+      it("reads its session through the one shared reader, when it has no native session", () => {
+        if (bridge.capabilities().nativeAuth) return;
+        expect(bridge.getAuthContext).toBe(readLocalAccountSession);
       });
 
       it("only exposes notify() when it claims native notifications", () => {
