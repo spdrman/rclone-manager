@@ -102,7 +102,7 @@ const (
 	// It says nothing about what producing one costs, and the difference
 	// matters enough to be stated here rather than discovered by a
 	// consumer: local's three are computed by reading the whole file,
-	// while s3's md5 is an ETag the store already holds. So this key
+	// while s3's md5 is a validator the store already holds. So this key
 	// answers "could a hash be obtained", not "is a hash cheaper than a
 	// read" - #793's own narrower list (model.SourceSignals'
 	// RemoteHashAlgorithms) is the second question, and ADR 0009 section
@@ -158,7 +158,7 @@ const (
 	//
 	// A path is a slot id: it survives an overwrite, so two different
 	// bytes have the same one and nothing about it says the object
-	// changed. A generation, an S3 versionId or an ETag is a content
+	// A generation or an S3 versionId is a content
 	// identity: it changes when the bytes change, which is what lets a
 	// consumer decide "unchanged" without reading the object. EPIC
 	// #779's trust classification (#793/#824) reads this key and nothing
@@ -284,10 +284,6 @@ const (
 	// this key answers identity and not retention.
 	GenerationVersioned GenerationIdentity = "versioned"
 
-	// GenerationETag is a content-derived validator and nothing more: it
-	// changes when the bytes change and names no retained version.
-	GenerationETag GenerationIdentity = "etag"
-
 	// GenerationNone is a backend offering nothing but the path. An
 	// overwrite that preserves size and mtime is invisible, which is
 	// exactly why a stable slot id must not be reported here as an
@@ -298,8 +294,8 @@ const (
 )
 
 var validGenerationIdentity = map[GenerationIdentity]bool{
-	GenerationVersioned: true, GenerationETag: true,
-	GenerationNone: true, GenerationUnknown: true,
+	GenerationVersioned: true,
+	GenerationNone:      true, GenerationUnknown: true,
 }
 
 // HashAlgorithm is one checksum a backend can be asked for, spelled the

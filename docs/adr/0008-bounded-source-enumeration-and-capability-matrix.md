@@ -248,10 +248,7 @@ The entries worth arguing about:
   listing is the ETag, which still changes on every overwrite). local and
   sftp are `none`: a POSIX path is a slot and nothing more, which is
   exactly why #793's classification for those two has to fall back to
-  size and mtime. The fourth value, `etag`, exists for a backend that has
-  a content validator and no version concept; nothing shipped declares it
-  yet, and a vocabulary that forced such a backend to answer `versioned`
-  or `none` would make it lie either way. Phase 1 derives
+  size and mtime. Phase 1 derives
   `SourceSignals` from this key and retires the duplicated
   `BundledSourceSignals` (ADR 0009).
 

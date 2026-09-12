@@ -218,7 +218,7 @@ func validateManifestCapabilities(file string, m Manifest) []error {
 	}
 	if caps.Declares(CapGenerationIdentity) && !validGenerationIdentity[caps.GenerationIdentity] {
 		addf("capabilities.generation_identity is %q, and the accepted values are %s",
-			caps.GenerationIdentity, `"versioned", "etag", "none", "unknown"`)
+			caps.GenerationIdentity, `"versioned", "none", "unknown"`)
 	}
 
 	// A hash this boundary cannot ask for is a claim nothing can act on,
